@@ -57,13 +57,42 @@ curl http://localhost:6877/models/embedding \
 
 ### Change embedding model
 
-Changing the embedding model triggers a full re-index of memory:
+Changing the embedding model requires explicit confirmation, then rebuilds the
+semantic index for all active facts and readable wiki pages. Arden sends
+embeddings to the provider in batches.
 
 ```bash
 curl -X POST http://localhost:6877/config/embedding \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"embedding_model": "text-embedding-3-large"}'
+  -d '{"embedding_model": "text-embedding-3-large", "confirmed": true}'
+```
+
+Disable embeddings with JSON `null`. Full-text search remains available:
+
+```bash
+curl -X POST http://localhost:6877/config/embedding \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"embedding_model": null, "confirmed": true}'
+```
+
+Follow rebuild progress:
+
+```bash
+curl http://localhost:6877/index/status \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Transient provider rate limits are retried using the provider's reset time.
+While waiting, `retry_at` reports when the current batch will resume. Completed
+batches survive retries and server restarts.
+
+Retry a failed rebuild:
+
+```bash
+curl -X POST http://localhost:6877/index/start \
+  -H "Authorization: Bearer $API_KEY"
 ```
 
 ### Add custom model

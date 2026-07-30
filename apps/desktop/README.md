@@ -6,7 +6,7 @@ It provides:
 
 - chat over the server's SSE stream
 - tool approval cards and activity traces
-- managed wiki browsing/editing with links, records, history, and maintenance review
+- managed wiki browsing/editing with links, records, and reversible history
 - sandboxed HTML widgets rendered from the agent's `render_html` tool
 - local server URL/API key storage; API keys use Electron `safeStorage` when supported by the OS
 

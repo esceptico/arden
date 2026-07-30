@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -269,6 +270,21 @@ class ToolResult:
         else:
             outcome = ToolOutcome(status=ToolOutcomeStatus.SUCCEEDED)
         return replace(self, outcome=outcome)
+
+    def serialized_payload(self) -> str:
+        payload = {
+            "content": self.content,
+            "preview": self.preview,
+            "is_error": self.is_error,
+            "data": self.data,
+            "model_content": [
+                block.model_dump(mode="json") if hasattr(block, "model_dump") else dict(block)
+                for block in self.model_content
+            ],
+            "source_refs": [ref.to_dict() for ref in self.source_refs],
+            "outcome": self.outcome.to_dict() if self.outcome else None,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
     @staticmethod
     def failure(

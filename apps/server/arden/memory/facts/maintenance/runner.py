@@ -21,7 +21,6 @@ from arden.memory.facts.maintenance.store import (
 )
 from arden.memory.facts.models import Fact, FactChangeFeed, FactConflictError
 from arden.memory.facts.service import FactPrincipal, FactService
-from arden.wiki.constants import WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX
 from arden.wiki.models import WikiMaintenancePageUpdate, WikiPageRecord, WikiSnapshot
 from arden.wiki.service import WikiService
 
@@ -113,53 +112,6 @@ FactMaintenanceReviewer = Callable[[FactMaintenancePreparedCluster], Awaitable[F
 
 
 @dataclass(frozen=True, slots=True)
-class FactMaintenanceDuplicatePageAsk:
-    """Pinned evidence for a user decision before normalizing a colliding topic."""
-
-    wiki_head: str
-    old_topic: str
-    canonical_page_id: str
-    canonical_version: str
-    canonical_title: str
-    existing_page_id: str
-    existing_version: str
-    existing_title: str
-    normalization_intent: str
-
-    @property
-    def evidence_key(self) -> str:
-        first, second = sorted((self.canonical_page_id, self.existing_page_id))
-        return f"{WIKI_MAINTENANCE_FACT_DUPLICATE_EVIDENCE_PREFIX}{first}:{second}"
-
-    @property
-    def evidence_fingerprint(self) -> str:
-        payload = {
-            "canonical_page_id": self.canonical_page_id,
-            "canonical_version": self.canonical_version,
-            "canonical_title": self.canonical_title,
-            "existing_page_id": self.existing_page_id,
-            "existing_version": self.existing_version,
-            "existing_title": self.existing_title,
-        }
-        return hashlib.sha256(
-            json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-
-    @property
-    def summary(self) -> str:
-        return (
-            f"Possible duplicate pages block topic normalization {self.old_topic!r} → {self.canonical_title!r}. "
-            f"Wiki head {self.wiki_head}; canonical {self.canonical_title!r} "
-            f"(id {self.canonical_page_id}, version {self.canonical_version}); existing owner "
-            f"{self.existing_title!r} (id {self.existing_page_id}, version {self.existing_version}). "
-            f"Intent: {self.normalization_intent}"
-        )
-
-
-DuplicatePageAskRecorder = Callable[[FactMaintenanceDuplicatePageAsk], Awaitable[bool]]
-
-
-@dataclass(frozen=True, slots=True)
 class FactMaintenanceResult:
     through_revision: str | None
     reviewed_clusters: int = 0
@@ -188,7 +140,6 @@ class FactMaintenance:
         wiki: WikiService,
         candidate_provider: FactMaintenanceCandidateProvider | None = None,
         candidate_limit: int = 12,
-        record_duplicate_page_ask: DuplicatePageAskRecorder | None = None,
     ) -> None:
         if not 1 <= candidate_limit <= 100:
             raise ValueError("candidate_limit must be between 1 and 100")
@@ -198,7 +149,6 @@ class FactMaintenance:
         self._wiki = wiki
         self._candidate_provider = candidate_provider
         self._candidate_limit = candidate_limit
-        self._record_duplicate_page_ask = record_duplicate_page_ask
         self._intents = FactMaintenanceIntentStore(service.plans.conn)
 
     async def run(self) -> FactMaintenanceResult:
@@ -236,19 +186,12 @@ class FactMaintenance:
             cluster = await self._prepare_cluster(target, facts, wiki_pages)
             decision = await self._reviewer(cluster)
             reviewed.append(_ReviewedDecision(target, cluster, decision))
-        topic_changes, topic_bindings, topic_reasons, duplicate_asks = self._prepare_topic_normalizations(
+        topic_changes, topic_bindings, topic_reasons = self._prepare_topic_normalizations(
             reviewed,
             facts,
             wiki_snapshot,
             wiki_pages,
         )
-        if duplicate_asks:
-            if self._record_duplicate_page_ask is None:
-                raise FactMaintenanceError("duplicate page review recorder is unavailable")
-            for ask in duplicate_asks:
-                if not await self._record_duplicate_page_ask(ask):
-                    return FactMaintenanceResult(feed.through_revision, reviewed_clusters=len(reviewed))
-
         changes, amended, merged, reasons = self._prepare_changes(reviewed)
         changes = self._merge_topic_changes(changes, topic_changes)
         amended = sum(change["op"] == "amend" for change in changes)
@@ -750,7 +693,6 @@ class FactMaintenance:
         list[dict[str, Any]],
         tuple[tuple[str, str, str], ...],
         tuple[str, ...],
-        tuple[FactMaintenanceDuplicatePageAsk, ...],
     ]:
         selections: dict[str, WikiPageRecord] = {}
         reasons: dict[str, str] = {}
@@ -775,29 +717,14 @@ class FactMaintenance:
 
         accepted: dict[str, WikiPageRecord] = {}
         pending_alias_owners: dict[str, str] = {}
-        duplicate_asks: list[FactMaintenanceDuplicatePageAsk] = []
         for old_topic, page in sorted(selections.items()):
             canonical_title = page.page.title
             if old_topic == canonical_title:
                 continue
             owner = self._wiki.resolve_topic_name(old_topic, snapshot=wiki_snapshot)
             if owner is not None and owner.page.page_id != page.page.page_id:
-                if owner.page.lifecycle == "active":
-                    if wiki_snapshot.head is None:
-                        raise FactMaintenanceError("duplicate page review requires a committed wiki snapshot")
-                    duplicate_asks.append(
-                        FactMaintenanceDuplicatePageAsk(
-                            wiki_head=wiki_snapshot.head,
-                            old_topic=old_topic,
-                            canonical_page_id=page.page.page_id,
-                            canonical_version=page.resource.version_id,
-                            canonical_title=page.page.title,
-                            existing_page_id=owner.page.page_id,
-                            existing_version=owner.resource.version_id,
-                            existing_title=owner.page.title,
-                            normalization_intent=reasons[old_topic],
-                        )
-                    )
+                # Fact maintenance cannot choose a page, merge, move, archive,
+                # or rename, so this normalization is intentionally omitted.
                 continue
             accepted[old_topic] = page
             if owner is not None:
@@ -838,7 +765,7 @@ class FactMaintenance:
         bindings = tuple(
             (topic, accepted[topic].page.page_id, accepted[topic].page.title) for topic in sorted(used_topics)
         )
-        return changes, bindings, tuple(reasons[topic] for topic in sorted(used_topics)), tuple(duplicate_asks)
+        return changes, bindings, tuple(reasons[topic] for topic in sorted(used_topics))
 
     @staticmethod
     def _merge_topic_changes(

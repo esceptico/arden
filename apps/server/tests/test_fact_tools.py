@@ -135,6 +135,8 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
         assert event["origin"] == "tool.fact_changes"
         assert event["payload"]["scope"] == {"kind": "area", "key": "project"}
         assert event["sources"]["items"][0]["kind"] == "tool_call"
+        assert "dependencies" not in plan.data
+        assert "duplicate_windows" not in plan.data
 
         plan_id = plan.content.splitlines()[0].removeprefix("Fact change plan ID: ")
         assert plan_id == plan.data["plan_id"]
@@ -151,6 +153,7 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
         json.dumps(fact.data)
         assert fact.data["fact"]["scope"] == {"kind": "area", "key": "project"}
         assert fact.data["fact"]["sources"]["total"] == 1
+        assert "version" not in fact.data["fact"]
     finally:
         await connection.close()
 
@@ -461,6 +464,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         assert supersession["origin"] == "memory.retention"
         assert supersession["sources"]["items"][1]["kind"] == "fact"
         assert supersession["sources"]["items"][1]["ref"] == "successor"
+        assert "extra" not in supersession["sources"]["items"][1]
 
         committed = await commit_fact_changes_tool.execute(
             retention("retention-commit", "commit_fact_changes"),

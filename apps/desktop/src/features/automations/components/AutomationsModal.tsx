@@ -135,6 +135,7 @@ export function AutomationsModal() {
   const searchRef = useRef<HTMLInputElement>(null);
   const railRef = useRef<HTMLElement>(null);
   const draftSequence = useRef(0);
+  const duplicateIdempotencyKeys = useRef(new Map<string, string>());
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -272,8 +273,11 @@ export function AutomationsModal() {
   }, []);
 
   const duplicateRailAutomation = useCallback(async (automation: Automation) => {
+    const idempotencyKey = duplicateIdempotencyKeys.current.get(automation.task_id) ?? crypto.randomUUID();
+    duplicateIdempotencyKeys.current.set(automation.task_id, idempotencyKey);
     try {
-      const duplicate = await duplicateAutomation(automation);
+      const duplicate = await duplicateAutomation(automation, idempotencyKey);
+      duplicateIdempotencyKeys.current.delete(automation.task_id);
       requestIntent({ kind: "select", taskId: duplicate.task_id });
     } catch (error) {
       reportAutomationActionFailure("duplicate", automation, error);

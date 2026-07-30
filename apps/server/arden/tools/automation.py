@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.automation.models import Automation
 from arden.automation.triggers import build_trigger
@@ -28,7 +28,9 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "Optional model override per automation (falls back to default chat model when omitted). "
     "Each automation gets its own dedicated channel for results; use create_loop to repeat work in this chat. "
     "Runs are read-only by default. Grant required action tools with tool_scope; auto_approve=true only skips "
-    "approvals for tools already granted by that scope."
+    "approvals for tools already granted by that scope. "
+    "Always provide one stable idempotency_key and reuse it unchanged after an ambiguous retry; standalone "
+    "automations use idempotency_scope='global'."
     f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
@@ -213,21 +215,34 @@ class CreateAutomationInput(BaseModel):
             "this tool is called from inside a loop iteration."
         ),
     )
-    idempotency_key: str | None = Field(
-        default=None,
+    idempotency_key: str = Field(
+        min_length=1,
+        max_length=200,
         description=(
-            "Deduplication key. Combined with idempotency_scope, prevents "
-            "creating duplicate automations on retries / repeated tool calls."
+            "Required stable creation key. Reuse the exact key after an ambiguous retry; "
+            "do not version or rotate it to bypass an existing automation."
         ),
     )
-    idempotency_scope: Literal["run", "attempt", "global"] | None = Field(
-        default=None,
+    idempotency_scope: Literal["run", "attempt", "global"] = Field(
+        default="global",
         description=(
-            "Scope for the idempotency claim. Required when idempotency_key is "
-            "set. 'global' = no parent; 'run' / 'attempt' = scoped to the "
-            "calling automation's fire."
+            "Scope for the idempotency claim. Use 'global' for standalone automations; "
+            "'run' / 'attempt' are scoped to the calling automation's fire."
         ),
     )
+    attempt_n: int | None = Field(
+        default=None,
+        description="Required retry-attempt number when idempotency_scope='attempt'.",
+        ge=0,
+    )
+
+    @model_validator(mode="after")
+    def validate_attempt_scope(self):
+        if self.idempotency_scope == "attempt" and self.attempt_n is None:
+            raise ValueError("attempt_n is required when idempotency_scope='attempt'")
+        if self.idempotency_scope != "attempt" and self.attempt_n is not None:
+            raise ValueError("attempt_n is only valid when idempotency_scope='attempt'")
+        return self
 
 
 class UpdateAutomationInput(BaseModel):
@@ -350,8 +365,8 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     if parent_conflict:
         lines.append(f"Parent {inferred_parent!r} missing — will fail on execute")
     if args.idempotency_scope:
-        key = args.idempotency_key or "(unset)"
-        lines.append(f"Idempotency: {args.idempotency_scope} · key={key}")
+        attempt = f" · attempt={args.attempt_n}" if args.attempt_n is not None else ""
+        lines.append(f"Idempotency: {args.idempotency_scope} · key={args.idempotency_key}{attempt}")
     lines.append("")
     lines.append("Prompt:")
     lines.append(args.prompt)
@@ -423,6 +438,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             idempotency_key=args.idempotency_key,
             idempotency_scope=args.idempotency_scope,
             parent_fire_at=parent_fire_at,
+            attempt_n=args.attempt_n,
             tool_scope=args.tool_scope,
         )
     except ValueError as e:
@@ -434,9 +450,32 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
         )
 
     if automation is None:
-        return ToolResult(
-            content=f"Skipped (idempotency claim conflict): key={args.idempotency_key}",
-            preview="Skipped (idempotent)",
+        task_id = svc.idempotent_task_id(
+            args.idempotency_scope,
+            args.idempotency_key,
+            parent_automation_id,
+            parent_fire_at,
+            args.attempt_n,
+        )
+        if area is not None:
+            task_id = f"area:{area.area_id}:{task_id}"
+        existing = await svc.store.get(task_id)
+        if existing is not None:
+            lines = [
+                f"Automation already exists: {_automation_label(existing)}",
+                f"ID: {existing.task_id}",
+            ]
+            if existing.thread_id:
+                lines.append(f"Channel: {existing.thread_id}")
+            lines.append("No changes made. Reuse this ID; call update_automation to change it.")
+            return ToolResult(content="\n".join(lines), preview=f"Already exists ({existing.task_id})")
+        return ToolResult.failure(
+            code="write_conflict",
+            message=(
+                f"Idempotency key {args.idempotency_key!r} is already claimed, but its automation is unavailable."
+            ),
+            preview="Idempotency conflict",
+            recovery_action="Call list_automations, then retry once with the same key; do not rotate the key.",
         )
 
     lines = [

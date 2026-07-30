@@ -228,17 +228,12 @@ test("wikilink resolution follows the server result including aliases, headings,
 test("availability-check failures stay retryable without blocking the memory workspace", async () => {
   const note = summary("note.md", "Note");
   let renameChecks = 0;
-  let maintenanceChecks = 0;
   installCanonicalMemoryBridge({
     pages: [wikiPage(note, "Note body")],
     onRequest: ({ path }) => {
       if (path === "/admin/wiki/rename-approvals") {
         renameChecks += 1;
         return error(503, "rename service unavailable");
-      }
-      if (path === "/admin/wiki/maintenance-reviews") {
-        maintenanceChecks += 1;
-        return error(503, "maintenance service unavailable");
       }
       return undefined;
     },
@@ -249,13 +244,11 @@ test("availability-check failures stay retryable without blocking the memory wor
 
   expect(host.querySelector("h1")?.textContent).toBe("Note");
   expect(host.querySelector("[data-wiki-rename-status]")).toBeNull();
-  expect(host.querySelector("[data-wiki-maintenance-status]")).toBeNull();
   expect(host.querySelector("[data-memory-availability-error]")?.textContent).toContain("rename service unavailable");
 
   await act(async () => host.querySelector<HTMLButtonElement>("[data-memory-availability-error] button")?.click());
   await settle();
   expect(renameChecks).toBeGreaterThan(1);
-  expect(maintenanceChecks).toBeGreaterThan(1);
 });
 
 test("a persisted rename approval still blocks the memory workspace", async () => {

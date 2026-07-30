@@ -205,7 +205,6 @@ test("vault changes refresh clean pages and protect dirty drafts", async () => {
   await act(async () => useStore.getState().memoryVaultChanged({
     paths: ["topics/a.md"],
     revision: "note-r2",
-    reviewRequired: false,
     seq: 90,
   }));
   await settle(280);
@@ -222,7 +221,6 @@ test("vault changes refresh clean pages and protect dirty drafts", async () => {
   await act(async () => useStore.getState().memoryVaultChanged({
     paths: ["topics/a.md"],
     revision: "note-r3",
-    reviewRequired: false,
     seq: 91,
   }));
   await settle(280);

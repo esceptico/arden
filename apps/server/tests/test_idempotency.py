@@ -1,9 +1,12 @@
 import asyncio
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 
 import arden.database as database
 from arden.automation.models import IdempotencyClaim
@@ -11,7 +14,15 @@ from arden.automation.scheduler import Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.context.store import SessionStore
+from arden.server.routers.automation import (
+    create_automation as create_automation_route,
+)
+from arden.server.routers.automation import (
+    update_automation as update_automation_route,
+)
+from arden.server.schemas import CreateAutomationRequest, UpdateAutomationRequest
 from arden.services.session import SessionService
+from arden.tools.executor import ToolExecutor
 
 
 @pytest_asyncio.fixture
@@ -307,15 +318,199 @@ async def test_create_with_idempotency_key_returns_none_on_repeat(service: Autom
     assert first.idempotency_scope == "global"
 
     second = await service.create(
-        name="watch-item-1-again",
-        description="Pokes item 1 again.",
-        prompt="Poke item 1 again.",
+        name="watch-item-1",
+        prompt="Poke item 1.",
         trigger_type="time",
         at="09:00",
         idempotency_key="item-1",
         idempotency_scope="global",
     )
     assert second is None
+    assert [task.task_id for task in await service.store.list_all() if task.task_id == first.task_id] == [first.task_id]
+    channels = [
+        session
+        for session in await service.session_service.list_sessions(limit=10)
+        if session["origin_automation_id"] == first.task_id
+    ]
+    assert [session["session_id"] for session in channels] == [first.thread_id]
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_global_create_has_one_task_and_channel(service: AutomationService):
+    kwargs = {
+        "name": "concurrent wiki digest",
+        "description": "Maintains one wiki digest.",
+        "prompt": "Update automations/concurrent-wiki-digest.md.",
+        "trigger_type": "time",
+        "every": "1d",
+        "idempotency_key": "wiki-automation:concurrent-wiki-digest",
+        "idempotency_scope": "global",
+    }
+
+    results = await asyncio.gather(service.create(**kwargs), service.create(**kwargs))
+
+    assert sum(result is not None for result in results) == 1
+    tasks = await service.store.list_all()
+    assert len(tasks) == 1
+    channels = [
+        session
+        for session in await service.session_service.list_sessions(limit=10)
+        if session["origin_automation_id"] == tasks[0].task_id
+    ]
+    assert [session["session_id"] for session in channels] == [tasks[0].thread_id]
+
+
+@pytest.mark.asyncio
+async def test_delete_releases_global_claim_for_same_task_and_channel_recreation(service: AutomationService):
+    kwargs = {
+        "name": "watch-item-recreated",
+        "description": "Pokes the recreated item.",
+        "prompt": "Poke the recreated item.",
+        "trigger_type": "time",
+        "at": "09:00",
+        "idempotency_key": "item-recreated",
+        "idempotency_scope": "global",
+    }
+    first = await service.create(**kwargs)
+    assert first is not None
+    assert await service.delete(first.task_id) == 0
+
+    recreated = await service.create(**kwargs)
+    assert recreated is not None
+    assert recreated.task_id == first.task_id
+    assert recreated.thread_id == first.thread_id
+    assert [task.task_id for task in await service.store.list_all() if task.task_id == first.task_id] == [first.task_id]
+    channels = [
+        session
+        for session in await service.session_service.list_sessions(limit=10)
+        if session["origin_automation_id"] == first.task_id
+    ]
+    assert [session["session_id"] for session in channels] == [first.thread_id]
+
+
+@pytest.mark.asyncio
+async def test_create_reclaims_only_matching_legacy_orphan_global_claim(service: AutomationService):
+    kwargs = {
+        "name": "watch-legacy-item",
+        "description": "Pokes the legacy item.",
+        "prompt": "Poke the legacy item.",
+        "trigger_type": "time",
+        "at": "09:00",
+        "idempotency_key": "item-legacy",
+        "idempotency_scope": "global",
+    }
+    first = await service.create(**kwargs)
+    assert first is not None
+    await service.store.conn.execute("DELETE FROM scheduled_tasks WHERE task_id = ?", (first.task_id,))
+    await service.store.conn.commit()
+
+    reclaimed = await service.create(**kwargs)
+    assert reclaimed is not None
+    assert reclaimed.task_id == first.task_id
+
+    assert await service.store.delete(reclaimed.task_id)
+    assert await service.store.try_claim_idempotency(
+        scope="global", key="item-legacy", automation_task_id="legacy-other-task"
+    )
+    assert await service.create(**kwargs) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_rolls_back_task_and_global_claim_together(service: AutomationService):
+    task = await service.create(
+        name="watch-delete-rollback",
+        description="Exercises delete rollback.",
+        prompt="Exercise delete rollback.",
+        trigger_type="time",
+        at="09:00",
+        idempotency_key="item-delete-rollback",
+        idempotency_scope="global",
+    )
+    assert task is not None
+    await service.store.conn.execute(
+        """
+        CREATE TRIGGER fail_global_claim_release
+        BEFORE DELETE ON automation_idempotency_claims
+        BEGIN
+            SELECT RAISE(ABORT, 'claim release failed');
+        END
+        """
+    )
+    await service.store.conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="claim release failed"):
+        await service.store.delete(task.task_id)
+
+    assert await service.store.get(task.task_id) is not None
+    rows = await service.store.conn.execute_fetchall(
+        "SELECT automation_task_id FROM automation_idempotency_claims WHERE automation_task_id = ?",
+        (task.task_id,),
+    )
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_automation_post_replays_same_global_creation(service: AutomationService):
+    request = CreateAutomationRequest(
+        name="wiki digest",
+        description="Maintains a wiki digest.",
+        prompt="Update automations/wiki-digest.md.",
+        trigger_type="time",
+        every="1d",
+        tool_scope=["create_wiki_page", "edit_wiki_page"],
+        idempotency_key="wiki-automation:wiki-digest",
+    )
+    runtime = SimpleNamespace(executor=ToolExecutor())
+
+    first = await create_automation_route(request, service, runtime)
+    replay = await create_automation_route(request, service, runtime)
+
+    assert replay["task_id"] == first["task_id"]
+    assert replay["idempotency_key"] == "wiki-automation:wiki-digest"
+    tasks = await service.list_all()
+    assert len(tasks) == 1
+    assert tasks[0].thread_id is not None
+
+
+@pytest.mark.asyncio
+async def test_automation_post_rejects_unknown_tool_scope(service: AutomationService):
+    request = CreateAutomationRequest(
+        name="broken scope",
+        description="Exercises scope validation.",
+        prompt="Run with a misspelled tool.",
+        trigger_type="time",
+        every="1d",
+        tool_scope=["edit_wki_page"],
+        idempotency_key="broken-scope",
+    )
+
+    with pytest.raises(HTTPException, match="tool_scope patterns match no registered tool"):
+        await create_automation_route(request, service, SimpleNamespace(executor=ToolExecutor()))
+
+    assert await service.list_all() == []
+
+
+@pytest.mark.asyncio
+async def test_automation_patch_rejects_unknown_tool_scope(service: AutomationService):
+    task = await service.create(
+        name="safe scope",
+        description="Exercises update scope validation.",
+        prompt="Keep the valid scope.",
+        trigger_type="time",
+        every="1d",
+        tool_scope=["create_wiki_page"],
+    )
+    assert task is not None
+
+    with pytest.raises(HTTPException, match="tool_scope patterns match no registered tool"):
+        await update_automation_route(
+            task.task_id,
+            UpdateAutomationRequest(tool_scope=["edit_wki_page"]),
+            service,
+            SimpleNamespace(executor=ToolExecutor()),
+        )
+
+    assert (await service.get(task.task_id)).tool_scope == ["create_wiki_page"]
 
 
 @pytest.mark.asyncio

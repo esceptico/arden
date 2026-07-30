@@ -212,7 +212,6 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
         if (custom) return custom;
 
         if (request.path === "/admin/wiki/rename-approvals") return ok({ approvals: [] });
-        if (request.path === "/admin/wiki/maintenance-reviews") return ok({ reviews: [] });
         if (request.path.startsWith("/admin/facts?")) {
           return ok({
             facts: [...state.facts.values()].map(rawFact),

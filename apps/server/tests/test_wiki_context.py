@@ -51,6 +51,13 @@ class _Index:
         self.store.items[source_id] = (title, content, metadata)
         return True
 
+    async def sync(self, source, items, **_kwargs):
+        current_ids = {item.source_id for item in items}
+        for source_id in set(self.store.items) - current_ids:
+            await self.delete(source, source_id)
+        for item in items:
+            await self.upsert(source, item.source_id, item.title, item.content, item.metadata)
+
     async def search(self, _query, *, sources, limit):
         assert sources == [WIKI_PAGE_SOURCE]
         return [
@@ -139,6 +146,8 @@ async def test_wiki_index_tracks_active_pages_and_context_keeps_residents_separa
     assert retrieved is not None
     assert "Renamed topic" in retrieved
     assert "Role: common; freshness: stale" in retrieved
+    assert "page: topic" not in retrieved
+    assert "resource: topics/topic.md" in retrieved
     assert "Home" not in retrieved
 
 

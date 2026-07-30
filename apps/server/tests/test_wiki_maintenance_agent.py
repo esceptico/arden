@@ -22,7 +22,6 @@ from arden.wiki.maintenance.runner import (
     WikiMaintenancePreparedReport,
     WikiMaintenanceResult,
 )
-from arden.wiki.maintenance.store import WikiMaintenanceReviewConflictError
 from arden.wiki.models import WikiPage, WikiPageRecord
 
 
@@ -44,7 +43,6 @@ def _report() -> WikiMaintenancePreparedReport:
     return WikiMaintenancePreparedReport(
         commit_id="c" * 64,
         base_head="d" * 64,
-        evidence_fingerprint="e" * 64,
         replay_fingerprint="f" * 64,
         markdown="# Wiki maintenance review\n\nP001 only",
         page_tokens={"P001": record},
@@ -185,7 +183,7 @@ async def test_runtime_uses_the_exact_wiki_agent_scope_and_rejects_early_exit(tm
             return RunResult(run_id="wiki-maintenance-run", output=None, usage=Usage())
 
         monkeypatch.setattr("arden.server.runtime.automation.run_agent", stop_early)
-        with pytest.raises(WikiMaintenanceReviewConflictError, match="before completing"):
+        with pytest.raises(WikiMaintenanceError, match="before completing"):
             await runtime.automation._run_wiki_maintenance(None)
     finally:
         await runtime.close()

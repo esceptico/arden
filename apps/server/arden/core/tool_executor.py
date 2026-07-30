@@ -361,7 +361,7 @@ class ArdenToolExecutor:
         data = result.data
         note = ""
         if tool_call_id is not None:
-            raw_payload = self._serialized_result(result)
+            raw_payload = result.serialized_payload()
             path = persist_result(self._ctx.session_id, tool_call_id, raw_payload)
             blob = persist_raw_tool_result(raw_payload)
             data = {
@@ -381,24 +381,8 @@ class ArdenToolExecutor:
             outcome=result.outcome,
         )
 
-    @staticmethod
-    def _serialized_result(result: ToolResult) -> str:
-        payload = {
-            "content": result.content,
-            "preview": result.preview,
-            "is_error": result.is_error,
-            "data": result.data,
-            "model_content": [
-                block.model_dump(mode="json") if hasattr(block, "model_dump") else dict(block)
-                for block in result.model_content
-            ],
-            "source_refs": [ref.to_dict() for ref in result.source_refs],
-            "outcome": result.outcome.to_dict() if result.outcome else None,
-        }
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-
     def _bound_result_payload(self, result: ToolResult, tool_call_id: str) -> ToolResult:
-        serialized = self._serialized_result(result)
+        serialized = result.serialized_payload()
         if len(serialized.encode("utf-8")) <= OFFLOAD_THRESHOLD:
             return result
 

@@ -3,25 +3,27 @@
 import asyncio
 import json
 from hashlib import sha256
-from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolSourceRef
+from arden.constants import OFFLOAD_THRESHOLD
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceState, ResourceVersion
 from arden.services.session import SessionService
 from arden.tools.core import ToolResult, tool
-from arden.tools.core.context import ToolExecution
+from arden.tools.core.context import ResourceObservation, ToolExecution
 from arden.tools.core.formatting import format_lines_with_pagination
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 from arden.wiki.constants import (
     AUTOMATIONS_PATH_PREFIX,
+    README_FILENAME,
     WIKI_HEALTH_PATH,
     WIKI_HEALTH_RESOURCE_ID,
     WIKI_POST_COMMIT_SERVICE,
+    wiki_page_observation_id,
 )
-from arden.wiki.models import GeneratedPageTarget, LinkReference, WikiPageRecord
+from arden.wiki.models import GeneratedPageTarget, LinkReference, WikiPageRecord, WikiSnapshot
 from arden.wiki.pages import PageValidationError, extract_generated_region, parse_page
 from arden.wiki.pages import create_page as build_page
 from arden.wiki.service import (
@@ -39,7 +41,7 @@ _MAX_LIST_DATA_BYTES = 40_000
 _MAX_LINKS = 500
 _MAX_LINK_DATA_BYTES = 40_000
 _MAX_LINK_FIELD_CHARS = 2_000
-_MAX_LINK_ID_CHARS = 512
+_MAX_LINK_PATH_CHARS = 4_096
 _MAX_LINK_CANDIDATES = 20
 _CONTENT_TRUNCATION = "\n[truncated at 40000 characters]"
 _WIKI_PERMISSION = frozenset({WIKI_SERVICE})
@@ -47,22 +49,10 @@ _WIKI_WRITE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE})
 _WIKI_MOVE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE, "session"})
 
 
-class WikiPageSelector(BaseModel):
+class ReadWikiPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_id: str | None = Field(default=None, min_length=1, max_length=512)
-    path: str | None = Field(default=None, min_length=1, max_length=4096)
-    title: str | None = Field(default=None, min_length=1, max_length=4096)
-    alias: str | None = Field(default=None, min_length=1, max_length=4096)
-
-    @model_validator(mode="after")
-    def _require_one_exact_selector(self) -> Self:
-        if sum(value is not None for value in (self.page_id, self.path, self.title, self.alias)) != 1:
-            raise ValueError("provide exactly one of page_id, path, title, or alias")
-        return self
-
-
-class ReadWikiPageInput(WikiPageSelector):
+    path: str = Field(min_length=1, max_length=4096)
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=500, ge=1, le=_MAX_PAGE_LINES)
 
@@ -79,18 +69,16 @@ class ListWikiPagesInput(BaseModel):
     limit: int = Field(default=100, ge=1, le=_MAX_LIST_ENTRIES)
 
 
-class WikiLinksInput(WikiPageSelector):
+class WikiLinksInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
     limit: int = Field(default=100, ge=1, le=_MAX_LINKS)
 
 
 class CreateWikiPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_id: str = Field(
-        min_length=1,
-        max_length=512,
-        description="Stable page identity. Use a concise durable slug; it cannot be changed later.",
-    )
     path: str = Field(
         min_length=4,
         max_length=4096,
@@ -99,52 +87,38 @@ class CreateWikiPageInput(BaseModel):
     title: str = Field(min_length=1, max_length=4096)
     aliases: list[str] = Field(default_factory=list, max_length=100)
     body: str = Field(default="", max_length=_MAX_CONTENT_CHARS)
-    expected_head: str | None = Field(
-        description="Exact repository head returned by list_wiki_pages; use null only when the wiki is empty.",
-        min_length=64,
-        max_length=64,
-        pattern=r"^[0-9a-f]{64}$",
-    )
 
 
 class EditWikiPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_id: str = Field(min_length=1, max_length=512)
+    path: str = Field(min_length=1, max_length=4096)
     body: str = Field(max_length=_MAX_CONTENT_CHARS)
-    expected_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    expected_head: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class ArchiveWikiPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_id: str = Field(min_length=1, max_length=512)
-    expected_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    expected_head: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    path: str = Field(min_length=1, max_length=4096)
     reason: str = Field(default="archive wiki page", min_length=1, max_length=500)
 
 
 class MoveWikiPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_id: str = Field(min_length=1, max_length=512)
+    path: str = Field(min_length=1, max_length=4096)
     new_path: str = Field(
         min_length=4,
         max_length=4096,
         description="New relative POSIX .md path. The page title, identity, aliases, body, and metadata stay unchanged.",
     )
-    expected_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    expected_head: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class PublishWikiGeneratedInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page_id: str = Field(min_length=1, max_length=512)
+    path: str = Field(min_length=1, max_length=4096)
     generated: str = Field(max_length=_MAX_CONTENT_CHARS)
-    expected_version: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
-    expected_head: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 def _wiki(execution: ToolExecution) -> WikiService | ToolResult:
@@ -159,40 +133,22 @@ def _wiki(execution: ToolExecution) -> WikiService | ToolResult:
     return wiki
 
 
-def _selector(selector: WikiPageSelector) -> tuple[str, str]:
-    if selector.page_id is not None:
-        return "page_id", selector.page_id
-    if selector.path is not None:
-        return "path", selector.path
-    if selector.title is not None:
-        return "title", selector.title
-    if selector.alias is not None:
-        return "alias", selector.alias
-    raise AssertionError("WikiPageSelector requires one selector")
-
-
-def _page_data(record: WikiPageRecord, head: str | None) -> dict[str, object]:
+def _page_data(record: WikiPageRecord) -> dict[str, object]:
     return {
-        "page_id": record.page.page_id,
         "path": record.resource.path,
         "title": record.page.title,
         "aliases": list(record.page.aliases),
         "lifecycle": record.page.lifecycle,
-        "version": record.resource.version_id,
-        "head": head,
     }
 
 
-def _archived_page_data(wiki: WikiService, resource: ResourceVersion, head: str | None) -> dict[str, object]:
+def _archived_page_data(wiki: WikiService, resource: ResourceVersion) -> dict[str, object]:
     page = parse_page(wiki.repository.read_version(resource), expected_page_id=resource.resource_id)
     return {
-        "page_id": page.page_id,
         "path": resource.path,
         "title": page.title,
         "aliases": list(page.aliases),
         "lifecycle": "archived",
-        "version": resource.version_id,
-        "head": head,
     }
 
 
@@ -200,8 +156,39 @@ def _page_ref(record: WikiPageRecord) -> ToolSourceRef:
     return ToolSourceRef(
         provider="memory",
         kind="wiki_page",
-        ref=record.page.page_id,
+        ref=record.resource.path,
         title=record.page.title,
+    )
+
+
+def _observe_page(execution: ToolExecution, record: WikiPageRecord, head: str | None, *, content_read: bool) -> None:
+    execution.ctx.run.observe_resource(
+        wiki_page_observation_id(record.page.page_id),
+        version=record.resource.version_id,
+        container_version=head,
+        content_read=content_read,
+    )
+
+
+def _require_page_observation(
+    execution: ToolExecution,
+    page_id: str,
+    *,
+    content_read: bool,
+) -> ResourceObservation | ToolResult:
+    observation = execution.ctx.run.resource_observation(wiki_page_observation_id(page_id))
+    if (
+        observation is not None
+        and observation.version is not None
+        and observation.container_version is not None
+        and (observation.content_read or not content_read)
+    ):
+        return observation
+    return ToolResult.failure(
+        code="fresh_read_required",
+        message="Read this wiki page before changing it.",
+        preview="Read required",
+        recovery_action="Read the page again, then retry the change.",
     )
 
 
@@ -230,24 +217,24 @@ def _producer_page_error(execution: ToolExecution, record: WikiPageRecord) -> To
         code="producer_page_requires_generated_publish",
         message="Automation-owned generated regions must be changed with publish_wiki_generated.",
         preview="Use generated-region publishing",
-        recovery_action="Read the page, then call publish_wiki_generated with its current version and head.",
+        recovery_action="Read the page, then call publish_wiki_generated again.",
     )
 
 
-def _revision_conflict(error: RevisionConflictError) -> ToolResult:
+def _revision_conflict() -> ToolResult:
     return ToolResult.failure(
         code="revision_conflict",
-        message=str(error),
+        message="The wiki changed after it was read.",
         preview="Wiki changed",
         retryable=True,
-        recovery_action="Read the page or directory again and retry with its current version and repository head.",
+        recovery_action="Read the relevant page or directory again, then retry.",
     )
 
 
-def _invalid_page(error: ValueError) -> ToolResult:
+def _invalid_page(_error: ValueError) -> ToolResult:
     return ToolResult.failure(
         code="invalid_page",
-        message=str(error),
+        message="The wiki page path, metadata, or Markdown body is invalid.",
         preview="Invalid wiki page",
         recovery_action="Correct the page path, title, aliases, or Markdown body and retry.",
     )
@@ -264,14 +251,23 @@ def _directory(value: str) -> str | None:
     return directory
 
 
+def _activated_directory_readme_paths(snapshot: WikiSnapshot, page_path: str) -> tuple[str, ...]:
+    directory, _separator, _filename = page_path.rpartition("/")
+    normalized = _directory(directory)
+    if not normalized:
+        return ()
+    parts = normalized.split("/")
+    candidates = tuple("/".join((*parts[:index], README_FILENAME)) for index in range(1, len(parts) + 1))
+    active_paths = {record.resource.path for record in snapshot.pages if record.page.lifecycle == "active"}
+    return tuple(path for path in candidates if path not in active_paths)
+
+
 def _listing_page_data(record: WikiPageRecord) -> dict[str, object]:
     return {
         "kind": "page",
-        "page_id": record.page.page_id,
         "path": record.resource.path,
         "title": record.page.title,
         "lifecycle": record.page.lifecycle,
-        "version": record.resource.version_id,
     }
 
 
@@ -312,49 +308,33 @@ def _bounded_listing(entries: list[dict[str, object]], limit: int) -> list[dict[
     return visible
 
 
-def _resolve(wiki: WikiService, selector: WikiPageSelector) -> tuple[WikiPageRecord, str | None] | ToolResult:
-    field, value = _selector(selector)
+def _resolve(wiki: WikiService, path: str) -> tuple[WikiPageRecord, str | None] | ToolResult:
     try:
         snapshot = wiki.snapshot()
-    except WikiAmbiguityError as exc:
+    except WikiAmbiguityError:
         return ToolResult.failure(
             code="ambiguous_ref",
-            message=str(exc),
+            message="The wiki contains an ambiguous page name.",
             preview="Ambiguous wiki reference",
-            recovery_action="Call list_wiki_pages and retry with an exact page_id or path.",
+            recovery_action="Call list_wiki_pages and retry with an exact page path.",
         )
-    except WikiValidationError as exc:
+    except WikiValidationError:
         return ToolResult.failure(
             code="invalid_ref",
-            message=str(exc),
+            message="The wiki cannot resolve this page path.",
             preview="Invalid wiki reference",
-            recovery_action="Call list_wiki_pages and retry with one exact returned reference.",
+            recovery_action="Call list_wiki_pages and retry with one exact returned page path.",
         )
 
     pages = tuple(record for record in snapshot.pages if record.page.lifecycle == "active")
-    if field == "page_id":
-        matches = tuple(record for record in pages if record.page.page_id == value)
-    elif field == "path":
-        matches = tuple(record for record in pages if record.resource.path == value)
-    elif field == "title":
-        matches = tuple(record for record in pages if record.page.title == value)
-    else:
-        matches = tuple(record for record in pages if value in record.page.aliases)
+    matches = tuple(record for record in pages if record.resource.path == path)
 
     if not matches:
         return ToolResult.failure(
             code="not_found",
-            message=f"No active wiki page has {field} {value!r}.",
+            message=f"No active wiki page exists at {path!r}.",
             preview="Wiki page not found",
-            recovery_action="Call list_wiki_pages and retry with an exact active page reference.",
-        )
-    if len(matches) != 1:
-        return ToolResult.failure(
-            code="ambiguous_ref",
-            message=f"Wiki {field} {value!r} matches multiple active pages.",
-            preview="Ambiguous wiki reference",
-            data={"candidates": [_page_data(record, snapshot.head) for record in matches]},
-            recovery_action="Retry with one exact candidate page_id from this result.",
+            recovery_action="Call list_wiki_pages and retry with an exact active page path.",
         )
     return matches[0], snapshot.head
 
@@ -378,16 +358,16 @@ def _bounded_text(value: str | None, limit: int) -> tuple[str | None, bool]:
     return value[:limit] + "…", True
 
 
-def _link_data(reference: LinkReference) -> tuple[dict[str, object], bool]:
-    source_page_id, source_truncated = _bounded_text(reference.source_page_id, _MAX_LINK_ID_CHARS)
-    target_page_id, target_truncated = _bounded_text(reference.target_page_id, _MAX_LINK_ID_CHARS)
+def _link_data(reference: LinkReference, paths: dict[str, str]) -> tuple[dict[str, object], bool]:
+    source_path, source_truncated = _bounded_text(paths.get(reference.source_page_id), _MAX_LINK_PATH_CHARS)
+    target_path, target_truncated = _bounded_text(paths.get(reference.target_page_id), _MAX_LINK_PATH_CHARS)
     page, page_truncated = _bounded_text(reference.node.page, _MAX_LINK_FIELD_CHARS)
     fragment, fragment_truncated = _bounded_text(reference.node.fragment, _MAX_LINK_FIELD_CHARS)
     alias, alias_truncated = _bounded_text(reference.node.alias, _MAX_LINK_FIELD_CHARS)
     candidates = []
     candidate_truncated = len(reference.candidates) > _MAX_LINK_CANDIDATES
     for candidate in reference.candidates[:_MAX_LINK_CANDIDATES]:
-        bounded, truncated = _bounded_text(candidate, _MAX_LINK_ID_CHARS)
+        bounded, truncated = _bounded_text(paths.get(candidate), _MAX_LINK_PATH_CHARS)
         candidates.append(bounded)
         candidate_truncated = candidate_truncated or truncated
     truncated = any(
@@ -401,8 +381,8 @@ def _link_data(reference: LinkReference) -> tuple[dict[str, object], bool]:
         )
     )
     return {
-        "source_page_id": source_page_id,
-        "target_page_id": target_page_id,
+        "source_path": source_path,
+        "target_path": target_path,
         "status": reference.status.value,
         "candidates": candidates,
         "page": page,
@@ -415,6 +395,7 @@ def _link_data(reference: LinkReference) -> tuple[dict[str, object], bool]:
 def _bounded_links(
     references: tuple[LinkReference, ...],
     *,
+    paths: dict[str, str],
     limit: int,
     budget: int,
 ) -> tuple[list[dict[str, object]], int, bool]:
@@ -422,7 +403,7 @@ def _bounded_links(
     used = 0
     fields_truncated = False
     for reference in references[:limit]:
-        item, truncated = _link_data(reference)
+        item, truncated = _link_data(reference, paths)
         size = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1
         if used + size > budget:
             break
@@ -446,17 +427,17 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
         )
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
-    except WikiAmbiguityError as exc:
+    except WikiAmbiguityError:
         return ToolResult.failure(
             code="ambiguous_ref",
-            message=str(exc),
+            message="The wiki contains an ambiguous page name.",
             preview="Ambiguous wiki reference",
             recovery_action="List the wiki root, then retry with one exact child directory.",
         )
-    except WikiValidationError as exc:
+    except WikiValidationError:
         return ToolResult.failure(
             code="invalid_ref",
-            message=str(exc),
+            message="The wiki cannot list this directory.",
             preview="Invalid wiki reference",
             recovery_action="List the wiki root, then retry with one exact child directory.",
         )
@@ -475,7 +456,7 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
         if entry["kind"] == "directory":
             lines.append(f"[directory] {entry['path']}")
         else:
-            lines.append(f"[page] {entry['path']} — {entry['title']} ({entry['page_id']})")
+            lines.append(f"[page] {entry['path']} — {entry['title']}")
     if not lines:
         lines.append("No wiki entries.")
     next_offset = args.offset + len(visible)
@@ -492,7 +473,6 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
         content=f"Wiki {label}\n" + "\n".join(lines),
         preview=f"{len(visible)} wiki entries" + (" (capped)" if has_more else ""),
         data={
-            "head": snapshot.head,
             "directory": directory,
             "offset": args.offset,
             "entries": visible,
@@ -507,43 +487,52 @@ async def read_wiki_page(execution: ToolExecution, args: ReadWikiPageInput) -> T
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
-    resolved = await asyncio.to_thread(_resolve, wiki, args)
+    resolved = await asyncio.to_thread(_resolve, wiki, args.path)
     if isinstance(resolved, ToolResult):
         return resolved
     record, head = resolved
-    page = _page_data(record, head)
-    prefix = (
-        f"Wiki page metadata: {json.dumps(page, ensure_ascii=False, separators=(',', ':'))}\n\nWiki page content:\n"
-    )
+    body = record.page.body.decode("utf-8")
     content, truncated = _bounded_content(
-        record.content.decode("utf-8"),
+        body,
         offset=args.offset,
         limit=args.limit,
-        max_chars=_MAX_CONTENT_CHARS - len(prefix),
+        max_chars=_MAX_CONTENT_CHARS,
     )
-    return ToolResult(
-        content=prefix + content,
+    result = ToolResult(
+        content=content,
         preview=record.page.title,
         source_refs=(_page_ref(record),),
         data={
-            "page": page,
+            "page": _page_data(record),
             "offset": args.offset,
             "limit": args.limit,
             "content_truncated": truncated,
         },
     )
+    _observe_page(
+        execution,
+        record,
+        head,
+        content_read=(
+            args.offset == 1
+            and args.limit >= len(body.split("\n"))
+            and not truncated
+            and len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
+        ),
+    )
+    return result
 
 
 async def wiki_links(execution: ToolExecution, args: WikiLinksInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
-    resolved = await asyncio.to_thread(_resolve, wiki, args)
+    resolved = await asyncio.to_thread(_resolve, wiki, args.path)
     if isinstance(resolved, ToolResult):
         return resolved
     record, head = resolved
     report = await asyncio.to_thread(wiki.link_report, record.page.page_id, at=head)
-    page = _page_data(report.page, report.head)
+    page = _page_data(report.page)
     static_size = len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1_000
     if static_size >= _MAX_LINK_DATA_BYTES:
         return ToolResult.failure(
@@ -553,14 +542,17 @@ async def wiki_links(execution: ToolExecution, args: WikiLinksInput) -> ToolResu
             recovery_action="Read the page directly; report malformed page metadata if this persists.",
         )
     remaining = _MAX_LINK_DATA_BYTES - static_size
+    paths = {item.page.page_id: item.resource.path for item in report.pages}
     outgoing_budget = remaining // 2 if report.backlinks else remaining
     outgoing, outgoing_size, outgoing_fields_truncated = _bounded_links(
         report.outgoing,
+        paths=paths,
         limit=args.limit,
         budget=outgoing_budget,
     )
     backlinks, _backlinks_size, backlink_fields_truncated = _bounded_links(
         report.backlinks,
+        paths=paths,
         limit=args.limit,
         budget=remaining - outgoing_size,
     )
@@ -601,38 +593,41 @@ async def create_wiki_page(execution: ToolExecution, args: CreateWikiPageInput) 
         return wiki
     if error := _automation_path_error(execution, args.path):
         return error
-    if args.page_id == WIKI_HEALTH_RESOURCE_ID or args.path.casefold() == WIKI_HEALTH_PATH:
+    if args.path.casefold() == WIKI_HEALTH_PATH:
         return _invalid_page(WikiValidationError("health page is backend-managed"))
     body = args.body.encode("utf-8")
     try:
-        desired = build_page(
-            page_id=args.page_id,
-            title=args.title,
-            aliases=tuple(args.aliases),
-            body=body,
-        ).to_bytes()
         snapshot = await asyncio.to_thread(wiki.snapshot)
-        current = next((record for record in snapshot.pages if record.page.page_id == args.page_id), None)
-        if current is not None and current.resource.path == args.path and current.content == desired:
-            return ToolResult(
-                content=f"{args.path} already has the requested content.",
-                preview="Wiki page unchanged",
-                source_refs=(_page_ref(current),),
-                data={
-                    "page": _page_data(current, snapshot.head),
-                    "commit_id": None,
-                    "changed": False,
-                    "projection_pending": False,
-                },
+        current = next((record for record in snapshot.pages if record.resource.path == args.path), None)
+        if current is not None:
+            desired = build_page(
+                page_id=current.page.page_id,
+                title=args.title,
+                aliases=tuple(args.aliases),
+                body=body,
+            ).to_bytes()
+            if current.content == desired:
+                _observe_page(execution, current, snapshot.head, content_read=True)
+                return ToolResult(
+                    content=f"{args.path} already has the requested content.",
+                    preview="Wiki page unchanged",
+                    source_refs=(_page_ref(current),),
+                    data={
+                        "page": _page_data(current),
+                        "changed": False,
+                        "projection_pending": False,
+                    },
+                )
+            return ToolResult.failure(
+                code="name_conflict",
+                message=f"A wiki page already exists at {args.path!r} with different content.",
+                preview="Wiki path already exists",
+                recovery_action="Read the existing page, choose another path, or edit that page instead.",
             )
-        if snapshot.head != args.expected_head:
-            raise RevisionConflictError(
-                f"current head changed: expected {args.expected_head!r}, found {snapshot.head!r}"
-            )
+        activated_readme_paths = _activated_directory_readme_paths(snapshot, args.path)
         actor, origin = _write_identity(execution)
         created = await asyncio.to_thread(
             wiki.create_page,
-            page_id=args.page_id,
             path=args.path,
             title=args.title,
             aliases=tuple(args.aliases),
@@ -642,28 +637,34 @@ async def create_wiki_page(execution: ToolExecution, args: CreateWikiPageInput) 
             origin=origin,
             reason=f"create wiki page {args.path}",
         )
-    except RevisionConflictError as error:
-        return _revision_conflict(error)
-    except WikiAmbiguityError as error:
+    except RevisionConflictError:
+        return _revision_conflict()
+    except WikiAmbiguityError:
         return ToolResult.failure(
             code="name_conflict",
-            message=str(error),
+            message="The requested path, title, or alias is already in use.",
             preview="Wiki name already exists",
             recovery_action="List the target directory, choose a unique path/title/alias, and retry.",
         )
     except (PageValidationError, WikiValidationError) as error:
         return _invalid_page(error)
 
-    commit_id = wiki.repository.head
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
     head = wiki.repository.head
+    _observe_page(execution, created, head, content_read=True)
+    message = f"Created {created.resource.path}."
+    if activated_readme_paths:
+        readmes = ", ".join(activated_readme_paths)
+        message += (
+            f" Created or restored directory contracts: {readmes}. Read them now; replace any bootstrap text with "
+            "the exact purpose, producers, consumers, boundaries, and retention before finishing."
+        )
     return ToolResult(
-        content=f"Created {created.resource.path}.",
+        content=message,
         preview="Wiki page created",
         source_refs=(_page_ref(created),),
         data={
-            "page": _page_data(created, head),
-            "commit_id": commit_id,
+            "page": _page_data(created),
             "changed": True,
             "projection_pending": projection_pending,
         },
@@ -677,15 +678,15 @@ async def edit_wiki_page(execution: ToolExecution, args: EditWikiPageInput) -> T
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
         record = next(
-            (item for item in snapshot.pages if item.page.page_id == args.page_id and item.page.lifecycle == "active"),
+            (item for item in snapshot.pages if item.resource.path == args.path and item.page.lifecycle == "active"),
             None,
         )
         if record is None:
             return ToolResult.failure(
                 code="not_found",
-                message=f"No active wiki page has page_id {args.page_id!r}.",
+                message=f"No active wiki page exists at {args.path!r}.",
                 preview="Wiki page not found",
-                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page_id.",
+                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page path.",
             )
         if error := _automation_path_error(execution, record.resource.path):
             return error
@@ -693,41 +694,43 @@ async def edit_wiki_page(execution: ToolExecution, args: EditWikiPageInput) -> T
             return error
         replacement = record.page.with_body(args.body.encode("utf-8")).to_bytes()
         if replacement == record.content:
+            _observe_page(execution, record, snapshot.head, content_read=True)
             return ToolResult(
                 content=f"{record.resource.path} already has the requested body.",
                 preview="Wiki page unchanged",
                 source_refs=(_page_ref(record),),
                 data={
-                    "page": _page_data(record, snapshot.head),
-                    "commit_id": None,
+                    "page": _page_data(record),
                     "changed": False,
                     "projection_pending": False,
                 },
             )
+        observation = _require_page_observation(execution, record.page.page_id, content_read=True)
+        if isinstance(observation, ToolResult):
+            return observation
         actor, origin = _write_identity(execution)
-        updated, commit_id = await asyncio.to_thread(
+        updated, _commit_id = await asyncio.to_thread(
             wiki.update_page_with_commit,
-            args.page_id,
+            record.page.page_id,
             content=replacement,
-            expected_version=args.expected_version,
-            expected_head=args.expected_head,
+            expected_version=observation.version,
             actor=actor,
             origin=origin,
             reason=f"edit wiki page {record.resource.path}",
         )
-    except RevisionConflictError as error:
-        return _revision_conflict(error)
+    except RevisionConflictError:
+        return _revision_conflict()
     except (PageValidationError, WikiValidationError) as error:
         return _invalid_page(error)
 
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
+    _observe_page(execution, updated, wiki.repository.head, content_read=True)
     return ToolResult(
         content=f"Updated {updated.resource.path}.",
         preview="Wiki page updated",
         source_refs=(_page_ref(updated),),
         data={
-            "page": _page_data(updated, wiki.repository.head),
-            "commit_id": commit_id,
+            "page": _page_data(updated),
             "changed": True,
             "projection_pending": projection_pending,
         },
@@ -740,23 +743,27 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
         return wiki
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
-        record = next((item for item in snapshot.pages if item.page.page_id == args.page_id), None)
+        record = next((item for item in snapshot.pages if item.resource.path == args.path), None)
         if record is None:
-            try:
-                resource = await asyncio.to_thread(wiki.repository.get, args.page_id, at=snapshot.head)
-            except KeyError:
+            resource = await asyncio.to_thread(
+                wiki.repository.find_by_path,
+                args.path,
+                at=snapshot.head,
+                include_archived=True,
+            )
+            if resource is None:
                 return ToolResult.failure(
                     code="not_found",
-                    message=f"No wiki page has page_id {args.page_id!r}.",
+                    message=f"No wiki page exists at {args.path!r}.",
                     preview="Wiki page not found",
-                    recovery_action="Call list_wiki_pages and retry with an exact page_id.",
+                    recovery_action="Call list_wiki_pages and retry with an exact page path.",
                 )
             if resource.state is not ResourceState.ARCHIVED:
                 return ToolResult.failure(
                     code="not_found",
-                    message=f"No active wiki page has page_id {args.page_id!r}.",
+                    message=f"No active wiki page exists at {args.path!r}.",
                     preview="Wiki page not found",
-                    recovery_action="Call list_wiki_pages and retry with an exact active page_id.",
+                    recovery_action="Call list_wiki_pages and retry with an exact active page path.",
                 )
             if error := _automation_path_error(execution, resource.path):
                 return error
@@ -764,8 +771,7 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
                 content=f"{resource.path} is already archived.",
                 preview="Wiki page unchanged",
                 data={
-                    "page": _archived_page_data(wiki, resource, snapshot.head),
-                    "commit_id": None,
+                    "page": _archived_page_data(wiki, resource),
                     "changed": False,
                     "projection_pending": False,
                 },
@@ -776,29 +782,39 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
             return error
         if record.page.page_id == WIKI_HEALTH_RESOURCE_ID:
             return _invalid_page(WikiValidationError("health page is backend-managed"))
+        observation = _require_page_observation(execution, record.page.page_id, content_read=False)
+        if isinstance(observation, ToolResult):
+            return observation
+        if record.resource.version_id != observation.version:
+            return _revision_conflict()
         actor, origin = _write_identity(execution)
         await asyncio.to_thread(
             wiki.archive_page,
-            args.page_id,
-            expected_version=args.expected_version,
-            base_head=args.expected_head,
+            record.page.page_id,
+            expected_version=observation.version,
+            base_head=snapshot.head,
             actor=actor,
             origin=origin,
             reason=args.reason,
         )
-    except RevisionConflictError as error:
-        return _revision_conflict(error)
+    except RevisionConflictError:
+        return _revision_conflict()
     except WikiValidationError as error:
         return _invalid_page(error)
 
-    resource = await asyncio.to_thread(wiki.repository.get, args.page_id, at=wiki.repository.head)
+    resource = await asyncio.to_thread(wiki.repository.get, record.page.page_id, at=wiki.repository.head)
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
+    execution.ctx.run.observe_resource(
+        wiki_page_observation_id(record.page.page_id),
+        version=resource.version_id,
+        container_version=wiki.repository.head,
+        content_read=False,
+    )
     return ToolResult(
         content=f"Archived {resource.path}.",
         preview="Wiki page archived",
         data={
-            "page": _archived_page_data(wiki, resource, wiki.repository.head),
-            "commit_id": wiki.repository.head,
+            "page": _archived_page_data(wiki, resource),
             "changed": True,
             "projection_pending": projection_pending,
         },
@@ -812,15 +828,61 @@ async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> T
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
         record = next(
-            (item for item in snapshot.pages if item.page.page_id == args.page_id and item.page.lifecycle == "active"),
+            (item for item in snapshot.pages if item.resource.path == args.path and item.page.lifecycle == "active"),
             None,
         )
         if record is None:
+            destination = next(
+                (
+                    item
+                    for item in snapshot.pages
+                    if item.resource.path == args.new_path and item.page.lifecycle == "active"
+                ),
+                None,
+            )
+            if destination is not None:
+                history = await asyncio.to_thread(
+                    wiki.repository.history,
+                    resource_id=destination.page.page_id,
+                )
+                already_moved = any(
+                    change.action == "move"
+                    and change.before is not None
+                    and change.after is not None
+                    and change.before.path == args.path
+                    and change.after.path == args.new_path
+                    for commit in history
+                    for change in commit.changes
+                )
+                if already_moved:
+                    if error := _automation_path_error(execution, args.path):
+                        return error
+                    if error := _automation_path_error(execution, args.new_path):
+                        return error
+                    _observe_page(execution, destination, snapshot.head, content_read=False)
+                    return ToolResult(
+                        content=f"{args.path} was already moved to {args.new_path}.",
+                        preview="Wiki page unchanged",
+                        source_refs=(_page_ref(destination),),
+                        data={
+                            "page": _page_data(destination),
+                            "changed": False,
+                            "projection_pending": False,
+                        },
+                    )
             return ToolResult.failure(
                 code="not_found",
-                message=f"No active wiki page has page_id {args.page_id!r}.",
+                message=f"No active wiki page exists at {args.path!r}.",
                 preview="Wiki page not found",
-                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page_id.",
+                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page path.",
+            )
+        if record.resource.path == args.new_path:
+            _observe_page(execution, record, snapshot.head, content_read=False)
+            return ToolResult(
+                content=f"{record.resource.path} is already at the requested path.",
+                preview="Wiki page unchanged",
+                source_refs=(_page_ref(record),),
+                data={"page": _page_data(record), "changed": False, "projection_pending": False},
             )
         if error := _automation_path_error(execution, record.resource.path):
             return error
@@ -831,7 +893,7 @@ async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> T
         if record.page.page_id == WIKI_HEALTH_RESOURCE_ID:
             return _invalid_page(WikiValidationError("health page is backend-managed"))
         sessions: SessionService = execution.ctx.services["session"]
-        area = await sessions.find_area_by_page_id(args.page_id)
+        area = await sessions.find_area_by_page_id(record.page.page_id)
         if area is not None:
             return ToolResult.failure(
                 code="area_page_bound",
@@ -839,23 +901,29 @@ async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> T
                 preview="Area page must move with its Area",
                 recovery_action="Rename the Area instead; it moves the bound page and keeps the custodian synchronized.",
             )
+        observation = _require_page_observation(execution, record.page.page_id, content_read=False)
+        if isinstance(observation, ToolResult):
+            return observation
+        if record.resource.version_id != observation.version:
+            return _revision_conflict()
+        activated_readme_paths = _activated_directory_readme_paths(snapshot, args.new_path)
         actor, origin = _write_identity(execution)
         moved, commit_id = await asyncio.to_thread(
             wiki.move_page,
-            args.page_id,
+            record.page.page_id,
             new_path=args.new_path,
-            expected_version=args.expected_version,
-            expected_head=args.expected_head,
+            expected_version=observation.version,
+            expected_head=snapshot.head,
             actor=actor,
             origin=origin,
             reason=f"move wiki page {record.resource.path} to {args.new_path}",
         )
-    except RevisionConflictError as error:
-        return _revision_conflict(error)
-    except WikiAmbiguityError as error:
+    except RevisionConflictError:
+        return _revision_conflict()
+    except WikiAmbiguityError:
         return ToolResult.failure(
             code="name_conflict",
-            message=str(error),
+            message="The destination path or another page name is already in use.",
             preview="Wiki path already exists",
             recovery_action="List the destination directory and retry with an unused path.",
         )
@@ -863,17 +931,24 @@ async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> T
         return _invalid_page(error)
 
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]() if commit_id is not None else False
+    _observe_page(execution, moved, wiki.repository.head, content_read=observation.content_read)
+    message = (
+        f"Moved {record.resource.path} to {moved.resource.path}."
+        if commit_id is not None
+        else f"{moved.resource.path} is already at the requested path."
+    )
+    if commit_id is not None and activated_readme_paths:
+        readmes = ", ".join(activated_readme_paths)
+        message += (
+            f" Created or restored directory contracts: {readmes}. Read them now; replace any bootstrap text with "
+            "the exact purpose, producers, consumers, boundaries, and retention before finishing."
+        )
     return ToolResult(
-        content=(
-            f"Moved {record.resource.path} to {moved.resource.path}."
-            if commit_id is not None
-            else f"{moved.resource.path} is already at the requested path."
-        ),
+        content=message,
         preview="Wiki page moved" if commit_id is not None else "Wiki page unchanged",
         source_refs=(_page_ref(moved),),
         data={
-            "page": _page_data(moved, wiki.repository.head),
-            "commit_id": commit_id,
+            "page": _page_data(moved),
             "changed": commit_id is not None,
             "projection_pending": projection_pending,
         },
@@ -887,7 +962,7 @@ async def approve_create_wiki_page(
     return ApprovalInfo(
         description=f"Create wiki page {args.path}",
         preview=args.body[:1_500],
-        diff=f"Title: {args.title}\nPage ID: {args.page_id}\nExpected repository head: {args.expected_head}",
+        diff=f"Title: {args.title}\nPath: {args.path}",
     )
 
 
@@ -896,9 +971,9 @@ async def approve_edit_wiki_page(
     args: EditWikiPageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
-        description=f"Replace the body of wiki page {args.page_id}",
+        description=f"Replace the body of wiki page {args.path}",
         preview=args.body[:1_500],
-        diff=f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}",
+        diff="Replace the current page body.",
     )
 
 
@@ -907,9 +982,9 @@ async def approve_archive_wiki_page(
     args: ArchiveWikiPageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
-        description=f"Archive wiki page {args.page_id}",
+        description=f"Archive wiki page {args.path}",
         preview=args.reason,
-        diff=f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}",
+        diff="Archive the current page.",
     )
 
 
@@ -918,9 +993,9 @@ async def approve_move_wiki_page(
     args: MoveWikiPageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
-        description=f"Move wiki page {args.page_id} to {args.new_path}",
+        description=f"Move wiki page {args.path} to {args.new_path}",
         preview="Path-style wiki links to this page will be rewritten; title-style links will stay unchanged.",
-        diff=f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}",
+        diff="Move the current page and update resolved path-style links.",
     )
 
 
@@ -933,23 +1008,17 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
         generated += b"\n"
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
-        if snapshot.head != args.expected_head:
-            raise RevisionConflictError(
-                f"current head changed: expected {args.expected_head!r}, found {snapshot.head!r}"
-            )
         record = next(
-            (page for page in snapshot.pages if page.page.page_id == args.page_id and page.page.lifecycle == "active"),
+            (page for page in snapshot.pages if page.resource.path == args.path and page.page.lifecycle == "active"),
             None,
         )
         if record is None:
             return ToolResult.failure(
                 code="not_found",
-                message=f"No active wiki page has page_id {args.page_id!r}.",
+                message=f"No active wiki page exists at {args.path!r}.",
                 preview="Wiki page not found",
-                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page_id.",
+                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page path.",
             )
-        if record.resource.version_id != args.expected_version:
-            raise RevisionConflictError(f"resource {args.page_id} changed: expected {args.expected_version}")
         if not record.resource.path.startswith((AUTOMATIONS_PATH_PREFIX, "insights/")) or "fact_citations" in (
             record.page.metadata
         ):
@@ -979,17 +1048,22 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 recovery_action="Run the registered owning automation, or publish to a page owned by this automation.",
             )
         if extract_generated_region(record.content, expected_page_id=record.page.page_id) == generated:
+            _observe_page(execution, record, snapshot.head, content_read=True)
             return ToolResult(
                 content=f"{record.resource.path} already has that generated content.",
                 preview="Wiki page unchanged",
                 source_refs=(_page_ref(record),),
                 data={
-                    "page": _page_data(record, snapshot.head),
-                    "commit_id": None,
+                    "page": _page_data(record),
                     "changed": False,
                     "projection_pending": False,
                 },
             )
+        observation = _require_page_observation(execution, record.page.page_id, content_read=True)
+        if isinstance(observation, ToolResult):
+            return observation
+        if record.resource.version_id != observation.version:
+            return _revision_conflict()
         metadata = {
             key: value
             for key, value in record.page.metadata.items()
@@ -1016,13 +1090,13 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
             origin=origin,
             reason=f"update generated wiki page {record.resource.path}",
         )
-    except RevisionConflictError as exc:
+    except RevisionConflictError:
         return ToolResult.failure(
             code="revision_conflict",
-            message=str(exc),
+            message="The wiki page changed after it was read.",
             preview="Wiki page changed",
             retryable=True,
-            recovery_action="Read the page again and retry with its current version and repository head.",
+            recovery_action="Read the page again, then retry.",
         )
     except GeneratedRegionConflictError as exc:
         return ToolResult.failure(
@@ -1040,16 +1114,16 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
         )
 
     published_head = commit.commit_id if commit is not None else snapshot.head
-    updated = await asyncio.to_thread(wiki.read_page, args.page_id, at=published_head)
+    updated = await asyncio.to_thread(wiki.read_page, record.page.page_id, at=published_head)
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]() if commit is not None else False
     current_head = wiki.repository.head
+    _observe_page(execution, updated, current_head, content_read=True)
     return ToolResult(
         content=f"Updated the generated region in {updated.resource.path}.",
         preview="Wiki page updated",
         source_refs=(_page_ref(updated),),
         data={
-            "page": _page_data(updated, current_head),
-            "commit_id": None if commit is None else commit.commit_id,
+            "page": _page_data(updated),
             "changed": commit is not None,
             "projection_pending": projection_pending,
         },
@@ -1061,9 +1135,9 @@ async def approve_publish_wiki_generated(
     args: PublishWikiGeneratedInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
-        description=f"Update generated wiki content for {args.page_id}",
+        description=f"Update generated wiki content for {args.path}",
         preview=args.generated[:1_500],
-        diff=(f"Expected page version: {args.expected_version}\nExpected repository head: {args.expected_head}"),
+        diff="Update the current generated content.",
     )
 
 
@@ -1085,9 +1159,9 @@ create_wiki_page_tool = tool(
     display_name="CreateWikiPage",
     display_description="Create one managed wiki page.",
     description=(
-        "Create one common managed wiki page from a stable page ID, path, title, aliases, and Markdown body. "
+        "Create one common managed wiki page from a path, title, aliases, and Markdown body. "
         "Missing ancestor directories receive semantic README.md contracts in the same commit. "
-        "List the wiki root first and provide its exact repository head. "
+        "Read and specialize any reported bootstrap README before finishing. "
         f"Scheduled automations can create pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
     input_model=CreateWikiPageInput,
@@ -1109,7 +1183,7 @@ edit_wiki_page_tool = tool(
     display_description="Replace one managed wiki page body.",
     description=(
         "Replace only the Markdown body of one active managed wiki page while preserving its identity and metadata. "
-        "Read the page first and provide its exact page ID, version, and repository head. "
+        "Read the page first. "
         f"Scheduled automations can edit pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
     input_model=EditWikiPageInput,
@@ -1131,7 +1205,7 @@ archive_wiki_page_tool = tool(
     display_description="Archive one managed wiki page.",
     description=(
         "Recoverably archive one active managed wiki page; this never hard-deletes its history. "
-        "Read the page first and provide its exact page ID, version, and repository head. "
+        "Read the page first. "
         f"Scheduled automations can archive pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
     input_model=ArchiveWikiPageInput,
@@ -1154,8 +1228,9 @@ move_wiki_page_tool = tool(
     description=(
         "Move one active managed wiki page to a new path without changing its identity, title, aliases, body, or metadata. "
         "Missing destination directory README.md contracts are created in the same commit. "
+        "Read and specialize any reported bootstrap README before finishing. "
         "Path-style wikilinks that resolve to the page are updated atomically; title-style links remain unchanged. "
-        "Read the page first and provide its exact page ID, version, and repository head."
+        "Read the page first."
     ),
     input_model=MoveWikiPageInput,
     policy=ToolPolicy(
@@ -1174,7 +1249,7 @@ move_wiki_page_tool = tool(
 read_wiki_page_tool = tool(
     display_name="ReadWikiPage",
     display_description="Read one managed wiki page.",
-    description="Read one active managed wiki page by an exact page ID, path, title, or alias.",
+    description="Read one active managed wiki page by its exact path.",
     input_model=ReadWikiPageInput,
     policy=ToolPolicy(
         action=ToolAction.READ,
@@ -1202,10 +1277,7 @@ wiki_links_tool = tool(
 publish_wiki_generated_tool = tool(
     display_name="PublishWikiGenerated",
     display_description="Update one page's generated region.",
-    description=(
-        "Update only the generated region of one existing managed wiki page. "
-        "Read the page first and provide its exact version and repository head."
-    ),
+    description=("Update only the generated region of one existing managed wiki page. Read the page first."),
     input_model=PublishWikiGeneratedInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,

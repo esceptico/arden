@@ -20,6 +20,7 @@ export function DialogLayer({
   className,
   ariaLabel,
   labelledBy,
+  describedBy,
   alert = false,
   children,
 }: {
@@ -28,6 +29,7 @@ export function DialogLayer({
   className?: string;
   ariaLabel?: string;
   labelledBy?: string;
+  describedBy?: string;
   alert?: boolean;
   children: ReactNode;
 }) {
@@ -50,6 +52,7 @@ export function DialogLayer({
       aria-modal="true"
       aria-label={ariaLabel}
       aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
       tabIndex={-1}
       className={className}
       initial={{ opacity: 0 }}

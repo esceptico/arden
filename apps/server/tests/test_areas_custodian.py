@@ -311,6 +311,93 @@ def test_delivery_retries_exact_request_after_restart_without_consuming_new_wake
     assert second.message == "run with: later wake"
 
 
+def test_failed_delivery_refunds_budget_and_restores_wakes(tmp_path):
+    c = _store(tmp_path)
+    c.note_event("a1", "first wake", attention="ambient", paused=False, now=NOW)
+    allowed, delivery = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda events: ", ".join(events),
+        now=NOW,
+    )
+    assert allowed and delivery is not None
+    c.note_event("a1", "later wake", attention="ambient", paused=False, now=NOW)
+    assert c.runs_today("a1", now=NOW) == 1
+
+    assert c.abandon_delivery("a1", client_id=delivery.client_id)
+    assert c.runs_today("a1", now=NOW) == 0
+    assert c.state("a1")["pending_events"] == ["first wake", "later wake"]
+    assert "pending_delivery" not in c.state("a1")
+    assert not c.abandon_delivery("a1", client_id=delivery.client_id)
+
+
+def test_failed_bound_delivery_requires_its_exact_chat_run(tmp_path):
+    c = _store(tmp_path)
+    allowed, delivery = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda _: "run",
+        now=NOW,
+    )
+    assert allowed and delivery is not None
+    c.bind_delivery_run("a1", client_id=delivery.client_id, run_id="chat-run-1")
+
+    assert not c.abandon_delivery("a1", run_id="stale-chat-run")
+    assert c.runs_today("a1", now=NOW) == 1
+    assert c.abandon_delivery("a1", run_id="chat-run-1")
+    assert c.runs_today("a1", now=NOW) == 0
+
+
+def test_failed_manual_delivery_does_not_change_autonomous_budget(tmp_path):
+    c = _store(tmp_path)
+    allowed, delivery = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="manual:area:a1:1",
+        attention="ambient",
+        manual=True,
+        skip_approvals=True,
+        build_message=lambda _: "run",
+        now=NOW,
+    )
+    assert allowed and delivery is not None
+
+    assert c.abandon_delivery("a1", client_id=delivery.client_id)
+    assert c.runs_today("a1", now=NOW) == 0
+
+
+def test_repeated_failed_runs_do_not_exhaust_the_daily_cap(tmp_path):
+    c = _store(tmp_path)
+    cap = AREA_ATTENTION_PRESETS["ambient"]["runs_per_day"]
+
+    for iteration in range(1, cap + 2):
+        client_id = f"loop:area:a1:{iteration}"
+        run_id = f"chat-run-{iteration}"
+        allowed, delivery = c.begin_or_resume_delivery(
+            "a1",
+            iteration=iteration,
+            client_id=client_id,
+            attention="ambient",
+            manual=False,
+            skip_approvals=True,
+            build_message=lambda _: "run",
+            now=NOW,
+        )
+        assert allowed and delivery is not None
+        c.bind_delivery_run("a1", client_id=client_id, run_id=run_id)
+        assert c.abandon_delivery("a1", run_id=run_id)
+
+    assert c.runs_today("a1", now=NOW) == 0
+
+
 def test_stale_delivery_is_replaced_after_iteration_was_committed(tmp_path):
     c = _store(tmp_path)
     allowed, first = c.begin_or_resume_delivery(

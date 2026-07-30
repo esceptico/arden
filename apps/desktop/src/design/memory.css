@@ -1364,10 +1364,8 @@
 .memory-edit-review__error { margin: 0; padding: var(--space-2) var(--memory-review-inline) var(--space-3); color: var(--danger); font-size: var(--text-xs); }
 .memory-edit-review__conflict { min-height: 0; padding: var(--space-4) var(--memory-review-inline); }
 
-/* Canonical rename and maintenance questions reuse the established blocking
-   review sheet; these rules style only their content. */
-.wiki-rename-sheet__title,
-.wiki-maintenance-review__title {
+/* Rename approval reuses the established blocking review sheet. */
+.wiki-rename-sheet__title {
   margin: var(--space-1) 0 0;
   color: var(--ink);
   font-size: var(--text-section);
@@ -1440,8 +1438,7 @@
   min-width: 0;
 }
 
-.wiki-rename-sheet__footer,
-.wiki-maintenance-review__footer {
+.wiki-rename-sheet__footer {
   padding: var(--space-3) var(--memory-review-inline);
   display: flex;
   justify-content: flex-end;
@@ -1450,79 +1447,7 @@
   background: var(--panel);
 }
 
-.wiki-maintenance-review__body {
-  display: grid;
-  align-content: start;
-  gap: var(--space-5);
-}
-
-.wiki-maintenance-review__status p {
-  max-width: 65ch;
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: var(--text-body);
-  line-height: var(--leading-body);
-}
-
-.wiki-maintenance-review__updates {
-  margin: var(--space-4) 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.wiki-maintenance-review__updates > li {
-  padding: var(--space-4) 0;
-  border-top: 1px solid var(--edge);
-}
-
-.wiki-maintenance-review__updates > li:last-child {
-  padding-bottom: 0;
-}
-
-.wiki-maintenance-review__page-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.wiki-maintenance-review__page-heading h3 {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-  font-size: var(--text-body);
-  font-weight: 600;
-}
-
-.wiki-maintenance-review__page-heading code {
-  flex: none;
-  color: var(--muted);
-  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
-}
-
-.wiki-maintenance-review__aliases {
-  margin: var(--space-1-5) 0 var(--space-3);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-}
-
-.wiki-maintenance-review pre {
-  max-height: 15rem;
-  margin: 0;
-  padding: var(--space-3);
-  overflow: auto;
-  border-radius: var(--r-house);
-  color: var(--ink-soft);
-  background: var(--surface-2);
-  font: 500 var(--text-meta)/1.55 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.wiki-rename-sheet .memory-edit-review__scrim,
-.wiki-maintenance-review .memory-edit-review__scrim {
+.wiki-rename-sheet .memory-edit-review__scrim {
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
 }
@@ -1533,15 +1458,6 @@
     gap: var(--space-1);
   }
 
-  .wiki-maintenance-review__page-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .wiki-maintenance-review__footer {
-    flex-wrap: wrap;
-  }
 }
 
 /* ── Nested diff dialog / quick switcher ────────────────────── */

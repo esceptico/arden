@@ -107,6 +107,43 @@ class CustodianStore:
             raise RuntimeError(f"Custodian delivery iteration moved backwards for {area_id}")
         return delivery
 
+    def bind_delivery_run(self, area_id: str, *, client_id: str, run_id: str) -> None:
+        pending = self.state(area_id).get("pending_delivery")
+        if pending is None or pending["client_id"] != client_id:
+            raise RuntimeError(f"Custodian delivery changed before chat binding for {area_id}")
+        pending["run_id"] = run_id
+        self._flush()
+
+    def abandon_delivery(
+        self,
+        area_id: str,
+        *,
+        client_id: str | None = None,
+        run_id: str | None = None,
+    ) -> bool:
+        """Release one exact failed delivery and restore its wake events."""
+
+        if (client_id is None) == (run_id is None):
+            raise ValueError("Provide exactly one custodian delivery identifier")
+        st = self.state(area_id)
+        pending = st.get("pending_delivery")
+        if pending is None:
+            return False
+        matches = pending["client_id"] == client_id if client_id is not None else pending.get("run_id") == run_id
+        if not matches:
+            return False
+
+        budget_day = pending.get("budget_day")
+        if budget_day is not None:
+            if st["runs_day"] != budget_day or st["runs_today"] < 1:
+                raise RuntimeError(f"Custodian run budget changed before delivery rollback for {area_id}")
+            st["runs_today"] -= 1
+        restored_events = [*pending.get("woken_by", ()), *st["pending_events"]]
+        st["pending_events"] = list(dict.fromkeys(restored_events))[-8:]
+        del st["pending_delivery"]
+        self._flush()
+        return True
+
     def needs_intake(self, area_id: str) -> bool:
         return self.state(area_id)["last_report"] is None
 
@@ -197,6 +234,9 @@ class CustodianStore:
             "client_id": delivery.client_id,
             "message": delivery.message,
             "skip_approvals": delivery.skip_approvals,
+            "run_id": None,
+            "budget_day": None if manual else now.date().isoformat(),
+            "woken_by": list(woken_by),
         }
         self._flush()
         return True, delivery

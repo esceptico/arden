@@ -38,7 +38,11 @@ Configure role-specific models and reasoning effort in Desktop Settings. They
 are persisted in `model_roles` and `model_reasoning_efforts` in the settings
 file; the legacy `ARDEN_<ROLE>_MODEL` variables are not configuration inputs.
 
-<Note>Embedding is optional. Without it, vector search is disabled but arden still works with full-text search.</Note>
+Choose an embedding model—or **No embeddings**—in **Desktop Settings → Models**.
+Changing it rebuilds the semantic index after confirmation. A disabled choice
+is persisted as `"embedding_model": null`.
+
+<Note>Embedding is optional. Without it, Arden makes no embedding requests and continues to work with full-text search.</Note>
 
 ## Server
 

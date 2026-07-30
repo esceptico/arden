@@ -1,8 +1,8 @@
 import hashlib
 from datetime import UTC, datetime
 
+import httpx
 import pytest
-from ddgs.exceptions import DDGSException
 
 from arden.context.models import SessionState
 from arden.integrations.web import ddgs as ddgs_module
@@ -208,45 +208,122 @@ async def test_web_search_sanitizes_provider_failures():
         "('error sending request for url (https://html.duckduckgo.com/html/)', 'https://html.duckduckgo.com/html/')"
     )
     result = await web_search(
-        _execution(FakeWebSource(error=WebSearchProviderException("DuckDuckGo request failed."))),
+        _execution(FakeWebSource(error=WebSearchProviderException("Web search is temporarily unavailable."))),
         WebSearchInput(query="normal query", limit=5),
     )
 
     assert result.is_error is True
     assert result.preview == "Search failed"
-    assert result.content == "DuckDuckGo request failed."
+    assert result.content == "Web search is temporarily unavailable."
     assert raw_error not in result.content
 
 
-def test_ddgs_web_source_raises_no_search_results_for_exact_sentinel(monkeypatch):
-    class FakeDDGS:
-        def __enter__(self):
-            return self
+def test_ddgs_web_source_parses_results_and_removes_redirects(monkeypatch):
+    response = httpx.Response(
+        200,
+        content=b"""
+            <html><body>
+                <div class="result">
+                    <a class="result__a">Missing URL</a>
+                </div>
+                <div class="result results_links">
+                    <a
+                        class="result__a"
+                        href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fitem%3Fx%3D1&amp;rut=tracker"
+                    >Example result</a>
+                    <div class="result__snippet"> Useful <b>search</b> result. </div>
+                </div>
+            </body></html>
+        """,
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    def fake_get(url: str, **kwargs: object) -> httpx.Response:
+        calls.append((url, kwargs))
+        return response
 
-        def text(self, query: str, max_results: int):
-            raise DDGSException("No results found.")
+    monkeypatch.setattr(ddgs_module.httpx, "get", fake_get)
 
-    monkeypatch.setattr(ddgs_module, "DDGS", FakeDDGS)
+    results = DDGSWebSource().search_with_details("example query", 5, None)
+
+    assert results == [
+        WebSearchResult(
+            title="Example result",
+            url="https://example.com/item?x=1",
+            summary="Useful search result.",
+        )
+    ]
+    assert calls[0][1]["params"] == {"q": "example query"}
+
+
+def test_ddgs_web_source_raises_no_search_results_for_empty_page(monkeypatch):
+    monkeypatch.setattr(
+        ddgs_module.httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(200, content=b"<html><body>No results.</body></html>"),
+    )
 
     with pytest.raises(NoSearchResultsException):
         DDGSWebSource().search_with_details("too specific", 5, None)
 
 
 def test_ddgs_web_source_raises_provider_exception_for_request_failures(monkeypatch):
-    class FakeDDGS:
-        def __enter__(self):
-            return self
+    def fail(*args, **kwargs):
+        raise httpx.ConnectTimeout("timed out")
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    monkeypatch.setattr(ddgs_module.httpx, "get", fail)
 
-        def text(self, query: str, max_results: int):
-            raise DDGSException("RuntimeError: error sending request for url (https://html.duckduckgo.com/html/)")
-
-    monkeypatch.setattr(ddgs_module, "DDGS", FakeDDGS)
-
-    with pytest.raises(WebSearchProviderException, match="DuckDuckGo request failed"):
+    with pytest.raises(WebSearchProviderException, match="Web search is temporarily unavailable"):
         DDGSWebSource().search_with_details("normal query", 5, None)
+
+
+def test_ddgs_web_source_treats_challenge_response_as_provider_failure(monkeypatch):
+    monkeypatch.setattr(
+        ddgs_module.httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(202, content=b"<html><body>Challenge</body></html>"),
+    )
+
+    with pytest.raises(WebSearchProviderException, match="Web search is temporarily unavailable"):
+        DDGSWebSource().search_with_details("normal query", 5, None)
+
+
+def test_ddgs_web_source_falls_back_to_lite_search(monkeypatch):
+    responses = iter(
+        [
+            httpx.Response(202, content=b"<html><body>Challenge</body></html>"),
+            httpx.Response(
+                200,
+                content=b"""
+                    <html><body><table>
+                        <tr>
+                            <td>1.</td>
+                            <td>
+                                <a class="result-link" href="https://example.com/fallback">Fallback result</a>
+                            </td>
+                        </tr>
+                        <tr><td></td><td class="result-snippet">Fallback snippet.</td></tr>
+                    </table></body></html>
+                """,
+            ),
+        ]
+    )
+    calls: list[str] = []
+
+    def fake_get(url: str, **kwargs: object) -> httpx.Response:
+        calls.append(url)
+        return next(responses)
+
+    monkeypatch.setattr(ddgs_module.httpx, "get", fake_get)
+
+    assert DDGSWebSource().search_with_details("normal query", 5, None) == [
+        WebSearchResult(
+            title="Fallback result",
+            url="https://example.com/fallback",
+            summary="Fallback snippet.",
+        )
+    ]
+    assert calls == [
+        "https://html.duckduckgo.com/html/",
+        "https://lite.duckduckgo.com/lite/",
+    ]

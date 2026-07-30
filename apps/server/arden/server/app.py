@@ -172,7 +172,6 @@ async def lifespan(app: FastAPI):
     await refresh_codex_models()
     runtime = Runtime()
     await runtime.connect()
-    runtime.start_indexing()
     # Bound the durable tool-result store on startup: prune offloaded results past
     # the retention window so it can't accumulate across sessions (it had grown to
     # ~5GB, which made an agent grepping it never converge — the CPU runaway).
@@ -398,7 +397,8 @@ async def lifespan(app: FastAPI):
         client_id = _iteration_client_id(automation, automation_run_id)
         message = AUTOMATION_PROMPT.render(prompt=automation.prompt, context=ctx_str) if ctx_str else automation.prompt
         skip_approvals = automation.auto_approve
-        if is_custodian_task_id(automation.task_id):
+        custodian_task = is_custodian_task_id(automation.task_id)
+        if custodian_task:
             delivery = runtime.automation.custodians.pending_delivery(area_id, iteration)
             if delivery is None:
                 record = await runtime.session_service.get_area(area_id)
@@ -430,19 +430,28 @@ async def lifespan(app: FastAPI):
             client_id = delivery.client_id
             message = delivery.message
             skip_approvals = delivery.skip_approvals
-        run_id = await _dispatch_session_message(
-            _loop_target_id(automation) or "",
-            message,
-            client_id=client_id,
-            skip_approvals=skip_approvals,
-            tool_scope=_automation_tool_scope(automation),
-            chat_model=await _automation_chat_model(runtime, automation),
-            loop_task_id=automation.task_id,
-            automation_id=automation.task_id,
-            queue_if_busy=False,
-        )
+        try:
+            run_id = await _dispatch_session_message(
+                _loop_target_id(automation) or "",
+                message,
+                client_id=client_id,
+                skip_approvals=skip_approvals,
+                tool_scope=_automation_tool_scope(automation),
+                chat_model=await _automation_chat_model(runtime, automation),
+                loop_task_id=automation.task_id,
+                automation_id=automation.task_id,
+                queue_if_busy=False,
+            )
+        except BaseException:
+            if custodian_task:
+                runtime.automation.custodians.abandon_delivery(area_id, client_id=client_id)
+            raise
         if run_id is None:
+            if custodian_task:
+                runtime.automation.custodians.abandon_delivery(area_id, client_id=client_id)
             raise RuntimeError(f"Iteration automation {automation.task_id} did not start a chat run")
+        if custodian_task:
+            runtime.automation.custodians.bind_delivery_run(area_id, client_id=client_id, run_id=run_id)
         return run_id
 
     runtime.scheduler.set_iteration_dispatcher(_dispatch_iteration)

@@ -22,6 +22,7 @@ from arden.server.schemas import (
 )
 from arden.server.sse_stream import live_records, reset_chunk
 from arden.server.sse_stream import replay_records as iter_replay_records
+from arden.tools.tool_scope import validate_tool_scope
 
 router = APIRouter(tags=["automations"])
 
@@ -52,13 +53,29 @@ def _automation_to_dict(a: Automation, recent_statuses: list[str] | None = None)
         "tool_scope": a.tool_scope,
         "kind": a.kind,
         "read_history": a.read_history,
+        "idempotency_key": a.idempotency_key,
+        "idempotency_scope": a.idempotency_scope,
     }
+
+
+def _validate_tool_scope(patterns: list[str] | None, runtime: Runtime) -> None:
+    if not patterns:
+        return
+    if runtime.executor is None:
+        raise HTTPException(status_code=503, detail="Tool registry unavailable")
+    try:
+        validate_tool_scope(patterns, runtime.executor.registry.tools)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/automations")
 async def create_automation(
-    request: CreateAutomationRequest, svc: AutomationService = Depends(require_automation_service)
+    request: CreateAutomationRequest,
+    svc: AutomationService = Depends(require_automation_service),
+    runtime: Runtime = Depends(get_runtime),
 ):
+    _validate_tool_scope(request.tool_scope, runtime)
     try:
         automation = await svc.create(
             name=request.name,
@@ -79,9 +96,26 @@ async def create_automation(
             triggers=request.triggers,
             cooldown_minutes=request.cooldown_minutes,
             tool_scope=request.tool_scope,
+            idempotency_key=request.idempotency_key,
+            idempotency_scope=request.idempotency_scope,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if automation is None:
+        task_id = svc.idempotent_task_id(
+            request.idempotency_scope,
+            request.idempotency_key,
+            None,
+            None,
+            None,
+        )
+        try:
+            automation = await svc.get(task_id)
+        except KeyError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency claim exists without a live automation; retry with the same key",
+            ) from error
     return _automation_to_dict(automation)
 
 
@@ -251,8 +285,12 @@ async def run_automation(task_id: str, svc: AutomationService = Depends(require_
 
 @router.patch("/automations/{task_id}")
 async def update_automation(
-    task_id: str, request: UpdateAutomationRequest, svc: AutomationService = Depends(require_automation_service)
+    task_id: str,
+    request: UpdateAutomationRequest,
+    svc: AutomationService = Depends(require_automation_service),
+    runtime: Runtime = Depends(get_runtime),
 ):
+    _validate_tool_scope(request.tool_scope, runtime)
     try:
         automation = await svc.update(
             task_id,

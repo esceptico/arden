@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.core.content import ContextContent, ContextManifestEntry
 from arden.tools.core.types import ToolOverrideDecision
@@ -527,7 +527,8 @@ class UpdateConfigRequest(BaseModel):
 
 
 class UpdateEmbeddingRequest(BaseModel):
-    embedding_model: str
+    embedding_model: str | None
+    confirmed: bool = False
 
 
 class UpdateDirectivesRequest(BaseModel):
@@ -538,6 +539,8 @@ class UpdateDirectivesRequest(BaseModel):
 
 
 class CreateAutomationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
     description: str | None = Field(default=None, min_length=1, max_length=220)
@@ -556,9 +559,13 @@ class CreateAutomationRequest(BaseModel):
     triggers: list[dict] | None = None
     cooldown_minutes: int | None = None
     tool_scope: list[str] | None = None
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    idempotency_scope: Literal["global"] = "global"
 
 
 class UpdateAutomationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     prompt: str | None = Field(default=None, min_length=1)
     description: str | None = Field(default=None, min_length=1, max_length=220)

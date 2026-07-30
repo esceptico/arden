@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceDecision,
+    WikiMaintenanceError,
     WikiMaintenancePreparedReport,
     WikiMaintenanceResult,
 )
-from arden.wiki.maintenance.store import WikiMaintenanceReviewConflictError
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,7 @@ class WikiMaintenanceReviewService:
         report = self._report
         pending = self._decision
         if report is None or pending is None:
-            raise WikiMaintenanceReviewConflictError("request the current wiki maintenance report before deciding")
+            raise WikiMaintenanceError("request the current wiki maintenance report before deciding")
         self._maintenance.validate_prepared_decision(report, decision)
         self._report = None
         self._decision = None
@@ -61,9 +61,7 @@ class WikiMaintenanceReviewService:
 
     async def require_completed(self) -> WikiMaintenanceResult:
         if self._task is None or not self._task.done():
-            raise WikiMaintenanceReviewConflictError(
-                "wiki maintenance agent exited before completing the review workflow"
-            )
+            raise WikiMaintenanceError("wiki maintenance agent exited before completing the review workflow")
         return self._task.result()
 
     async def aclose(self) -> None:
@@ -77,7 +75,7 @@ class WikiMaintenanceReviewService:
 
     async def _review(self, report: WikiMaintenancePreparedReport) -> WikiMaintenanceDecision:
         if self._decision is not None:
-            raise WikiMaintenanceReviewConflictError("wiki maintenance reviewer received overlapping reports")
+            raise WikiMaintenanceError("wiki maintenance reviewer received overlapping reports")
         self._report = report
         self._decision = asyncio.get_running_loop().create_future()
         self._ready.set()

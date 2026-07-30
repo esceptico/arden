@@ -21,7 +21,6 @@ export type { SessionViewState } from "@/stores/session-view";
 export interface MemoryVaultChange {
   paths: string[];
   revision: string | null;
-  reviewRequired: boolean;
   seq: number | null;
 }
 

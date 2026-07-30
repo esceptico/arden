@@ -15,6 +15,8 @@ import {
 } from "@/lib/tokens/motion";
 import type { DiffReviewDecision, DiffReviewOperation } from "@/components/ui/diffReviewTypes";
 
+const REVISION_LABEL_LENGTH = 8;
+
 export interface MemoryConflict {
   currentRevision: string;
   currentContent: string;
@@ -130,7 +132,7 @@ export function MemoryEditReview({
           </header>
           <div className="memory-edit-review__conflict grid min-h-0 min-w-0 flex-1 gap-3 overflow-auto lg:grid-cols-2">
             <section aria-label="Current page" className="flex min-h-[280px] min-w-0 flex-col">
-              <h2 className="mb-1 text-xs font-semibold text-muted">Current page · rev {conflict.currentRevision.slice(0, 12)}</h2>
+              <h2 className="mb-1 text-xs font-semibold text-muted">Current page · rev {conflict.currentRevision.slice(0, REVISION_LABEL_LENGTH)}</h2>
               <DiffReview
                 before={{ path, content: baseContent }}
                 after={{ path, content: conflict.currentContent }}

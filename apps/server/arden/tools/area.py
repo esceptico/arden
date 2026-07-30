@@ -1,17 +1,18 @@
 import asyncio
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
 from arden.areas.agent import CUSTODIAN_ACTOR_PREFIX, AreaCustodianReport
 from arden.areas.work_store import AreaWorkReportError, AreaWorkStore
+from arden.constants import OFFLOAD_THRESHOLD
 from arden.revisions import RevisionConflictError
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.formatting import format_lines_with_pagination
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
-from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE
+from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE, wiki_page_observation_id
 from arden.wiki.service import WikiService, WikiValidationError
 
 WIKI_SERVICE = "wiki"
@@ -19,24 +20,28 @@ AREA_WORK_SERVICE = "area_work"
 
 
 class AreaPageReadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=2_000, ge=1, le=4_000)
 
 
 class AreaPagePatchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     old_text: str = Field(min_length=1, max_length=100_000)
     new_text: str = Field(max_length=100_000)
-    expected_version: str = Field(min_length=1, max_length=128)
-    expected_head: str = Field(min_length=1, max_length=128)
 
 
 class AreaPageWriteInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     content: str = Field(min_length=1, max_length=100_000, description="Complete Markdown body.")
-    expected_version: str = Field(min_length=1, max_length=128)
-    expected_head: str = Field(min_length=1, max_length=128)
 
 
 class AreaAutomationRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     task_id: str = Field(min_length=1, max_length=200)
 
 
@@ -93,6 +98,34 @@ def _write_failure(exc: Exception) -> ToolResult:
     )
 
 
+def _observed_target(execution: ToolExecution, page_id: str, *, require_content: bool) -> ToolResult | None:
+    observation = execution.ctx.run.resource_observation(wiki_page_observation_id(page_id))
+    if observation is None or (require_content and not observation.content_read):
+        return ToolResult.failure(
+            code="fresh_read_required",
+            message="Read the Area page before editing it.",
+            preview="Read Area page first",
+            recovery_action="Call area_page_read, then retry the edit.",
+        )
+    return None
+
+
+def _current_target_matches_observation(execution: ToolExecution, page_id: str, version: str) -> bool:
+    observation = execution.ctx.run.resource_observation(wiki_page_observation_id(page_id))
+    return observation is not None and observation.version == version
+
+
+def _observe_page(
+    execution: ToolExecution, page_id: str, version: str, head: str | None, *, content_read: bool
+) -> None:
+    execution.ctx.run.observe_resource(
+        wiki_page_observation_id(page_id),
+        version=version,
+        container_version=head,
+        content_read=content_read,
+    )
+
+
 def _custodian_area_id(execution: ToolExecution) -> str | None:
     area = execution.ctx.area
     task_id = f"area:{area.area_id}" if area is not None else None
@@ -106,17 +139,15 @@ async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> T
     if isinstance(target, ToolResult):
         return target
     _wiki, head, record = target
-    raw = record.content.decode("utf-8")
-    content = format_lines_with_pagination(raw, args.offset, args.limit)
+    body = record.page.body.decode("utf-8")
+    content = format_lines_with_pagination(body, args.offset, args.limit)
     metadata = {
-        "page_id": record.page.page_id,
-        "page_path": record.resource.path,
+        "path": record.resource.path,
+        "title": record.page.title,
         "offset": args.offset,
-        "version": record.resource.version_id,
-        "head": head,
-        "size": len(record.content),
+        "size": len(record.page.body),
     }
-    return ToolResult(
+    result = ToolResult(
         content=(
             f"Area page metadata: {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))}\n\n"
             f"Area page content:\n{content}"
@@ -124,17 +155,33 @@ async def area_page_read(execution: ToolExecution, args: AreaPageReadInput) -> T
         preview=record.page.title,
         data=metadata,
     )
+    _observe_page(
+        execution,
+        record.page.page_id,
+        record.resource.version_id,
+        head,
+        content_read=(
+            args.offset == 1
+            and args.limit >= len(body.split("\n"))
+            and len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
+        ),
+    )
+    return result
 
 
 async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) -> ToolResult:
     target = await asyncio.to_thread(_target, execution)
     if isinstance(target, ToolResult):
         return target
-    wiki, head, record = target
-    if record.resource.version_id != args.expected_version or head != args.expected_head:
+    wiki, _head, record = target
+    if failure := _observed_target(execution, record.page.page_id, require_content=False):
+        return failure
+    observation = execution.ctx.run.resource_observation(wiki_page_observation_id(record.page.page_id))
+    assert observation is not None
+    if not _current_target_matches_observation(execution, record.page.page_id, record.resource.version_id):
         return _write_failure(RevisionConflictError("Area page revision changed"))
-    raw = record.content.decode("utf-8")
-    matches = raw.count(args.old_text)
+    body = record.page.body.decode("utf-8")
+    matches = body.count(args.old_text)
     if matches != 1:
         return ToolResult.failure(
             code="not_found" if matches == 0 else "ambiguous_ref",
@@ -142,15 +189,14 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
             preview="Patch not applied",
             recovery_action="Read the page and include enough exact surrounding text for one match.",
         )
-    content = raw.replace(args.old_text, args.new_text, 1).encode()
+    content = record.page.with_body(body.replace(args.old_text, args.new_text, 1).encode()).to_bytes()
     custodian_area_id = _custodian_area_id(execution)
     try:
         updated = await asyncio.to_thread(
             wiki.update_page,
             record.page.page_id,
             content=content,
-            expected_version=args.expected_version,
-            expected_head=args.expected_head,
+            expected_version=record.resource.version_id,
             actor=(
                 f"{CUSTODIAN_ACTOR_PREFIX}{custodian_area_id}"
                 if custodian_area_id is not None
@@ -163,11 +209,12 @@ async def area_page_patch(execution: ToolExecution, args: AreaPagePatchInput) ->
         return _write_failure(exc)
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
     return _updated_result(
-        record,
         updated,
         wiki.repository.head,
+        execution,
         "Patched this Area's wiki page.",
         "Area page patched",
+        content_read=observation.content_read,
         projection_pending=projection_pending,
     )
 
@@ -176,8 +223,10 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
     target = await asyncio.to_thread(_target, execution)
     if isinstance(target, ToolResult):
         return target
-    wiki, head, record = target
-    if record.resource.version_id != args.expected_version or head != args.expected_head:
+    wiki, _head, record = target
+    if failure := _observed_target(execution, record.page.page_id, require_content=True):
+        return failure
+    if not _current_target_matches_observation(execution, record.page.page_id, record.resource.version_id):
         return _write_failure(RevisionConflictError("Area page revision changed"))
     content = record.page.with_body((args.content.rstrip() + "\n").encode()).to_bytes()
     custodian_area_id = _custodian_area_id(execution)
@@ -186,8 +235,7 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
             wiki.update_page,
             record.page.page_id,
             content=content,
-            expected_version=args.expected_version,
-            expected_head=args.expected_head,
+            expected_version=record.resource.version_id,
             actor=(
                 f"{CUSTODIAN_ACTOR_PREFIX}{custodian_area_id}"
                 if custodian_area_id is not None
@@ -200,33 +248,34 @@ async def area_page_write(execution: ToolExecution, args: AreaPageWriteInput) ->
         return _write_failure(exc)
     projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
     return _updated_result(
-        record,
         updated,
         wiki.repository.head,
+        execution,
         "Updated this Area's wiki page.",
         "Area page updated",
+        content_read=True,
         projection_pending=projection_pending,
     )
 
 
 def _updated_result(
-    before,
     after,
     head: str | None,
+    execution: ToolExecution,
     content: str,
     preview: str,
     *,
+    content_read: bool,
     projection_pending: bool,
 ) -> ToolResult:
     metadata = {
-        "page_id": after.page.page_id,
-        "page_path": after.resource.path,
-        "version": after.resource.version_id,
-        "head": head,
-        "size": len(after.content),
+        "path": after.resource.path,
+        "title": after.page.title,
+        "size": len(after.page.body),
     }
     if projection_pending:
         metadata["projection_pending"] = True
+    _observe_page(execution, after.page.page_id, after.resource.version_id, head, content_read=content_read)
     return ToolResult(
         content=(f"{content}\nArea page metadata: {json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))}"),
         preview=preview,
@@ -236,8 +285,6 @@ def _updated_result(
             effect=ToolEffect(
                 operation="edit",
                 target=after.resource.path,
-                before_ref=before.resource.version_id,
-                after_ref=after.resource.version_id,
             ),
         ),
     )
@@ -319,7 +366,7 @@ _WIKI_PERMISSION = frozenset({WIKI_SERVICE})
 area_page_read_tool = tool(
     display_name="AreaPageRead",
     display_description="Read the current Area wiki page.",
-    description="Read the current Area's attached managed wiki page and exact version tokens.",
+    description="Read the current Area's attached managed wiki page.",
     input_model=AreaPageReadInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=_WIKI_PERMISSION),
     execute=area_page_read,
@@ -328,7 +375,7 @@ area_page_read_tool = tool(
 area_page_patch_tool = tool(
     display_name="AreaPagePatch",
     display_description="Patch the current Area wiki page.",
-    description="Replace one exact block in the attached managed page using its version and wiki head.",
+    description="Replace one exact block in the current Area page. Read the page first.",
     input_model=AreaPagePatchInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
@@ -341,7 +388,7 @@ area_page_patch_tool = tool(
 area_page_write_tool = tool(
     display_name="AreaPageWrite",
     display_description="Replace the current Area wiki page body.",
-    description="Replace only the Markdown body of the attached managed page using exact version tokens.",
+    description="Replace only the Markdown body of the current Area page. Read the page first.",
     input_model=AreaPageWriteInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,

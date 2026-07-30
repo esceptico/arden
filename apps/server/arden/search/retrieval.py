@@ -30,7 +30,7 @@ class HybridRetriever:
     def __init__(
         self,
         store: SearchStore,
-        embedder: Embedder,
+        embedder: Embedder | None,
         rrf_k: int = RRF_K,
         vector_weight: float = 0.5,
         fts_weight: float = 0.5,
@@ -100,12 +100,13 @@ class HybridRetriever:
         limit: int = 10,
     ) -> list[RankedResult]:
         vector_results: list[ScoredRow] = []
-        try:
-            query_embedding = await self.embedder.embed_one(query)
-            query_bytes = serialize_embedding(query_embedding)
-            vector_results = await self._vector_search(query_bytes, sources, limit)
-        except Exception as e:
-            _logger.warning("Vector search failed, using FTS only: %s", e)
+        if self.embedder is not None:
+            try:
+                query_embedding = await self.embedder.embed_one(query)
+                query_bytes = serialize_embedding(query_embedding)
+                vector_results = await self._vector_search(query_bytes, sources, limit)
+            except Exception as e:
+                _logger.warning("Vector search failed, using FTS only: %s", e)
 
         fts_results = await self._fts_search(query, sources, limit)
 

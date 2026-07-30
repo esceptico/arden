@@ -220,13 +220,17 @@ class AutomationService:
             raise ValueError(f"session {session_id!r} is unavailable")
 
     @staticmethod
-    def _idempotent_task_id(
+    def idempotent_task_id(
         scope: str,
         key: str,
         parent_automation_id: str | None,
         parent_fire_at: str | None,
         attempt_n: int | None,
     ) -> str:
+        if scope == "global":
+            parent_automation_id = None
+            parent_fire_at = None
+            attempt_n = None
         claim = "\x1f".join(
             (
                 scope,
@@ -510,6 +514,28 @@ class AutomationService:
         triggers_resolved: bool = False,
     ) -> Automation | None:
         prompt = self._normalize_prompt(prompt)
+        if idempotency_key is not None and idempotency_scope is None:
+            raise ValueError("idempotency_scope required when idempotency_key is set")
+        claim_parent_automation_id = parent_automation_id
+        claim_parent_fire_at = parent_fire_at
+        claim_attempt_n = attempt_n
+        if idempotency_scope == "global":
+            claim_parent_automation_id = None
+            claim_parent_fire_at = None
+            claim_attempt_n = None
+        if task_id is None and idempotency_key is not None:
+            task_id = self.idempotent_task_id(
+                idempotency_scope,
+                idempotency_key,
+                claim_parent_automation_id,
+                claim_parent_fire_at,
+                claim_attempt_n,
+            )
+            if area_id is not None:
+                task_id = f"area:{area_id}:{task_id}"
+        if idempotency_key is not None and task_id is not None and await self.store.get(task_id) is not None:
+            return None
+
         display_description, description_source = await self._resolve_description(
             name=name,
             prompt=prompt,
@@ -532,27 +558,14 @@ class AutomationService:
         )
 
         now = datetime.now(UTC)
-        if idempotency_key is not None and idempotency_scope is None:
-            raise ValueError("idempotency_scope required when idempotency_key is set")
 
         # Stable ids (e.g. area:{key}) let seeding find its rows across boots.
         # Area-owned children mint under area:{key}:{slug} — that prefix IS
         # the ownership boundary area_run_automation enforces. Everything
         # else gets a random slug.
         if task_id is None:
-            if idempotency_key is not None:
-                task_id = self._idempotent_task_id(
-                    idempotency_scope,
-                    idempotency_key,
-                    parent_automation_id,
-                    parent_fire_at,
-                    attempt_n,
-                )
-                if area_id is not None:
-                    task_id = f"area:{area_id}:{task_id}"
-            else:
-                slug = generate_slug(2)
-                task_id = f"area:{area_id}:{slug}" if area_id else slug
+            slug = generate_slug(2)
+            task_id = f"area:{area_id}:{slug}" if area_id else slug
 
         # Agent-created automations always get a dedicated channel. Its stable
         # id makes an idempotent retry reuse the original channel rather than
@@ -599,9 +612,9 @@ class AutomationService:
                     automation,
                     scope=idempotency_scope,
                     key=idempotency_key,
-                    parent_automation_id=parent_automation_id,
-                    parent_fire_at=parent_fire_at,
-                    attempt_n=attempt_n,
+                    parent_automation_id=claim_parent_automation_id,
+                    parent_fire_at=claim_parent_fire_at,
+                    attempt_n=claim_attempt_n,
                     claimed_at=now,
                 )
                 if not claimed:

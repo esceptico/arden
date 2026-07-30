@@ -30,7 +30,7 @@ type AutomationEvent =
   | { type: "automation_finished"; task_id: string; result: string | null; seq?: number }
   | { type: "session_created"; session: SessionListItem; seq?: number }
   | { type: "session_activity"; session: SessionListItem; seq?: number }
-  | { type: "memory_changed"; paths: string[]; revision?: string | null; review_required?: boolean; seq?: number }
+  | { type: "memory_changed"; paths: string[]; revision?: string | null; seq?: number }
   | { type: "areas_changed"; keys: string[]; seq?: number }
   | { type: "navigation_requested"; origin_session_id: string; destination: AppDestination; label: string; seq?: number }
   | { type: "stream_keepalive"; latest_seq: number; seq?: number }
@@ -54,7 +54,6 @@ export function memoryVaultChangeFromEvent(
   return {
     paths: event.paths,
     revision: event.revision ?? null,
-    reviewRequired: event.review_required ?? false,
     seq: event.seq ?? null,
   };
 }

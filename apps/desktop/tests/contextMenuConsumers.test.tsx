@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { Automation } from "@/api/types";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import { duplicateAutomationPayload } from "@/actions/automations";
+import { AutomationDetail } from "@/features/automations/components/AutomationDetail";
 import { AutomationRail } from "@/features/automations/components/AutomationRail";
 import { NotebookRail } from "@/features/memory/components/NotebookRail";
 import { NavRow } from "@/features/sessions/components/NavRow";
@@ -291,11 +292,12 @@ test("Automation duplicate payload retains the real trigger and capability bound
       contains: ["brief"],
     }],
   });
-  expect(payload).toEqual({
+  expect(payload).toMatchObject({
     name: "Daily brief copy",
     description: "Summarize the day.",
     model: null,
     auto_approve: false,
+    idempotency_scope: "global",
     triggers: [{
       type: "message",
       source: "slack",
@@ -306,6 +308,79 @@ test("Automation duplicate payload retains the real trigger and capability bound
     cooldown_minutes: null,
     tool_scope: ["calendar.read"],
   });
+  expect(payload.idempotency_key).toEqual(expect.any(String));
+});
+
+test("Each deliberate duplicate receives a fresh idempotency key", () => {
+  const first = duplicateAutomationPayload(automation);
+  const second = duplicateAutomationPayload(automation);
+
+  expect(first.idempotency_scope).toBe("global");
+  expect(second.idempotency_scope).toBe("global");
+  expect(first.idempotency_key).not.toBe(second.idempotency_key);
+});
+
+test("An ambiguous duplicate retry can reuse its operation key", () => {
+  const first = duplicateAutomationPayload(automation, "duplicate-operation");
+  const retry = duplicateAutomationPayload(automation, "duplicate-operation");
+
+  expect(retry.idempotency_key).toBe(first.idempotency_key);
+});
+
+test("Draft creation retries keep one idempotency key", async () => {
+  const previousDesktop = window.ardenDesktop;
+  const payloads: Array<Record<string, unknown>> = [];
+  window.ardenDesktop = {
+    api: {
+      request: async (_config, request) => {
+        if (request.path === "/automations" && request.method === "POST" && request.body) {
+          payloads.push(JSON.parse(request.body) as Record<string, unknown>);
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            contentType: "application/json",
+            data: { detail: "temporary failure" },
+            text: "",
+          };
+        }
+        throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+      },
+    },
+  } as unknown as NonNullable<Window["ardenDesktop"]>;
+
+  try {
+    const { app, render } = mount();
+    await render(
+      <AutomationDetail
+        seed={{
+          kind: "draft",
+          preset: { name: "Retry me", prompt: "Retry this automation.", trigger_type: "time", every: "1h" },
+        }}
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    );
+    const create = Array.from(app.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Create");
+    expect(create).toBeDefined();
+
+    await act(async () => {
+      create?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      create?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.idempotency_scope).toBe("global");
+    expect(payloads[0]?.idempotency_key).toEqual(expect.any(String));
+    expect(payloads[1]?.idempotency_key).toBe(payloads[0]?.idempotency_key);
+  } finally {
+    window.ardenDesktop = previousDesktop;
+  }
 });
 
 test("Run menus expose the real result peek and do not claim a missing deep link", () => {

@@ -1650,6 +1650,8 @@ async def test_large_tool_result_event_spills_raw_content_to_manifest(store: Ses
     assert payload["type"] == "TOOL_CALL_RESULT"
     assert payload["content"] != raw
     assert "raw_ref" in payload
+    assert "sha256" not in payload["content"]
+    assert "content_sha256" not in payload
     assert payload["content_bytes"] == len(raw.encode("utf-8"))
     assert len(rows[0]["event_json"]) < RAW_TOOL_RESULT_INLINE_MAX_BYTES
 
@@ -1819,6 +1821,7 @@ async def test_offloaded_tool_result_event_registers_existing_raw_blob(store: Se
     payload = json.loads(rows[0]["event_json"])
     assert payload["content"] == "compact head/tail preview"
     assert payload["raw_ref"].startswith("tr_")
+    assert "content_sha256" not in payload
     assert RAW_TOOL_RESULT_DATA_KEY not in payload.get("data", {})
 
     manifest = await store.get_tool_result(payload["raw_ref"])

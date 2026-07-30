@@ -79,7 +79,13 @@ class WikiPageIndexProjection:
 
         return self._last_state
 
-    async def sync(self) -> object | None:
+    async def sync(
+        self,
+        *,
+        force: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
+        raise_on_error: bool = False,
+    ) -> object | None:
         changed_state: WikiPageIndexState | None = None
         result: object | None = None
         failure: Exception | None = None
@@ -92,7 +98,12 @@ class WikiPageIndexProjection:
                     )
                     break
                 try:
-                    state = await self._sync(search_index)
+                    state = await self._sync(
+                        search_index,
+                        force=force,
+                        progress_callback=progress_callback,
+                        raise_on_error=raise_on_error,
+                    )
                 except Exception as error:
                     if attempt == 0 and self._get_search_index() is not search_index:
                         continue
@@ -137,7 +148,14 @@ class WikiPageIndexProjection:
                 return list(results)
         raise RuntimeError("search index changed during wiki_page search")
 
-    async def _sync(self, search_index: object) -> WikiPageIndexState:
+    async def _sync(
+        self,
+        search_index: object,
+        *,
+        force: bool,
+        progress_callback: Callable[[int, int], None] | None,
+        raise_on_error: bool,
+    ) -> WikiPageIndexState:
         """Index one pinned wiki head, retrying one concurrent wiki commit."""
 
         for attempt in range(2):
@@ -157,18 +175,13 @@ class WikiPageIndexProjection:
                 )
                 for record in pages
             ]
-            indexed = await search_index.store.get_indexed_hashes(WIKI_PAGE_SOURCE)
-            current_ids = {item.source_id for item in items}
-            for source_id in set(indexed) - current_ids:
-                await search_index.delete(WIKI_PAGE_SOURCE, source_id)
-            for item in items:
-                await search_index.upsert(
-                    item.source,
-                    item.source_id,
-                    item.title,
-                    item.content,
-                    item.metadata,
-                )
+            await search_index.sync(
+                WIKI_PAGE_SOURCE,
+                items,
+                progress_callback=progress_callback,
+                force=force,
+                raise_on_error=raise_on_error,
+            )
             if self._wiki.repository.head == wiki_head:
                 return WikiPageIndexState(wiki_head, "ready")
             if attempt == 0:
@@ -273,7 +286,7 @@ def _render_pages(header: str, pages: list[WikiPageRecord], fact_revision: str |
         prefix = (
             f"### {record.page.title}\n"
             f"Role: {meta['role']}; freshness: {meta['freshness']}; "
-            f"page: {record.page.page_id}; resource: {meta['resource_path']}\n\n"
+            f"resource: {meta['resource_path']}\n\n"
         )
         remaining = budget - used - len(prefix) - 2
         if remaining <= 0:

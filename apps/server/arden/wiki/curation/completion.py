@@ -40,10 +40,6 @@ class CompletionWikiEditCuratorReviewer:
             for token, fact in evidence.fact_tokens.items()
         ]
         payload = {
-            "wiki_commit_id": evidence.commit_id,
-            "generated_baseline_commit_id": evidence.baseline_commit_id,
-            "generated_fact_revision": evidence.source_revision,
-            "page_id": evidence.page_id,
             "path": evidence.path,
             "last_generated_baseline": evidence.generated_baseline,
             "page_immediately_before_user_edit": evidence.before_user_edit,

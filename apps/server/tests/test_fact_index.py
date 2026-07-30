@@ -32,6 +32,13 @@ class _Index:
         self.store.items.pop(source_id, None)
         return True
 
+    async def sync(self, source, items, **_kwargs):
+        current_ids = {item.source_id for item in items}
+        for source_id in set(self.store.items) - current_ids:
+            await self.delete(source, source_id)
+        for item in items:
+            await self.upsert(source, item.source_id, item.title, item.content, item.metadata)
+
     async def search(self, _query, *, sources, limit):
         assert sources == [FACT_SEARCH_SOURCE]
         return [

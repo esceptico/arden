@@ -1,5 +1,18 @@
 import { afterEach, expect, test } from "bun:test";
-import { getSetupStatusApi, parseModelsResponse, parseServerConfig, preflightGoogleSetupApi, saveGoogleCredentialsApi, verifySlackTokenApi } from "@/api/settings";
+import {
+  getEmbeddingModelsApi,
+  getIndexStatusApi,
+  getSetupStatusApi,
+  parseEmbeddingModelsResponse,
+  parseIndexStatus,
+  parseModelsResponse,
+  parseServerConfig,
+  preflightGoogleSetupApi,
+  saveGoogleCredentialsApi,
+  startIndexingApi,
+  updateEmbeddingModelApi,
+  verifySlackTokenApi,
+} from "@/api/settings";
 
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
 
@@ -66,6 +79,11 @@ test("rejects config responses without server-owned compaction token triggers", 
   expect(() => parseServerConfig(stale)).toThrow("compaction_token_trigger");
 });
 
+test("accepts disabling embeddings but rejects malformed config values", () => {
+  expect(parseServerConfig({ ...config, embedding_model: null }).embedding_model).toBeNull();
+  expect(() => parseServerConfig({ ...config, embedding_model: 42 })).toThrow("embedding_model");
+});
+
 test("rejects stale model metadata before it enters state", () => {
   expect(() => parseModelsResponse({
     models: ["gpt-5.2"],
@@ -96,6 +114,75 @@ test("accepts current config and model metadata contracts", () => {
     workflow_model: "gpt-5.2",
     memory_model: "gpt-5.2",
   })).toMatchObject({ reasoning_efforts: { "gpt-5.2": ["low", "medium"] } });
+});
+
+test("accepts the nullable embedding catalog and rebuild status contracts", () => {
+  expect(parseEmbeddingModelsResponse({
+    models: ["text-embedding-3-small"],
+    groups: [{ provider: "openai", models: ["text-embedding-3-small"] }],
+    current: null,
+  })).toMatchObject({ current: null });
+  expect(parseIndexStatus({
+    state: "reindexing",
+    model: "text-embedding-3-small",
+    phase: "facts",
+    done: 4,
+    total: 12,
+    retry_at: null,
+    error: null,
+  })).toMatchObject({ state: "reindexing", phase: "facts" });
+});
+
+test("embedding API wrappers preserve explicit confirmation and nullable disable", async () => {
+  const status = {
+    state: "ready",
+    model: null,
+    phase: null,
+    done: 0,
+    total: 0,
+    retry_at: null,
+    error: null,
+  };
+  const requests: { path: string; method?: string; body?: string; timeout?: number }[] = [];
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    ardenDesktop: {
+      api: {
+        request: async (_config: unknown, request: { path: string; method?: string; body?: string; timeout?: number }) => {
+          requests.push(request);
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: request.path === "/models/embedding"
+              ? {
+                  models: ["text-embedding-3-small"],
+                  groups: [{ provider: "openai", models: ["text-embedding-3-small"] }],
+                  current: "text-embedding-3-small",
+                }
+              : status,
+            text: "",
+          };
+        },
+      },
+    },
+  };
+  const appConfig = { serverUrl: "http://localhost:6877", apiKey: "" };
+
+  await getEmbeddingModelsApi(appConfig);
+  await updateEmbeddingModelApi(appConfig, null);
+  await getIndexStatusApi(appConfig);
+  await startIndexingApi(appConfig);
+
+  expect(requests.map((request) => request.path)).toEqual([
+    "/models/embedding",
+    "/config/embedding",
+    "/index/status",
+    "/index/start",
+  ]);
+  expect(JSON.parse(requests[1].body ?? "{}")).toEqual({ embedding_model: null, confirmed: true });
+  expect(requests[1].method).toBe("POST");
+  expect(requests[3].method).toBe("POST");
 });
 
 test("setup API wrappers preserve endpoint contracts", async () => {

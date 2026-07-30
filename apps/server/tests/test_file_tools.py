@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 
 import pytest
+from pydantic import ValidationError
 
 from arden.context.models import AreaContext, SessionState
 from arden.core.prompts import AREA_BLOCK
@@ -12,6 +13,9 @@ from arden.tools.core.registry import ToolRegistry
 from arden.tools.deferred import is_deferred_tool
 from arden.tools.executor import ToolExecutor
 from arden.tools.files import (
+    EditFileInput,
+    ReadFileInput,
+    WriteFileInput,
     edit_file_tool,
     find_files_tool,
     list_files_tool,
@@ -38,11 +42,15 @@ async def test_read_file_self_reports_source_refs(tmp_path):
     note = tmp_path / "q3.md"
     note.write_text("dashboard notes", encoding="utf-8")
 
-    result = await read_file_tool.execute(_make_execution("read_file"), path=str(note))
+    execution = _make_execution("read_file")
+    result = await read_file_tool.execute(execution, path=str(note))
 
     assert not result.is_error
-    assert result.data["sha256"] == sha256(b"dashboard notes").hexdigest()
+    assert "sha256" not in result.data
+    assert sha256(b"dashboard notes").hexdigest() not in result.content
     assert result.data["size"] == len(b"dashboard notes")
+    observation = execution.ctx.run.resource_observation(f"file:{note.resolve()}")
+    assert observation is not None and observation.content_read
     assert [ref.to_dict() for ref in result.source_refs] == [
         {
             "provider": "filesystem",
@@ -143,7 +151,6 @@ async def test_area_write_and_edit_results_display_relative_paths(tmp_path):
         execution,
         path="notes.txt",
         content="hello",
-        expected_sha256="absent",
     )
 
     assert not write.is_error
@@ -157,7 +164,6 @@ async def test_area_write_and_edit_results_display_relative_paths(tmp_path):
         path="notes.txt",
         old_text="hello",
         new_text="bye",
-        expected_sha256=write.data["sha256"],
     )
 
     assert not edit.is_error
@@ -321,7 +327,6 @@ async def test_write_file_writes_exact_content(tmp_path):
         _make_execution("write_file"),
         path=str(target),
         content="a\nb\n",
-        expected_sha256="absent",
     )
 
     assert not result.is_error
@@ -329,39 +334,92 @@ async def test_write_file_writes_exact_content(tmp_path):
     assert result.data == {
         "path": str(target),
         "lines": 3,
-        "sha256": sha256(b"a\nb\n").hexdigest(),
         "size": 4,
     }
     assert result.outcome is not None and result.outcome.effect is not None
-    assert result.outcome.effect.before_ref == "absent"
-    assert result.outcome.effect.after_ref == result.data["sha256"]
+    assert result.outcome.effect.before_ref is None
+    assert result.outcome.effect.after_ref is None
+
+
+@pytest.mark.asyncio
+async def test_write_file_requires_a_fresh_complete_read(tmp_path):
+    target = tmp_path / "note.txt"
+    target.write_text("old\nkeep", encoding="utf-8")
+    execution = _make_execution("write_file")
+
+    missing = await write_file_tool.execute(execution, path=str(target), content="new\nkeep")
+    await read_file_tool.execute(execution, path=str(target), limit=1)
+    partial = await write_file_tool.execute(execution, path=str(target), content="new\nkeep")
+
+    assert missing.is_error and missing.outcome is not None and missing.outcome.error is not None
+    assert missing.outcome.error.code == "fresh_read_required"
+    assert partial.is_error and partial.outcome is not None and partial.outcome.error is not None
+    assert partial.outcome.error.code == "fresh_read_required"
+    assert target.read_text(encoding="utf-8") == "old\nkeep"
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_a_read_that_will_be_offloaded(tmp_path):
+    target = tmp_path / "large.txt"
+    target.write_text("x" * 60_000, encoding="utf-8")
+    execution = _make_execution("write_file")
+
+    read = await read_file_tool.execute(execution, path=str(target))
+    result = await write_file_tool.execute(execution, path=str(target), content="replacement")
+
+    assert len(read.content) > 60_000
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "fresh_read_required"
+    assert target.read_text(encoding="utf-8") == "x" * 60_000
+
+
+@pytest.mark.asyncio
+async def test_write_file_create_retry_is_idempotent(tmp_path):
+    target = tmp_path / "new.txt"
+    execution = _make_execution("write_file")
+
+    created = await write_file_tool.execute(execution, path=str(target), content="hello")
+    retried = await write_file_tool.execute(execution, path=str(target), content="hello")
+
+    assert not created.is_error and not retried.is_error
+    assert retried.preview == "File unchanged"
+    assert target.read_text(encoding="utf-8") == "hello"
+
+
+def test_file_write_schemas_reject_hash_arguments() -> None:
+    for model in (ReadFileInput, WriteFileInput, EditFileInput):
+        assert "expected_sha256" not in model.model_fields
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        WriteFileInput.model_validate({"path": "x", "content": "y", "expected_sha256": "a" * 64})
 
 
 @pytest.mark.asyncio
 async def test_write_file_rejects_change_after_approval(tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("version A", encoding="utf-8")
-    expected = file_revision(target).sha256
     execution = _make_execution("write_file")
+    await read_file_tool.execute(execution, path=str(target))
 
     approval = await write_file_tool.approval_info(
         execution,
         path=str(target),
         content="approved replacement",
-        expected_sha256=expected,
     )
     target.write_text("version B", encoding="utf-8")
     result = await write_file_tool.execute(
         execution,
         path=str(target),
         content="approved replacement",
-        expected_sha256=expected,
     )
 
-    assert approval is not None and expected in (approval.diff or "")
+    assert approval is not None
+    assert "sha256" not in (approval.diff or "").lower()
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
     assert result.outcome.error.code == "write_conflict"
+    assert "sha256" not in result.content.lower()
     assert target.read_text(encoding="utf-8") == "version B"
 
 
@@ -375,7 +433,6 @@ async def test_edit_file_replaces_one_exact_block(tmp_path):
         path=str(target),
         old_text="old",
         new_text="new",
-        expected_sha256=file_revision(target).sha256,
     )
 
     assert not result.is_error
@@ -392,7 +449,6 @@ async def test_edit_file_rejects_ambiguous_block(tmp_path):
         path=str(target),
         old_text="same",
         new_text="different",
-        expected_sha256=file_revision(target).sha256,
     )
 
     assert result.is_error
@@ -424,7 +480,7 @@ async def test_write_file_requires_approval_through_registry(tmp_path):
     result = await registry.execute(
         "write_file",
         execution,
-        {"path": str(target), "content": "hello", "expected_sha256": "absent"},
+        {"path": str(target), "content": "hello"},
     )
 
     assert result.preview == "Rejected"

@@ -158,6 +158,8 @@ test("memory review keeps the sheet mounted through the exact room-release lifec
   expect(review).toContain("POSE_SHEET_OUT");
   expect(review).toContain("SHEET_CLEANUP_ENTER_TRANSITION");
   expect(review).toContain("SHEET_CLEANUP_EXIT_TRANSITION");
+  expect(review).toContain("const REVISION_LABEL_LENGTH = 8");
+  expect(review).toContain("slice(0, REVISION_LABEL_LENGTH)");
   expect(review).toContain("scrimMotionProps");
   expect(review).toContain("sheetMotionProps");
   expect(review).toContain('className="memory-edit-review__scrim"');

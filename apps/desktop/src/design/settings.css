@@ -367,6 +367,76 @@
   gap: var(--space-2);
 }
 
+.settings-embedding-progress {
+  padding: 12px 15px 14px;
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+}
+
+.settings-embedding-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-control);
+}
+
+.settings-embedding-progress-head span:last-child {
+  flex: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-embedding-progress progress {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--accent);
+}
+
+.settings-embedding-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal-top);
+  padding: var(--space-4);
+  display: grid;
+  place-items: center;
+  background: var(--modal-scrim-bg);
+}
+
+.settings-embedding-dialog__panel {
+  width: min(100%, 25rem);
+  padding: var(--space-5);
+  display: grid;
+  gap: var(--space-4);
+  border-radius: var(--r-panel);
+  background: var(--card);
+  box-shadow: var(--shadow-5);
+}
+
+.settings-embedding-dialog h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-lg);
+  font-weight: 620;
+  letter-spacing: -0.014em;
+}
+
+.settings-embedding-dialog p {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.settings-embedding-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 /* Appearance keeps its accent chooser deliberately quiet: it previews the
  * current paper theme, not a light/dark split miniature. */
 .settings-accent-swatches {

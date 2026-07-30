@@ -465,6 +465,17 @@ _SQL_LATEST_RUNS = (
 )
 
 _SQL_DELETE = "DELETE FROM scheduled_tasks WHERE task_id = ?"
+_SQL_DELETE_GLOBAL_IDEMPOTENCY_CLAIMS_BY_TASK = """
+DELETE FROM automation_idempotency_claims
+WHERE automation_task_id = ? AND scope = 'global'
+"""
+_SQL_RECLAIM_ORPHAN_GLOBAL_IDEMPOTENCY_CLAIM = """
+DELETE FROM automation_idempotency_claims
+WHERE claim_id = ?
+  AND scope = 'global'
+  AND automation_task_id = ?
+  AND NOT EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ?)
+"""
 
 _SQL_SET_ENABLED = "UPDATE scheduled_tasks SET enabled = ? WHERE task_id = ?"
 _SQL_SET_ENABLED_IF_CLAIM = """
@@ -1781,12 +1792,22 @@ class AutomationStore:
         ]
 
     async def delete(self, task_id: str) -> bool:
-        cursor = await self.conn.execute(_SQL_DELETE, (task_id,))
-        await self.conn.execute(_SQL_DELETE_DEDUPE_BY_TASK, (task_id,))
-        await self.conn.execute(_SQL_DELETE_QUEUE_BY_TASK, (task_id,))
-        await self.conn.execute(_SQL_DELETE_COUNTS_BY_TASK, (task_id,))
-        await self.conn.commit()
-        return cursor.rowcount > 0
+        async with self._idempotency_lock:
+            await self.conn.execute("BEGIN")
+            try:
+                cursor = await self.conn.execute(_SQL_DELETE, (task_id,))
+                if cursor.rowcount == 0:
+                    await self.conn.rollback()
+                    return False
+                await self.conn.execute(_SQL_DELETE_GLOBAL_IDEMPOTENCY_CLAIMS_BY_TASK, (task_id,))
+                await self.conn.execute(_SQL_DELETE_DEDUPE_BY_TASK, (task_id,))
+                await self.conn.execute(_SQL_DELETE_QUEUE_BY_TASK, (task_id,))
+                await self.conn.execute(_SQL_DELETE_COUNTS_BY_TASK, (task_id,))
+                await self.conn.commit()
+                return True
+            except BaseException:
+                await self.conn.rollback()
+                raise
 
     async def set_enabled(self, task_id: str, enabled: bool) -> None:
         await self.conn.execute(_SQL_SET_ENABLED, (int(enabled), task_id))
@@ -2035,8 +2056,32 @@ class AutomationStore:
                     ),
                 )
                 if cursor.rowcount == 0:
-                    await self.conn.rollback()
-                    return False
+                    if scope != "global":
+                        await self.conn.rollback()
+                        return False
+                    reclaimed = await self.conn.execute(
+                        _SQL_RECLAIM_ORPHAN_GLOBAL_IDEMPOTENCY_CLAIM,
+                        (claim_id, automation.task_id, automation.task_id),
+                    )
+                    if reclaimed.rowcount == 0:
+                        await self.conn.rollback()
+                        return False
+                    cursor = await self.conn.execute(
+                        _SQL_TRY_CLAIM_IDEMPOTENCY,
+                        (
+                            claim_id,
+                            scope,
+                            key,
+                            parent_automation_id,
+                            parent_fire_at,
+                            attempt_n,
+                            (claimed_at or datetime.now(UTC)).isoformat(),
+                            automation.task_id,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        await self.conn.rollback()
+                        return False
                 await self.conn.execute(
                     _SQL_INSERT,
                     (

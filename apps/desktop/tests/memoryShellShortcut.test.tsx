@@ -27,7 +27,6 @@ function installBridge() {
         }
         if (request.path === "/admin/wiki/pages") return response({ repository_head: "wiki-head-1", pages: [] });
         if (request.path === "/admin/wiki/rename-approvals") return response({ approvals: [] });
-        if (request.path === "/admin/wiki/maintenance-reviews") return response({ reviews: [] });
         if (request.path.startsWith("/admin/facts?")) return response({ facts: [], has_more: false, next_after: null });
         if (request.path.startsWith("/automations")) return response({ automations: [] });
         return response({});

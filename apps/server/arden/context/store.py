@@ -3163,12 +3163,9 @@ class SessionStore:
         preview: str,
         tool_result_id: str,
         content_bytes: int,
-        content_sha256: str,
     ) -> str:
         prefix = preview_text(preview)
-        note = (
-            f"[Full raw tool result stored as {tool_result_id}; {content_bytes} bytes, sha256:{content_sha256[:12]}.]"
-        )
+        note = f"[Full raw tool result stored as {tool_result_id}; {content_bytes} bytes.]"
         return f"{prefix}\n\n{note}" if prefix else note
 
     @staticmethod
@@ -3226,7 +3223,6 @@ class SessionStore:
                     content_sha256=blob.content_sha256,
                 ),
                 content_bytes=blob.content_bytes,
-                content_sha256=blob.content_sha256,
             )
 
         tool_result_id = cls._tool_result_id(
@@ -3239,7 +3235,7 @@ class SessionStore:
         preview = payload.get("preview") if isinstance(payload.get("preview"), str) else ""
         retention_class = "session"
         payload["raw_ref"] = tool_result_id
-        payload["content_sha256"] = blob.content_sha256
+        payload.pop("content_sha256", None)
         payload["content_bytes"] = blob.content_bytes
         payload["retention_class"] = retention_class
 

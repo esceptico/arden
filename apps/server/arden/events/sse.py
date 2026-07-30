@@ -123,7 +123,6 @@ class MemoryChangedEvent(SSEEvent):
     type: EventType = field(default=EventType.MEMORY_CHANGED, init=False)
     paths: list[str] = field(default_factory=list)  # vault-relative page paths
     revision: str | None = None
-    review_required: bool = False
 
 
 @dataclass(frozen=True)

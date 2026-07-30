@@ -792,6 +792,10 @@ class Scheduler:
             self._schedule_wake(datetime.now(UTC) + timedelta(seconds=SCHEDULER_EVENT_RETRY_BASE_SECONDS))
             await self.emit_automation_event(AutomationFinishedEvent(task_id=automation.task_id, result=None))
             return
+        if outcome.state == "suppressed":
+            _logger.info("Suppressed automation %s: %s", automation.task_id, outcome.result)
+            await self.emit_automation_event(AutomationFinishedEvent(task_id=automation.task_id, result=None))
+            return
         if outcome.retry_at is not None:
             self._schedule_wake(outcome.retry_at)
         if outcome.event_retry_at is not None:

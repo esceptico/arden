@@ -10,6 +10,8 @@ AUTOMATION_SUFFIX = (
     "Do not create new automations or ask for confirmation. "
     "When the task reads or writes an existing wiki directory, read its README.md before its pages. "
     "The wiki creates a missing directory README atomically with the first page. "
+    "When a create or move reports a created or restored README, read it immediately and replace bootstrap text "
+    "with the exact purpose, producer, consumers, boundaries, and retention before finishing. "
     "Explicitly list or read every named wiki input before using it. "
     "Return only the final output — no preamble, no narration, no thinking out loud. "
     "If the user asked to be notified, told, or written to — use the notify tool. " + UNTRUSTED_DATA_RULE

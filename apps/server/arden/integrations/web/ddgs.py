@@ -1,9 +1,9 @@
 import logging
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
+import httpx
 import trafilatura
-from ddgs import DDGS
-from ddgs.exceptions import DDGSException
+from lxml import etree, html
 from trafilatura import bare_extraction
 from trafilatura.settings import use_config
 
@@ -16,12 +16,78 @@ _cfg = use_config()
 _cfg.set("DEFAULT", "DOWNLOAD_TIMEOUT", "10")
 _cfg.set("DEFAULT", "MAX_FILE_SIZE", "1000000")
 
-_DDGS_NO_RESULTS = ("No results found.",)
+_SEARCH_URLS = (
+    "https://html.duckduckgo.com/html/",
+    "https://lite.duckduckgo.com/lite/",
+)
+_SEARCH_TIMEOUT_SECONDS = 6
+_SEARCH_HEADERS = {
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": "Mozilla/5.0",
+}
+_RESULT_XPATH = '//div[contains(concat(" ", normalize-space(@class), " "), " result ")]'
+_RESULT_LINK_XPATH = './/a[contains(concat(" ", normalize-space(@class), " "), " result__a ")]'
+_RESULT_SNIPPET_XPATH = 'string(.//*[contains(concat(" ", normalize-space(@class), " "), " result__snippet ")])'
+_LITE_RESULT_LINK_XPATH = '//a[contains(concat(" ", normalize-space(@class), " "), " result-link ")]'
+_LITE_RESULT_SNIPPET_XPATH = (
+    "string(ancestor::tr[1]/following-sibling::tr[1]"
+    '/td[contains(concat(" ", normalize-space(@class), " "), " result-snippet ")])'
+)
+_PROVIDER_FAILURE = "Web search is temporarily unavailable."
 
 
 def _guess_title(url: str) -> str:
     parsed = urlparse(url)
     return parsed.netloc or url
+
+
+def _direct_result_url(raw_url: str) -> str:
+    url = urljoin("https://duckduckgo.com", raw_url)
+    parsed = urlparse(url)
+    if parsed.hostname not in {"duckduckgo.com", "www.duckduckgo.com"} or parsed.path != "/l/":
+        return url
+    targets = parse_qs(parsed.query).get("uddg")
+    return targets[0] if targets else url
+
+
+def _parse_search_results(content: bytes, limit: int) -> list[WebSearchResult]:
+    document = html.fromstring(content)
+    results: list[WebSearchResult] = []
+    for row in document.xpath(_RESULT_XPATH):
+        links = row.xpath(_RESULT_LINK_XPATH)
+        if not links:
+            continue
+        link = links[0]
+        title = link.text_content().strip()
+        raw_url = link.get("href")
+        if not title or not raw_url:
+            continue
+        snippet = " ".join(row.xpath(_RESULT_SNIPPET_XPATH).split())
+        results.append(
+            WebSearchResult(
+                title=title,
+                url=_direct_result_url(raw_url),
+                summary=snippet or None,
+            )
+        )
+        if len(results) == limit:
+            return results
+    for link in document.xpath(_LITE_RESULT_LINK_XPATH):
+        title = link.text_content().strip()
+        raw_url = link.get("href")
+        if not title or not raw_url:
+            continue
+        snippet = " ".join(link.xpath(_LITE_RESULT_SNIPPET_XPATH).split())
+        results.append(
+            WebSearchResult(
+                title=title,
+                url=_direct_result_url(raw_url),
+                summary=snippet or None,
+            )
+        )
+        if len(results) == limit:
+            return results
+    return results
 
 
 class DDGSWebSource:
@@ -35,34 +101,29 @@ class DDGSWebSource:
         category: str | None = None,
     ) -> list[WebSearchResult]:
         del category
-        results: list[WebSearchResult] = []
-        with DDGS() as client:
+        completed_request = False
+        for search_url in _SEARCH_URLS:
             try:
-                items = client.text(query, max_results=limit) or []
-            except DDGSException as e:
-                if e.args == _DDGS_NO_RESULTS:
-                    raise NoSearchResultsException(query) from e
-                else:
-                    _logger.warning("DuckDuckGo search failed: %s", e)
-                    raise WebSearchProviderException("DuckDuckGo request failed.") from e
-            for item in items:
-                title = (item.get("title") or item.get("heading") or "").strip()
-                url = (item.get("href") or item.get("url") or "").strip()
-                snippet = (item.get("body") or item.get("snippet") or "").strip()
-                published = item.get("date")
-                if not url:
-                    continue
-                if not title:
-                    title = _guess_title(url)
-                results.append(
-                    WebSearchResult(
-                        title=title,
-                        url=url,
-                        published_date=str(published) if published else None,
-                        summary=snippet or None,
-                    )
+                response = httpx.get(
+                    search_url,
+                    params={"q": query},
+                    headers=_SEARCH_HEADERS,
+                    timeout=_SEARCH_TIMEOUT_SECONDS,
+                    follow_redirects=True,
                 )
-        return results
+                if response.status_code != httpx.codes.OK:
+                    _logger.warning("Web search returned HTTP %s from %s", response.status_code, search_url)
+                    continue
+                completed_request = True
+                results = _parse_search_results(response.content, limit)
+            except (httpx.HTTPError, etree.ParserError) as error:
+                _logger.warning("Web search request failed for %s: %s", search_url, error)
+                continue
+            if results:
+                return results
+        if completed_request:
+            raise NoSearchResultsException(query)
+        raise WebSearchProviderException(_PROVIDER_FAILURE)
 
     def get_contents(self, urls: list[str]) -> list[WebContentResult]:
         out: list[WebContentResult] = []

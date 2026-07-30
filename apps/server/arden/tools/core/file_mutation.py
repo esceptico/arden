@@ -17,7 +17,7 @@ class RevisionConflict(Exception):
     def __init__(self, *, expected: str, observed: str):
         self.expected = expected
         self.observed = observed
-        super().__init__(f"expected revision {expected}, observed {observed}")
+        super().__init__("file changed during update")
 
 
 def file_revision(path: Path) -> FileRevision:

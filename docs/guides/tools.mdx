@@ -84,7 +84,7 @@ an exact plan and commit; do not use a generic memory-record mutation tool.
 | `get_fact_history` | Read a fact's immutable event history and provenance. | — |
 | `get_due_fact_reviews` | List facts due for evidence-based review. | — |
 | `plan_fact_changes` | Validate creates, reviews, amendments, supersessions, expiries, or retractions without publishing them. | — |
-| `commit_fact_changes` | Commit one exact returned plan if its facts remain at their planned versions. | — |
+| `commit_fact_changes` | Commit one exact returned plan if its facts remain unchanged. | — |
 
 `plan_fact_changes` returns the preview and `plan_id`; `commit_fact_changes`
 accepts only that `plan_id`. The server derives authority and provenance from
@@ -92,22 +92,22 @@ the active session and Area.
 
 ## Wiki
 
-Wiki pages are the readable, managed projection. Read before writing and carry
-the returned revision tokens into every mutation. Scheduled automations can use
-generic writes only below `automations/`; generated publishing remains reserved
-for an explicit owner.
+Wiki pages are the readable, managed projection. Read before writing, then use
+semantic page arguments; the backend enforces concurrency. On a conflict,
+reread and retry. Scheduled automations can use generic writes only below
+`automations/`; generated publishing remains reserved for an explicit owner.
 This group is deferred: load it with `load_tools(group="wiki")`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
 | `list_wiki_pages` | List active pages and direct child directories in one managed directory. | — |
-| `read_wiki_page` | Read one active page by exact ID, path, title, or alias. | — |
+| `read_wiki_page` | Read one active page by exact managed path. | — |
 | `wiki_links` | Read a page's outgoing links and backlinks. | — |
-| `create_wiki_page` | Create one common page at an exact path and repository head. | 🔒 |
-| `edit_wiki_page` | Replace one page body at an exact page version and repository head. | 🔒 |
-| `archive_wiki_page` | Recoverably archive one page at an exact version and head. | 🔒 |
-| `move_wiki_page` | Move or rename one page and rewrite its wiki links atomically. | 🔒 |
-| `publish_wiki_generated` | Update only an existing page's generated region using its exact version and repository head. | 🔒 |
+| `create_wiki_page` | Create one common page from its path, title, and body. | 🔒 |
+| `edit_wiki_page` | Replace one page body by its exact managed path. | 🔒 |
+| `archive_wiki_page` | Recoverably archive one page by its exact managed path. | 🔒 |
+| `move_wiki_page` | Move one page by its exact managed path and rewrite its wiki links atomically. | 🔒 |
+| `publish_wiki_generated` | Atomically update only an explicit automation owner's existing generated region by exact managed path. | 🔒 |
 
 ## Web
 

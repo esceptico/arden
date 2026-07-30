@@ -47,6 +47,12 @@
   gap: var(--space-2);
 }
 
+/* Settings' embedding selector is the model half of the standard field. */
+.model-picker--embedding {
+  width: 276px;
+  min-width: 0;
+}
+
 /* In the composer the picker's two controls are just two more items in the
    toolbar's row, so the space between them is the toolbar's own gap — not the
    wider one the Settings field uses. Width follows from the columns rather
@@ -57,7 +63,7 @@
   gap: var(--space-1-5);
 }
 
-.model-picker--field .model-picker__trigger {
+:is(.model-picker--field, .model-picker--embedding) .model-picker__trigger {
   width: 100%;
   min-width: 0;
   height: 32px;
@@ -81,15 +87,15 @@
     box-shadow var(--motion-focus) var(--ease-out);
 }
 
-.model-picker--field .model-picker__trigger:hover {
+:is(.model-picker--field, .model-picker--embedding) .model-picker__trigger:hover {
   background: var(--field-hover-bg);
 }
 
-.model-picker--field .model-picker__trigger:active {
+:is(.model-picker--field, .model-picker--embedding) .model-picker__trigger:active {
   transform: scale(var(--press-scale));
 }
 
-.model-picker--field .model-picker__trigger:focus-visible {
+:is(.model-picker--field, .model-picker--embedding) .model-picker__trigger:focus-visible {
   box-shadow:
     var(--shadow-2),
     0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
@@ -292,6 +298,8 @@
     width: 100%;
     grid-template-columns: minmax(0, 1fr) 88px;
   }
+
+  .model-picker--embedding { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

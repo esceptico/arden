@@ -69,6 +69,15 @@ class ApprovalControls:
     skip_approvals: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class ResourceObservation:
+    """A backend-only snapshot a run may safely mutate from."""
+
+    version: str | None
+    container_version: str | None
+    content_read: bool
+
+
 @dataclass
 class RunContext:
     """Per-run identity and limits."""
@@ -102,6 +111,7 @@ class RunContext:
     automation_id: str | None = None
     active_plan_ref: str | None = None
     research_scope_id: str | None = None
+    _resource_observations: dict[str, ResourceObservation] = field(default_factory=dict, repr=False)
     # Builds an IOBridge bound to a child (subagent) session's own SSE bus, so a
     # spawned FULL subagent streams to its own session exactly like a normal run
     # instead of the parent's bus. Set by the chat service (which owns the
@@ -111,6 +121,22 @@ class RunContext:
     def __post_init__(self) -> None:
         if self.budget is None:
             self.budget = RunBudget()
+
+    def observe_resource(
+        self,
+        resource_id: str,
+        *,
+        version: str | None,
+        container_version: str | None,
+        content_read: bool,
+    ) -> None:
+        previous = self._resource_observations.get(resource_id)
+        if previous is not None and previous.version == version and previous.container_version == container_version:
+            content_read = content_read or previous.content_read
+        self._resource_observations[resource_id] = ResourceObservation(version, container_version, content_read)
+
+    def resource_observation(self, resource_id: str) -> ResourceObservation | None:
+        return self._resource_observations.get(resource_id)
 
     def to_rehydration_state(
         self,

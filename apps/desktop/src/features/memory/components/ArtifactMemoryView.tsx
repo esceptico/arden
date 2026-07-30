@@ -46,14 +46,9 @@ import { MemoryQuickSwitcher } from "@/features/memory/components/MemoryQuickSwi
 import { MemoryDocumentTabs } from "@/features/memory/components/MemoryDocumentTabs";
 import { WikiLinkPreview } from "@/features/memory/components/WikiLinkPreview";
 import {
-  WikiMaintenanceReviewSheet,
-  WikiMaintenanceReviewStatusSheet,
-} from "@/features/memory/components/WikiMaintenanceReviewSheet";
-import {
   WikiRenameApprovalSheet,
   WikiRenameApprovalStatusSheet,
 } from "@/features/memory/components/WikiRenameApprovalSheet";
-import { useWikiMaintenanceReviews } from "@/features/memory/hooks/useWikiMaintenanceReviews";
 import { useWikiRenameApprovals } from "@/features/memory/hooks/useWikiRenameApprovals";
 import { ArtifactCache } from "@/features/memory/lib/artifactCache";
 import { NavigationHistory, type NavigationLocation } from "@/features/memory/lib/navigationHistory";
@@ -309,11 +304,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [workspaceEmpty, setWorkspaceEmpty] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState<MemoryTabContextMenuState | null>(null);
   const [pageContextMenu, setPageContextMenu] = useState<MemoryPageContextMenuState | null>(null);
-  const [maintenanceDraft, setMaintenanceDraft] = useState<{
-    key: string;
-    manual: boolean;
-    note: string;
-  } | null>(null);
   const [contentDirection, setContentDirection] = useState(1);
 
   const summaryRequest = useRef<SummaryRequest | null>(null);
@@ -548,41 +538,15 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     reconcile: reconcileRename,
     resolve: resolveRename,
   } = useWikiRenameApprovals(config, onRenameResolved);
-  const {
-    reviews: maintenanceReviews,
-    activeReview: maintenanceReview,
-    pending: maintenancePending,
-    error: maintenanceError,
-    verification: maintenanceVerification,
-    reconciliationRequired: maintenanceReconciliationRequired,
-    refresh: refreshMaintenance,
-    resolve: resolveMaintenance,
-  } = useWikiMaintenanceReviews(config);
   const renameBlocked = renameDraft != null || activeRenameApproval != null;
-  const maintenanceVisible = maintenanceReview != null && !renameBlocked;
-  const availabilityError = [
-    renameVerification === "error" ? renameError : null,
-    maintenanceVerification === "error" ? maintenanceError : null,
-  ].filter((message): message is string => message != null).join(" ");
+  const availabilityError = renameVerification === "error" ? renameError : null;
   const retryAvailabilityChecks = () => {
     if (renameVerification === "error") void reconcileRename();
-    if (maintenanceVerification === "error") void refreshMaintenance(true);
   };
-  const maintenanceKey = maintenanceReview
-    ? `${maintenanceReview.reviewId}:${maintenanceReview.generation}`
-    : "";
-  const activeMaintenanceDraft = maintenanceDraft?.key === maintenanceKey
-    ? maintenanceDraft
-    : { key: maintenanceKey, manual: false, note: "" };
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    if (maintenanceDraft == null || maintenanceDraft.key === maintenanceKey) return;
-    setMaintenanceDraft(null);
-  }, [maintenanceDraft, maintenanceKey]);
 
   const navigableArtifacts = useMemo(() => artifacts.filter((artifact) => isNotebookResourcePath(artifact.path)), [artifacts]);
   const titles = useMemo(
@@ -1721,7 +1685,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       </nav>
 
       <div data-memory-zone="workspace" className="mw-doc">
-        {availabilityError && !renameBlocked && !maintenanceReview && (
+        {availabilityError && !renameBlocked && (
           <div data-memory-availability-error role="alert" className="memory-edit-review__error">
             <span>{availabilityError}</span>{" "}
             <button type="button" onClick={retryAvailabilityChecks}>Retry checks</button>
@@ -2057,39 +2021,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       <WikiRenameApprovalStatusSheet
         error={renameVerification === "error" ? renameError : null}
         onRetry={() => void reconcileRename()}
-      />
-    )}
-    {maintenanceVisible && maintenanceReview && (
-      <WikiMaintenanceReviewSheet
-        key={maintenanceKey}
-        config={config}
-        review={maintenanceReview}
-        position={1}
-        total={maintenanceReviews.length}
-        pending={maintenancePending}
-        checking={maintenanceVerification === "loading"}
-        reconciliationRequired={maintenanceReconciliationRequired}
-        error={maintenanceError}
-        manual={activeMaintenanceDraft.manual}
-        note={activeMaintenanceDraft.note}
-        onManualChange={(manual) => setMaintenanceDraft({
-          key: maintenanceKey,
-          manual,
-          note: activeMaintenanceDraft.note,
-        })}
-        onNoteChange={(note) => setMaintenanceDraft({
-          key: maintenanceKey,
-          manual: true,
-          note,
-        })}
-        onReconcile={() => void refreshMaintenance(true)}
-        onResolve={(review, decision) => void resolveMaintenance(review, decision)}
-      />
-    )}
-    {maintenanceVisible && !maintenanceReview && (
-      <WikiMaintenanceReviewStatusSheet
-        error={maintenanceVerification === "error" ? maintenanceError : null}
-        onRetry={() => void refreshMaintenance(true)}
       />
     )}
   </>

@@ -58,7 +58,7 @@ def connected_providers(config) -> set[Provider]:
                 connected.add(meta["provider"])
         elif getattr(config, PROVIDER_KEY_FIELDS[pid], None):
             connected.add(meta["provider"])
-    if get_models_by_provider(Provider.CUSTOM):
+    if get_models_by_provider(Provider.CUSTOM) or get_embedding_models_by_provider(Provider.CUSTOM):
         connected.add(Provider.CUSTOM)
     return connected
 
@@ -100,11 +100,12 @@ async def get_providers(runtime: Runtime = Depends(get_runtime)):
         )
 
     custom_models = get_models_by_provider(Provider.CUSTOM)
+    custom_embedding_models = get_embedding_models_by_provider(Provider.CUSTOM)
     providers.append(
         {
             "id": "custom",
             "name": "Custom (OpenAI-compatible)",
-            "connected": bool(custom_models),
+            "connected": bool(custom_models or custom_embedding_models),
             "key_hint": None,
             "from_env": False,
             "model_count": len(custom_models),
@@ -112,7 +113,7 @@ async def get_providers(runtime: Runtime = Depends(get_runtime)):
                 {"id": mid, "base_url": m.base_url, "context_window": m.max_context_tokens}
                 for mid, m in custom_models.items()
             ],
-            "embedding_models": list(get_embedding_models_by_provider(Provider.CUSTOM).keys()),
+            "embedding_models": list(custom_embedding_models.keys()),
         }
     )
 

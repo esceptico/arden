@@ -124,6 +124,40 @@ def test_update_page_preserves_exact_bytes_and_requires_page_and_tree_versions(t
         )
 
 
+def test_update_page_can_guard_only_the_observed_page_version(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = WikiService(repo)
+    observed = service.create_page(path="notes/one.md", title="One", page_id="one")
+    service.create_page(path="notes/two.md", title="Two", page_id="two", expected_head=repo.head)
+
+    updated = service.update_page(
+        "one",
+        content=observed.page.with_body(b"Updated after an unrelated commit.\n").to_bytes(),
+        expected_version=observed.resource.version_id,
+    )
+
+    assert updated.page.body == b"Updated after an unrelated commit.\n"
+    current_head = repo.head
+    repo.commit(
+        ChangeSet(
+            operations=(
+                Update("one", updated.resource.version_id, updated.page.with_body(b"Concurrent.\n").to_bytes()),
+            ),
+            actor="test",
+            origin="test",
+            reason="same-page race",
+            idempotency_key="same-page-race",
+            expected_head=current_head,
+        )
+    )
+    with pytest.raises(RevisionConflictError, match="resource one changed"):
+        service.update_page(
+            "one",
+            content=updated.page.with_body(b"Stale overwrite.\n").to_bytes(),
+            expected_version=updated.resource.version_id,
+        )
+
+
 def test_ordinary_page_operations_cannot_take_over_backend_health(tmp_path: Path) -> None:
     fresh = WikiService(_repo(tmp_path / "fresh"))
     with pytest.raises(WikiValidationError, match="backend-managed"):
@@ -554,7 +588,11 @@ def test_directory_readmes_are_created_atomically_and_protected_while_children_a
     assert b"## Purpose" in root_readme.content
     assert b"## Producers" in digest_readme.content
     assert b"## Consumers" in digest_readme.content
+    assert b"## Boundaries" in digest_readme.content
     assert b"## Retention" in digest_readme.content
+    assert root_readme.page.title == "Automations README"
+    assert digest_readme.page.title == "Digest README"
+    assert b"before the creating task finishes" in digest_readme.content
     assert b"today.md" not in digest_readme.content
     assert not digest_readme.page.title.startswith("Directory:")
 
@@ -596,6 +634,42 @@ def test_directory_readmes_are_created_atomically_and_protected_while_children_a
     )
     assert service.read_page(digest_readme_id).content == restored_content
     assert {change.action for change in repo.history(limit=1)[0].changes} == {"create", "restore"}
+
+
+@pytest.mark.parametrize(
+    ("directory", "title", "marker"),
+    (
+        ("topics", "Topics README", b"verify important claims"),
+        ("daily", "Daily README", b"timeless truth"),
+        ("automations", "Automations README", b"Child READMEs"),
+        ("insights", "Insights README", b"supporting evidence, inference, and open questions"),
+        ("projects", "Projects README", b"cross-project knowledge"),
+    ),
+)
+def test_builtin_directory_readmes_have_specific_agent_contracts(
+    tmp_path: Path,
+    directory: str,
+    title: str,
+    marker: bytes,
+) -> None:
+    service = WikiService(_repo(tmp_path))
+    service.create_page(path=f"{directory}/example.md", title="Example")
+    readme = next(record for record in service.snapshot().pages if record.resource.path == f"{directory}/README.md")
+
+    assert readme.page.title == title
+    assert b"guide" not in readme.content.lower()
+    assert marker in readme.content
+    assert b"## Boundaries" in readme.content
+
+
+def test_directory_readme_title_does_not_claim_the_directory_topic_name(tmp_path: Path) -> None:
+    service = WikiService(_repo(tmp_path))
+    service.create_page(path="catalog.md", title="Topics")
+
+    service.create_page(path="topics/example.md", title="Example")
+
+    readme = next(record for record in service.snapshot().pages if record.resource.path == "topics/README.md")
+    assert readme.page.title == "Topics README"
 
 
 def test_root_readme_remains_an_ordinary_home_page(tmp_path: Path) -> None:

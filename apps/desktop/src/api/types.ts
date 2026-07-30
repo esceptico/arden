@@ -115,7 +115,7 @@ export interface ServerConfig {
   /** Default model for workflow agents. */
   workflow_model: string;
   memory_model: string;
-  embedding_model: string;
+  embedding_model: string | null;
   web_search: "auto" | "exa" | "ddgs" | "none";
   web_search_provider: string;
   max_depth: number;
@@ -233,11 +233,16 @@ export interface Automation {
   /** Loops with read_history=false are "channels" (post-mode feeds) — their
    *  spawned sessions are channel-type rather than chat-type. */
   read_history?: boolean;
+  idempotency_key?: string | null;
+  idempotency_scope?: "global" | "run" | "attempt" | null;
 }
 
 export interface CreateAutomationPayload {
   name: string;
   prompt: string;
+  /** Stable per-create operation identity. Retries reuse this key. */
+  idempotency_key?: string;
+  idempotency_scope?: "global";
   /** Omit to have Arden generate concise display copy. */
   description?: string;
   model?: string | null;

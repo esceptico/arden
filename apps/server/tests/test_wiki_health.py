@@ -11,7 +11,6 @@ from arden.wiki.health import (
     WikiHealthIssue,
     WikiHealthIssueCode,
     WikiHealthIssueOwner,
-    WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthWorker,
 )
@@ -65,7 +64,6 @@ def test_health_projects_typed_evidence_and_mechanics(tmp_path: Path) -> None:
                 WikiHealthIssueOwner.RETENTION,
             ),
         ),
-        pending_reviews=(WikiHealthPendingReview("review-1", "Decide whether to merge topic pages"),),
     )
 
     result = WikiHealthProjector(service).project(input_value)
@@ -75,12 +73,13 @@ def test_health_projects_typed_evidence_and_mechanics(tmp_path: Path) -> None:
     assert result.commit.origin == "wiki.health"
     content = repo.read("health").decode()
     assert "Overall status: **attention needed**" in content
-    assert f"Wiki: `{report.through_revision}`" in content
-    assert "| Memory Synthesis | behind | `facts-1` | 2026-07-28T00:00:00+00:00 |" in content
+    assert "Wiki: available" in content
+    assert "| Memory Synthesis | behind | 2026-07-28T00:00:00+00:00 |" in content
+    assert report.through_revision not in content
     assert "**unresolved_link** — owner: Wiki Maintenance; `source.md`: Missing" in content
     assert "**index_behind** — owner: Backend; `wiki_page`: awaiting wiki_page sync" in content
     assert "**fact_review_due** — owner: Memory Retention; `fact-9`: expired review date" in content
-    assert "`review-1` — Decide whether to merge topic pages" in content
+    assert "Pending maintenance reviews" not in content
     assert {issue.code for issue in result.issues} == {
         WikiHealthIssueCode.UNRESOLVED_LINK,
         WikiHealthIssueCode.INDEX_BEHIND,
@@ -98,10 +97,10 @@ def test_health_renders_all_four_canonical_workers_in_order(tmp_path: Path) -> N
         line for line in content.splitlines() if line.startswith("| Memory") or line.startswith("| Wiki Maintenance")
     ]
     assert rows == [
-        "| Memory Maintenance | current | `facts-1` | 2026-07-28T00:00:00+00:00 |",
-        "| Memory Retention | current | `facts-1` | 2026-07-28T00:00:00+00:00 |",
-        "| Memory Synthesis | current | `facts-1` | 2026-07-28T00:00:00+00:00 |",
-        "| Wiki Maintenance | not available | `none` | never |",
+        "| Memory Maintenance | current | 2026-07-28T00:00:00+00:00 |",
+        "| Memory Retention | current | 2026-07-28T00:00:00+00:00 |",
+        "| Memory Synthesis | current | 2026-07-28T00:00:00+00:00 |",
+        "| Wiki Maintenance | not available | never |",
     ]
 
 
@@ -119,10 +118,7 @@ def test_health_retention_checkpoint_is_behind_when_a_due_review_exists(tmp_path
 
     WikiHealthProjector(service).project(value)
 
-    assert (
-        "| Memory Retention | behind | `facts-1` | 2026-07-28T00:00:00+00:00 |"
-        in service.repository.read("health").decode()
-    )
+    assert "| Memory Retention | behind | 2026-07-28T00:00:00+00:00 |" in service.repository.read("health").decode()
 
 
 def test_generated_health_does_not_claim_the_personal_health_topic_name(tmp_path: Path) -> None:
@@ -201,7 +197,7 @@ def test_health_emits_stale_fact_page_with_revision_evidence(tmp_path: Path) -> 
     issue = next(issue for issue in result.issues if issue.code is WikiHealthIssueCode.STALE_PAGE)
     assert issue.target == "topics/stale.md"
     assert issue.owner is WikiHealthIssueOwner.SYNTHESIS
-    assert issue.evidence == f"generated from {'a' * 64}; current fact revision is {'c' * 64}"
+    assert issue.evidence == "Generated fact content is behind the current ledger."
 
 
 def test_health_does_not_duplicate_invalid_provenance_as_stale(tmp_path: Path) -> None:

@@ -6,20 +6,20 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
+from arden.constants import OFFLOAD_THRESHOLD
 from arden.core.tool_result_files import RESULTS_BASE
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.collections import format_timestamp, paginate
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, read_file_snapshot
+from arden.tools.core.file_mutation import FileRevision, RevisionConflict, atomic_compare_and_swap, read_file_snapshot
 from arden.tools.core.formatting import format_lines_with_pagination
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 READ_FILE_DESCRIPTION = (
     "Read content from a file. Use for code, configs, logs, etc. "
-    "Returns the file's SHA-256 revision for safe write_file/edit_file calls. "
     "For large files, use offset and limit parameters to read in chunks. "
     "When an area default cwd is set, use paths relative to it unless reading outside the area."
 )
@@ -37,12 +37,12 @@ SEARCH_TEXT_DESCRIPTION = (
 )
 WRITE_FILE_DESCRIPTION = (
     "Write exact UTF-8 content to a file. Creates the file or replaces existing content. "
-    "Call read_file first and pass its sha256, or expected_sha256='absent' for creation. "
+    "Read an existing file completely before replacing it. "
     "When an area default cwd is set, use paths relative to it unless writing outside the area."
 )
 EDIT_FILE_DESCRIPTION = (
     "Edit a file by replacing one exact text block with another. "
-    "Call read_file first and pass its sha256 as expected_sha256. "
+    "The old text must match exactly once. "
     "When an area default cwd is set, use paths relative to it unless editing outside the area."
 )
 
@@ -118,6 +118,10 @@ def _path_data(path: Path, cwd: str | None = None) -> dict:
     return data
 
 
+def _observation_id(path: Path) -> str:
+    return f"file:{path}"
+
+
 def _unified_diff(path: Path, before: str, after: str, *, display_path: str | None = None) -> str | None:
     label = display_path or str(path)
     diff = "".join(
@@ -131,20 +135,12 @@ def _unified_diff(path: Path, before: str, after: str, *, display_path: str | No
     return diff or None
 
 
-def _revision_bound_diff(diff: str | None, expected_sha256: str) -> str:
-    body = diff.rstrip() + "\n\n" if diff else ""
-    return f"{body}Expected SHA-256: {expected_sha256}"
-
-
-def _write_conflict(path: Path, conflict: RevisionConflict, cwd: str | None = None) -> ToolResult:
+def _write_conflict(path: Path, cwd: str | None = None) -> ToolResult:
     return ToolResult.failure(
         code="write_conflict",
-        message=(
-            f"File changed since it was read: {_display_path(path, cwd)}. "
-            f"Expected {conflict.expected}, observed {conflict.observed}. Read it again before writing."
-        ),
+        message=f"File changed since it was read: {_display_path(path, cwd)}.",
         preview="Write conflict",
-        recovery_action="Read the current file, recompute the edit, and retry with its new sha256.",
+        recovery_action="Read the current file, recompute the edit, and retry.",
     )
 
 
@@ -155,6 +151,8 @@ def _write_conflict(path: Path, conflict: RevisionConflict, cwd: str | None = No
 
 
 class ReadFileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     path: str = Field(description="File path. Prefer relative paths from the area default cwd when set.")
     offset: int = Field(
         default=_DEFAULT_OFFSET,
@@ -170,7 +168,9 @@ class ReadFileInput(BaseModel):
     )
 
 
-def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
+def _read_file_sync(
+    args: ReadFileInput, cwd: str | None = None
+) -> tuple[ToolResult, Path | None, FileRevision | None, bool]:
     full_path = _resolve_path(args.path, cwd)
     offset = args.offset
     limit = args.limit
@@ -182,19 +182,29 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
         limit = _OFFLOAD_READ_LIMIT
 
     if not full_path.exists():
-        return ToolResult.failure(
-            code="not_found",
-            message=f"File not found: {args.path}. Check the path or use list_files() to list the directory.",
-            preview="Not found",
-            recovery_action="Call list_files on the parent directory and retry with an existing path.",
+        return (
+            ToolResult.failure(
+                code="not_found",
+                message=f"File not found: {args.path}. Check the path or use list_files() to list the directory.",
+                preview="Not found",
+                recovery_action="Call list_files on the parent directory and retry with an existing path.",
+            ),
+            None,
+            None,
+            False,
         )
 
     if not full_path.is_file():
-        return ToolResult.failure(
-            code="invalid_ref",
-            message=f"Path is a directory, not a file: {args.path}. Use list_files(path={args.path!r}) to list contents.",
-            preview="Not a file",
-            recovery_action="Call list_files for directories or retry with a file path.",
+        return (
+            ToolResult.failure(
+                code="invalid_ref",
+                message=f"Path is a directory, not a file: {args.path}. Use list_files(path={args.path!r}) to list contents.",
+                preview="Not a file",
+                recovery_action="Call list_files for directories or retry with a file path.",
+            ),
+            None,
+            None,
+            False,
         )
 
     try:
@@ -214,32 +224,56 @@ def _read_file_sync(args: ReadFileInput, cwd: str | None = None) -> ToolResult:
                     ),
                 )
             )
-        return ToolResult(
+        result = ToolResult(
             content=formatted,
             preview=f"Read {lines} lines",
-            data={**_path_data(full_path, cwd), "sha256": revision.sha256, "size": revision.size},
+            data={**_path_data(full_path, cwd), "size": revision.size},
             source_refs=source_refs,
+        )
+        return (
+            result,
+            full_path,
+            revision,
+            offset == 1 and limit >= lines and len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD,
         )
 
     except PermissionError:
-        return ToolResult.failure(
-            code="permission_denied",
-            message=f"Permission denied: {args.path}. File may be protected or require elevated access.",
-            preview="Denied",
-            recovery_action="Choose a readable path or request the required filesystem access.",
+        return (
+            ToolResult.failure(
+                code="permission_denied",
+                message=f"Permission denied: {args.path}. File may be protected or require elevated access.",
+                preview="Denied",
+                recovery_action="Choose a readable path or request the required filesystem access.",
+            ),
+            None,
+            None,
+            False,
         )
     except OSError:
-        return ToolResult.failure(
-            code="read_failed",
-            message=f"Could not read file: {args.path}",
-            preview="Read failed",
-            retryable=True,
-            recovery_action="Retry the read or inspect the path with list_files.",
+        return (
+            ToolResult.failure(
+                code="read_failed",
+                message=f"Could not read file: {args.path}",
+                preview="Read failed",
+                retryable=True,
+                recovery_action="Retry the read or inspect the path with list_files.",
+            ),
+            None,
+            None,
+            False,
         )
 
 
 async def read_file(execution: ToolExecution, args: ReadFileInput) -> ToolResult:
-    return await asyncio.to_thread(_read_file_sync, args, _session_cwd(execution))
+    result, path, revision, content_read = await asyncio.to_thread(_read_file_sync, args, _session_cwd(execution))
+    if path is not None and revision is not None:
+        execution.ctx.run.observe_resource(
+            _observation_id(path),
+            version=revision.sha256,
+            container_version=None,
+            content_read=content_read,
+        )
+    return result
 
 
 class ListFilesInput(BaseModel):
@@ -577,11 +611,10 @@ async def search_text(execution: ToolExecution, args: SearchTextInput) -> ToolRe
 
 
 class WriteFileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     path: str = Field(description="Path to write. Prefer relative paths from the area default cwd when set.")
     content: str = Field(description="Full file content to write.")
-    expected_sha256: str = Field(
-        description="SHA-256 returned by read_file, or the literal 'absent' when creating a new file."
-    )
 
 
 def _approve_write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ApprovalInfo | None:
@@ -597,7 +630,7 @@ def _approve_write_file_sync(args: WriteFileInput, cwd: str | None = None) -> Ap
     return ApprovalInfo(
         description=f"{action} {display}",
         preview=args.content[:500],
-        diff=_revision_bound_diff(diff, args.expected_sha256),
+        diff=diff,
     )
 
 
@@ -605,75 +638,148 @@ async def approve_write_file(execution: ToolExecution, args: WriteFileInput) -> 
     return await asyncio.to_thread(_approve_write_file_sync, args, _session_cwd(execution))
 
 
-def _write_file_sync(args: WriteFileInput, cwd: str | None = None) -> ToolResult:
+def _fresh_read_required(path: Path, cwd: str | None = None) -> ToolResult:
+    return ToolResult.failure(
+        code="fresh_read_required",
+        message=f"Read {_display_path(path, cwd)} completely before replacing it.",
+        preview="Read file first",
+        recovery_action="Call read_file for the complete file, then retry.",
+    )
+
+
+def _write_file_sync(
+    args: WriteFileInput,
+    cwd: str | None,
+    observed_version: str | None,
+    content_read: bool,
+) -> tuple[ToolResult, FileRevision | None, bool]:
     path = _resolve_path(args.path, cwd)
     if path.exists() and path.is_dir():
-        return ToolResult.failure(
-            code="invalid_ref",
-            message=f"Path is a directory: {args.path}",
-            preview="Is directory",
-            recovery_action="Retry with a file path.",
+        return (
+            ToolResult.failure(
+                code="invalid_ref",
+                message=f"Path is a directory: {args.path}",
+                preview="Is directory",
+                recovery_action="Retry with a file path.",
+            ),
+            None,
+            False,
         )
     if not path.parent.exists():
-        return ToolResult.failure(
-            code="not_found",
-            message=f"Parent directory does not exist: {_display_path(path.parent, cwd)}",
-            preview="No parent",
-            recovery_action="Create or choose an existing parent directory before writing.",
+        return (
+            ToolResult.failure(
+                code="not_found",
+                message=f"Parent directory does not exist: {_display_path(path.parent, cwd)}",
+                preview="No parent",
+                recovery_action="Create or choose an existing parent directory before writing.",
+            ),
+            None,
+            False,
         )
 
     try:
-        revision = atomic_compare_and_swap(path, args.content, args.expected_sha256)
-    except RevisionConflict as conflict:
-        return _write_conflict(path, conflict, cwd)
+        if path.exists():
+            current, current_revision = read_file_snapshot(path)
+            if current.decode("utf-8", errors="replace") == args.content:
+                return (
+                    ToolResult(
+                        content=f"{_display_path(path, cwd)} already has the requested content.",
+                        preview="File unchanged",
+                        data={
+                            **_path_data(path, cwd),
+                            "lines": args.content.count("\n") + 1 if args.content else 0,
+                            "size": current_revision.size,
+                        },
+                    ),
+                    current_revision,
+                    content_read,
+                )
+            if not content_read or observed_version is None:
+                return _fresh_read_required(path, cwd), None, False
+            if current_revision.sha256 != observed_version:
+                return _write_conflict(path, cwd), None, False
+            expected = observed_version
+            operation = "replace"
+        else:
+            expected = "absent"
+            operation = "create"
+        revision = atomic_compare_and_swap(path, args.content, expected)
+    except RevisionConflict:
+        return _write_conflict(path, cwd), None, False
     except PermissionError:
-        return ToolResult.failure(
-            code="permission_denied",
-            message=f"Permission denied: {args.path}",
-            preview="Denied",
-            recovery_action="Choose a writable path or request filesystem access.",
+        return (
+            ToolResult.failure(
+                code="permission_denied",
+                message=f"Permission denied: {args.path}",
+                preview="Denied",
+                recovery_action="Choose a writable path or request filesystem access.",
+            ),
+            None,
+            False,
         )
     except OSError:
-        return ToolResult.failure(
-            code="write_failed",
-            message=f"Could not write file: {args.path}",
-            preview="Write failed",
-            retryable=True,
-            recovery_action="Inspect the path and retry after resolving the filesystem error.",
+        return (
+            ToolResult.failure(
+                code="write_failed",
+                message=f"Could not write file: {args.path}",
+                preview="Write failed",
+                retryable=True,
+                recovery_action="Inspect the path and retry after resolving the filesystem error.",
+            ),
+            None,
+            False,
         )
 
     lines = args.content.count("\n") + 1 if args.content else 0
     display = _display_path(path, cwd)
-    return ToolResult(
-        content=f"Wrote {display} ({lines} lines).",
-        preview=f"Wrote {lines} lines",
-        data={
-            **_path_data(path, cwd),
-            "lines": lines,
-            "sha256": revision.sha256,
-            "size": revision.size,
-        },
-        outcome=ToolOutcome(
-            status=ToolOutcomeStatus.SUCCEEDED,
-            effect=ToolEffect(
-                operation="create" if args.expected_sha256 == "absent" else "replace",
-                target=str(path),
-                before_ref=args.expected_sha256,
-                after_ref=revision.sha256,
+    return (
+        ToolResult(
+            content=f"Wrote {display} ({lines} lines).",
+            preview=f"Wrote {lines} lines",
+            data={
+                **_path_data(path, cwd),
+                "lines": lines,
+                "size": revision.size,
+            },
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.SUCCEEDED,
+                effect=ToolEffect(
+                    operation=operation,
+                    target=str(path),
+                ),
             ),
         ),
+        revision,
+        True,
     )
 
 
 async def write_file(execution: ToolExecution, args: WriteFileInput) -> ToolResult:
-    return await asyncio.to_thread(_write_file_sync, args, _session_cwd(execution))
+    path = _resolve_path(args.path, _session_cwd(execution))
+    observation = execution.ctx.run.resource_observation(_observation_id(path))
+    result, revision, complete = await asyncio.to_thread(
+        _write_file_sync,
+        args,
+        _session_cwd(execution),
+        None if observation is None else observation.version,
+        False if observation is None else observation.content_read,
+    )
+    if revision is not None and complete:
+        execution.ctx.run.observe_resource(
+            _observation_id(path),
+            version=revision.sha256,
+            container_version=None,
+            content_read=True,
+        )
+    return result
 
 
 class EditFileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     path: str = Field(description="Path to edit. Prefer relative paths from the area default cwd when set.")
     old_text: str = Field(min_length=1, description="Exact existing text block to replace. Must match once.")
     new_text: str = Field(description="Replacement text.")
-    expected_sha256: str = Field(description="SHA-256 returned by read_file for the content being edited.")
 
 
 def _approve_edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ApprovalInfo | None:
@@ -688,10 +794,7 @@ def _approve_edit_file_sync(args: EditFileInput, cwd: str | None = None) -> Appr
     return ApprovalInfo(
         description=f"Edit {display}",
         preview=args.new_text[:500],
-        diff=_revision_bound_diff(
-            _unified_diff(path, before, after, display_path=display),
-            args.expected_sha256,
-        ),
+        diff=_unified_diff(path, before, after, display_path=display),
     )
 
 
@@ -699,88 +802,128 @@ async def approve_edit_file(execution: ToolExecution, args: EditFileInput) -> Ap
     return await asyncio.to_thread(_approve_edit_file_sync, args, _session_cwd(execution))
 
 
-def _edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ToolResult:
+def _edit_file_sync(args: EditFileInput, cwd: str | None = None) -> tuple[ToolResult, Path | None, FileRevision | None]:
     path = _resolve_path(args.path, cwd)
     if not path.exists():
-        return ToolResult.failure(
-            code="not_found",
-            message=f"File not found: {args.path}",
-            preview="Not found",
-            recovery_action="Call list_files and read_file, then retry with an exact path.",
+        return (
+            ToolResult.failure(
+                code="not_found",
+                message=f"File not found: {args.path}",
+                preview="Not found",
+                recovery_action="Call list_files and read_file, then retry with an exact path.",
+            ),
+            None,
+            None,
         )
     if not path.is_file():
-        return ToolResult.failure(
-            code="invalid_ref",
-            message=f"Path is not a file: {args.path}",
-            preview="Not a file",
-            recovery_action="Retry with a file path.",
+        return (
+            ToolResult.failure(
+                code="invalid_ref",
+                message=f"Path is not a file: {args.path}",
+                preview="Not a file",
+                recovery_action="Retry with a file path.",
+            ),
+            None,
+            None,
         )
 
     try:
-        before = _read_text(path)
+        raw, current_revision = read_file_snapshot(path)
+        before = raw.decode("utf-8", errors="replace")
     except PermissionError:
-        return ToolResult.failure(
-            code="permission_denied",
-            message=f"Permission denied: {args.path}",
-            preview="Denied",
-            recovery_action="Choose a readable file or request filesystem access.",
+        return (
+            ToolResult.failure(
+                code="permission_denied",
+                message=f"Permission denied: {args.path}",
+                preview="Denied",
+                recovery_action="Choose a readable file or request filesystem access.",
+            ),
+            None,
+            None,
         )
     count = before.count(args.old_text)
     if count == 0:
-        return ToolResult.failure(
-            code="not_found",
-            message="Text block not found. Read the file and include more exact context.",
-            preview="No match",
-            recovery_action="Call read_file and retry with an exact text block from the current revision.",
+        return (
+            ToolResult.failure(
+                code="not_found",
+                message="Text block not found. Read the file and include more exact context.",
+                preview="No match",
+                recovery_action="Call read_file and retry with an exact text block from the current revision.",
+            ),
+            None,
+            None,
         )
     if count > 1:
-        return ToolResult.failure(
-            code="invalid_ref",
-            message=f"Text block matched {count} times. Include a larger exact block so the edit is unique.",
-            preview="Ambiguous",
-            recovery_action="Call read_file and retry with a larger unique text block.",
+        return (
+            ToolResult.failure(
+                code="invalid_ref",
+                message=f"Text block matched {count} times. Include a larger exact block so the edit is unique.",
+                preview="Ambiguous",
+                recovery_action="Call read_file and retry with a larger unique text block.",
+            ),
+            None,
+            None,
         )
 
     after = before.replace(args.old_text, args.new_text, 1)
     try:
-        revision = atomic_compare_and_swap(path, after, args.expected_sha256)
-    except RevisionConflict as conflict:
-        return _write_conflict(path, conflict, cwd)
+        revision = atomic_compare_and_swap(path, after, current_revision.sha256)
+    except RevisionConflict:
+        return _write_conflict(path, cwd), None, None
     except PermissionError:
-        return ToolResult.failure(
-            code="permission_denied",
-            message=f"Permission denied: {args.path}",
-            preview="Denied",
-            recovery_action="Choose a writable file or request filesystem access.",
+        return (
+            ToolResult.failure(
+                code="permission_denied",
+                message=f"Permission denied: {args.path}",
+                preview="Denied",
+                recovery_action="Choose a writable file or request filesystem access.",
+            ),
+            None,
+            None,
         )
     except OSError:
-        return ToolResult.failure(
-            code="write_failed",
-            message=f"Could not edit file: {args.path}",
-            preview="Edit failed",
-            retryable=True,
-            recovery_action="Inspect the path and retry after resolving the filesystem error.",
+        return (
+            ToolResult.failure(
+                code="write_failed",
+                message=f"Could not edit file: {args.path}",
+                preview="Edit failed",
+                retryable=True,
+                recovery_action="Inspect the path and retry after resolving the filesystem error.",
+            ),
+            None,
+            None,
         )
 
     display = _display_path(path, cwd)
-    return ToolResult(
-        content=f"Edited {display}.",
-        preview="Edited",
-        data={**_path_data(path, cwd), "sha256": revision.sha256, "size": revision.size},
-        outcome=ToolOutcome(
-            status=ToolOutcomeStatus.SUCCEEDED,
-            effect=ToolEffect(
-                operation="edit",
-                target=str(path),
-                before_ref=args.expected_sha256,
-                after_ref=revision.sha256,
+    return (
+        ToolResult(
+            content=f"Edited {display}.",
+            preview="Edited",
+            data={**_path_data(path, cwd), "size": revision.size},
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.SUCCEEDED,
+                effect=ToolEffect(
+                    operation="edit",
+                    target=str(path),
+                ),
             ),
         ),
+        path,
+        revision,
     )
 
 
 async def edit_file(execution: ToolExecution, args: EditFileInput) -> ToolResult:
-    return await asyncio.to_thread(_edit_file_sync, args, _session_cwd(execution))
+    result, path, revision = await asyncio.to_thread(_edit_file_sync, args, _session_cwd(execution))
+    if path is not None and revision is not None:
+        observation = execution.ctx.run.resource_observation(_observation_id(path))
+        execution.ctx.run.observe_resource(
+            _observation_id(path),
+            version=revision.sha256,
+            container_version=None,
+            content_read=False if observation is None else observation.content_read,
+        )
+    return result
 
 
 read_file_tool = tool(

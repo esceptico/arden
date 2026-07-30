@@ -36,6 +36,7 @@ Call `create_automation` exactly once with:
   - Detection is near-real-time (~1 min) and reads via the bot token. A time/interval "scan Slack" is the wrong shape and may not even work without a user token.
 - **`tool_scope`** (optional): list only the write/action tools the standalone prompt needs. Read-only tools are always available; `auto_approve` does not grant tools by itself.
 - **`auto_approve`** (default false): set true ONLY if the automation must run autonomously. It skips per-run approvals for tools already in `tool_scope`. For a Slack watcher acting on untrusted messages, also set `from_user` as a sender gate.
+- **`idempotency_key`**: a stable semantic key for this exact recurring job, such as `automation:morning-standup-digest`; set **`idempotency_scope`** to `"global"`. Reuse the exact key for an ambiguous retry. Do not create a date/version suffix; inspect with `list_automations` and use `update_automation` if that job already exists.
 
 ## Before calling — say what and why
 

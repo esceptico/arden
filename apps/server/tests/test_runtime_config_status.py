@@ -1,4 +1,10 @@
+import asyncio
+import sqlite3
+from datetime import UTC, datetime, timedelta
+
+import aiosqlite
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from arden.config import Config
@@ -184,7 +190,7 @@ async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, m
 
     assert knowledge.tool_services() == {}
 
-    assert knowledge.indexer is None
+    assert knowledge.indexer is not None
     assert knowledge.search_index is None
 
     enabled = Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding")
@@ -192,9 +198,302 @@ async def test_knowledge_runtime_syncs_indexer_with_embedding_config(tmp_path, m
 
     assert knowledge.indexer is not None
     assert knowledge.search_index is not None
+    assert knowledge.search_index.embedder is not None
 
     disabled = Config(arden_dir=tmp_path, memory=False, embedding_model=None)
     await knowledge.reload_config(disabled, stores=None)
 
-    assert knowledge.indexer is None
-    assert knowledge.search_index is None
+    assert knowledge.indexer is not None
+    assert knowledge.search_index is not None
+    await knowledge.close()
+
+
+@pytest.mark.asyncio
+async def test_embedding_change_requires_confirmation_before_settings_mutation(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding"))
+    calls: list[dict] = []
+
+    async def update(**fields) -> None:
+        calls.append(fields)
+
+    monkeypatch.setattr(runtime.config_service, "update", update)
+
+    with pytest.raises(HTTPException, match="confirmed=true"):
+        await runtime.update_embedding_model(None, confirmed=False)
+
+    assert calls == []
+    await runtime.update_embedding_model("test-embedding", confirmed=False)
+    assert calls == []
+    with pytest.raises(HTTPException, match="not available"):
+        await runtime.update_embedding_model("text-embedding-3-small", confirmed=True)
+
+
+@pytest.mark.asyncio
+async def test_runtime_index_status_reports_progress_error_and_concurrent_rebuild(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding"))
+
+    class Indexer:
+        vector_enabled = True
+        rate_limit_retry_at = None
+
+    runtime.knowledge.indexer = Indexer()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Projection:
+        async def sync(self, *, progress_callback, **_kwargs):
+            assert "force" not in _kwargs
+            progress_callback(0, 2)
+            started.set()
+            await release.wait()
+            progress_callback(2, 2)
+            return self
+
+    runtime.fact_index_projection = Projection()
+    runtime.wiki_page_projection = Projection()
+
+    assert await runtime.start_indexing() is True
+    await started.wait()
+    runtime.knowledge.indexer.rate_limit_retry_at = datetime.now(UTC) + timedelta(seconds=46)
+    active_status = await runtime.get_index_status()
+    assert active_status["state"] == "reindexing"
+    assert datetime.fromisoformat(active_status["retry_at"]) > datetime.now(UTC)
+    runtime.knowledge.indexer.rate_limit_retry_at = None
+    assert (await runtime.get_index_status())["retry_at"] is None
+    with pytest.raises(HTTPException, match="already running"):
+        await runtime.start_indexing()
+    with pytest.raises(HTTPException, match="already running"):
+        await runtime.update_embedding_model(None, confirmed=True)
+
+    release.set()
+    assert runtime._index_task is not None
+    await runtime._index_task
+    assert await runtime.get_index_status() == {
+        "state": "ready",
+        "model": "test-embedding",
+        "phase": None,
+        "done": 2,
+        "total": 2,
+        "retry_at": None,
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_reload_stops_active_rebuild_before_reloading_knowledge(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding"))
+
+    class Indexer:
+        vector_enabled = True
+        needs_rebuild = False
+        rate_limit_retry_at = None
+
+    runtime.knowledge.indexer = Indexer()
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def active_rebuild():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    old_task = asyncio.create_task(active_rebuild())
+    runtime._index_task = old_task
+    await started.wait()
+
+    async def reload_config():
+        assert stopped.is_set()
+
+    monkeypatch.setattr(runtime.config_runtime, "reload", reload_config)
+
+    await runtime.reload_config()
+
+    assert old_task.cancelled()
+    assert runtime._index_task is not old_task
+    await runtime._index_task
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_rebuild_failure_when_a_projection_cannot_finish(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding"))
+
+    class Indexer:
+        vector_enabled = True
+        rate_limit_retry_at = None
+
+    runtime.knowledge.indexer = Indexer()
+
+    class Projection:
+        async def sync(self, **_kwargs):
+            return None
+
+    runtime.fact_index_projection = Projection()
+
+    assert await runtime.start_indexing() is True
+    assert runtime._index_task is not None
+    await runtime._index_task
+
+    status = await runtime.get_index_status()
+    assert status["state"] == "error"
+    assert status["error"] == "RuntimeError: fact index rebuild did not complete"
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_mark_existing_unavailable_partitions_as_rebuilt(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding"))
+
+    class Indexer:
+        vector_enabled = True
+        rate_limit_retry_at = None
+
+    runtime.knowledge.indexer = Indexer()
+
+    class Store:
+        marked_ready = False
+
+        async def get_stats(self):
+            return {"fact": 1}
+
+        async def mark_embedding_ready(self):
+            self.marked_ready = True
+
+    class Index:
+        def __init__(self, store):
+            self.store = store
+
+    store = Store()
+    runtime.knowledge.search_index = Index(store)
+
+    assert await runtime.start_indexing() is True
+    assert runtime._index_task is not None
+    await runtime._index_task
+
+    status = await runtime.get_index_status()
+    assert status["state"] == "error"
+    assert status["error"] == "RuntimeError: cannot rebuild unavailable sources: fact"
+    assert store.marked_ready is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_vector_index_initialization_failure(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+
+    original_execute = aiosqlite.Connection.execute
+
+    async def reject_vector_table(self, sql, parameters=()):
+        if "CREATE VIRTUAL TABLE IF NOT EXISTS items_vec" in sql:
+            raise sqlite3.OperationalError("vec extension unavailable")
+        return await original_execute(self, sql, parameters)
+
+    monkeypatch.setattr(aiosqlite.Connection, "execute", reject_vector_table)
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False, embedding_model="test-embedding"))
+
+    await runtime.connect()
+    try:
+        assert await runtime.get_index_status() == {
+            "state": "error",
+            "model": "test-embedding",
+            "phase": None,
+            "done": 0,
+            "total": 0,
+            "retry_at": None,
+            "error": "Vector index is unavailable; full-text search remains available",
+        }
+        assert runtime.search_index is not None
+        assert runtime.search_index.embedder is None
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_connect_reports_initial_embedding_failure_without_stopping_fts(tmp_path, monkeypatch):
+    import arden.llm.models as llm_models
+    from arden.embedder import Embedder
+    from arden.memory.facts.ledger import FactLedger
+
+    monkeypatch.setitem(
+        llm_models._registry._embedding_models,
+        "test-embedding",
+        EmbeddingModel("test-embedding", Provider.CUSTOM, 3, base_url="http://localhost"),
+    )
+
+    config = Config(arden_dir=tmp_path, embedding_model="test-embedding")
+    ledger = FactLedger(config.memory_artifacts_dir / "facts")
+    plan = ledger.plan(
+        [
+            {
+                "op": "create",
+                "fact_id": "sunshield",
+                "text": "The orbital telescope uses a sunshield.",
+                "kind": "fact",
+                "subjects": ["Telescope"],
+                "scope": {"kind": "user", "key": None},
+                "sources": [{"kind": "test", "ref": "sunshield"}],
+            }
+        ],
+        actor="test",
+        origin="test",
+        reason="seed",
+    )
+    ledger.commit(plan)
+
+    async def unavailable(self, texts):
+        del self, texts
+        raise TimeoutError("provider unavailable")
+
+    monkeypatch.setattr(Embedder, "embed", unavailable)
+    runtime = Runtime(config)
+
+    await runtime.connect()
+    try:
+        assert (await runtime.get_index_status())["state"] == "error"
+        assert (await runtime.get_index_status())["error"] == "TimeoutError: provider unavailable"
+        assert runtime.search_index is not None
+        assert runtime.search_index.embedder is not None
+        results = await runtime.search_index.search("sunshield", sources=["fact"])
+        assert [result.source_id for result in results] == ["sunshield"]
+    finally:
+        await runtime.close()

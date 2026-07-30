@@ -166,30 +166,11 @@ class AutomationRuntime:
         )
 
     async def request_fact_maintenance(self) -> bool:
-        """Resume blocked fact maintenance after its durable user decision."""
+        """Schedule fact maintenance."""
 
         return await self.scheduler.request_delayed_run(
             BUILTIN_MEMORY_CONSOLIDATE_ID,
             timedelta(0),
-        )
-
-    async def request_wiki_maintenance(self) -> bool:
-        """Resume durable maintenance immediately after a user decision."""
-
-        return await self.scheduler.request_delayed_run(
-            BUILTIN_WIKI_MAINTENANCE_ID,
-            timedelta(0),
-        )
-
-    async def notify_wiki_maintenance_reviews_changed(self, revision: str | None) -> None:
-        """Invalidate the durable review queue in every open desktop."""
-
-        await self.scheduler.emit_automation_event(
-            MemoryChangedEvent(
-                paths=[],
-                revision=revision,
-                review_required=True,
-            )
         )
 
     async def notify_wiki_changed(
@@ -199,9 +180,7 @@ class AutomationRuntime:
         *,
         source_areas_by_path: dict[str, set[str]],
     ) -> None:
-        await self.scheduler.emit_automation_event(
-            MemoryChangedEvent(paths=paths, revision=revision, review_required=False)
-        )
+        await self.scheduler.emit_automation_event(MemoryChangedEvent(paths=paths, revision=revision))
         changed = set(paths)
         for record in await self.stores.sessions.list_areas():
             page_path = record.get("page_path")
@@ -215,21 +194,37 @@ class AutomationRuntime:
 
     async def _on_area_run_completed(self, run_completed: RunCompleted) -> bool:
         """Project one trusted custodian report after durable chat completion."""
-        return await self._project_area_report(
-            run_id=run_completed.run_id,
-            session_id=run_completed.session_id,
-            automation_task_id=run_completed.automation_task_id,
-            required=True,
-        )
+        try:
+            return await self._project_area_report(
+                run_id=run_completed.run_id,
+                session_id=run_completed.session_id,
+                automation_task_id=run_completed.automation_task_id,
+                required=True,
+            )
+        except Exception:
+            task_id = run_completed.automation_task_id
+            if task_id is not None and task_id.startswith("area:"):
+                self.custodians.abandon_delivery(
+                    task_id.removeprefix("area:"),
+                    run_id=run_completed.run_id,
+                )
+            raise
 
     async def _on_area_run_failed(self, run_failed: RunFailed) -> bool:
         """Finish projecting any report accepted before chat finalization failed."""
-        return await self._project_area_report(
+        accepted = await self._project_area_report(
             run_id=run_failed.run_id,
             session_id=run_failed.session_id,
             automation_task_id=run_failed.automation_task_id,
             required=False,
         )
+        task_id = run_failed.automation_task_id
+        if not accepted and task_id is not None and task_id.startswith("area:"):
+            self.custodians.abandon_delivery(
+                task_id.removeprefix("area:"),
+                run_id=run_failed.run_id,
+            )
+        return accepted
 
     async def _project_area_report(
         self,
@@ -496,10 +491,9 @@ class AutomationRuntime:
 
         reviewed = sum(result.reviewed_commits for result in results)
         updated = sum(result.updated_pages for result in results)
+        skipped = sum(result.skipped_oversized_reports for result in results)
         final = results[-1]
-        if final.blocked:
-            state = "needs user review"
-        elif final.reload_required:
+        if final.reload_required:
             state = "fresh-feed continuation deferred"
         elif final.empty:
             state = "idle"
@@ -507,11 +501,12 @@ class AutomationRuntime:
             state = "current"
         else:
             state = "incomplete"
-        if final.blocked:
-            await self.notify_wiki_maintenance_reviews_changed(final.feed_target_revision)
         if final.reload_required:
             await self.scheduler.request_delayed_run(BUILTIN_WIKI_MAINTENANCE_ID, _WIKI_MAINTENANCE_RETRY_DELAY)
-        return CompletedAgentRun(agent_run.run_id, f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}")
+        result = f"wiki maintenance: {state}; reviewed {reviewed}; updated {updated}"
+        if skipped:
+            result += f"; skipped oversized reports {skipped}"
+        return CompletedAgentRun(agent_run.run_id, result)
 
     @staticmethod
     def _area_run_at(index: int) -> str:

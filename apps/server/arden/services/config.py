@@ -36,7 +36,7 @@ class ConfigService:
 
         def mutate(settings: dict) -> None:
             for key, value in persist.items():
-                if value is None:
+                if value is None and key != "embedding_model":
                     settings.pop(key, None)
                 else:
                     settings[key] = value

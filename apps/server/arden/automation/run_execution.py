@@ -92,7 +92,7 @@ class ExecutionDependencies:
 class ExecutionOutcome:
     """Durable execution result; Scheduler applies live reservation/wake actions."""
 
-    state: Literal["deferred", "detached", "settled", "unstarted"]
+    state: Literal["deferred", "detached", "settled", "suppressed", "unstarted"]
     result: str | None = None
     retry_at: datetime | None = None
     event_retry_at: datetime | None = None
@@ -189,13 +189,10 @@ async def run_session_bound(
         raise RuntimeError(f"{mode.title()} loop {automation.task_id} missing thread_id")
     if dispatcher is None:
         raise RuntimeError(f"{mode} dispatcher not wired")
-    try:
-        if automation.read_history:
-            dispatched = await dispatcher(automation, context, automation_run_id)
-        else:
-            dispatched = await dispatcher(automation, context)
-    except RunSkipped as skip:
-        return SessionExecutionOutcome(result=f"Skipped: {skip}")
+    if automation.read_history:
+        dispatched = await dispatcher(automation, context, automation_run_id)
+    else:
+        dispatched = await dispatcher(automation, context)
     if automation.read_history and not dispatched:
         raise RuntimeError(f"Iteration automation {automation.task_id} did not return a chat run id")
     result: CompletedAgentRun | DetachedRun = DetachedRun(dispatched) if automation.read_history else dispatched
@@ -274,6 +271,18 @@ async def execute_and_settle(
         if not discarded:
             raise RuntimeError(f"automation run {run_id} was already settled") from deferred
         return ExecutionOutcome(state="deferred")
+    except RunSkipped as skipped:
+        next_run = prewritten_next_run if has_prewritten_next_run else automation.next_run_at
+        discarded = await dependencies.store.defer_run(
+            task_id=automation.task_id,
+            run_id=run_id,
+            retry_at=next_run,
+            expected_next_run=next_run,
+            event_queue_id=event_queue_id,
+        )
+        if not discarded:
+            raise RuntimeError(f"automation run {run_id} was already settled") from skipped
+        return ExecutionOutcome(state="suppressed", result=str(skipped))
     except asyncio.CancelledError:
         cancelled = True
         error_message = "CancelledError: automation run cancelled"

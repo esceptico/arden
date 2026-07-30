@@ -215,7 +215,7 @@ test("all picker variants use the mock geometry, material, and side-aware motion
   const chat = read("../src/design/chat.css");
 
   expect(css).toMatch(/\.model-picker--field\s*\{[^}]*width:\s*276px;[^}]*grid-template-columns:\s*180px 88px;/s);
-  expect(css).toMatch(/\.model-picker--field \.model-picker__trigger\s*\{[^}]*height:\s*32px;[^}]*background:\s*var\(--paper\);[^}]*box-shadow:\s*var\(--shadow-2\);/s);
+  expect(css).toMatch(/:is\(\.model-picker--field, \.model-picker--embedding\) \.model-picker__trigger\s*\{[^}]*height:\s*32px;[^}]*background:\s*var\(--paper\);[^}]*box-shadow:\s*var\(--shadow-2\);/s);
   expect(css).toMatch(/\.model-picker__model-menu\s*\{[^}]*width:\s*300px;[^}]*max-height:\s*260px;/s);
   expect(css).toMatch(/\.model-picker__model-menu\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;/s);
   expect(css).toMatch(/\.model-picker__model-list\s*\{[^}]*flex:\s*1;[^}]*overflow:\s*auto;/s);

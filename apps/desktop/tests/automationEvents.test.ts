@@ -19,22 +19,21 @@ describe("automation event stream helpers", () => {
     );
   });
 
-  test("memory change keeps exact paths, revision, review flag, and sequence", () => {
+  test("memory change keeps exact paths, revision, and sequence", () => {
     expect(memoryVaultChangeFromEvent({
       type: "memory_changed",
       paths: ["topics/a.md"],
       revision: "sha256:r2",
-      review_required: true,
       seq: 17,
     })).toEqual({
-      paths: ["topics/a.md"], revision: "sha256:r2", reviewRequired: true, seq: 17,
+      paths: ["topics/a.md"], revision: "sha256:r2", seq: 17,
     });
   });
 
   test("memory store retains sequenced events and ignores duplicate or evicted-stale delivery", () => {
     const before = useStore.getState().memoryVaultVersion;
     useStore.setState({ memoryVaultChanges: [] });
-    const change = { paths: ["topics/a.md"], revision: "sha256:r2", reviewRequired: true, seq: 17 };
+    const change = { paths: ["topics/a.md"], revision: "sha256:r2", seq: 17 };
     useStore.getState().memoryVaultChanged(change);
     expect(useStore.getState().memoryVaultChanges).toEqual([change]);
     expect(useStore.getState().memoryVaultVersion).toBe(before + 1);
@@ -49,11 +48,11 @@ describe("automation event stream helpers", () => {
     useStore.setState({ memoryVaultChanges: [] });
     for (let seq = MEMORY_VAULT_CHANGE_CAP + 12; seq >= 1; seq -= 1) {
       useStore.getState().memoryVaultChanged({
-        paths: [`topics/${seq}.md`], revision: `r${seq}`, reviewRequired: false, seq,
+        paths: [`topics/${seq}.md`], revision: `r${seq}`, seq,
       });
     }
     useStore.getState().memoryVaultChanged({
-      paths: ["duplicate.md"], revision: "duplicate", reviewRequired: true, seq: MEMORY_VAULT_CHANGE_CAP,
+      paths: ["duplicate.md"], revision: "duplicate", seq: MEMORY_VAULT_CHANGE_CAP,
     });
 
     const changes = useStore.getState().memoryVaultChanges;

@@ -8,7 +8,7 @@ import pytest_asyncio
 import arden.database as database
 from arden.agent import Usage
 from arden.automation.models import Automation
-from arden.automation.scheduler import CompletedAgentRun, DetachedRunBindingPending, RunDeferred, Scheduler
+from arden.automation.scheduler import CompletedAgentRun, DetachedRunBindingPending, RunDeferred, RunSkipped, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import CountTrigger, MessageTrigger, TimeTrigger
@@ -958,6 +958,37 @@ async def test_busy_iteration_is_deferred_without_history_or_duplicate_delivery(
         )
         completed = await store.list_runs("loop-1")
         assert completed[0]["status"] == "completed"
+    finally:
+        await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_suppressed_iteration_is_not_recorded_as_completed(store: AutomationStore):
+    automation = _loop()
+    automation.last_result = "previous successful result"
+    await store.save(automation)
+
+    async def suppress(
+        _automation: Automation,
+        _context: str | dict | None,
+        _automation_run_id: int,
+    ) -> str:
+        raise RunSkipped("autonomous daily run cap reached")
+
+    scheduler = Scheduler(store=store, build_deps=lambda: None)
+    scheduler.set_iteration_dispatcher(suppress)
+    try:
+        await scheduler._tick()
+        await asyncio.gather(*tuple(scheduler._running))
+
+        reloaded = await store.get(automation.task_id)
+        assert reloaded is not None
+        assert reloaded.running_since is None
+        assert reloaded.iteration_count == 0
+        assert reloaded.last_run_at is None
+        assert reloaded.last_result == "previous successful result"
+        assert reloaded.next_run_at is not None and reloaded.next_run_at > datetime.now(UTC)
+        assert await store.list_runs(automation.task_id) == []
     finally:
         await scheduler.stop()
 

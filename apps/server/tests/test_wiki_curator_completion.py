@@ -62,3 +62,8 @@ async def test_completion_reviewer_uses_typed_semantic_decision() -> None:
     assert call["response_format"] is WikiEditCuratorDecision
     assert "formatting" in call["messages"][0]["content"]
     assert '"token": "F000"' in call["messages"][1]["content"]
+    assert "b" * 64 not in call["messages"][1]["content"]
+    assert "c" * 64 not in call["messages"][1]["content"]
+    assert "d" * 64 not in call["messages"][1]["content"]
+    assert '"page_id"' not in call["messages"][1]["content"]
+    assert "preferences" in call["messages"][1]["content"]

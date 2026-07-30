@@ -314,10 +314,15 @@ async def get_embedding_models(runtime: Runtime = Depends(get_runtime)):
     all_models = get_embedding_models_fn()
     groups: dict[str, list[str]] = {}
     for mid, m in all_models.items():
+        if mid != runtime.config.embedding_model and not runtime.embedding_model_available(mid):
+            continue
         groups.setdefault(m.provider.value, []).append(mid)
     return {
-        "models": list_embedding_models(),
-        "groups": [{"provider": p, "models": ms} for p, ms in groups.items()],
+        "models": [mid for mid in list_embedding_models() if any(mid in values for values in groups.values())],
+        "groups": [
+            {"provider": provider, "label": provider_label(Provider(provider)), "models": models}
+            for provider, models in groups.items()
+        ],
         "current": runtime.config.embedding_model,
     }
 
@@ -326,20 +331,9 @@ async def get_embedding_models(runtime: Runtime = Depends(get_runtime)):
 async def update_embedding_model(
     req: UpdateEmbeddingRequest,
     runtime: Runtime = Depends(get_runtime),
-    cfg_svc: ConfigService = Depends(require_config_service),
 ):
-    old_model = runtime.config.embedding_model
-
     try:
-        await cfg_svc.update(embedding_model=req.embedding_model)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if runtime.config.embedding_model == old_model:
-        return {"status": "unchanged", "embedding_model": old_model}
-
-    return {
-        "status": "reindexing",
-        "embedding_model": req.embedding_model,
-        "embedding_dim": runtime.config.embedding.dim if runtime.config.embedding else None,
-    }
+        await runtime.update_embedding_model(req.embedding_model, req.confirmed)
+    except (ValueError, ValidationError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return await runtime.get_index_status()

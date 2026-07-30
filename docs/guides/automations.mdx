@@ -110,7 +110,9 @@ curl -X POST http://localhost:6877/automations \
     "description": "Weekday morning briefing",
     "trigger_type": "time",
     "at": "09:00",
-    "days": "weekdays"
+    "days": "weekdays",
+    "idempotency_key": "automation:morning-briefing",
+    "idempotency_scope": "global"
 }'
 ```
 
@@ -127,9 +129,15 @@ curl -X POST http://localhost:6877/automations \
     "triggers": [
       {"type": "count", "every_n": 5},
       {"type": "idle", "idle_minutes": 10}
-    ]
+    ],
+    "idempotency_key": "automation:extract-conversation-facts",
+    "idempotency_scope": "global"
   }'
 ```
+
+### Stable creation keys
+
+Send a stable semantic `idempotency_key` with `idempotency_scope: "global"` for every standalone automation. Reuse the exact pair only when a create request has an ambiguous outcome. First list automations to find the existing producer; update it instead of creating a date- or version-suffixed duplicate. An explicit deletion releases the key so the same job can be recreated with its original identity.
 
 ## Approvals and permissions
 

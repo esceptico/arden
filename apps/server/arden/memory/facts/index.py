@@ -3,11 +3,13 @@
 import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from arden.logging import get_logger
 from arden.memory.facts.models import Fact
 from arden.memory.facts.service import FactService
+from arden.search.types import RawItem
 
 FACT_SEARCH_SOURCE = "fact"
 _logger = get_logger(__name__)
@@ -33,7 +35,13 @@ class FactIndexProjection:
     def last_state(self) -> FactIndexState:
         return self._last_state
 
-    async def sync(self) -> object | None:
+    async def sync(
+        self,
+        *,
+        force: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
+        raise_on_error: bool = False,
+    ) -> object | None:
         async with self._lock:
             for attempt in range(2):
                 index = self._get_search_index()
@@ -48,17 +56,16 @@ class FactIndexProjection:
                     revision = await self._service.revision()
                     facts = await asyncio.to_thread(self._service.ledger.facts_at, revision)
                     active = tuple(fact for fact in facts.values() if fact.status == "active")
-                    indexed = await index.store.get_indexed_hashes(FACT_SEARCH_SOURCE)
-                    current_ids = {fact.fact_id for fact in active}
-                    for fact_id in set(indexed).difference(current_ids):
-                        await index.delete(FACT_SEARCH_SOURCE, fact_id)
-                    for fact in active:
-                        await index.upsert(
-                            FACT_SEARCH_SOURCE,
-                            fact.fact_id,
-                            " · ".join(fact.subjects),
-                            fact.text,
-                            {
+                    now = datetime.now(UTC)
+                    items = [
+                        RawItem(
+                            source=FACT_SEARCH_SOURCE,
+                            source_id=fact.fact_id,
+                            title=" · ".join(fact.subjects),
+                            content=fact.text,
+                            created_at=now,
+                            updated_at=now,
+                            metadata={
                                 "version": fact.version,
                                 "kind": fact.kind,
                                 "scope_kind": fact.scope["kind"],
@@ -66,6 +73,15 @@ class FactIndexProjection:
                                 "evidence_class": fact.evidence_class,
                             },
                         )
+                        for fact in active
+                    ]
+                    await index.sync(
+                        FACT_SEARCH_SOURCE,
+                        items,
+                        progress_callback=progress_callback,
+                        force=force,
+                        raise_on_error=raise_on_error,
+                    )
                     if self._get_search_index() is not index:
                         if attempt == 0:
                             continue
@@ -82,6 +98,8 @@ class FactIndexProjection:
                         continue
                     _logger.warning("fact index sync failed", exc_info=True)
                     self._last_state = FactIndexState(None, "error", f"{type(error).__name__}: {error}".rstrip(": "))
+                    if raise_on_error:
+                        raise
                     return None
             self._last_state = FactIndexState(None, "not_ready", "search index changed during fact sync")
             return None

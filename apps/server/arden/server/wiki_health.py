@@ -25,7 +25,7 @@ def dangling_fact_citation_issues(
                     WikiHealthIssue(
                         WikiHealthIssueCode.DANGLING_CITATION,
                         record.resource.path,
-                        f"missing fact version {citation.fact_id}@{citation.version}",
+                        f"cited fact revision is unavailable for {citation.fact_id}",
                         fact_page_owner(record.page.metadata),
                     )
                 )

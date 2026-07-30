@@ -10,7 +10,7 @@ from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area
 from arden.areas.work_models import AreaOutcome, AreaWorkEvent, AreaWorkItem, AreaWorkSnapshot
-from arden.events.internal import RunCompleted, RunCompletionRejected
+from arden.events.internal import RunCompleted, RunCompletionRejected, RunFailed
 from arden.server.runtime.automation import AutomationRuntime
 
 
@@ -99,11 +99,27 @@ async def test_custodian_completion_requires_an_accepted_report(tmp_path: Path) 
     runtime = AutomationRuntime.__new__(AutomationRuntime)
     runtime.stores = SimpleNamespace(automations=Automations(), area_work=Work())
     runtime.area_asks = AskStore(tmp_path / "asks.json")
+    runtime.custodians = CustodianStore(tmp_path / "custodians.json")
 
     async def load_areas():
         return [Area(key="health", title="Health", page_path="topics/health.md", autonomy="observe")]
 
     runtime.load_areas = load_areas
+    allowed, delivery = runtime.custodians.begin_or_resume_delivery(
+        "health",
+        iteration=1,
+        client_id="area-health-attempt",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda _: "run",
+    )
+    assert allowed and delivery is not None
+    runtime.custodians.bind_delivery_run(
+        "health",
+        client_id=delivery.client_id,
+        run_id="custodian-run",
+    )
 
     with pytest.raises(RunCompletionRejected, match="without submitting a report"):
         await runtime._on_area_run_completed(
@@ -116,6 +132,57 @@ async def test_custodian_completion_requires_an_accepted_report(tmp_path: Path) 
                 automation_task_id="area:health",
             )
         )
+    assert runtime.custodians.runs_today("health") == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_custodian_chat_releases_its_run_budget(tmp_path: Path) -> None:
+    class Automations:
+        async def list_session_bound_by_session(self, session_id: str):
+            return [SimpleNamespace(task_id="area:health")]
+
+    class Work:
+        async def report(self, run_ref: str):
+            return None
+
+    runtime = AutomationRuntime.__new__(AutomationRuntime)
+    runtime.stores = SimpleNamespace(automations=Automations(), area_work=Work())
+    runtime.area_asks = AskStore(tmp_path / "asks.json")
+    runtime.custodians = CustodianStore(tmp_path / "custodians.json")
+
+    async def load_areas():
+        return [Area(key="health", title="Health", page_path="topics/health.md", autonomy="observe")]
+
+    runtime.load_areas = load_areas
+    runtime.custodians.note_event("health", "health page changed", attention="ambient", paused=False)
+    allowed, delivery = runtime.custodians.begin_or_resume_delivery(
+        "health",
+        iteration=1,
+        client_id="area-health-attempt",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda events: ", ".join(events),
+    )
+    assert allowed and delivery is not None
+    runtime.custodians.bind_delivery_run(
+        "health",
+        client_id=delivery.client_id,
+        run_id="custodian-run",
+    )
+
+    accepted = await runtime._on_area_run_failed(
+        RunFailed(
+            "custodian-run",
+            "area-channel",
+            "ChatIdempotencyConflict: idempotency_conflict",
+            automation_task_id="area:health",
+        )
+    )
+
+    assert not accepted
+    assert runtime.custodians.runs_today("health") == 0
+    assert runtime.custodians.state("health")["pending_events"] == ["health page changed"]
 
 
 @pytest.mark.asyncio

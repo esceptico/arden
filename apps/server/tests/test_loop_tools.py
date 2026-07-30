@@ -176,6 +176,7 @@ def test_automation_display_description_is_bounded():
             description="x" * 221,
             trigger_type="time",
             every="1h",
+            idempotency_key="bounded",
         )
     with pytest.raises(pydantic.ValidationError):
         UpdateAutomationInput(task_id="bounded", description="x" * 221)
@@ -186,6 +187,26 @@ def test_create_automation_schema_does_not_expose_session_binding():
 
     assert "thread_id" not in properties
     assert "read_history" not in properties
+
+
+def test_create_automation_requires_retry_safe_idempotency():
+    with pytest.raises(ValidationError, match="idempotency_key"):
+        CreateAutomationInput(
+            name="unsafe",
+            prompt="Run once.",
+            trigger_type="time",
+            every="1h",
+        )
+
+    with pytest.raises(ValidationError, match="attempt_n is required"):
+        CreateAutomationInput(
+            name="attempt",
+            prompt="Run once per attempt.",
+            trigger_type="time",
+            every="1h",
+            idempotency_key="attempt",
+            idempotency_scope="attempt",
+        )
 
 
 # --- create_automation / create_loop tool wiring for channel-aware fields ---
@@ -202,23 +223,19 @@ async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
         prompt="Post the morning brief.",
         trigger_type="time",
         at="09:00",
+        idempotency_key="daily-brief-1",
     )
 
-    first = await create_automation(
-        execution,
-        args.model_copy(update={"idempotency_key": "daily-brief-1", "idempotency_scope": "global"}),
-    )
+    first = await create_automation(execution, args)
     assert not first.is_error
     assert "Created" in first.content or "created" in first.content.lower()
 
-    second = await create_automation(
-        execution,
-        args.model_copy(update={"idempotency_key": "daily-brief-1", "idempotency_scope": "global"}),
-    )
+    second = await create_automation(execution, args)
     assert not second.is_error
-    assert "Skipped" in second.content
+    assert "already exists" in second.content.lower()
 
     created = next(a for a in await store.list_all() if a.name == "daily brief")
+    assert created.task_id in second.content
     channels = [
         session
         for session in await svc.session_service.list_sessions(limit=10)
@@ -244,6 +261,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
                 "thread_id": "sess-target",
                 "read_history": True,
                 "tool_scope": ["slack_search", "slack_post_message"],
+                "idempotency_key": "channel-automation",
             }
         )
     args = CreateAutomationInput(
@@ -253,6 +271,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
         trigger_type="time",
         every="1h",
         tool_scope=["slack_search", "slack_post_message"],
+        idempotency_key="channel-automation",
     )
     result = await create_automation(execution, args)
     assert not result.is_error
@@ -280,6 +299,7 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
         every="1h",
         auto_approve=True,
         tool_scope=["slack_search", "slack_post_message"],
+        idempotency_key="scoped-sender",
     )
 
     info = await approve_create_automation(execution, args)
@@ -303,6 +323,7 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
             prompt="Read the source first.",
             trigger_type="time",
             every="1h",
+            idempotency_key="scope-update",
         ),
     )
     created = next(a for a in await store.list_all() if a.name == "scope update")
@@ -352,6 +373,7 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
         channels=["feel-good-inc", "eng-bugs"],
         from_user="sam",
         contains=["bug", "error"],
+        idempotency_key="bug-watch",
     )
 
     result = await create_automation(execution, args)
@@ -395,6 +417,7 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
             prompt="Triage new items.",
             trigger_type="time",
             every="1h",
+            idempotency_key="watch",
         ),
     )
     task_id = next(a.task_id for a in await store.list_all())
@@ -425,12 +448,39 @@ async def test_create_automation_defaults_parent_from_loop_ctx(store_and_svc):
         prompt="Run follow-up work from the loop.",
         trigger_type="time",
         every="2h",
+        idempotency_key="child-auto",
     )
     result = await create_automation(execution, args)
     assert not result.is_error
 
     rows = await store.list_all()
     child = next(a for a in rows if a.name == "child auto")
+    assert child.parent_automation_id == "loop-1"
+
+
+@pytest.mark.asyncio
+async def test_create_automation_attempt_scope_uses_attempt_number(store_and_svc):
+    store, svc = store_and_svc
+    fired_at = datetime.now(UTC)
+    await store.update_last_run("loop-1", fired_at, fired_at + timedelta(minutes=5))
+    execution = _execution(svc, loop_task_id="loop-1")
+
+    result = await create_automation(
+        execution,
+        CreateAutomationInput(
+            name="attempt child",
+            description="Runs once for this retry attempt.",
+            prompt="Run the attempt-scoped child.",
+            trigger_type="time",
+            every="2h",
+            idempotency_key="attempt-child",
+            idempotency_scope="attempt",
+            attempt_n=2,
+        ),
+    )
+
+    assert not result.is_error
+    child = next(a for a in await store.list_all() if a.name == "attempt child")
     assert child.parent_automation_id == "loop-1"
 
 
@@ -609,6 +659,7 @@ async def test_create_automation_rejects_unknown_tool_scope_names(store_and_svc)
             trigger_type="time",
             every="1d",
             tool_scope=["archve_session"],
+            idempotency_key="typo-scope",
         ),
     )
 
@@ -632,6 +683,7 @@ async def test_create_automation_accepts_prefix_scope_patterns(store_and_svc):
             trigger_type="time",
             every="1d",
             tool_scope=["slack_*"],
+            idempotency_key="prefix-scope",
         ),
     )
 
@@ -654,6 +706,7 @@ async def test_update_automation_rejects_unknown_tool_scope_names(store_and_svc)
             prompt="Read email.",
             trigger_type="time",
             every="1d",
+            idempotency_key="scope-guard",
         ),
     )
     created = next(a for a in await store.list_all() if a.name == "scope guard")

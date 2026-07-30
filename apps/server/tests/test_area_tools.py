@@ -1,4 +1,3 @@
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -131,47 +130,49 @@ async def test_area_page_tools_are_locked_to_active_area_page(tmp_path: Path) ->
         reason="seed",
     )
     run = execution(wiki)
+    before = wiki.read_page("area-health-page")
 
     read = await area_page_read(run, AreaPageReadInput())
-    metadata = json.loads(read.content.splitlines()[0].removeprefix("Area page metadata: "))
     patched = await area_page_patch(
         run,
         AreaPagePatchInput(
             old_text="Old status",
             new_text="Current status",
-            expected_version=metadata["version"],
-            expected_head=metadata["head"],
         ),
     )
 
     assert not read.is_error and "Old status" in read.content
     assert not patched.is_error and b"Current status" in wiki.read_page("area-health-page").content
-    assert f'"version":"{wiki.read_page("area-health-page").resource.version_id}"' in patched.content
-    assert f'"head":"{wiki.repository.head}"' in patched.content
+    current = wiki.read_page("area-health-page")
+    assert "page_id:" not in read.content
+    assert read.data is not None and read.data["path"] == "topics/health.md"
+    assert "page_id" not in read.serialized_payload()
+    assert "page_id" not in patched.serialized_payload()
+    assert before.resource.version_id not in read.content
+    assert wiki.repository.head not in read.content
+    assert current.resource.version_id not in patched.content
+    assert wiki.repository.head not in patched.content
     assert wiki.read_page("visa").page.body == b"Visa secret\n"
 
 
 @pytest.mark.asyncio
 async def test_area_page_write_preserves_frontmatter(tmp_path: Path) -> None:
     wiki = seed(tmp_path)
-    before = wiki.read_page("area-health-page")
-    head = wiki.repository.head
-    assert head is not None
+    run = execution(wiki)
+    await area_page_read(run, AreaPageReadInput())
 
     result = await area_page_write(
-        execution(wiki),
+        run,
         AreaPageWriteInput(
             content="# Health\n\nNew body",
-            expected_version=before.resource.version_id,
-            expected_head=head,
         ),
     )
 
     after = wiki.read_page("area-health-page")
     assert not result.is_error
     assert result.outcome is not None and result.outcome.effect is not None
-    assert result.outcome.effect.before_ref == before.resource.version_id
-    assert result.outcome.effect.after_ref == after.resource.version_id
+    assert result.outcome.effect.before_ref is None
+    assert result.outcome.effect.after_ref is None
     assert after.page.title == "Health"
     assert after.page.body == b"# Health\n\nNew body\n"
 
@@ -181,17 +182,13 @@ async def test_custodian_page_write_projects_without_self_wake(tmp_path: Path) -
     wiki = seed(tmp_path)
     projection = ProjectionRecorder()
     run = execution(wiki, automation_id="area:area_health", post_commit=projection)
-    before = wiki.read_page("area-health-page")
-    head = wiki.repository.head
-    assert head is not None
+    await area_page_read(run, AreaPageReadInput())
 
     result = await area_page_patch(
         run,
         AreaPagePatchInput(
             old_text="Old status",
             new_text="Current status",
-            expected_version=before.resource.version_id,
-            expected_head=head,
         ),
     )
 
@@ -205,17 +202,13 @@ async def test_non_custodian_page_write_projects_as_external_area_change(tmp_pat
     wiki = seed(tmp_path)
     projection = ProjectionRecorder()
     run = execution(wiki, loop_task_id=None, post_commit=projection)
-    before = wiki.read_page("area-health-page")
-    head = wiki.repository.head
-    assert head is not None
+    await area_page_read(run, AreaPageReadInput())
 
     result = await area_page_patch(
         run,
         AreaPagePatchInput(
             old_text="Old status",
             new_text="Current status",
-            expected_version=before.resource.version_id,
-            expected_head=head,
         ),
     )
 
@@ -227,20 +220,17 @@ async def test_non_custodian_page_write_projects_as_external_area_change(tmp_pat
 @pytest.mark.asyncio
 async def test_area_page_write_stays_successful_when_projection_is_pending(tmp_path: Path) -> None:
     wiki = seed(tmp_path)
-    before = wiki.read_page("area-health-page")
-    head = wiki.repository.head
-    assert head is not None
 
     async def defer_projection() -> bool:
         return True
 
+    run = execution(wiki, post_commit=defer_projection)
+    await area_page_read(run, AreaPageReadInput())
     result = await area_page_patch(
-        execution(wiki, post_commit=defer_projection),
+        run,
         AreaPagePatchInput(
             old_text="Old status",
             new_text="Current status",
-            expected_version=before.resource.version_id,
-            expected_head=head,
         ),
     )
 
@@ -255,6 +245,8 @@ async def test_area_page_patch_rejects_stale_revision(tmp_path: Path) -> None:
     before = wiki.read_page("area-health-page")
     stale_head = wiki.repository.head
     assert stale_head is not None
+    run = execution(wiki)
+    await area_page_read(run, AreaPageReadInput())
     wiki.update_page(
         "area-health-page",
         content=before.page.with_body(b"external version\n").to_bytes(),
@@ -266,12 +258,10 @@ async def test_area_page_patch_rejects_stale_revision(tmp_path: Path) -> None:
     )
 
     result = await area_page_patch(
-        execution(wiki),
+        run,
         AreaPagePatchInput(
             old_text="Old status",
             new_text="Approved status",
-            expected_version=before.resource.version_id,
-            expected_head=stale_head,
         ),
     )
 
@@ -279,6 +269,97 @@ async def test_area_page_patch_rejects_stale_revision(tmp_path: Path) -> None:
     assert result.outcome is not None and result.outcome.error is not None
     assert result.outcome.error.code == "write_conflict"
     assert wiki.read_page("area-health-page").page.body == b"external version\n"
+
+
+@pytest.mark.asyncio
+async def test_area_page_patch_allows_an_unrelated_wiki_commit(tmp_path: Path) -> None:
+    wiki = seed(tmp_path)
+    run = execution(wiki)
+    await area_page_read(run, AreaPageReadInput())
+    wiki.create_page(
+        path="topics/unrelated.md",
+        title="Unrelated",
+        expected_head=wiki.repository.head,
+        actor="test",
+        origin="test",
+        reason="unrelated change",
+    )
+
+    result = await area_page_patch(
+        run,
+        AreaPagePatchInput(old_text="Old status", new_text="Current status"),
+    )
+
+    assert not result.is_error
+    assert wiki.read_page("area-health-page").page.body == b"# Health\n\nCurrent status\n"
+
+
+@pytest.mark.asyncio
+async def test_area_page_write_requires_a_fresh_full_read(tmp_path: Path) -> None:
+    result = await area_page_write(execution(seed(tmp_path)), AreaPageWriteInput(content="New body"))
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "fresh_read_required"
+
+
+@pytest.mark.asyncio
+async def test_area_page_write_requires_the_complete_page(tmp_path: Path) -> None:
+    wiki = seed(tmp_path)
+    run = execution(wiki)
+    await area_page_read(run, AreaPageReadInput(limit=1))
+
+    result = await area_page_write(run, AreaPageWriteInput(content="New body"))
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "fresh_read_required"
+
+
+@pytest.mark.asyncio
+async def test_area_page_write_rejects_a_read_that_will_be_offloaded(tmp_path: Path) -> None:
+    wiki = seed(tmp_path)
+    current = wiki.read_page("area-health-page")
+    wiki.update_page(
+        current.page.page_id,
+        content=current.page.with_body(("x" * 60_000).encode()).to_bytes(),
+        expected_version=current.resource.version_id,
+        expected_head=wiki.repository.head,
+    )
+    run = execution(wiki)
+
+    await area_page_read(run, AreaPageReadInput())
+    result = await area_page_write(run, AreaPageWriteInput(content="New body"))
+
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "fresh_read_required"
+    assert wiki.read_page("area-health-page").page.body == ("x" * 60_000).encode()
+
+
+@pytest.mark.asyncio
+async def test_area_page_patch_accepts_a_partial_read(tmp_path: Path) -> None:
+    wiki = seed(tmp_path)
+    run = execution(wiki)
+    await area_page_read(run, AreaPageReadInput(limit=1))
+
+    result = await area_page_patch(run, AreaPagePatchInput(old_text="Old status", new_text="New status"))
+    replacement = await area_page_write(run, AreaPageWriteInput(content="Overwrite"))
+
+    assert not result.is_error
+    assert replacement.is_error
+    assert replacement.outcome is not None and replacement.outcome.error is not None
+    assert replacement.outcome.error.code == "fresh_read_required"
+    assert wiki.read_page("area-health-page").page.body == b"# Health\n\nNew status\n"
+
+
+def test_area_page_inputs_reject_hashes_and_extra_fields() -> None:
+    for model in (AreaPageReadInput, AreaPagePatchInput, AreaPageWriteInput):
+        assert "expected_version" not in model.model_json_schema()["properties"]
+        assert "expected_head" not in model.model_json_schema()["properties"]
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AreaPagePatchInput.model_validate({"old_text": "old", "new_text": "new", "expected_head": "a" * 64})
 
 
 @pytest.mark.asyncio

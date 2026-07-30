@@ -64,7 +64,7 @@ _FACT_MAINTENANCE_DESCRIPTION = "Reconcile duplicate and misclassified canonical
 FACT_MAINTENANCE_TOOL_SCOPE = [FACT_MAINTENANCE_REVIEW_TOOL_NAME]
 FACT_MAINTENANCE_PROMPT = (
     "Run Memory Maintenance to completion. Start with fact_maintenance_review action='next'. "
-    "For each prepared, version-pinned cluster, merge only genuine duplicates, correct only "
+    "For each prepared cluster, merge only genuine duplicates, correct only "
     "kind, labels, subjects, lifecycle, or evidence class, and choose no_change whenever the "
     "evidence is weak or ambiguous. Never create or rewrite fact text, manage age-based expiry, "
     "perform general supersession, edit wiki prose, or let inferred evidence replace direct "
@@ -78,17 +78,17 @@ _FACT_SYNTHESIS_PROMPT = (
     "content outside managed regions, never invent facts, and leave unresolved "
     "or uncertain facts out of publication."
 )
-_WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from managed revision evidence."
+_WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from prepared evidence."
 _MEMORY_STORAGE_MAINTENANCE_DESCRIPTION = "Collect expired unreachable managed-history objects."
 WIKI_MAINTENANCE_TOOL_SCOPE = [WIKI_MAINTENANCE_REVIEW_TOOL_NAME]
 WIKI_MAINTENANCE_PROMPT = (
     "Run Wiki Maintenance to completion. Start with wiki_maintenance_review action='next'. "
-    "For each prepared, version-pinned report, preserve user intent and use only the supplied evidence. "
+    "For each prepared report, preserve user intent and use only the supplied evidence. "
     "Choose no_change unless a targeted title, alias, or ordinary body edit is necessary for cross-page consistency. "
-    "If pages may describe the same subject, use needs_review with a clear concern and wait for the user; do not combine them. "
+    "If evidence is ambiguous, choose no_change; do not combine pages. "
     "Never invent facts or citations, read raw facts, rename, move, archive, redirect, or edit generated regions. "
-    "Use needs_review for every durable user decision. If the tool rejects a decision, correct that same report "
-    "and retry. Continue until the tool reports completion; never use another tool or stop early."
+    "If the tool rejects a decision, correct that same report and retry. Continue until the tool reports completion; "
+    "never use another tool or stop early."
 )
 
 BUILTINS = [

@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from pydantic import BaseModel
 
 from arden.agent.types.llm import CompletionResponse, ProviderToolCall, ReasoningContentDelta, ToolCallStreamDelta
-from arden.llm.retry import with_retry
+from arden.llm.retry import RateLimitWaitCallback, with_retry
 
 
 class CompletionClient(ABC):
@@ -63,7 +63,18 @@ class CompletionClient(ABC):
     async def stream_completion(
         self, **kwargs
     ) -> AsyncGenerator[str | ReasoningContentDelta | ToolCallStreamDelta | ProviderToolCall | CompletionResponse]:
-        async for item in self._stream_completion(**kwargs):
+        async def open_stream():
+            stream = self._stream_completion(**kwargs)
+            try:
+                first = await anext(stream)
+            except StopAsyncIteration:
+                return stream, None
+            return stream, first
+
+        stream, first = await with_retry(open_stream)
+        if first is not None:
+            yield first
+        async for item in stream:
             yield item
 
     @abstractmethod
@@ -78,8 +89,13 @@ class EmbeddingClient(ABC):
         model: str,
     ) -> list[list[float]]: ...
 
-    async def embedding(self, **kwargs) -> list[list[float]]:
-        return await with_retry(self._embedding, **kwargs)
+    async def embedding(
+        self,
+        *,
+        on_rate_limit_wait: RateLimitWaitCallback | None = None,
+        **kwargs,
+    ) -> list[list[float]]:
+        return await with_retry(self._embedding, on_rate_limit_wait=on_rate_limit_wait, **kwargs)
 
     @abstractmethod
     async def close(self) -> None: ...

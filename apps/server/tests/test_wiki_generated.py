@@ -51,8 +51,10 @@ def test_publish_generated_creates_a_readme_for_a_new_directory(tmp_path: Path) 
         "topics/topic.md",
     }
     readme = next(record for record in service.snapshot().pages if record.resource.path == "topics/README.md")
+    assert readme.page.title == "Topics README"
     assert b"## Purpose" in readme.content
     assert b"## Consumers" in readme.content
+    assert b"## Boundaries" in readme.content
     assert b"shared context" in readme.content
 
 

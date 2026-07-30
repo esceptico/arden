@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from arden.llm.models import Model, Provider, provider_label
+from arden.llm.models import EmbeddingModel, Model, Provider, provider_label
 from arden.server.routers import settings as settings_router
 
 
@@ -85,3 +85,25 @@ async def test_models_endpoint_lists_connected_providers_only(monkeypatch):
     assert payload["models"] == ["openai-codex/test", "gemini-3-flash-preview"]
     assert {group["provider"] for group in payload["groups"]} == {"openai-codex", "google"}
     assert "claude-sonnet-4-6" not in payload["models"]
+
+
+@pytest.mark.asyncio
+async def test_embedding_catalog_lists_reachable_models_and_retains_current(monkeypatch):
+    models = {
+        "openai": EmbeddingModel("openai", Provider.OPENAI, 3),
+        "google": EmbeddingModel("google", Provider.GOOGLE, 3),
+    }
+    monkeypatch.setattr(settings_router, "get_embedding_models_fn", lambda: models)
+    monkeypatch.setattr(settings_router, "list_embedding_models", lambda: list(models))
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(embedding_model="google"),
+        embedding_model_available=lambda model_id: model_id == "openai",
+    )
+
+    payload = await settings_router.get_embedding_models(runtime)
+
+    assert payload["models"] == ["openai", "google"]
+    assert payload["groups"] == [
+        {"provider": "openai", "label": "OpenAI", "models": ["openai"]},
+        {"provider": "google", "label": "Google", "models": ["google"]},
+    ]

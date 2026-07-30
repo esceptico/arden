@@ -15,11 +15,17 @@ curl -X POST http://localhost:6877/automations \
     "description": "Weekday morning briefing",
     "trigger_type": "time",
     "at": "09:00",
-    "days": "weekdays"
+    "days": "weekdays",
+    "idempotency_key": "automation:morning-briefing",
+    "idempotency_scope": "global"
   }'
 ```
 
 Notifier configuration is separate from automation creation. Use the notification/notifier settings or `/notifiers/*` endpoints.
+
+### Idempotent creation
+
+Every standalone `POST /automations` request must include a stable semantic `idempotency_key` and `idempotency_scope: "global"`. Reuse that exact key only to retry an ambiguous create. If an automation with that key already exists, inspect it and use `PATCH /automations/{task_id}` for changes; do not create a versioned replacement key. Deleting the automation releases its global key, allowing the same job to be recreated without renaming the key.
 
 ## Trigger options
 
@@ -68,7 +74,9 @@ curl -X POST http://localhost:6877/automations \
       {"type": "count", "every_n": 5},
       {"type": "idle", "idle_minutes": 10}
     ],
-    "cooldown_minutes": 10
+    "cooldown_minutes": 10,
+    "idempotency_key": "automation:extract-facts",
+    "idempotency_scope": "global"
   }'
 ```
 
@@ -96,6 +104,12 @@ already-granted tools and never expands the scope.
 For example, a wiki-producing automation can use
 `"tool_scope": ["create_wiki_page", "edit_wiki_page"]` with
 `"auto_approve": true`.
+
+Its prompt should list the target directory before creating a page, and read
+the exact path before editing one. The backend protects a fresh read from being
+overwritten; on a write conflict, list/read again before retrying. Ordinary
+automation pages belong under `automations/`. `publish_wiki_generated` is
+separate: use it only for an explicit automation owner's existing generated region.
 
 ## List automations
 

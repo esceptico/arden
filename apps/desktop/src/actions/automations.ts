@@ -47,7 +47,10 @@ function duplicateTrigger(trigger: AutomationTrigger): AutomationTrigger {
 /** Build a real create payload from the server's automation representation.
  * This lives at the action boundary so every duplicate preserves the same
  * trigger and capability contract instead of rebuilding it in a menu. */
-export function duplicateAutomationPayload(source: Automation): CreateAutomationPayload {
+export function duplicateAutomationPayload(
+  source: Automation,
+  idempotencyKey: string = crypto.randomUUID(),
+): CreateAutomationPayload {
   const duplicateableTriggers = source.triggers.filter((trigger) => (
     ["time", "event", "idle", "count", "message"].includes(trigger.type)
   ));
@@ -57,6 +60,8 @@ export function duplicateAutomationPayload(source: Automation): CreateAutomation
   return {
     name: `${source.name.trim() || "Untitled automation"} copy`,
     prompt: source.prompt,
+    idempotency_key: idempotencyKey,
+    idempotency_scope: "global",
     ...(source.description ? { description: source.description } : {}),
     model: source.model,
     auto_approve: source.auto_approve,
@@ -66,8 +71,11 @@ export function duplicateAutomationPayload(source: Automation): CreateAutomation
   };
 }
 
-export async function duplicateAutomation(source: Automation): Promise<Automation> {
-  return createAutomation(duplicateAutomationPayload(source));
+export async function duplicateAutomation(
+  source: Automation,
+  idempotencyKey?: string,
+): Promise<Automation> {
+  return createAutomation(duplicateAutomationPayload(source, idempotencyKey));
 }
 
 export async function updateAutomation(taskId: string, patch: UpdateAutomationPayload): Promise<Automation> {

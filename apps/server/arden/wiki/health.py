@@ -9,7 +9,7 @@ from arden.constants import BUILTIN_MEMORY_DREAM_ID
 from arden.revisions.models import Commit
 from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR
 from arden.wiki.models import WikiChangesReport
-from arden.wiki.provenance import FactPageFreshness, fact_page_freshness, parse_fact_provenance
+from arden.wiki.provenance import FactPageFreshness, fact_page_freshness
 from arden.wiki.service import WikiService
 
 
@@ -77,21 +77,12 @@ class WikiHealthIndex:
 
 
 @dataclass(frozen=True, slots=True)
-class WikiHealthPendingReview:
-    """Visible pending maintenance review, intentionally not an issue type."""
-
-    review_id: str
-    summary: str
-
-
-@dataclass(frozen=True, slots=True)
 class WikiHealthInput:
     fact_ledger_revision: str | None
     wiki: WikiChangesReport
     workers: tuple[WikiHealthWorker, ...]
     index: WikiHealthIndex
     issues: tuple[WikiHealthIssue, ...] = ()
-    pending_reviews: tuple[WikiHealthPendingReview, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,13 +156,11 @@ def _mechanical_issues(
     for record in report.current_records:
         if fact_page_freshness(record.page.metadata, fact_revision) is not FactPageFreshness.STALE:
             continue
-        generated = parse_fact_provenance(record.page.metadata, record.resource.path).generated_from_revision
-        assert generated is not None
         issues.append(
             WikiHealthIssue(
                 WikiHealthIssueCode.STALE_PAGE,
                 record.resource.path,
-                f"generated from {generated}; current fact revision is {fact_revision}",
+                "Generated fact content is behind the current ledger.",
                 fact_page_owner(record.page.metadata),
             )
         )
@@ -187,7 +176,7 @@ def fact_page_owner(metadata: Mapping[str, object]) -> WikiHealthIssueOwner:
 def _index_issues(index: WikiHealthIndex, observed_wiki_revision: str | None) -> tuple[WikiHealthIssue, ...]:
     if observed_wiki_revision is None or index.revision == observed_wiki_revision:
         return ()
-    detail = index.detail or f"indexed {index.revision or 'nothing'}, observed {observed_wiki_revision}"
+    detail = index.detail or "The search index is behind the current wiki."
     return (WikiHealthIssue(WikiHealthIssueCode.INDEX_BEHIND, "wiki_page", detail, WikiHealthIssueOwner.BACKEND),)
 
 
@@ -209,36 +198,32 @@ def _render(value: WikiHealthInput, observed: str | None, issues: tuple[WikiHeal
     state = "healthy"
     if (
         issues
-        or value.pending_reviews
         or index_status != "current"
         or storage_status != "healthy"
         or any(worker.status != "current" for worker in workers)
     ):
         state = "attention needed"
 
-    lines = ["# Wiki health", "", f"Overall status: **{state}**", "", "## Observed revisions"]
+    lines = ["# Wiki health", "", f"Overall status: **{state}**", "", "## Observed state"]
     lines.extend(
         (
-            f"- Fact ledger: `{_revision(value.fact_ledger_revision)}`",
-            f"- Wiki: `{_revision(observed)}`",
+            f"- Fact ledger: {'available' if value.fact_ledger_revision is not None else 'empty'}",
+            f"- Wiki: {'available' if observed is not None else 'empty'}",
             "",
             "## Maintenance",
             "",
-            "| Worker | Status | Processed through | Last success |",
-            "| --- | --- | --- | --- |",
+            "| Worker | Status | Last success |",
+            "| --- | --- | --- |",
         )
     )
     for worker in workers:
-        lines.append(
-            f"| {worker.name} | {worker.status} | `{_revision(worker.processed_through)}` | {_time(worker.last_success)} |"
-        )
+        lines.append(f"| {worker.name} | {worker.status} | {_time(worker.last_success)} |")
     lines.extend(
         (
             "",
             "## Search and link index",
             "",
             f"- Status: {index_status}",
-            f"- Revision: `{_revision(value.index.revision)}`",
         )
     )
     if value.index.detail:
@@ -252,11 +237,6 @@ def _render(value: WikiHealthInput, observed: str | None, issues: tuple[WikiHeal
             "- Thresholds: 50 MiB inspection; 100 MiB attention",
         )
     )
-    lines.extend(("", "## Pending maintenance reviews", ""))
-    if value.pending_reviews:
-        lines.extend(f"- `{item.review_id}` — {item.summary}" for item in value.pending_reviews)
-    else:
-        lines.append("- None")
     lines.extend(("", "## Actionable issues", ""))
     if issues:
         lines.extend(
@@ -266,10 +246,6 @@ def _render(value: WikiHealthInput, observed: str | None, issues: tuple[WikiHeal
     else:
         lines.append("- None")
     return ("\n".join(lines) + "\n").encode()
-
-
-def _revision(value: str | None) -> str:
-    return value or "none"
 
 
 def _storage_status(report: WikiChangesReport) -> str:

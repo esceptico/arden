@@ -216,6 +216,7 @@ export function AutomationDetail({
   );
   const descriptionRequestTaskRef = useRef<string | null>(null);
   const descriptionActiveTaskRef = useRef<string | null>(null);
+  const createIdempotencyKeyRef = useRef<string | null>(null);
   const moreActionRef = useRef<HTMLButtonElement>(null);
 
   const taskId = automation?.task_id ?? null;
@@ -345,10 +346,16 @@ export function AutomationDetail({
 
   const create = async () => {
     if (busy || !valid) return;
+    const idempotencyKey = createIdempotencyKeyRef.current ?? crypto.randomUUID();
+    createIdempotencyKeyRef.current = idempotencyKey;
     setBusy("create");
     setMutationError(null);
     try {
-      await createAutomation(buildPayload(form));
+      await createAutomation({
+        ...buildPayload(form),
+        idempotency_key: idempotencyKey,
+        idempotency_scope: "global",
+      });
       onDirtyChange?.(false);
       onCreated();
     } catch (error) {

@@ -55,6 +55,10 @@ curl -X POST http://localhost:6877/admin/facts/batch \
 
 ## Wiki pages
 
+These `/admin` endpoints are the Desktop/backend concurrency interface, so they
+expose internal page and revision identifiers. Agent wiki tools do not: they use
+managed paths and keep this bookkeeping inside the server.
+
 ### Read
 
 - `GET /admin/wiki/pages` lists active pages. Pass `include_redirects=true` to include redirects.

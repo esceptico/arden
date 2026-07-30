@@ -45,6 +45,15 @@ from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 FACT_SERVICE = "facts"
 _MAX_FACT_RESULTS = 100
 _MAX_HISTORY_SOURCES = 50
+_INTERNAL_SOURCE_EXTRA_FIELDS = frozenset(
+    {
+        "version",
+        "wiki_commit_id",
+        "page_version",
+        "baseline_commit_id",
+        "baseline_page_version",
+    }
+)
 _MAX_CURSOR_CHARS = 2_048
 _CURSOR_VERSION = 1
 
@@ -404,8 +413,20 @@ def _source_summary(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) ->
 
 
 def _sources_data(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) -> dict[str, Any]:
+    items = []
+    for source in sources[:_MAX_HISTORY_SOURCES]:
+        if not isinstance(source, Mapping):
+            continue
+        item = dict(source)
+        if isinstance(extra := item.get("extra"), Mapping):
+            public_extra = {key: value for key, value in extra.items() if key not in _INTERNAL_SOURCE_EXTRA_FIELDS}
+            if public_extra:
+                item["extra"] = public_extra
+            else:
+                item.pop("extra")
+        items.append(item)
     return {
-        "items": [dict(source) for source in sources[:_MAX_HISTORY_SOURCES] if isinstance(source, Mapping)],
+        "items": items,
         "total": len(sources),
         "has_more": len(sources) > _MAX_HISTORY_SOURCES,
     }
@@ -429,7 +450,6 @@ def _fact_data(fact: Fact, *, include_sources: bool = False) -> dict[str, Any]:
         "review_basis": fact.review_basis,
         "expires_at": _time(fact.expires_at),
         "successor_id": fact.successor_id,
-        "version": fact.version,
         "source_summary": _source_summary(fact.sources),
     }
     if include_sources:
@@ -441,6 +461,7 @@ def _event_data(event: FactEvent) -> dict[str, Any]:
     payload = dict(event.record["payload"])
     sources = payload.pop("sources", ())
     payload.pop("review_window", None)
+    payload.pop("expected_version", None)
     value: dict[str, Any] = {
         "event_id": event.event_id,
         "plan_id": event.plan_id,
@@ -915,8 +936,6 @@ async def plan_fact_changes(execution: ToolExecution, args: PlanFactChangesInput
             data={
                 "plan_id": preview.plan_id,
                 "events": [_event_data(event) for event in preview.events],
-                "dependencies": preview.dependencies,
-                "duplicate_windows": preview.duplicate_windows,
             },
         )
     except Exception as exc:
@@ -959,7 +978,7 @@ search_facts_tool = tool(
 get_fact_tool = tool(
     display_name="Get Fact",
     display_description="Read one canonical fact.",
-    description="Read one visible fact with its current version, lifecycle, and saved provenance.",
+    description="Read one visible fact with its lifecycle and saved provenance.",
     input_model=GetFactInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
     execute=get_fact,
@@ -995,7 +1014,7 @@ plan_fact_changes_tool = tool(
 commit_fact_changes_tool = tool(
     display_name="Commit Fact Changes",
     display_description="Publish one previously planned fact change set.",
-    description="Commit an exact plan_id only if its affected facts remain at their planned versions.",
+    description="Commit an exact plan_id only if its affected facts remain unchanged since planning.",
     input_model=CommitFactChangesInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
     execute=commit_fact_changes,

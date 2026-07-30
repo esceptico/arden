@@ -2,9 +2,10 @@ import asyncio
 import difflib
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
+from arden.constants import OFFLOAD_THRESHOLD
 from arden.settings import ARDEN_DIR
 from arden.tools.core import EmptyInput, ToolResult, tool
 from arden.tools.core.context import ToolExecution
@@ -17,6 +18,7 @@ from arden.tools.core.file_mutation import (
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 DIRECTIVES_PATH = ARDEN_DIR / "directives.json"
+_DIRECTIVES_OBSERVATION_ID = "directives"
 
 DESCRIPTION = """Set custom directives that shape your behavior.
 
@@ -28,10 +30,9 @@ Read current directives first (if any), then write the updated version."""
 
 
 class SetDirectivesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     directives: str = Field(description="The full custom directives text.")
-    expected_sha256: str = Field(
-        description="SHA-256 returned by get_directives, or the literal 'absent' when none exist."
-    )
 
 
 class GetDirectivesInput(EmptyInput):
@@ -40,11 +41,18 @@ class GetDirectivesInput(EmptyInput):
 
 async def get_directives(execution: ToolExecution, args: GetDirectivesInput) -> ToolResult:
     content, revision, size = await asyncio.to_thread(_load_directives_snapshot)
-    return ToolResult(
+    result = ToolResult(
         content=content or "",
         preview="Directives loaded" if content else "No directives",
-        data={"sha256": revision, "size": size},
+        data={"size": size},
     )
+    execution.ctx.run.observe_resource(
+        _DIRECTIVES_OBSERVATION_ID,
+        version=None if revision == "absent" else revision,
+        container_version=None,
+        content_read=len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD,
+    )
+    return result
 
 
 async def approve_set_directives(execution: ToolExecution, args: SetDirectivesInput) -> ApprovalInfo:
@@ -53,43 +61,63 @@ async def approve_set_directives(execution: ToolExecution, args: SetDirectivesIn
     return ApprovalInfo(
         description="Update directives",
         preview=None,
-        diff=f"{diff.rstrip()}\n\nExpected SHA-256: {args.expected_sha256}",
+        diff=diff,
     )
 
 
 async def set_directives(execution: ToolExecution, args: SetDirectivesInput) -> ToolResult:
     try:
-        revision = await asyncio.to_thread(save_directives, args.directives, args.expected_sha256)
-    except RevisionConflict as conflict:
+        observation = execution.ctx.run.resource_observation(_DIRECTIVES_OBSERVATION_ID)
+        revision, unchanged = await asyncio.to_thread(
+            _set_directives_snapshot,
+            args.directives,
+            None if observation is None else observation.version,
+            False if observation is None else observation.content_read,
+        )
+    except _FreshReadRequired:
+        return ToolResult.failure(
+            code="fresh_read_required",
+            message="Read the current directives before replacing them.",
+            preview="Read directives first",
+            recovery_action="Call get_directives, then retry.",
+        )
+    except RevisionConflict:
         return ToolResult.failure(
             code="write_conflict",
-            message=(
-                "Directives changed since they were read. "
-                f"Expected {conflict.expected}, observed {conflict.observed}. Read them again before writing."
-            ),
+            message="Directives changed since they were read.",
             preview="Write conflict",
-            recovery_action="Call get_directives and retry with its new sha256.",
+            recovery_action="Call get_directives, recompute the update, and retry.",
+        )
+    execution.ctx.run.observe_resource(
+        _DIRECTIVES_OBSERVATION_ID,
+        version=revision.sha256,
+        container_version=None,
+        content_read=True,
+    )
+    if unchanged:
+        return ToolResult(
+            content="Directives already have the requested content.",
+            preview="Directives unchanged",
+            data={"size": revision.size},
         )
     outcome = ToolOutcome(
         status=ToolOutcomeStatus.SUCCEEDED,
         effect=ToolEffect(
             operation="replace",
             target=str(DIRECTIVES_PATH),
-            before_ref=args.expected_sha256,
-            after_ref=revision.sha256,
         ),
     )
     if not args.directives.strip():
         return ToolResult(
             content="Directives cleared.",
             preview="Cleared",
-            data={"sha256": revision.sha256, "size": revision.size},
+            data={"size": revision.size},
             outcome=outcome,
         )
     return ToolResult(
         content=f"Directives updated:\n{args.directives}",
         preview="Directives set",
-        data={"sha256": revision.sha256, "size": revision.size},
+        data={"size": revision.size},
         outcome=outcome,
     )
 
@@ -97,7 +125,7 @@ async def set_directives(execution: ToolExecution, args: SetDirectivesInput) -> 
 get_directives_tool = tool(
     display_name="Get Directives",
     display_description="Read persistent behavior directives.",
-    description="Read the current persistent behavior directives and their revision before replacing them.",
+    description="Read the current persistent behavior directives.",
     input_model=GetDirectivesInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
     execute=get_directives,
@@ -142,7 +170,26 @@ def _load_directives_snapshot() -> tuple[str | None, str, int]:
     return text or None, revision.sha256, revision.size
 
 
-def save_directives(content: str, expected_sha256: str | None = None):
+class _FreshReadRequired(Exception):
+    pass
+
+
+def _set_directives_snapshot(
+    directives: str,
+    observed_revision: str | None,
+    content_read: bool,
+):
+    content = directives.strip()
+    current, revision, _size = _load_directives_snapshot()
+    if revision != "absent" and current == (content or None):
+        return read_file_snapshot(DIRECTIVES_PATH)[1], True
+    if revision != "absent" and (not content_read or observed_revision is None):
+        raise _FreshReadRequired
+    expected = "absent" if revision == "absent" else observed_revision
+    return atomic_compare_and_swap(DIRECTIVES_PATH, json.dumps({"content": content}), expected), False
+
+
+def save_directives(content: str, expected_revision: str | None = None):
     content = content.strip()
-    expected = expected_sha256 or revision_or_absent(DIRECTIVES_PATH)
+    expected = expected_revision or revision_or_absent(DIRECTIVES_PATH)
     return atomic_compare_and_swap(DIRECTIVES_PATH, json.dumps({"content": content}), expected)

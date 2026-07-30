@@ -15,6 +15,10 @@ _logger = get_logger(__name__)
 # v2: added a `source` partition key so per-source KNN doesn't starve small
 # partitions when another source contains many more vectors.
 _VEC_SCHEMA_VERSION = "2"
+_EMBEDDINGS_DISABLED = "disabled"
+_EMBEDDING_READY = "ready"
+_EMBEDDING_PENDING = "pending"
+_EMBEDDING_RETRY_AT = "embedding_retry_at"
 
 SNIPPET_DISPLAY_LIMIT = 500
 
@@ -38,13 +42,18 @@ class Item:
 
 
 class SearchStore:
-    def __init__(self, conn: aiosqlite.Connection, embedding_dim: int):
+    def __init__(self, conn: aiosqlite.Connection, embedding_dim: int | None, embedding_model: str | None = None):
         self.conn = conn
         self.embedding_dim = embedding_dim
+        self.embedding_model = embedding_model
         self._has_fts = False
         self._has_vec = False
 
-    async def init_schema(self) -> None:
+    @property
+    def has_vector_index(self) -> bool:
+        return self._has_vec
+
+    async def init_schema(self) -> bool:
         await self._check_integrity()
 
         await self.conn.executescript("""
@@ -70,19 +79,43 @@ class SearchStore:
             CREATE INDEX IF NOT EXISTS idx_items_hash ON items(source, content_hash);
         """)
 
-        # Rebuild the vec table (and force a full re-embed) when the embedding dim
-        # OR the vec schema version changed. v2 adds the `source` partition key.
+        # Vectors are derived. Text remains available through FTS while
+        # embeddings are disabled or a new model is being rebuilt.
         stored_dim = await self._get_meta("embedding_dim")
+        stored_model = await self._get_meta("embedding_model")
+        stored_state = await self._get_meta("embedding_state")
         stored_vec_ver = await self._get_meta("vec_schema_version")
-        dim_changed = stored_dim is not None and int(stored_dim) != self.embedding_dim
-        ver_changed = stored_vec_ver != _VEC_SCHEMA_VERSION
-        if dim_changed or ver_changed:
+        rows = await self.conn.execute_fetchall("SELECT EXISTS(SELECT 1 FROM items)")
+        has_items = bool(rows[0][0])
+        rows = await self.conn.execute_fetchall(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items_vec')"
+        )
+        has_vec_table = bool(rows[0][0])
+        dim_changed = (
+            self.embedding_dim is not None and stored_dim not in (None, "") and int(stored_dim) != self.embedding_dim
+        )
+        embedding_identity = self.embedding_model or _EMBEDDINGS_DISABLED
+        model_changed = stored_model is not None and stored_model != embedding_identity
+        ver_changed = stored_vec_ver != _VEC_SCHEMA_VERSION and (has_items or has_vec_table)
+        needs_rebuild = False
+        vectors_invalid = False
+        if self.embedding_dim is None:
+            # The dormant table is never queried without an embedder. Keeping it
+            # lets disabled mode open an existing index without loading sqlite-vec;
+            # enabling embeddings again replaces it through model_changed below.
+            embedding_state = _EMBEDDINGS_DISABLED
+        else:
+            vectors_invalid = dim_changed or model_changed or ver_changed
+            needs_rebuild = vectors_invalid or stored_state == _EMBEDDING_PENDING
+            embedding_state = _EMBEDDING_PENDING if needs_rebuild else _EMBEDDING_READY
+        if vectors_invalid:
             _logger.info(
-                "rebuilding vec table (dim_changed=%s ver_changed=%s) — full re-embed", dim_changed, ver_changed
+                "rebuilding vec table (model_changed=%s dim_changed=%s ver_changed=%s)",
+                model_changed,
+                dim_changed,
+                ver_changed,
             )
             await self.conn.execute("DROP TABLE IF EXISTS items_vec")
-            await self.conn.execute("DELETE FROM items")
-            await self.conn.commit()
 
         try:
             await self.conn.execute("""
@@ -114,23 +147,29 @@ class SearchStore:
         except Exception:
             self._has_fts = False
 
-        try:
-            await self.conn.execute(f"""
-                CREATE VIRTUAL TABLE IF NOT EXISTS items_vec USING vec0(
-                    item_id INTEGER PRIMARY KEY,
-                    embedding float[{self.embedding_dim}] distance_metric=cosine,
-                    source text partition key
-                );
-            """)
-            self._has_vec = True
-        except Exception as e:
-            _logger.warning("Failed to create vec0 table: %s", e)
-            self._has_vec = False
+        if self.embedding_dim is not None:
+            try:
+                await self.conn.execute(f"""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS items_vec USING vec0(
+                        item_id INTEGER PRIMARY KEY,
+                        embedding float[{self.embedding_dim}] distance_metric=cosine,
+                        source text partition key
+                    );
+                """)
+                self._has_vec = True
+            except Exception as e:
+                _logger.warning("Failed to create vec0 table: %s", e)
+                self._has_vec = False
 
-        await self._set_meta("embedding_dim", str(self.embedding_dim))
+        await self._set_meta("embedding_dim", str(self.embedding_dim) if self.embedding_dim is not None else "")
+        await self._set_meta("embedding_model", embedding_identity)
+        await self._set_meta("embedding_state", embedding_state)
         await self._set_meta("vec_schema_version", _VEC_SCHEMA_VERSION)
+        if model_changed:
+            await self._set_meta(_EMBEDDING_RETRY_AT, "")
         await run_migrations(self.conn)
         await self.conn.commit()
+        return needs_rebuild
 
     async def _get_meta(self, key: str) -> str | None:
         try:
@@ -142,23 +181,19 @@ class SearchStore:
     async def _set_meta(self, key: str, value: str) -> None:
         await self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
-    async def rebuild_vec_table(self, new_dim: int) -> None:
-        self.embedding_dim = new_dim
-        await self.conn.execute("DROP TABLE IF EXISTS items_vec")
-        try:
-            await self.conn.execute(f"""
-                CREATE VIRTUAL TABLE items_vec USING vec0(
-                    item_id INTEGER PRIMARY KEY,
-                    embedding float[{self.embedding_dim}] distance_metric=cosine,
-                    source text partition key
-                );
-            """)
-            self._has_vec = True
-        except Exception as e:
-            _logger.warning("Failed to recreate vec0 table: %s", e)
-            self._has_vec = False
+    async def mark_embedding_ready(self) -> None:
+        if self.embedding_dim is None:
+            return
+        await self._set_meta("embedding_state", _EMBEDDING_READY)
+        await self.conn.commit()
 
-        await self._set_meta("embedding_dim", str(self.embedding_dim))
+    async def get_embedding_retry_at(self) -> datetime | None:
+        value = await self._get_meta(_EMBEDDING_RETRY_AT)
+        return datetime.fromisoformat(value) if value else None
+
+    async def set_embedding_retry_at(self, retry_at: datetime | None) -> None:
+        value = retry_at.isoformat() if retry_at is not None else ""
+        await self._set_meta(_EMBEDDING_RETRY_AT, value)
         await self.conn.commit()
 
     async def _check_integrity(self) -> None:
@@ -209,11 +244,19 @@ class SearchStore:
         )
         return bool(rows) and rows[0]["content_hash"] == content_hash
 
-    async def get_indexed_hashes(self, source: str) -> dict[str, tuple[int, str]]:
+    async def get_indexed_hashes(self, source: str) -> dict[str, tuple[int, str, bool]]:
         rows = await self.conn.execute_fetchall(
-            "SELECT id, source_id, content_hash FROM items WHERE source = ?", (source,)
+            """
+            SELECT items.id, items.source_id, items.content_hash,
+                   EXISTS(SELECT 1 FROM items_vec WHERE items_vec.item_id = items.id) AS has_embedding
+            FROM items
+            WHERE items.source = ?
+            """
+            if self._has_vec
+            else "SELECT id, source_id, content_hash, 0 AS has_embedding FROM items WHERE source = ?",
+            (source,),
         )
-        return {row["source_id"]: (row["id"], row["content_hash"]) for row in rows}
+        return {row["source_id"]: (row["id"], row["content_hash"], bool(row["has_embedding"])) for row in rows}
 
     async def update_metadata(self, source: str, source_id: str, metadata: dict | None) -> bool:
         """Refresh non-embedding identity without invalidating the vector."""
@@ -238,10 +281,11 @@ class SearchStore:
         source_id: str,
         title: str,
         content: str,
-        embedding: bytes,
+        embedding: bytes | None,
         metadata: dict | None = None,
         *,
         content_hash: str | None = None,
+        force: bool = False,
     ) -> bool:
         content_hash = content_hash or self.hash_content(content)
         snippet = self.make_snippet(content)
@@ -253,7 +297,7 @@ class SearchStore:
             (source, source_id),
         )
 
-        if existing and existing[0]["content_hash"] == content_hash:
+        if existing and existing[0]["content_hash"] == content_hash and not force:
             return False
 
         if existing:
@@ -269,10 +313,11 @@ class SearchStore:
             )
             if self._has_vec:
                 await self.conn.execute("DELETE FROM items_vec WHERE item_id = ?", (item_id,))
-                await self.conn.execute(
-                    "INSERT INTO items_vec(item_id, embedding, source) VALUES (?, ?, ?)",
-                    (item_id, embedding, source),
-                )
+                if embedding is not None:
+                    await self.conn.execute(
+                        "INSERT INTO items_vec(item_id, embedding, source) VALUES (?, ?, ?)",
+                        (item_id, embedding, source),
+                    )
         else:
             cursor = await self.conn.execute(
                 """
@@ -283,7 +328,7 @@ class SearchStore:
                 (source, source_id, title, content, snippet, content_hash, metadata_json, now),
             )
             item_id = cursor.lastrowid
-            if self._has_vec:
+            if self._has_vec and embedding is not None:
                 await self.conn.execute(
                     "INSERT INTO items_vec(item_id, embedding, source) VALUES (?, ?, ?)",
                     (item_id, embedding, source),

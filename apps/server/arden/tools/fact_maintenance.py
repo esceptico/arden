@@ -106,7 +106,7 @@ fact_maintenance_review_tool = tool(
     display_name="Review Fact Maintenance",
     display_description="Advance one constrained Memory Maintenance review.",
     description=(
-        "Start with action='next'. Review exactly one prepared, version-pinned cluster. "
+        "Start with action='next'. Review exactly one prepared cluster. "
         "Submit exactly one decision, correct any rejected decision, and continue until completion. "
         "This is the only mutation surface for Memory Maintenance."
     ),

@@ -54,6 +54,31 @@ async def test_config_service_rolls_back_nested_settings_and_reloads_runtime(mon
 
 
 @pytest.mark.asyncio
+async def test_config_service_persists_explicit_no_embeddings(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted = {"embedding_model": "text-embedding-3-small"}
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+
+    service = ConfigService(on_config_change=lambda: _noop())
+    await service.update(embedding_model=None)
+
+    assert persisted == {"embedding_model": None}
+    assert Config(openai_api_key="key", **persisted).embedding is None
+
+
+async def _noop() -> None:
+    return
+
+
+@pytest.mark.asyncio
 async def test_config_service_creates_custom_model_and_stores_api_key(monkeypatch):
     import arden.services.config as config_module
 

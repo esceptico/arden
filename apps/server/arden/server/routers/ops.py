@@ -2,11 +2,10 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from arden.server.deps import require_automation_runtime, require_knowledge_runtime, require_tool_executor
+from arden.server.deps import require_automation_runtime, require_tool_executor
 from arden.server.middleware import _extract_bearer_token
 from arden.server.runtime import Runtime, get_runtime
 from arden.server.runtime.automation import AutomationRuntime
-from arden.server.runtime.knowledge import KnowledgeRuntime
 from arden.server.schemas import (
     HealthResponse,
     OutboxPruneResponse,
@@ -61,14 +60,14 @@ async def prune_outbox_completed(
 
 
 @router.get("/index/status")
-async def get_index_status(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)):
-    return await knowledge.get_index_status()
+async def get_index_status(runtime: Runtime = Depends(get_runtime)):
+    return await runtime.get_index_status()
 
 
 @router.post("/index/start")
-async def start_indexing(knowledge: KnowledgeRuntime = Depends(require_knowledge_runtime)):
-    knowledge.start_indexing()
-    return {"status": "started"}
+async def start_indexing(runtime: Runtime = Depends(get_runtime)):
+    await runtime.start_indexing()
+    return await runtime.get_index_status()
 
 
 @router.get("/scheduler/status", response_model=SchedulerStatusResponse, response_model_exclude_none=True)

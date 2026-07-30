@@ -38,17 +38,18 @@ Arden automatically receives a bounded resident wiki context from `README.md`,
 substantive prompt, it may also receive a small set of relevant indexed wiki
 pages.
 
-The agent can browse the managed wiki by directory, read one page by an exact
-ID, path, title, or alias, inspect links, create common pages, replace or move a
-page, and recoverably archive it. Writes require the exact repository head and
-page version from a fresh read.
+The agent can browse the managed wiki by directory, read one page by its exact
+managed path, inspect links, create common pages, replace or move a page, and
+recoverably archive it. Agents read before writing, then use paths; the backend
+keeps page identity and concurrency state internal. On a conflict, they reread
+the page or directory and retry.
 
 Scheduled automations can use those generic writes only below `automations/`.
 Interactive agents can write other ordinary pages after approval.
 
 Only an explicit automation may use `publish_wiki_generated` to update a page's
-generated region. It must first read the page and provide the exact version and
-repository head; it cannot overwrite user-managed prose.
+generated region. It must first read the page; the backend prevents it from
+overwriting user-managed prose.
 
 ## Desktop and API
 

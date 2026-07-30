@@ -15,14 +15,12 @@ from arden.constants import (
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
 from arden.events.internal import RunCompleted
-from arden.events.sse import MemoryChangedEvent
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDreamResult
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.runner import (
     FactMaintenance,
     FactMaintenanceDecision,
-    FactMaintenanceDuplicatePageAsk,
     FactMaintenanceResult,
 )
 from arden.memory.facts.maintenance.store import FactMaintenanceError
@@ -39,7 +37,7 @@ from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
 from arden.wiki.maintenance.runner import WikiMaintenanceResult
-from arden.wiki.maintenance.store import WikiMaintenanceReviewInput, WikiMaintenanceStore
+from arden.wiki.maintenance.store import WikiMaintenanceStore
 
 MIGRATED_AT = datetime(2026, 7, 28, 12, tzinfo=UTC)
 USER_SCOPE = ("user", None)
@@ -96,38 +94,6 @@ def _wiki_producer() -> Automation:
         read_history=True,
         tool_scope=["read_wiki_page", "publish_wiki_generated"],
     )
-
-
-@pytest.mark.asyncio
-async def test_runtime_duplicate_ask_yields_to_an_existing_ordinary_review(tmp_path) -> None:
-    runtime = Runtime(_config(tmp_path))
-    store = await WikiMaintenanceStore.open(tmp_path / "maintenance.sqlite")
-    runtime._wiki_maintenance_store = store
-    ask = FactMaintenanceDuplicatePageAsk(
-        wiki_head="a" * 64,
-        old_topic="Bike",
-        canonical_page_id="bicycle-page",
-        canonical_version="b" * 64,
-        canonical_title="Bicycle",
-        existing_page_id="bike-page",
-        existing_version="c" * 64,
-        existing_title="Bike",
-        normalization_intent="Normalize Bike to Bicycle.",
-    )
-    try:
-        ordinary = await store.record_review(
-            WikiMaintenanceReviewInput(
-                blocking_commit_id=ask.wiki_head,
-                evidence_key="ordinary-question",
-                evidence_fingerprint="d" * 64,
-                summary="An ordinary maintenance question is already open.",
-            )
-        )
-
-        assert not await runtime._record_duplicate_page_ask(ask)
-        assert await store.list_pending() == [ordinary]
-    finally:
-        await store.close()
 
 
 @pytest.mark.asyncio
@@ -261,7 +227,7 @@ async def test_runtime_health_reports_a_dangling_fact_citation(tmp_path) -> None
         health = runtime.wiki_service.read_page("health").page.body.decode()
         assert (
             "**dangling_citation** — owner: Synthesis; `topics/dangling.md`: "
-            f"missing fact version missing-fact@{'b' * 64}"
+            "cited fact revision is unavailable for missing-fact"
         ) in health
     finally:
         await runtime.close()
@@ -308,7 +274,8 @@ async def test_runtime_health_retries_when_facts_change_during_publication(tmp_p
         await runtime.project_wiki_health()
 
         health = runtime.wiki_service.read_page("health").page.body.decode()
-        assert f"Fact ledger: `{runtime._fact_ledger.revision}`" in health
+        assert "Fact ledger: available" in health
+        assert runtime._fact_ledger.revision not in health
         assert racing.calls == 4
     finally:
         await runtime.close()
@@ -844,7 +811,7 @@ async def test_any_automation_reconciles_a_wiki_head_it_changed(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_path, monkeypatch) -> None:
+async def test_wiki_maintenance_waits_for_synthesis_then_completes(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     _seed_fact(config)
     runtime = Runtime(config)
@@ -868,11 +835,6 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
         )
         assert retries == [(BUILTIN_WIKI_MAINTENANCE_ID, timedelta(minutes=1))]
 
-        emitted: list[MemoryChangedEvent] = []
-
-        async def emit(event):
-            emitted.append(event)
-
         async def current() -> bool:
             return True
 
@@ -881,11 +843,16 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
                 self.reviewer = reviewer
 
             async def run(self):
-                return WikiMaintenanceResult("c" * 64, "b" * 64, blocked=True, reviewed_commits=1)
+                return WikiMaintenanceResult(
+                    "c" * 64,
+                    "c" * 64,
+                    complete=True,
+                    reviewed_commits=1,
+                    skipped_oversized_reports=1,
+                )
 
         monkeypatch.setattr(runtime.automation, "synthesis_is_current", current)
         monkeypatch.setattr(runtime.automation, "get_wiki_maintenance", _Maintenance)
-        monkeypatch.setattr(runtime.automation.scheduler, "emit_automation_event", emit)
 
         async def run_review_agent(_deps, _request):
             assert runtime.automation.wiki_maintenance_review is not None
@@ -895,8 +862,7 @@ async def test_wiki_maintenance_waits_for_synthesis_then_notifies_review(tmp_pat
         monkeypatch.setattr("arden.server.runtime.automation.run_agent", run_review_agent)
         result = await handler(None)
         assert result.run_id == "wiki-maintenance-run"
-        assert result.result == "wiki maintenance: needs user review; reviewed 1; updated 0"
-        assert emitted[0].review_required is True
+        assert result.result == "wiki maintenance: current; reviewed 1; updated 0; skipped oversized reports 1"
     finally:
         await runtime.close()
 

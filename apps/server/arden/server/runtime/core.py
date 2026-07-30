@@ -18,6 +18,7 @@ from arden.core.factory import AgentConfig
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
 from arden.integrations.slack.client import SlackClient
 from arden.llm.base import CompletionClient
+from arden.llm.models import Provider, get_embedding_model
 from arden.llm.openai_codex_catalog import refresh_codex_models
 from arden.llm.router import close as llm_close
 from arden.llm.router import get_completion_client
@@ -28,14 +29,13 @@ from arden.memory.facts.completion_dream import CompletionFactDreamRenderer
 from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.dream import FactDream
-from arden.memory.facts.index import FactIndexProjection
+from arden.memory.facts.index import FACT_SEARCH_SOURCE, FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.runner import (
     CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID,
 )
 from arden.memory.facts.maintenance.runner import (
     FactMaintenance,
-    FactMaintenanceDuplicatePageAsk,
     FactMaintenanceReviewer,
 )
 from arden.memory.facts.plan_store import FactPlanStore
@@ -49,6 +49,7 @@ from arden.observability import init_tracing, shutdown_tracing
 from arden.operator.runner import OperatorDeps
 from arden.revisions import CollectionReport, ManagedFileRepository, RevisionConflictError
 from arden.server.app_control import AppControlService
+from arden.server.indexer import IndexProgress, IndexStatus
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.knowledge import KnowledgeRuntime
@@ -69,7 +70,7 @@ from arden.wiki.constants import (
     WIKI_MAINTENANCE_ACTOR,
     WIKI_POST_COMMIT_SERVICE,
 )
-from arden.wiki.context import WikiContextBuilder, WikiPageIndexProjection
+from arden.wiki.context import WIKI_PAGE_SOURCE, WikiContextBuilder, WikiPageIndexProjection
 from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
 from arden.wiki.curation.engine import WikiEditCurator
 from arden.wiki.curation.queue import WikiEditCuratorQueueStore
@@ -80,7 +81,6 @@ from arden.wiki.health import (
     WikiHealthIssue,
     WikiHealthIssueCode,
     WikiHealthIssueOwner,
-    WikiHealthPendingReview,
     WikiHealthProjector,
     WikiHealthWorker,
 )
@@ -88,12 +88,7 @@ from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceReviewer,
 )
-from arden.wiki.maintenance.store import (
-    WikiMaintenanceReviewConflictError,
-    WikiMaintenanceReviewInput,
-    WikiMaintenanceReviewStatus,
-    WikiMaintenanceStore,
-)
+from arden.wiki.maintenance.store import WikiMaintenanceStore
 from arden.wiki.models import WikiChangesReport
 from arden.wiki.service import WIKI_RENAME_ORIGIN, WikiService
 
@@ -158,6 +153,10 @@ class Runtime:
 
         self._connected = False
         self._closing = False
+        self._index_lock = asyncio.Lock()
+        self._index_task: asyncio.Task[None] | None = None
+        self._index_progress = IndexProgress(status=IndexStatus.PENDING)
+        self._index_error: str | None = None
 
         self.config_runtime = RuntimeConfig(
             initial_config,
@@ -281,10 +280,160 @@ class Runtime:
     # --- Subsystem lifecycle ---
 
     async def reload_config(self) -> None:
-        await self.config_runtime.reload()
+        async with self._index_lock:
+            was_indexing = self._index_is_running()
+            await self._cancel_indexing()
+            previous_embedding = self.config.embedding
+            await self.config_runtime.reload()
+
+            if self.config.embedding is None:
+                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
+                self._index_error = None
+            elif not self.indexer.vector_enabled:
+                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                self._index_error = "Vector index is unavailable; full-text search remains available"
+            elif (
+                was_indexing
+                or self.config.embedding != previous_embedding
+                or self.indexer.needs_rebuild
+                or self._index_progress.status is IndexStatus.ERROR
+            ):
+                self._start_indexing_locked()
 
     async def _after_config_reload(self) -> None:
         return
+
+    def embedding_model_available(self, model_id: str) -> bool:
+        model = get_embedding_model(model_id)
+        if model.provider is Provider.OPENAI:
+            return bool(self.config.openai_api_key)
+        if model.provider is Provider.GOOGLE:
+            return bool(self.config.gemini_api_key)
+        return model.provider is Provider.CUSTOM
+
+    async def update_embedding_model(self, model_id: str | None, confirmed: bool) -> None:
+        async with self._index_lock:
+            if model_id == self.config.embedding_model:
+                return
+            if self._index_is_running():
+                raise HTTPException(status_code=409, detail="Embedding reindex is already running")
+            if not confirmed:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Changing the embedding model re-embeds all facts and wiki pages; resend with confirmed=true",
+                )
+            if model_id is not None:
+                try:
+                    available = self.embedding_model_available(model_id)
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+                if not available:
+                    raise HTTPException(status_code=400, detail=f"Embedding model {model_id!r} is not available")
+            await self.config_service.update(embedding_model=model_id)
+            if self.config.embedding is None:
+                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
+                self._index_error = None
+                return
+            if not self.indexer.vector_enabled:
+                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                self._index_error = "Vector index is unavailable; full-text search remains available"
+                return
+            self._start_indexing_locked()
+
+    async def start_indexing(self) -> bool:
+        async with self._index_lock:
+            if self._index_is_running():
+                raise HTTPException(status_code=409, detail="Embedding reindex is already running")
+            if self.config.embedding is None:
+                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
+                self._index_error = None
+                return False
+            if not self.indexer.vector_enabled:
+                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                self._index_error = "Vector index is unavailable; full-text search remains available"
+                return False
+            self._start_indexing_locked()
+            return True
+
+    def _start_indexing_locked(self) -> None:
+        self._index_progress = IndexProgress(status=IndexStatus.INDEXING, phase="facts")
+        self._index_error = None
+        self._index_task = asyncio.create_task(self._run_indexing())
+
+    def _index_is_running(self) -> bool:
+        return self._index_task is not None and not self._index_task.done()
+
+    async def _run_indexing(self) -> None:
+        try:
+            rebuilt_sources: set[str] = set()
+            if self.fact_index_projection is not None:
+                if (
+                    await self.fact_index_projection.sync(
+                        progress_callback=self._index_progress_callback("facts"),
+                        raise_on_error=True,
+                    )
+                    is None
+                ):
+                    raise RuntimeError("fact index rebuild did not complete")
+                rebuilt_sources.add(FACT_SEARCH_SOURCE)
+            if self.wiki_page_projection is not None:
+                if (
+                    await self.wiki_page_projection.sync(
+                        progress_callback=self._index_progress_callback("wiki"),
+                        raise_on_error=True,
+                    )
+                    is None
+                ):
+                    raise RuntimeError("wiki index rebuild did not complete")
+                rebuilt_sources.add(WIKI_PAGE_SOURCE)
+            if self.search_index is not None:
+                existing_sources = set(await self.search_index.store.get_stats())
+                unavailable = {FACT_SEARCH_SOURCE, WIKI_PAGE_SOURCE}.intersection(existing_sources).difference(
+                    rebuilt_sources
+                )
+                if unavailable:
+                    raise RuntimeError(f"cannot rebuild unavailable sources: {', '.join(sorted(unavailable))}")
+                await self.search_index.store.mark_embedding_ready()
+                self.indexer.needs_rebuild = False
+            self._index_progress.status = IndexStatus.DONE
+            self._index_progress.phase = None
+        except asyncio.CancelledError:
+            self._index_progress.status = IndexStatus.PENDING
+            self._index_progress.phase = None
+            raise
+        except Exception as error:
+            self._index_error = f"{type(error).__name__}: {error}"
+            self._index_progress.status = IndexStatus.ERROR
+            self._index_progress.phase = None
+
+    def _index_progress_callback(self, phase: str) -> Callable[[int, int], None]:
+        def update(done: int, total: int) -> None:
+            self._index_progress.phase = phase
+            self._index_progress.done = done
+            self._index_progress.total = total
+
+        return update
+
+    async def get_index_status(self) -> dict:
+        retry_at = self.indexer.rate_limit_retry_at
+        return {
+            "state": self._index_progress.status.value,
+            "model": self.config.embedding_model,
+            "phase": self._index_progress.phase,
+            "done": self._index_progress.done,
+            "total": self._index_progress.total,
+            "retry_at": retry_at.isoformat() if retry_at is not None else None,
+            "error": self._index_error,
+        }
+
+    async def _cancel_indexing(self) -> None:
+        if self._index_task is None or self._index_task.done():
+            return
+        self._index_task.cancel()
+        try:
+            await self._index_task
+        except asyncio.CancelledError:
+            pass
 
     async def sync_mcp(self, config: Config | None = None) -> None:
         config = config or self.config
@@ -314,10 +463,17 @@ class Runtime:
         await self._init_facts(fact_ledger)
         await self._init_wiki_curator()
         await self.knowledge.connect(self.stores)
+        rebuild_pending = (
+            self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
+        )
         if self.fact_service is not None:
             fact_projection = FactIndexProjection(self.fact_service, lambda: self.search_index)
             self.fact_index_projection = fact_projection
-            await fact_projection.sync()
+            if not rebuild_pending:
+                try:
+                    await fact_projection.sync(raise_on_error=self.config.embedding is not None)
+                except Exception:
+                    _logger.warning("initial fact index sync failed", exc_info=True)
         if self.fact_service is not None and self.wiki_service is not None:
             projection = WikiPageIndexProjection(
                 self.wiki_service,
@@ -327,7 +483,32 @@ class Runtime:
             )
             self.wiki_page_projection = projection
             self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
-            await projection.sync()
+            if not rebuild_pending:
+                try:
+                    await projection.sync(raise_on_error=self.config.embedding is not None)
+                except Exception:
+                    _logger.warning("initial wiki index sync failed", exc_info=True)
+        if self.config.embedding is None:
+            self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
+        elif rebuild_pending:
+            self._index_progress = IndexProgress(status=IndexStatus.PENDING)
+        elif self.indexer.vector_enabled:
+            failed_projection = next(
+                (
+                    projection.last_state
+                    for projection in (self.fact_index_projection, self.wiki_page_projection)
+                    if projection is not None and projection.last_state.status != "ready"
+                ),
+                None,
+            )
+            if failed_projection is None:
+                self._index_progress = IndexProgress(status=IndexStatus.DONE)
+            else:
+                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                self._index_error = failed_projection.detail or "Initial index rebuild did not complete"
+        else:
+            self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+            self._index_error = "Vector index is unavailable; full-text search remains available"
         if self._wiki_maintenance_store is not None:
             self._wiki_change_head = await self._wiki_maintenance_store.get_projection_revision()
         self._init_skills()
@@ -351,6 +532,8 @@ class Runtime:
             self.wiki_curator_worker.start()
 
         self._connected = True
+        if rebuild_pending:
+            await self.start_indexing()
         _logger.info(
             "Runtime ready",
             integrations=len(self.integrations.clients),
@@ -458,14 +641,6 @@ class Runtime:
         if self.automation is not None:
             await self.automation.request_fact_synthesis()
 
-    async def notify_wiki_maintenance_reviews_changed(self, revision: str | None) -> None:
-        if self.automation is not None:
-            await self.automation.notify_wiki_maintenance_reviews_changed(revision)
-
-    async def request_wiki_maintenance(self) -> None:
-        if self.automation is not None:
-            await self.automation.request_wiki_maintenance()
-
     async def request_fact_maintenance(self) -> None:
         if self.automation is not None:
             await self.automation.request_fact_maintenance()
@@ -552,32 +727,7 @@ class Runtime:
             reviewer,
             wiki=self.wiki_service,
             candidate_provider=self.fact_index_projection,
-            record_duplicate_page_ask=self._record_duplicate_page_ask,
         )
-
-    async def _record_duplicate_page_ask(self, ask: FactMaintenanceDuplicatePageAsk) -> bool:
-        if self._wiki_maintenance_store is None:
-            raise RuntimeError("wiki maintenance review service is unavailable")
-        try:
-            review = await self._wiki_maintenance_store.record_fact_duplicate_review(
-                WikiMaintenanceReviewInput(
-                    blocking_commit_id=ask.wiki_head,
-                    evidence_key=ask.evidence_key,
-                    evidence_fingerprint=ask.evidence_fingerprint,
-                    summary=ask.summary,
-                )
-            )
-        except WikiMaintenanceReviewConflictError:
-            return False
-        if review.status is WikiMaintenanceReviewStatus.NEEDS_REVIEW:
-            await self.notify_wiki_maintenance_reviews_changed(review.blocking_commit_id)
-            return False
-        if review.status in {
-            WikiMaintenanceReviewStatus.REJECTED,
-            WikiMaintenanceReviewStatus.RESOLVED_MANUAL,
-        }:
-            return True
-        raise RuntimeError("duplicate page review has an invalid resolution")
 
     def _create_wiki_maintenance(self, reviewer: WikiMaintenanceReviewer) -> WikiMaintenance | None:
         if self._wiki_maintenance_store is None or self.wiki_service is None or not self.config.memory_model:
@@ -618,7 +768,6 @@ class Runtime:
                     synthesis = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
                     retention = await self._fact_consumer_store.get_retention_checkpoint(BUILTIN_MEMORY_RETENTION_ID)
                     maintenance = await self._wiki_maintenance_store.get_watermark()
-                    pending = await self._wiki_maintenance_store.list_pending()
                     completed_runs = await self.stores.automations.latest_completed_runs(
                         tuple(spec.task_id for spec in _HEALTH_PHASES)
                     )
@@ -699,9 +848,6 @@ class Runtime:
                                 for item in due_reviews
                             ),
                             *citation_issues,
-                        ),
-                        pending_reviews=tuple(
-                            WikiHealthPendingReview(item.review_id, item.summary) for item in pending
                         ),
                     )
                     result = await asyncio.to_thread(WikiHealthProjector(self.wiki_service).project, value)
@@ -904,6 +1050,7 @@ class Runtime:
             _logger.info("Cancelled %d active run(s)", cancelled)
 
         # Phase 2: stop background services
+        await self._cancel_indexing()
         if self.automation:
             await self.automation.stop()
         if self.wiki_curator_worker:
@@ -951,8 +1098,8 @@ class Runtime:
 
     def get_integration_errors(self) -> dict[str, str]:
         errors = dict(self.integrations.errors)
-        if self.indexer and self.indexer.error:
-            errors["index"] = self.indexer.error
+        if self._index_error:
+            errors["index"] = self._index_error
         return errors
 
     def build_chat_deps(self, chat_model: str | None = None):
@@ -1031,12 +1178,6 @@ class Runtime:
             SlackMonitor(slack, state_store=self.stores.monitor, automation_store=self.stores.automations)
         )
         self.monitor.start()
-
-    def start_indexing(self) -> None:
-        self.knowledge.start_indexing()
-
-    async def get_index_status(self) -> dict:
-        return await self.knowledge.get_index_status()
 
     async def get_scheduler_status(self) -> dict:
         if not self.automation:

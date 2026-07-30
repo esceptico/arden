@@ -9,7 +9,7 @@ class KnowledgeRuntime:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.embedding = config.embedding
-        self.indexer = Indexer(db_path=config.search_db_path, embedding=self.embedding) if self.embedding else None
+        self.indexer = Indexer(db_path=config.search_db_path, embedding=self.embedding)
         self.search_index = None
         self._fact_service: FactService | None = None
 
@@ -17,9 +17,8 @@ class KnowledgeRuntime:
         self._fact_service = service
 
     async def connect(self, _stores=None) -> None:
-        if self.indexer:
-            await self.indexer.connect()
-            self.search_index = self.indexer.index
+        await self.indexer.connect()
+        self.search_index = self.indexer.index
 
     async def reload_config(self, config: Config, stores=None) -> None:
         del stores
@@ -27,12 +26,10 @@ class KnowledgeRuntime:
         await self._sync_embedding()
 
     async def stop(self) -> None:
-        if self.indexer:
-            await self.indexer.stop()
+        return
 
     async def close(self) -> None:
-        if self.indexer:
-            await self.indexer.close()
+        await self.indexer.close()
 
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = {}
@@ -44,31 +41,15 @@ class KnowledgeRuntime:
             services["search_index"] = self.search_index
         return services
 
-    def start_indexing(self) -> None:
-        if self.indexer:
-            self.indexer.start(None)
-
-    async def get_index_status(self) -> dict:
-        return await self.indexer.get_status() if self.indexer else {"status": "disabled"}
-
     async def _sync_embedding(self) -> None:
         new_embedding = self.config.embedding
         if new_embedding == self.embedding:
             return
+        self.search_index = None
+        await self.indexer.close()
         self.embedding = new_embedding
-        if new_embedding is None:
-            if self.indexer:
-                await self.indexer.stop()
-                await self.indexer.close()
-            self.indexer = None
-            self.search_index = None
-            return
-        if self.indexer:
-            await self.indexer.stop()
-            await self.indexer.update_embedding(new_embedding)
-        else:
-            self.indexer = Indexer(db_path=self.config.search_db_path, embedding=new_embedding)
-            await self.indexer.connect()
+        self.indexer = Indexer(db_path=self.config.search_db_path, embedding=new_embedding)
+        await self.indexer.connect()
         self.search_index = self.indexer.index
 
     def _memory_reasoning_effort(self, model_id: str | None) -> str | None:

@@ -11,7 +11,6 @@ from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.wiki.constants import WIKI_MAINTENANCE_REVIEW_TOOL_NAME
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService, WikiMaintenanceReviewState
 from arden.wiki.maintenance.runner import WikiMaintenanceDecision, WikiMaintenanceError
-from arden.wiki.maintenance.store import WikiMaintenanceReviewConflictError
 
 WIKI_MAINTENANCE_SERVICE = "wiki_maintenance"
 
@@ -53,14 +52,22 @@ def _service(execution: ToolExecution) -> WikiMaintenanceReviewService | ToolRes
 def _result(state: WikiMaintenanceReviewState) -> ToolResult:
     if state.result is not None:
         result = state.result
-        status = "blocked for a durable user decision" if result.blocked else "completed"
+        skipped = (
+            f" Skipped {result.skipped_oversized_reports} oversized report(s) without changes."
+            if result.skipped_oversized_reports
+            else ""
+        )
         return ToolResult(
             content=(
-                f"Wiki Maintenance {status}. Reviewed {result.reviewed_commits} commit(s); "
-                f"updated {result.updated_pages} page(s)."
+                f"Wiki Maintenance completed. Reviewed {result.reviewed_commits} commit(s); "
+                f"updated {result.updated_pages} page(s).{skipped}"
             ),
             preview="Maintenance complete",
-            data={"completed": True, "blocked": result.blocked, "reload_required": result.reload_required},
+            data={
+                "completed": True,
+                "reload_required": result.reload_required,
+                "skipped_oversized_reports": result.skipped_oversized_reports,
+            },
         )
     report = state.report
     if report is None:
@@ -82,7 +89,7 @@ async def wiki_maintenance_review(execution: ToolExecution, args: WikiMaintenanc
     try:
         state = await service.next() if args.action == "next" else await service.decide(args.decision)
         return _result(state)
-    except (WikiMaintenanceError, WikiMaintenanceReviewConflictError) as exc:
+    except WikiMaintenanceError as exc:
         return ToolResult.failure(
             code="invalid_maintenance_decision",
             message=str(exc),
@@ -95,8 +102,8 @@ wiki_maintenance_review_tool = tool(
     display_name="Review Wiki Maintenance",
     display_description="Advance one constrained Wiki Maintenance review.",
     description=(
-        "Start with action='next'. Review exactly one prepared, version-pinned wiki change report. "
-        "Submit one decision. If pages may describe the same subject, use outcome='needs_review' with a clear concern; "
+        "Start with action='next'. Review exactly one prepared wiki change report. "
+        "Submit one decision. Choose no_change when the evidence is ambiguous; "
         "this workflow never combines or archives pages. Correct any rejected decision and continue until completion. "
         "This is the only mutation surface for Wiki Maintenance."
     ),

@@ -398,6 +398,52 @@ export async function getServerModels(config: AppConfig): Promise<ModelsResponse
   return parseModelsResponse(await apiWithConfig<unknown>(config, "/models"));
 }
 
+export interface EmbeddingModelGroup {
+  provider: string;
+  models: string[];
+}
+
+export interface EmbeddingModelsResponse {
+  models: string[];
+  groups: EmbeddingModelGroup[];
+  current: string | null;
+}
+
+export type IndexState = "idle" | "reindexing" | "ready" | "error" | "disabled";
+export type IndexPhase = "facts" | "wiki" | null;
+
+export interface IndexStatus {
+  state: IndexState;
+  model: string | null;
+  phase: IndexPhase;
+  done: number;
+  total: number;
+  retry_at: string | null;
+  error: string | null;
+}
+
+export async function getEmbeddingModelsApi(config: AppConfig): Promise<EmbeddingModelsResponse> {
+  return parseEmbeddingModelsResponse(await apiWithConfig<unknown>(config, "/models/embedding"));
+}
+
+export async function updateEmbeddingModelApi(
+  config: AppConfig,
+  embeddingModel: string | null,
+): Promise<IndexStatus> {
+  return parseIndexStatus(await apiWithConfig<unknown>(config, "/config/embedding", {
+    method: "POST",
+    body: JSON.stringify({ embedding_model: embeddingModel, confirmed: true }),
+  }));
+}
+
+export async function getIndexStatusApi(config: AppConfig): Promise<IndexStatus> {
+  return parseIndexStatus(await apiWithConfig<unknown>(config, "/index/status"));
+}
+
+export async function startIndexingApi(config: AppConfig): Promise<IndexStatus> {
+  return parseIndexStatus(await apiWithConfig<unknown>(config, "/index/start", { method: "POST" }));
+}
+
 export type ServerConfigPatch = Partial<{
   chat_model: string;
   max_depth: number;
@@ -426,6 +472,10 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
 }
@@ -451,6 +501,10 @@ export function parseServerConfig(data: unknown): ServerConfig {
   assertServerContract(typeof data.research_model === "string", "Invalid /config response: missing research_model");
   assertServerContract(typeof data.workflow_model === "string", "Invalid /config response: missing workflow_model");
   assertServerContract(typeof data.memory_model === "string", "Invalid /config response: missing memory_model");
+  assertServerContract(
+    isNullableString(data.embedding_model),
+    "Invalid /config response: invalid embedding_model",
+  );
   assertServerContract(isStringArray(data.reasoning_efforts), "Invalid /config response: missing reasoning_efforts");
   assertServerContract(
     isStringRecord(data.model_reasoning_efforts),
@@ -504,6 +558,51 @@ export function parseModelsResponse(data: unknown): ModelsResponse {
     "Invalid /models response: missing memory_model",
   );
   return data as unknown as ModelsResponse;
+}
+
+export function parseEmbeddingModelsResponse(data: unknown): EmbeddingModelsResponse {
+  assertServerContract(isRecord(data), "Invalid /models/embedding response: expected an object");
+  assertServerContract(isStringArray(data.models), "Invalid /models/embedding response: missing models");
+  assertServerContract(
+    Array.isArray(data.groups)
+      && data.groups.every(
+        (group) => isRecord(group) && typeof group.provider === "string" && isStringArray(group.models),
+      ),
+    "Invalid /models/embedding response: invalid groups",
+  );
+  assertServerContract(
+    isNullableString(data.current),
+    "Invalid /models/embedding response: invalid current",
+  );
+  return data as unknown as EmbeddingModelsResponse;
+}
+
+export function parseIndexStatus(data: unknown): IndexStatus {
+  assertServerContract(isRecord(data), "Invalid /index/status response: expected an object");
+  assertServerContract(
+    data.state === "idle"
+      || data.state === "reindexing"
+      || data.state === "ready"
+      || data.state === "error"
+      || data.state === "disabled",
+    "Invalid /index/status response: invalid state",
+  );
+  assertServerContract(isNullableString(data.model), "Invalid /index/status response: invalid model");
+  assertServerContract(
+    data.phase === "facts" || data.phase === "wiki" || data.phase === null,
+    "Invalid /index/status response: invalid phase",
+  );
+  assertServerContract(
+    typeof data.done === "number" && Number.isFinite(data.done) && data.done >= 0,
+    "Invalid /index/status response: invalid done",
+  );
+  assertServerContract(
+    typeof data.total === "number" && Number.isFinite(data.total) && data.total >= 0,
+    "Invalid /index/status response: invalid total",
+  );
+  assertServerContract(isNullableString(data.retry_at), "Invalid /index/status response: invalid retry_at");
+  assertServerContract(isNullableString(data.error), "Invalid /index/status response: invalid error");
+  return data as unknown as IndexStatus;
 }
 
 export async function patchServerConfig(
