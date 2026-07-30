@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from mcp import types as mcp_types
+import mcp_types
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
@@ -38,7 +38,7 @@ def call_tool_result_to_tool_result(
     return ToolResult(
         content=preview_text(content, limit=MCP_RESULT_PREVIEW_CHARS) if oversized else content,
         preview=content[:100] if content else "Empty result",
-        is_error=bool(result.isError),
+        is_error=result.is_error,
         data=data,
         model_content=projection.model_content,
         source_refs=extract_mcp_source_refs(result, provider=provider, tool_name=tool_name),
@@ -104,7 +104,7 @@ def extract_mcp_source_refs(
                 ):
                     return tuple(refs)
 
-    structured = result.structuredContent
+    structured = result.structured_content
     if tool_name == "search" and isinstance(structured, Mapping):
         results = structured.get("results")
         if isinstance(results, list):
@@ -157,8 +157,8 @@ def _model_content(result: mcp_types.CallToolResult, projection: ContentProjecti
         return projection.text
     if projection.fallback:
         return projection.fallback
-    if result.structuredContent is not None:
-        return json.dumps(result.structuredContent, ensure_ascii=False, sort_keys=True)
+    if result.structured_content is not None:
+        return json.dumps(result.structured_content, ensure_ascii=False, sort_keys=True)
     return ""
 
 
@@ -177,14 +177,14 @@ def _area_content(blocks: list[mcp_types.ContentBlock], *, include_model_content
                 metadata.append(_resource_metadata(resource))
             case mcp_types.ImageContent():
                 fallback.append("[image content]")
-                metadata.append(_media_metadata("image", block.mimeType, block.data))
+                metadata.append(_media_metadata("image", block.mime_type, block.data))
                 if include_model_content:
-                    model_content.append(ImageContent(media_type=block.mimeType, data=block.data))
+                    model_content.append(ImageContent(media_type=block.mime_type, data=block.data))
             case mcp_types.AudioContent():
                 fallback.append("[audio content]")
-                metadata.append(_media_metadata("audio", block.mimeType, block.data))
+                metadata.append(_media_metadata("audio", block.mime_type, block.data))
                 if include_model_content:
-                    model_content.append(AudioContent(media_type=block.mimeType, data=block.data))
+                    model_content.append(AudioContent(media_type=block.mime_type, data=block.data))
             case mcp_types.ResourceLink():
                 fallback.append(f"[resource: {block.uri}]")
                 metadata.append(_resource_link_metadata(block))
@@ -212,7 +212,7 @@ def _bounded_metadata(
         "raw_bytes": blob.content_bytes,
         **blob.to_internal_data(),
     }
-    structured = result.structuredContent
+    structured = result.structured_content
     if isinstance(structured, Mapping):
         data["structured_summary"] = {
             "keys": sorted(str(key) for key in structured)[:50],
@@ -231,8 +231,8 @@ def _bounded_metadata(
 
 def _metadata(result: mcp_types.CallToolResult, projection: ContentProjection) -> dict | None:
     data = {}
-    if result.structuredContent is not None:
-        data["structuredContent"] = result.structuredContent
+    if result.structured_content is not None:
+        data["structuredContent"] = result.structured_content
     if result.meta is not None:
         data["_meta"] = result.meta
     if projection.metadata:
@@ -256,8 +256,8 @@ def _resource_link_metadata(block: mcp_types.ResourceLink) -> dict[str, Any]:
     }
     if block.title:
         data["title"] = block.title
-    if block.mimeType:
-        data["mimeType"] = block.mimeType
+    if block.mime_type:
+        data["mimeType"] = block.mime_type
     if block.size is not None:
         data["size"] = block.size
     return data
@@ -268,8 +268,8 @@ def _resource_metadata(resource: mcp_types.TextResourceContents | mcp_types.Blob
         "type": "resource",
         "uri": str(resource.uri),
     }
-    if resource.mimeType:
-        data["mimeType"] = resource.mimeType
+    if resource.mime_type:
+        data["mimeType"] = resource.mime_type
     if isinstance(resource, mcp_types.BlobResourceContents):
         data["base64Length"] = len(resource.blob)
     return data

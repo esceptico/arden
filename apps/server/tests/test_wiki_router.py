@@ -35,7 +35,7 @@ def _seed(service: WikiService, page_id: str, path: str, title: str) -> None:
 
 
 def test_wiki_routes_are_registered_on_the_server_app():
-    paths = {route.path for route in server_app.routes}
+    paths = set(server_app.openapi()["paths"])
     assert "/admin/wiki/rename-approvals" in paths
     assert "/admin/wiki/rename-approvals/{approval_id}/accept" in paths
     assert "/admin/wiki/rename-approvals/{approval_id}/reject" in paths

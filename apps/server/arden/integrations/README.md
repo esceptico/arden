@@ -17,12 +17,12 @@ An integration is a frozen dataclass:
 ```python
 @dataclass(frozen=True)
 class Integration:
-    id: str                                             # "slack"
-    label: str                                          # "Slack"
-    service_fields: list[IntegrationField]              # user-facing config keys
-    tools: dict[str, Tool]                              # name-to-tool map
-    notifier_class: type[Notifier] | None               # optional notifier
-    build: Callable[[Config], object | None] | None     # returns client, or None if unconfigured
+    id: str  # "slack"
+    label: str  # "Slack"
+    service_fields: list[IntegrationField]  # user-facing config keys
+    tools: dict[str, Tool]  # name-to-tool map
+    notifier_class: type[Notifier] | None  # optional notifier
+    build: Callable[[Config], object | None] | None  # returns client, or None if unconfigured
 ```
 
 `build` receives the current `Config` and returns a client instance, or `None` if the integration isn't configured. If it raises, the error is captured and surfaced to the UI.

@@ -4,8 +4,8 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
-from mcp.types import CallToolResult
-from mcp.types import Tool as McpTool
+from mcp_types import CallToolResult
+from mcp_types import Tool as McpTool
 
 from arden.logging import get_logger
 from arden.mcp.errors import describe_mcp_error
@@ -101,7 +101,7 @@ class MCPServerSession:
 
         async with (
             http_client,
-            streamable_http_client(transport.url, http_client=http_client) as (read, write, _),
+            streamable_http_client(transport.url, http_client=http_client) as (read, write),
             ClientSession(read, write) as session,
         ):
             await session.initialize()

@@ -6,8 +6,8 @@ from typing import Annotated, Literal, Protocol
 from coolname import generate_slug
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.server.mcpserver import MCPServer
+from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 import arden.tools.research as research_module
@@ -149,7 +149,7 @@ def create_mcp_server(
     port: int = 6878,
     api_key_hash: str | None = None,
     public_url: str | None = None,
-) -> FastMCP:
+) -> MCPServer:
     auth = None
     token_verifier = None
     if api_key_hash:
@@ -161,14 +161,14 @@ def create_mcp_server(
         )
         token_verifier = APIKeyTokenVerifier(api_key_hash)
 
-    server = FastMCP("arden", host=host, port=port, auth=auth, token_verifier=token_verifier)
+    server = MCPServer("arden", auth=auth, token_verifier=token_verifier)
     factory = runner_factory or _default_runner_factory
 
     @server.tool(
         name="arden_research",
         title="Research with arden",
         description="Run a blocking arden research task and return answer, evidence, gaps, and contradictions.",
-        annotations=ToolAnnotations(readOnlyHint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
         structured_output=True,
     )
     async def arden_research(

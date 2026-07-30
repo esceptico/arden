@@ -49,7 +49,11 @@ def main() -> None:
             f"SELECT COUNT(*) FROM session_events WHERE event_type IN ({placeholders})",
             EPHEMERAL_VALUES,
         ).fetchone()[0]
-        print(f"session_events rows: {total:,} total, {target:,} ephemeral ({target / total:.0%})" if total else "session_events empty")
+        print(
+            f"session_events rows: {total:,} total, {target:,} ephemeral ({target / total:.0%})"
+            if total
+            else "session_events empty"
+        )
 
         if args.dry_run:
             print("\n[dry-run] no changes made.")

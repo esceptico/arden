@@ -1,4 +1,4 @@
-from mcp.types import (
+from mcp_types import (
     AudioContent,
     CallToolResult,
     EmbeddedResource,
@@ -28,7 +28,7 @@ def test_text_and_structured_content_keeps_text_primary():
     result = _adapt(
         CallToolResult(
             content=[TextContent(type="text", text="Found 1 note")],
-            structuredContent={"hits": [{"path": "Note.md"}], "warnings": []},
+            structured_content={"hits": [{"path": "Note.md"}], "warnings": []},
         )
     )
 
@@ -37,14 +37,14 @@ def test_text_and_structured_content_keeps_text_primary():
 
 
 def test_structured_content_only_falls_back_to_json():
-    result = _adapt(CallToolResult(content=[], structuredContent={"hits": [{"path": "Note.md"}], "warnings": []}))
+    result = _adapt(CallToolResult(content=[], structured_content={"hits": [{"path": "Note.md"}], "warnings": []}))
 
     assert result.content == '{"hits": [{"path": "Note.md"}], "warnings": []}'
     assert result.data == {"structuredContent": {"hits": [{"path": "Note.md"}], "warnings": []}}
 
 
 def test_error_result_uses_text_content_as_error_message():
-    result = _adapt(CallToolResult(content=[TextContent(type="text", text="Permission denied")], isError=True))
+    result = _adapt(CallToolResult(content=[TextContent(type="text", text="Permission denied")], is_error=True))
 
     assert result.content == "Permission denied"
     assert result.preview == "Permission denied"
@@ -65,7 +65,7 @@ def test_multiple_text_blocks_are_joined():
 
 
 def test_non_text_blocks_are_model_safe_placeholders():
-    result = _adapt(CallToolResult(content=[ImageContent(type="image", data="base64", mimeType="image/png")]))
+    result = _adapt(CallToolResult(content=[ImageContent(type="image", data="base64", mime_type="image/png")]))
 
     assert result.content == "[image content]"
     assert result.data == {
@@ -83,7 +83,7 @@ def test_non_text_blocks_are_model_safe_placeholders():
 
 
 def test_audio_blocks_are_forwarded_as_model_content():
-    result = _adapt(CallToolResult(content=[AudioContent(type="audio", data="base64", mimeType="audio/mpeg")]))
+    result = _adapt(CallToolResult(content=[AudioContent(type="audio", data="base64", mime_type="audio/mpeg")]))
 
     assert result.content == "[audio content]"
     assert [block.model_dump() for block in result.model_content] == [
@@ -95,7 +95,7 @@ def test_large_structured_payload_is_bounded_and_durably_retrievable():
     result = _adapt(
         CallToolResult(
             content=[TextContent(type="text", text="Found records")],
-            structuredContent={"rows": [{"body": "x" * 100_000}], "next_cursor": "page-2"},
+            structured_content={"rows": [{"body": "x" * 100_000}], "next_cursor": "page-2"},
         )
     )
 
@@ -110,7 +110,7 @@ def test_large_structured_payload_is_bounded_and_durably_retrievable():
 
 
 def test_large_media_payload_is_bounded_and_not_inlined_to_model():
-    result = _adapt(CallToolResult(content=[ImageContent(type="image", data="x" * 100_000, mimeType="image/png")]))
+    result = _adapt(CallToolResult(content=[ImageContent(type="image", data="x" * 100_000, mime_type="image/png")]))
 
     assert result.data["truncated"] is True
     assert result.model_content == ()
@@ -122,7 +122,7 @@ def test_text_blocks_are_not_polluted_by_non_text_placeholders():
         CallToolResult(
             content=[
                 TextContent(type="text", text="Visible result"),
-                ImageContent(type="image", data="base64", mimeType="image/png"),
+                ImageContent(type="image", data="base64", mime_type="image/png"),
             ]
         )
     )
@@ -147,7 +147,7 @@ def test_embedded_text_resource_is_model_visible_text():
                     type="resource",
                     resource=TextResourceContents(
                         uri="file:///tmp/note.md",
-                        mimeType="text/markdown",
+                        mime_type="text/markdown",
                         text="# Note",
                     ),
                 )
@@ -199,7 +199,7 @@ def test_mcp_resource_content_emits_stable_deduplicated_refs():
                 type="resource",
                 resource=TextResourceContents(
                     uri="file:///tmp/note.md",
-                    mimeType="text/markdown",
+                    mime_type="text/markdown",
                     text="# Note",
                 ),
             ),
@@ -228,7 +228,7 @@ def test_mcp_resource_content_emits_stable_deduplicated_refs():
 def test_canonical_mcp_search_extracts_only_top_level_results():
     result = CallToolResult(
         content=[],
-        structuredContent={
+        structured_content={
             "results": [
                 {"id": "doc-1", "title": "First", "url": "https://example.test/first"},
                 {"id": "doc-2", "title": "Second"},
@@ -260,7 +260,7 @@ def test_canonical_mcp_search_extracts_only_top_level_results():
 def test_canonical_mcp_fetch_extracts_document_with_optional_url():
     result = CallToolResult(
         content=[],
-        structuredContent={
+        structured_content={
             "id": "doc-1",
             "title": "First",
             "text": "Document body",
@@ -284,11 +284,11 @@ def test_canonical_mcp_fetch_extracts_document_with_optional_url():
 def test_canonical_mcp_sources_use_ids_when_titles_are_blank():
     search = CallToolResult(
         content=[],
-        structuredContent={"results": [{"id": "search-1", "title": "   "}]},
+        structured_content={"results": [{"id": "search-1", "title": "   "}]},
     )
     fetch = CallToolResult(
         content=[],
-        structuredContent={"id": "document-1", "title": "   ", "text": "Document body"},
+        structured_content={"id": "document-1", "title": "   ", "text": "Document body"},
     )
 
     search_refs = mcp_results.extract_mcp_source_refs(search, provider="demo", tool_name="search")
@@ -301,19 +301,19 @@ def test_canonical_mcp_sources_use_ids_when_titles_are_blank():
 def test_mcp_extraction_ignores_nested_or_inexact_contracts():
     nested = CallToolResult(
         content=[],
-        structuredContent={"wrapper": {"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]}},
+        structured_content={"wrapper": {"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]}},
     )
     inexact_name = CallToolResult(
         content=[],
-        structuredContent={"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]},
+        structured_content={"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]},
     )
     incomplete_fetch = CallToolResult(
         content=[],
-        structuredContent={"id": "x", "title": "Hidden", "url": "https://ignored.test"},
+        structured_content={"id": "x", "title": "Hidden", "url": "https://ignored.test"},
     )
     empty_fetch = CallToolResult(
         content=[],
-        structuredContent={"id": "x", "title": "Hidden", "text": "   ", "url": "https://ignored.test"},
+        structured_content={"id": "x", "title": "Hidden", "text": "   ", "url": "https://ignored.test"},
     )
 
     assert mcp_results.extract_mcp_source_refs(nested, provider="demo", tool_name="search") == ()
@@ -362,7 +362,7 @@ def test_mcp_search_stops_iterating_after_50_normalized_unique_refs():
             {"id": "overflow", "title": "Must not be read"},
         ]
     )
-    result = CallToolResult(content=resource_refs, structuredContent={"results": results})
+    result = CallToolResult(content=resource_refs, structured_content={"results": results})
 
     refs = mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="search")
 

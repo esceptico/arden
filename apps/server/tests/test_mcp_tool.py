@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from mcp.types import Tool as McpTool
+from mcp_types import CallToolResult, TextContent, ToolAnnotations
+from mcp_types import Tool as McpTool
 
 from arden.context.models import SessionState
 from arden.mcp.tool import MCPTool
@@ -27,12 +27,12 @@ async def test_mcp_tool_executes_remote_tool_and_adapts_result():
     mcp_tool = McpTool(
         name="search",
         description="Search notes",
-        inputSchema={"type": "object", "properties": {"query": {"type": "string"}}},
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
     )
     session = FakeMCPSession(
         CallToolResult(
             content=[TextContent(type="text", text="Found 1 note")],
-            structuredContent={
+            structured_content={
                 "results": [
                     {
                         "id": "Note.md",
@@ -82,7 +82,7 @@ async def test_mcp_tool_executes_remote_tool_and_adapts_result():
 
 
 def test_mcp_tool_uses_explicit_policy_override():
-    mcp_tool = McpTool(name="search", description="Search notes", inputSchema={"type": "object"})
+    mcp_tool = McpTool(name="search", description="Search notes", input_schema={"type": "object"})
     session = FakeMCPSession(CallToolResult(content=[]))
     policy = ToolPolicy(
         action=ToolAction.READ,
@@ -100,8 +100,8 @@ def test_mcp_tool_can_infer_read_policy_from_trusted_annotations():
     mcp_tool = McpTool(
         name="search",
         description="Search notes",
-        inputSchema={"type": "object"},
-        annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+        input_schema={"type": "object"},
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
     session = FakeMCPSession(CallToolResult(content=[]))
 
@@ -116,8 +116,8 @@ def test_mcp_tool_ignores_untrusted_annotations():
     mcp_tool = McpTool(
         name="search",
         description="Search notes",
-        inputSchema={"type": "object"},
-        annotations=ToolAnnotations(readOnlyHint=True),
+        input_schema={"type": "object"},
+        annotations=ToolAnnotations(read_only_hint=True),
     )
     session = FakeMCPSession(CallToolResult(content=[]))
 
@@ -149,7 +149,7 @@ def test_mcp_tool_preserves_complete_nested_schema():
     }
     tool = MCPTool(
         "notes",
-        McpTool(name="search", description="Search", inputSchema=input_schema),
+        McpTool(name="search", description="Search", input_schema=input_schema),
         FakeMCPSession(CallToolResult(content=[])),
     )
 
@@ -167,8 +167,8 @@ def test_mcp_tool_rejects_contradictory_trusted_annotations():
     mcp_tool = McpTool(
         name="erase",
         description="Erase",
-        inputSchema={"type": "object"},
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=True),
+        input_schema={"type": "object"},
+        annotations=ToolAnnotations(read_only_hint=True, destructive_hint=True),
     )
 
     with pytest.raises(ValueError, match="read-only and destructive"):
@@ -179,12 +179,12 @@ def test_mcp_tool_exposes_trusted_risk_annotations_in_metadata():
     mcp_tool = McpTool(
         name="publish",
         description="Publish",
-        inputSchema={"type": "object"},
+        input_schema={"type": "object"},
         annotations=ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=True,
         ),
     )
     tool = MCPTool("notes", mcp_tool, FakeMCPSession(CallToolResult(content=[])), trust_annotations=True)
@@ -203,7 +203,7 @@ async def test_mcp_tool_exception_returns_sanitized_typed_failure():
 
     tool = MCPTool(
         "notes",
-        McpTool(name="search", description="Search", inputSchema={"type": "object"}),
+        McpTool(name="search", description="Search", input_schema={"type": "object"}),
         FailingSession(),
     )
     result = await tool.execute(

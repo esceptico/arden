@@ -15,6 +15,17 @@ if (document.compatMode === undefined) {
   });
 }
 
+// Base UI now consults the browser's Web Animations API after a scroll-area
+// subtree settles. Happy DOM does not implement getAnimations yet; an empty
+// list is the faithful test-environment result because it has no animation
+// engine to report from.
+if (!Element.prototype.getAnimations) {
+  Object.defineProperty(Element.prototype, "getAnimations", {
+    configurable: true,
+    value: () => [],
+  });
+}
+
 // React's act() environment flag — every interaction test renders under act.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT ??= true;
 

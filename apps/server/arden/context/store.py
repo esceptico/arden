@@ -891,12 +891,12 @@ class SessionStore:
         area_id: str,
         *,
         name: str | object = _AREA_PATCH_UNSET,
-        default_cwd: str | None | object = _AREA_PATCH_UNSET,
-        instructions: str | None | object = _AREA_PATCH_UNSET,
-        knowledge_scope: str | None | object = _AREA_PATCH_UNSET,
-        page_path: str | None | object = _AREA_PATCH_UNSET,
-        page_id: str | None | object = _AREA_PATCH_UNSET,
-        autonomy: str | None | object = _AREA_PATCH_UNSET,
+        default_cwd: str | object | None = _AREA_PATCH_UNSET,
+        instructions: str | object | None = _AREA_PATCH_UNSET,
+        knowledge_scope: str | object | None = _AREA_PATCH_UNSET,
+        page_path: str | object | None = _AREA_PATCH_UNSET,
+        page_id: str | object | None = _AREA_PATCH_UNSET,
+        autonomy: str | object | None = _AREA_PATCH_UNSET,
         attention: str | object = _AREA_PATCH_UNSET,
         interrupts: str | object = _AREA_PATCH_UNSET,
         paused: bool | object = _AREA_PATCH_UNSET,
@@ -3608,7 +3608,7 @@ class SessionStore:
     async def list_sessions(
         self,
         limit: int = 20,
-        area_id: str | None | object = AREA_FILTER_UNSET,
+        area_id: str | object | None = AREA_FILTER_UNSET,
         include_agents: bool = True,
         offset: int = 0,
         newest_first: bool = True,
@@ -3727,7 +3727,7 @@ class SessionStore:
         around_seq: int | None = None,
         before_seq: int | None = None,
         after_seq: int | None = None,
-        area_id: str | None | object = AREA_FILTER_UNSET,
+        area_id: str | object | None = AREA_FILTER_UNSET,
     ) -> dict:
         if area_id is not AREA_FILTER_UNSET and not await self._session_matches_area(session_id, area_id):
             return {
@@ -3909,7 +3909,7 @@ class SessionStore:
         session_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
-        area_id: str | None | object = AREA_FILTER_UNSET,
+        area_id: str | object | None = AREA_FILTER_UNSET,
     ) -> dict:
         """Full-text search across transcript messages using SQLite FTS5.
 
@@ -3983,7 +3983,7 @@ class SessionStore:
             "snippet": (snippet if snippet is not None else (r["snippet"] or "")).strip(),
         }
 
-    async def _session_matches_area(self, session_id: str, area_id: str | None | object) -> bool:
+    async def _session_matches_area(self, session_id: str, area_id: str | object | None) -> bool:
         rows = await self.read_conn.execute_fetchall(
             "SELECT area_id FROM sessions WHERE session_id = ? LIMIT 1",
             (session_id,),

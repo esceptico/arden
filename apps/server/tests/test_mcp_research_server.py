@@ -47,7 +47,8 @@ async def test_mcp_server_exposes_structured_arden_research_tool():
     tools = await server.list_tools()
     result = await server.call_tool("arden_research", {"task": "research Dex integration"})
 
-    content, structured = result
+    content = result.content
+    structured = result.structured_content
     assert [tool.name for tool in tools] == ["arden_research"]
     assert runner.calls == [{"task": "research Dex integration", "depth": "normal"}]
     assert content[0].text.startswith("{")

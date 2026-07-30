@@ -462,7 +462,7 @@ class SessionService:
     async def list_sessions(
         self,
         limit: int = 20,
-        area_id: str | None | object = AREA_FILTER_UNSET,
+        area_id: str | object | None = AREA_FILTER_UNSET,
         include_agents: bool = True,
         offset: int = 0,
         newest_first: bool = True,
@@ -485,7 +485,7 @@ class SessionService:
         around_seq: int | None = None,
         before_seq: int | None = None,
         after_seq: int | None = None,
-        area_id: str | None | object = AREA_FILTER_UNSET,
+        area_id: str | object | None = AREA_FILTER_UNSET,
     ) -> dict:
         return await self.store.list_session_messages(
             session_id,
@@ -508,7 +508,7 @@ class SessionService:
         session_id: str | None = None,
         since: str | None = None,
         until: str | None = None,
-        area_id: str | None | object = AREA_FILTER_UNSET,
+        area_id: str | object | None = AREA_FILTER_UNSET,
     ) -> dict:
         return await self.store.search_messages(
             query,

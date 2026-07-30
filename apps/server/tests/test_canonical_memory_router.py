@@ -1,5 +1,6 @@
 """Canonical managed-wiki and fact HTTP contracts."""
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,7 +83,6 @@ def _client(tmp_path: Path) -> TestClient:
     async def project_wiki_state() -> None:
         projected.append(wiki.repository.head)
 
-    app = FastAPI()
     runtime = SimpleNamespace(
         connected=True,
         wiki_service=wiki,
@@ -94,7 +94,6 @@ def _client(tmp_path: Path) -> TestClient:
         projected_wiki_heads=projected,
         facts_connection=None,
     )
-    app.state.runtime = runtime
 
     async def open_facts() -> None:
         runtime.facts_connection = await connect(tmp_path / "facts.db")
@@ -105,15 +104,21 @@ def _client(tmp_path: Path) -> TestClient:
     async def close_facts() -> None:
         await runtime.facts_connection.close()
 
-    app.add_event_handler("startup", open_facts)
-    app.add_event_handler("shutdown", close_facts)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        await open_facts()
+        yield
+        await close_facts()
+
+    app = FastAPI(lifespan=lifespan)
+    app.state.runtime = runtime
     app.include_router(wiki_router)
     app.include_router(facts_router)
     return TestClient(app)
 
 
 def test_canonical_routes_are_registered_on_server_app() -> None:
-    paths = {route.path for route in server_app.routes}
+    paths = set(server_app.openapi()["paths"])
     assert {
         "/admin/wiki/pages",
         "/admin/wiki/pages/{page_id}",

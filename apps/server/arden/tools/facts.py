@@ -537,7 +537,7 @@ def _cursor_anchor(
     binding: str,
     snapshot: str,
     anchor_size: int,
-) -> tuple[str, ...] | None | ToolResult:
+) -> tuple[str, ...] | ToolResult | None:
     if cursor is None:
         return None
     try:

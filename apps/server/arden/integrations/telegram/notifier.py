@@ -1,22 +1,31 @@
 from typing import Self
 
 import aiohttp
-from telegramify_markdown import TextInterpreter, telegramify
+from telegramify_markdown import Text, telegramify
 
 from arden.notifiers.base import Notifier, NotifierContext
 
 _API_URL = "https://api.telegram.org/bot{token}/sendMessage"
-_MAX_WORD_COUNT = 3900
-_PARSE_MODE = "MarkdownV2"
+_MAX_MESSAGE_LENGTH = 3900
 
 
 async def _send(session: aiohttp.ClientSession, content: str, token: str, chat_id: str):
-    parts = await telegramify(content, interpreters_use=[TextInterpreter()], max_word_count=_MAX_WORD_COUNT)
-    chunks = [p.content for p in parts if p.content]  # text interpreter only returns text parts
+    parts = await telegramify(
+        content,
+        max_message_length=_MAX_MESSAGE_LENGTH,
+        min_file_lines=0,
+        render_mermaid=False,
+    )
 
     url = _API_URL.format(token=token)
-    for chunk in chunks:
-        payload = {"chat_id": chat_id, "text": chunk, "parse_mode": _PARSE_MODE}
+    for part in parts:
+        if not isinstance(part, Text) or not part.text:
+            continue
+        payload = {
+            "chat_id": chat_id,
+            "text": part.text,
+            "entities": [entity.to_dict() for entity in part.entities],
+        }
         async with session.post(url, json=payload) as resp:
             if resp.status == 200:
                 continue

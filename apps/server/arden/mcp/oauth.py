@@ -21,6 +21,7 @@ from mcp.client.auth.utils import (
 )
 from mcp.client.streamable_http import create_mcp_http_client
 from mcp.shared.auth import (
+    AuthorizationCodeResult,
     OAuthClientInformationFull,
     OAuthClientMetadata,
     OAuthMetadata,
@@ -253,7 +254,7 @@ def run_mcp_oauth(server_name: str, server_url: str, opts: OAuthOptions) -> None
         _logger.info("Opening browser for MCP OAuth (server=%r, port=%d)", server_name, port)
         webbrowser.open(url)
 
-    async def callback_handler() -> tuple[str, str | None]:
+    async def callback_handler() -> AuthorizationCodeResult:
         server.timeout = 5
         deadline = time.time() + LOGIN_TIMEOUT
         while not done.is_set():
@@ -267,7 +268,7 @@ def run_mcp_oauth(server_name: str, server_url: str, opts: OAuthOptions) -> None
             raise RuntimeError(f"OAuth failed: {code_result['error']}")
         if "code" not in code_result:
             raise RuntimeError("OAuth timed out — no authorization code received")
-        return (code_result["code"], code_result.get("state"))
+        return AuthorizationCodeResult(code=code_result["code"], state=code_result.get("state"))
 
     storage = MCPTokenStorage(server_name)
     storage.clear()
@@ -279,7 +280,6 @@ def run_mcp_oauth(server_name: str, server_url: str, opts: OAuthOptions) -> None
         storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
-        timeout=LOGIN_TIMEOUT,
     )
 
     loop = asyncio.new_event_loop()

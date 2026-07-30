@@ -227,7 +227,10 @@ def mcp_command(transport: str, host: str | None, port: int | None):
         api_key_hash=api_key_hash,
         public_url=f"http://{host}:{port}",
     )
-    server.run(transport=transport)
+    if transport == "streamable-http":
+        server.run(transport=transport, host=host, port=port)
+    else:
+        server.run(transport=transport)
 
 
 @observed_trace("cli", tags="cli")

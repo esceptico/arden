@@ -1,7 +1,7 @@
 from typing import Any, Protocol
 
-from mcp.types import CallToolResult, ToolAnnotations
-from mcp.types import Tool as McpTool
+from mcp_types import CallToolResult, ToolAnnotations
+from mcp_types import Tool as McpTool
 
 from arden.mcp.results import call_tool_result_to_tool_result, mcp_exception_result
 from arden.tools.core.base import Tool, ToolResult
@@ -61,7 +61,7 @@ class MCPTool(Tool):
             return mcp_exception_result(error, provider=self._server_name, tool_name=self._mcp_tool.name)
 
     def to_dict(self, name: str) -> dict:
-        input_schema = self._mcp_tool.inputSchema or {"type": "object"}
+        input_schema = self._mcp_tool.input_schema or {"type": "object"}
         schema: dict = {
             "name": name,
             "description": self.description,
@@ -73,12 +73,12 @@ class MCPTool(Tool):
 def _policy_from_annotations(annotations: ToolAnnotations | None, trusted: bool) -> ToolPolicy | None:
     if not trusted or annotations is None:
         return None
-    if annotations.readOnlyHint is True and annotations.destructiveHint is True:
+    if annotations.read_only_hint is True and annotations.destructive_hint is True:
         raise ValueError("Trusted MCP annotations cannot mark a tool as both read-only and destructive")
-    if annotations.readOnlyHint is True:
+    if annotations.read_only_hint is True:
         action = ToolAction.READ
         requires_approval = False
-    elif annotations.destructiveHint is True:
+    elif annotations.destructive_hint is True:
         action = ToolAction.WRITE
         requires_approval = True
     else:
@@ -89,7 +89,7 @@ def _policy_from_annotations(annotations: ToolAnnotations | None, trusted: bool)
         scope=ToolScope.EXTERNAL,
         requires_approval=requires_approval,
         permissions=frozenset({"mcp"}),
-        destructive=annotations.destructiveHint,
-        open_world=annotations.openWorldHint,
-        idempotent=annotations.idempotentHint,
+        destructive=annotations.destructive_hint,
+        open_world=annotations.open_world_hint,
+        idempotent=annotations.idempotent_hint,
     )

@@ -42,7 +42,7 @@ export { default as ChevronRight } from "@hugeicons/core-free-icons/ArrowRight01
 export { default as ChevronUp } from "@hugeicons/core-free-icons/ArrowUp01Icon";
 export { default as Circle } from "@hugeicons/core-free-icons/CircleIcon";
 export { default as CircleDotIcon } from "@hugeicons/core-free-icons/CircleDotIcon";
-export { default as CircleSlash2Icon } from "@hugeicons/core-free-icons/CircleSlash2Icon";
+export { default as CircleSlashTwoIcon } from "@hugeicons/core-free-icons/CircleSlashTwoIcon";
 export { default as Clock } from "@hugeicons/core-free-icons/Clock01Icon";
 export { default as CodeIcon } from "@hugeicons/core-free-icons/CodeIcon";
 export { default as ComputerTerminal01Icon } from "@hugeicons/core-free-icons/ComputerTerminal01Icon";

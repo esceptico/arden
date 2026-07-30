@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import os
 import secrets
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from arden.logging import get_logger
 
 _logger = get_logger(__name__)
 
-ARDEN_DIR = Path.home() / ".arden"
+ARDEN_DIR = Path(os.environ.get("ARDEN_DIR", str(Path.home() / ".arden"))).expanduser()
 
 
 def load_user_settings() -> dict:
