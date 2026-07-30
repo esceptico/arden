@@ -6,26 +6,29 @@ A local-first personal assistant. Not a coding agent: a place to keep the moving
 
 ![Arden](docs/images/main.png)
 
-Details, screenshots, and the API reference live in `docs/` and at **[docs.arden.io](https://docs.arden.io)**.
+Details, screenshots, and the API reference live in [`docs/`](docs/).
 
 ## Install
 
-```bash
-uv tool install arden    # or: pip install arden
-arden-server serve       # starts the backend, prints a one-time API key
-```
-
-The package doesn't include the desktop app. For that, use a source checkout:
+The desktop app and the supported development setup run from a source checkout:
 
 ```bash
-git clone https://github.com/esceptico/arden.git
+git clone https://github.com/esceptico/ntrp.git arden
 cd arden
+cp .env.example .env  # set one provider key, or connect in Desktop
 just install
 just server      # terminal 1
 just desktop     # terminal 2
 ```
 
-Paste the API key on first launch.
+Paste the API key printed by the server on first desktop launch.
+
+Server-only Docker deployment:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
 
 ## Commands
 
@@ -41,7 +44,7 @@ just check        # backend tests + desktop typecheck
 
 - `apps/server`: FastAPI backend, agent runtime, memory, areas, tools, integrations.
 - `apps/desktop`: Electron client.
-- `docs`: Public documentation and redesign mockups.
+- `docs`: Public documentation.
 
 ## License
 

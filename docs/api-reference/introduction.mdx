@@ -32,7 +32,7 @@ All endpoints return JSON. The event stream (`GET /chat/events/{session_id}`) us
 |-------|-----------|-------------|
 | [Chat](/api-reference/chat) | `GET /chat/events/{session_id}`, `POST /chat/message`, `POST /chat/background`, `POST /cancel` | SSE stream, messaging, background mode |
 | [Sessions](/api-reference/sessions) | `/session*`, `/sessions*` | Session management |
-| [Facts and Wiki](/api-reference/memory) | `/admin/facts*`, `/admin/wiki/pages*` | Read-only facts and versioned managed wiki pages |
+| [Facts and Wiki](/api-reference/memory) | `/admin/facts*`, `/admin/wiki/pages*` | Fact reads and pins; versioned managed wiki pages |
 | [Automations](/api-reference/automations) | `/automations*`, `/notifiers*` | Scheduled tasks, notifier configs |
 | [Config](/api-reference/config) | `/config*`, `/models*`, `/providers*`, `/services*`, `/directives` | Configuration, providers, models |
 | Health | `GET /health` | Server status (public) |
@@ -46,16 +46,24 @@ curl http://localhost:6877/health
 ```json
 {
   "status": "ok",
-  "version": "0.15.0"
+  "version": "1.0.0-rc.3",
+  "has_providers": true,
+  "outbox": {
+    "worker_running": true,
+    "pending": 0,
+    "ready": 0,
+    "running": 0,
+    "dead": 0
+  },
+  "config_version": 1,
+  "config_loaded_at": "2026-07-30T12:00:00+00:00"
 }
 ```
 
-Pass a Bearer token to also verify authentication:
+Pass a Bearer token to add an `auth` result:
 
 ```json
 {
-  "status": "ok",
-  "version": "0.15.0",
   "auth": true
 }
 ```

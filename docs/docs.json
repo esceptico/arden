@@ -38,6 +38,7 @@
               "integrations/models",
               "integrations/gmail",
               "integrations/calendar",
+              "integrations/google-drive",
               "integrations/slack",
               "integrations/mcp"
             ]
@@ -79,7 +80,7 @@
       "anchors": [
         {
           "anchor": "GitHub",
-          "href": "https://github.com/esceptico/arden",
+          "href": "https://github.com/esceptico/ntrp",
           "icon": "github"
         }
       ]
@@ -101,7 +102,7 @@
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/esceptico/arden"
+      "github": "https://github.com/esceptico/ntrp"
     }
   }
 }

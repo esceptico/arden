@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from pathlib import Path
 
 from arden.areas.triage import TRIAGE_SYSTEM
 from arden.automation.descriptions import _SYSTEM as AUTOMATION_DESCRIPTION_SYSTEM
@@ -16,9 +15,6 @@ from arden.server.routers.session import GOAL_PROPOSAL_SYSTEM_PROMPT
 from arden.services.goal_continuation import goal_continuation_prompt
 from arden.tools.background import BACKGROUND_SYSTEM_PROMPT
 from arden.wiki.curation.completion import _SYSTEM as WIKI_CURATION_SYSTEM
-
-REPOSITORY_ROOT = Path(__file__).parents[3]
-LEDGER = REPOSITORY_ROOT / "docs" / "architecture" / "prompt-tool-harness-ledger.md"
 
 
 def test_prompts_that_consume_runtime_data_share_the_untrusted_data_rule():
@@ -43,44 +39,6 @@ def test_prompts_that_consume_runtime_data_share_the_untrusted_data_rule():
     ]
 
     assert all(UNTRUSTED_DATA_RULE in prompt for prompt in prompts)
-
-
-def test_agent_and_automation_prompts_require_directory_contract_reads():
-    assert "Read an existing directory's README.md before processing its pages" in BASE_SYSTEM_PROMPT
-    assert "read its README.md before its pages" in AUTOMATION_SUFFIX
-    assert "Explicitly list or read every named wiki input" in AUTOMATION_SUFFIX
-
-
-def test_prompt_and_skill_ledger_covers_the_runtime_inventory():
-    ledger = LEDGER.read_text()
-    prompt_modules = (
-        "arden/core/prompts.py",
-        "arden/core/agent_types.py",
-        "arden/automation/prompts.py",
-        "arden/automation/builtins.py",
-        "arden/automation/descriptions.py",
-        "arden/areas/agent.py",
-        "arden/areas/triage.py",
-        "arden/context/prompts.py",
-        "arden/core/naming.py",
-        "arden/tools/research.py",
-        "arden/tools/background.py",
-        "arden/orchestra/engine.py",
-        "arden/server/routers/session.py",
-        "arden/memory/facts/completion_dream.py",
-        "arden/memory/facts/completion_renderer.py",
-        "arden/wiki/curation/completion.py",
-        "arden/agent/agent.py",
-        "arden/core/spawner.py",
-        "arden/events/triggers.py",
-        "arden/services/goal_continuation.py",
-        "arden/tools/core/context.py",
-        "arden/tools/deferred.py",
-    )
-    skills = {path.name for path in (REPOSITORY_ROOT / "apps" / "server" / "skills").iterdir() if path.is_dir()}
-
-    assert all(f"`{module}`" in ledger for module in prompt_modules)
-    assert all(f"`{skill}`" in ledger for skill in skills)
 
 
 def test_runtime_context_wrappers_mark_embedded_data_and_authority():

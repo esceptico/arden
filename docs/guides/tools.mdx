@@ -1,13 +1,16 @@
 ---
 title: "Tools"
-description: "All tools available to the Arden agent."
+description: "Core tools and integration capabilities available to the Arden agent."
 ---
 
 ## Overview
 
 Tools are capabilities the agent can invoke during a conversation. Some tools require your approval before executing (marked with 🔒).
 
-Some tool schemas are **deferred**. Deferred tools are known to the agent, but their full schemas are hidden until the agent calls `load_tools`. This keeps the prompt smaller and avoids carrying Gmail, calendar, Slack, MCP, automation, background, notification, and directive tools in every turn. Loading a tool only makes it callable on the next model step; it does not execute the tool or bypass approvals.
+Some tool schemas are **deferred**. The active harness exposes either
+`load_tools` or native `tool_search` as the loader and names the required call
+in the system prompt. Loading only makes a schema callable on the next model
+step; it does not execute the tool or bypass approvals.
 
 ## System & files
 
@@ -18,9 +21,12 @@ Some tool schemas are **deferred**. Deferred tools are known to the agent, but t
 | `write_file` / `edit_file` | Create or modify local files | 🔒 |
 | `current_time` | Get current date and time | — |
 | `research` | Spawn a research agent with all read-only tools (`depth`: quick/normal/deep) | — |
+| `workflow` | Run a curated built-in multi-agent workflow | — |
 | `background` | Spawn an autonomous background agent for long-running tasks | — |
 | `render_html` | Render a sandboxed rich card in desktop chat (`display` or `input` mode) | — |
 | `load_tools` | Load deferred tool schemas by group or exact name | — |
+| `tool_search` | Find and load exact deferred tools in native-search runs | — |
+| `request_connection` | Ask you to connect one required registered integration | — |
 | `set_directives` | Set persistent behavioral directives injected into the system prompt | 🔒 |
 
 File write tools and `set_directives` are deferred. The `background` tool can start new background work immediately; the `background` deferred group is only for listing, reading, or canceling existing background tasks.
@@ -50,6 +56,21 @@ Deferred group: `calendar`.
 | `create_calendar_event` | Create an event | 🔒 |
 | `edit_calendar_event` | Edit an event | 🔒 |
 | `delete_calendar_event` | Delete an event | 🔒 |
+
+## Google Drive
+
+Requires Google Drive to be connected.
+
+Deferred group: `google_drive`.
+
+| Tool | Description | Approval |
+|------|-------------|----------|
+| `search_google_drive` | Search Docs and Sheets | — |
+| `read_google_doc` | Read a Google Doc | — |
+| `read_google_sheet` | Read a bounded A1 range | — |
+| `create_google_doc` / `create_google_sheet` | Create an empty document or sheet | 🔒 |
+| `edit_google_doc` | Append to or replace exact text | 🔒 |
+| `update_google_sheet` / `append_google_sheet_rows` | Write cells or append rows | 🔒 |
 
 ## Facts
 
@@ -85,6 +106,7 @@ This group is deferred: load it with `load_tools(group="wiki")`.
 | `create_wiki_page` | Create one common page at an exact path and repository head. | 🔒 |
 | `edit_wiki_page` | Replace one page body at an exact page version and repository head. | 🔒 |
 | `archive_wiki_page` | Recoverably archive one page at an exact version and head. | 🔒 |
+| `move_wiki_page` | Move or rename one page and rewrite its wiki links atomically. | 🔒 |
 | `publish_wiki_generated` | Update only an existing page's generated region using its exact version and repository head. | 🔒 |
 
 ## Web
@@ -124,6 +146,7 @@ Deferred group: `automations`.
 | `create_automation` | Schedule a task | 🔒 |
 | `create_loop` | Start an in-chat recurring loop | 🔒 |
 | `schedule_wakeup` | Schedule a one-off wakeup into the current session | 🔒 |
+| `loop_done` | Stop the current loop after its completion condition is met | 🔒 |
 | `list_automations` | List all automations | — |
 | `update_automation` | Modify an automation | 🔒 |
 | `delete_automation` | Remove an automation | 🔒 |
@@ -141,6 +164,17 @@ Deferred group: `automations`.
 | `create_session` | Create a new chat/channel session | — |
 | `list_recent_sessions` / `read_session` / `search_transcripts` | Inspect readable chat history | — |
 | `send_message` | Message a chat, or steer an agent you spawned | 🔒 (chats only) |
+
+## App control
+
+Available only when the active session has app-control capability.
+
+| Tool | Description | Approval |
+|------|-------------|----------|
+| `rename_session` | Rename a chat or agent session | 🔒 |
+| `archive_session` | Archive finished sessions | 🔒 |
+| `request_attention` | Add a needs-you item to Home | 🔒 |
+| `open_in_app` | Open a supported resource in the desktop app | 🔒 |
 
 These are mostly internal coordination tools. The desktop app exposes the visible results as todos, channels, session history, and status updates.
 
@@ -217,6 +251,7 @@ Follow the same sequence for source-of-truth work: **search → inspect → prev
 | Tool | Description | Approval |
 |------|-------------|----------|
 | `use_skill` | Activate a skill for specialized instructions | — |
+| `create_skill` | Save an approved reusable global skill | 🔒 |
 
 Obsidian should be connected as an MCP server and loaded with `load_tools(group="mcp:obsidian")` when needed.
 

@@ -3,33 +3,16 @@ title: "Google Calendar"
 description: "Connect Google Calendar to view, create, and manage events."
 ---
 
-## Recommended setup
+## Connect
 
-Google Calendar uses the same Google OAuth credentials flow as Gmail. The easiest path is the desktop setup assistant:
+1. In Google Cloud, enable the **Google Calendar API** and create OAuth
+   credentials for a **Desktop app**.
+2. Put the credentials at `~/.arden/gmail_credentials.json`, or import them
+   with the setup assistant in **Settings → Integrations**.
+3. Open the **Google Calendar** card and click **Connect**. Arden opens a local
+   browser consent flow and stores an account-specific token under `~/.arden/`.
 
-<Steps>
-
-### Open Integrations settings
-
-Go to **Settings → Integrations → Gmail / Google Calendar**.
-
-### Run the setup assistant
-
-Click **Run setup assistant** and choose either:
-
-- **Calendar only** — Calendar tools without Gmail
-- **Email + Calendar** — Gmail and Calendar tools together
-- **All current Google services** — legacy full arden scope set, including Pub/Sub
-
-### Enable the Calendar API
-
-In the Google Cloud project used for your OAuth Desktop app credentials, enable the **Google Calendar API**.
-
-### Import credentials and add account
-
-Import/paste your Google OAuth Desktop app credentials in the assistant, then click **Add account**. Arden opens the local browser OAuth flow and saves a token under `~/.arden/`.
-
-</Steps>
+Use **Add account** to connect another Google account.
 
 ## Manual setup
 
@@ -39,19 +22,18 @@ Use the same credentials file as Gmail:
 ~/.arden/gmail_credentials.json
 ```
 
-Enable Calendar:
+With the server running, connect and enable Calendar:
 
 ```bash
-export ARDEN_CALENDAR=true
-```
-
-Then add an account from desktop settings, or call:
-
-```bash
-curl -X POST http://localhost:6877/gmail/add \
+curl -X POST http://localhost:6877/google/calendar/connect \
   -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"service_choice":"calendar"}'
+  -d '{}'
+
+curl -X PATCH http://localhost:6877/config \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"integrations":{"calendar":true}}'
 ```
 
 ## Available tools
@@ -66,7 +48,7 @@ curl -X POST http://localhost:6877/gmail/add \
 ## Troubleshooting
 
 - **API not enabled / 403** — enable the Google Calendar API in the OAuth project's API library.
-- **Missing scope** — re-run setup with **Calendar only**, **Email + Calendar**, or **All current Google services**.
+- **Missing scope** — disconnect and reconnect Google Calendar.
 - **Testing app access denied** — add your Google account as an OAuth test user.
 
 ## Event-driven automations

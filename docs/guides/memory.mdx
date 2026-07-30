@@ -39,9 +39,9 @@ substantive prompt, it may also receive a small set of relevant indexed wiki
 pages.
 
 The agent can browse the managed wiki by directory, read one page by an exact
-ID, path, title, or alias, inspect links, create common pages, replace a page
-body, and recoverably archive a page. Writes require the exact repository head
-and page version from a fresh read.
+ID, path, title, or alias, inspect links, create common pages, replace or move a
+page, and recoverably archive it. Writes require the exact repository head and
+page version from a fresh read.
 
 Scheduled automations can use those generic writes only below `automations/`.
 Interactive agents can write other ordinary pages after approval.
@@ -53,8 +53,8 @@ repository head; it cannot overwrite user-managed prose.
 ## Desktop and API
 
 The desktop Memory view reads managed wiki pages and the facts they cite. The
-[Facts and Wiki API](/api-reference/memory) exposes read-only fact access and
-versioned wiki-page management for administrative clients.
+[Facts and Wiki API](/api-reference/memory) supports fact reads, batch reads,
+explicit user pins, and versioned wiki-page management.
 
 ## Agent tools
 

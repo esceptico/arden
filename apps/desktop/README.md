@@ -6,7 +6,7 @@ It provides:
 
 - chat over the server's SSE stream
 - tool approval cards and activity traces
-- memory browsing/editing views with Memory, Graph, and Lenses tabs
+- managed wiki browsing/editing with links, records, history, and maintenance review
 - sandboxed HTML widgets rendered from the agent's `render_html` tool
 - local server URL/API key storage; API keys use Electron `safeStorage` when supported by the OS
 
@@ -16,7 +16,7 @@ Start the backend first and keep the one-time API key it prints:
 
 ```bash
 cd ../server
-uv sync --extra dev
+uv sync --locked --group dev
 uv run arden-server serve
 ```
 
@@ -27,7 +27,7 @@ bun install
 bun run dev
 ```
 
-Use Node `^20.19.0` or `>=22.12.0` for Vite 7. The checked-in `.node-version` pins `22.12.0` for local version managers.
+Use Node `^20.19.0` or `>=22.12.0`. The checked-in `.node-version` pins `22.12.0` for local version managers.
 
 The app connects to `http://localhost:6877` by default and asks for the server API key on first launch.
 

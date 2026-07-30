@@ -19,6 +19,7 @@ wheels/
 .features/
 .superpowers/
 .worktrees/
+.local/
 .arden-tmp/
 docs/internal/sandbox/
 data/

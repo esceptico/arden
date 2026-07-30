@@ -5,7 +5,7 @@ description: "Canonical admin APIs for durable facts and managed wiki pages."
 
 The canonical memory surface has two resources:
 
-- `/admin/facts` provides read-only access to the fact ledger.
+- `/admin/facts` reads the fact ledger and accepts explicit user pins.
 - `/admin/wiki/pages` manages versioned wiki pages.
 
 All endpoints require the usual Bearer token. See [Authentication](/api-reference/authentication).
@@ -27,8 +27,31 @@ curl "http://localhost:6877/admin/facts/search?query=coffee&limit=20" \
 Responses contain `facts`, `total`, `has_more`, and `next_after`. Read one fact
 with `GET /admin/facts/{fact_id}`; its response contains `fact`.
 
-Facts are managed by their owning workflows. This API does not create, edit, or
-delete them.
+### Pin
+
+`POST /admin/facts` persists one explicit user pin. Send a stable `request_id`
+to make retries idempotent:
+
+```bash
+curl -X POST http://localhost:6877/admin/facts \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"request_id":"result-2026-07-30-1","text":"Keep this result."}'
+```
+
+Other fact changes use the plan-and-commit agent tools rather than generic
+HTTP mutation endpoints.
+
+### Batch read
+
+`POST /admin/facts/batch` reads up to the server's batch limit in one request:
+
+```bash
+curl -X POST http://localhost:6877/admin/facts/batch \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"fact_ids":["fact_1","fact_2"]}'
+```
 
 ## Wiki pages
 
@@ -40,8 +63,10 @@ delete them.
 - `GET /admin/wiki/pages/{page_id}/diff` returns a diff. It accepts optional `base`, `target`, `offset`, `limit`, and `tail`.
 - `GET /admin/wiki/pages/{page_id}/links` returns outgoing links and backlinks.
 
-Page responses include `page_id`, `path`, `title`, `aliases`, `lifecycle`,
-`redirect_to`, `metadata`, `version`, and `repository_head`.
+Page responses include `page_id`, `path`, `resource_state`, `title`, `excerpt`,
+`aliases`, `lifecycle`, `redirect_to`, `metadata`, `version`,
+`repository_head`, `created_at`, and `updated_at`. Detail responses also include
+`content`.
 
 ### Create
 

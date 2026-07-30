@@ -3,52 +3,17 @@ title: "Gmail"
 description: "Connect Gmail to read, search, and send emails."
 ---
 
-## Recommended setup
+## Connect
 
-The easiest path is the desktop setup assistant:
+1. In [Google Cloud Console](https://console.cloud.google.com), enable the
+   **Gmail API**, configure the OAuth consent screen, and create OAuth
+   credentials for a **Desktop app**.
+2. Import the downloaded JSON with the setup assistant in **Settings →
+   Integrations**. Arden stores it as `~/.arden/gmail_credentials.json`.
+3. Open the **Gmail** card and click **Connect**. Arden opens a local browser
+   consent flow and saves an account-specific token under `~/.arden/`.
 
-<Steps>
-
-### Open Integrations settings
-
-In the desktop app, go to **Settings → Integrations → Gmail / Google Calendar**.
-
-### Run the setup assistant
-
-Click **Run setup assistant**.
-
-Choose the Google services you want:
-
-- **Email only** — Gmail read/send scopes
-- **Email + Calendar** — Gmail read/send plus Calendar
-- **Calendar only** — Calendar without Gmail tools
-- **All current Google services** — legacy full arden scope set, including Pub/Sub
-
-### Create Google OAuth credentials
-
-The assistant walks you through Google Cloud setup. In short:
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create or select a project
-3. Enable the **Gmail API**
-4. Configure the OAuth consent screen
-5. Create an OAuth 2.0 client with application type **Desktop app**
-6. Download the credentials JSON
-
-### Import credentials
-
-Use the assistant to either:
-
-- Select/import the downloaded credentials file by path, or
-- Paste the credentials JSON directly
-
-arden saves the normalized credentials to `~/.arden/gmail_credentials.json`.
-
-### Add account
-
-Click **Add account**. Arden opens a local browser OAuth consent flow and saves the token under `~/.arden/`.
-
-</Steps>
+Use **Add account** to connect another Google account.
 
 ## Manual setup
 
@@ -58,19 +23,18 @@ If you do not use the desktop assistant, place your Google OAuth Desktop app cre
 ~/.arden/gmail_credentials.json
 ```
 
-Then enable Gmail:
+With the server running, connect and enable Gmail:
 
 ```bash
-export ARDEN_GMAIL=true
-```
-
-Start the server and desktop app, then add the account from **Settings → Integrations** or call:
-
-```bash
-curl -X POST http://localhost:6877/gmail/add \
+curl -X POST http://localhost:6877/google/gmail/connect \
   -H "Authorization: Bearer $ARDEN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"service_choice":"email"}'
+  -d '{}'
+
+curl -X PATCH http://localhost:6877/config \
+  -H "Authorization: Bearer $ARDEN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"integrations":{"gmail":true}}'
 ```
 
 ## Google verification note
@@ -81,7 +45,6 @@ arden currently uses **bring-your-own Google OAuth credentials**. Gmail scopes s
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ARDEN_GMAIL` | `false` | Enable Gmail integration |
 | `ARDEN_GMAIL_DAYS` | `30` | Days of email history to index |
 
 ## Available tools
@@ -91,14 +54,16 @@ arden currently uses **bring-your-own Google OAuth credentials**. Gmail scopes s
 | `emails` | Search and list emails by date or query |
 | `read_email` | Get full email content by ID |
 | `send_email` | Send an email (requires approval) |
+| `reply_email` | Reply in an existing thread (requires approval) |
 
 ## Troubleshooting
 
 - **Missing credentials** — import a Google OAuth Desktop app JSON; Web application credentials are rejected.
 - **Access denied / test user** — if your OAuth app is still in Testing mode, add your Google account as a test user.
 - **API not enabled / 403** — enable the Gmail API in the same Google Cloud project.
-- **Missing scope** — re-run setup and choose a service option that includes the needed Gmail scope.
+- **Missing scope** — disconnect and reconnect Gmail.
 
 ## Multiple accounts
 
-Add more accounts from the desktop Integrations tab, or call `/gmail/add` again. Tokens are saved as account-specific files such as `gmail_token_<email>.json`.
+Add more accounts from the Gmail card. Tokens are stored per account and
+service under `~/.arden/`.

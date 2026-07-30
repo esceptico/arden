@@ -1,25 +1,34 @@
 ---
 title: "Skills"
-description: "Installable commands that extend Arden's capabilities."
+description: "Reusable playbooks that guide Arden through specialized work."
 ---
 
 ## Overview
 
-Skills are user-facing commands that add new functionality to arden. They're distinct from tools — skills are invoked with `/skill-name` in chat and can orchestrate multiple tool calls.
+Skills are reusable instructions, distinct from executable tools. Invoke one with
+`/skill-name` in chat; Arden loads its `SKILL.md` before working on the request.
 
 ## Builtin skills
 
-| Skill | Description |
-|-------|-------------|
-| `/add-model` | Register a custom LLM endpoint interactively |
-| `/add-skill` | Create or remove a user skill |
-| `/add-tool` | Create a user-defined tool |
+| Skill | Use |
+|-------|-----|
+| `/add-model` | Register an OpenAI-compatible chat or embedding model |
+| `/add-skill` | Create or remove a project or user skill |
+| `/add-tool` | Scaffold a user-defined Python tool |
+| `/audit`, `/investigate`, `/panel`, `/implement` | Run a curated multi-agent workflow through `workflow` |
+| `/loop` | Schedule repeated work in the current chat |
+| `/mermaid` | Return a renderable Mermaid diagram |
+| `/propose-automation`, `/propose-skill` | Propose a reusable automation or skill from this chat |
+| `/wiki-automation` | Create an automation that writes managed wiki output |
+
+The four workflow skills are trusted built-ins only; user-authored Python
+workflow presets do not run.
 
 ## Skill locations
 
-Skills are discovered from six locations (in order):
+Skills are discovered in this order; the first matching name wins:
 
-1. `apps/server/skills/` — builtin skills when developing from source; packaged as `skills/` in installed builds
+1. `apps/server/skills/` — built-ins when developing from source; packaged as `skills/` in installed builds
 2. `agent/skills/` — filesystem-agent skills
 3. `.agents/skills/` — project skills shared with agent clients
 4. `.skills/` — arden project-level skills (per-directory)
@@ -45,7 +54,7 @@ Install the skill from github.com/user/repo/my-skill
 
 ## Creating a skill
 
-A skill is a directory containing at minimum a `SKILL.md` file:
+A skill is a directory containing at minimum `SKILL.md`:
 
 ```
 my-skill/
@@ -55,7 +64,8 @@ my-skill/
 
 The `SKILL.md` tells the agent what the skill does and how to execute it. The agent follows these instructions when the user invokes `/my-skill`.
 
-Restart the server after creating a skill manually so the registry rescans builtin skills, `agent/skills/`, `.agents/skills/`, `.skills/`, `~/.arden/skills/`, and `~/.agents/skills/`. Skills installed through the API are reloaded automatically.
+Restart the server after creating a skill manually. Skills installed through the
+API reload automatically.
 
 ## Governance
 
@@ -65,11 +75,13 @@ Optional governance fields:
 
 | Field | Meaning |
 |-------|---------|
-| `source` | Where the skill came from, such as `github:owner/repo/path` or `local`. |
+| `source` | Where the skill came from, such as `github:owner/repo/path` or `local` |
 | `version` | Version, date, commit, or release label reviewed by the user. |
 | `reviewed_at` | ISO date for the last human review. |
 
-`GET /skills/governance` returns inventory, validation issues, and cleanup candidates. Cleanup candidates are read-only recommendations; Arden does not remove skills unless the user explicitly uses the remove action.
+`GET /skills/governance` returns inventory, validation issues, and cleanup
+candidates. Cleanup candidates are recommendations only; Arden removes a skill
+only through the explicit delete action.
 
 ## Managing skills
 

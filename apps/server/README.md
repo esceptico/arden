@@ -8,14 +8,14 @@ It provides:
 - FastAPI HTTP/SSE server
 - agent runtime and multi-agent tooling
 - integrations and deferred tool loading
-- persistent memory records, search, lens/admin APIs, and desktop admin surfaces
+- canonical facts, managed wiki pages, search, areas, and admin APIs
 - builtin skills and user-tool loading
 - sandboxed `render_html` widget tool support for interactive desktop clients
 
 Run from source:
 
 ```bash
-uv sync --extra dev
+uv sync --locked --group dev
 uv run arden-server serve
 ```
 
@@ -25,4 +25,4 @@ Run tests:
 uv run pytest
 ```
 
-Repository and full documentation: https://github.com/esceptico/arden
+Repository and full documentation: https://github.com/esceptico/ntrp

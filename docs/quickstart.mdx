@@ -11,24 +11,14 @@ description: "Get arden running locally."
 
 ## Install
 
-<Note>
-`uv tool install arden` installs the backend CLI. The Electron desktop app currently runs from a source checkout.
-</Note>
+Arden currently runs from a source checkout:
 
-<Tabs>
-  <Tab title="Backend package">
-    ```bash
-    uv tool install arden    # or: pip install arden
-    ```
-  </Tab>
-  <Tab title="From source">
-    ```bash
-    git clone https://github.com/esceptico/arden.git
-    cd arden
-    just install
-    ```
-  </Tab>
-</Tabs>
+```bash
+git clone https://github.com/esceptico/ntrp.git arden
+cd arden
+cp .env.example .env
+just install
+```
 
 ## Set up
 
@@ -36,13 +26,13 @@ description: "Get arden running locally."
 
 ### Set your LLM provider
 
-You can export a provider API key now, or configure a provider interactively in the desktop app after connecting.
+Set one provider key in `.env`, or configure a provider in the desktop app after connecting.
 
 ```bash
-# Pick one, or skip and configure from the desktop app:
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
-export GEMINI_API_KEY=...
+# Edit .env and uncomment one:
+ANTHROPIC_API_KEY=sk-ant-...
+# OPENAI_API_KEY=sk-...
+# GEMINI_API_KEY=...
 ```
 
 If you want to use an OpenAI subscription/account instead of an API key, skip the key export and choose **OpenAI Codex** in provider onboarding. Arden opens a browser sign-in and stores refreshable OAuth tokens in `~/.arden/openai-codex-auth.json`.
@@ -50,17 +40,20 @@ If you want to use an OpenAI subscription/account instead of an API key, skip th
 ### Start the server
 
 <Tabs>
-  <Tab title="Installed backend">
-    ```bash
-    arden-server serve
-    ```
-  </Tab>
   <Tab title="From source">
     ```bash
     just server
     ```
   </Tab>
+  <Tab title="Docker">
+    ```bash
+    docker compose up --build
+    ```
+  </Tab>
 </Tabs>
+
+Compose publishes the server only on `127.0.0.1` and persists Arden state in
+the `arden-data` volume.
 
 On first run, arden generates an API key and prints it:
 
@@ -69,7 +62,7 @@ Your API key: nBx7k2...
 Enter this in a desktop client to connect. It won't be shown again.
 ```
 
-<Warning>Copy this key — it's only shown once. Use `arden-server serve --reset-key` to generate a new one.</Warning>
+<Warning>Copy this key — it's only shown once. Use `uv run --project apps/server arden-server serve --reset-key` to generate a new one.</Warning>
 
 ### Start the desktop app
 
@@ -91,7 +84,8 @@ Paste your API key in the connection screen. If no LLM provider is configured, p
 
 ### Connect integrations
 
-Open **Settings → Integrations** for Gmail/Google Calendar and Slack, or **Settings → MCP** for MCP servers. Use **Run setup assistant** for guided Google credentials, Slack token verification, and MCP JSON import.
+Open **Settings → Integrations** to connect Gmail, Google Calendar, Google
+Drive, or Slack. Use **Settings → MCP** for MCP servers.
 
 </Steps>
 

@@ -16,8 +16,8 @@ curl http://localhost:6877/config \
   "model_roles": {
     "research": {"model": "claude-sonnet-4-6", "reasoning_effort": null},
     "workflow": {"model": "claude-sonnet-4-6", "reasoning_effort": null},
-    "auxiliary": {"model": "claude-haiku-4-5", "reasoning_effort": null},
-    "memory": {"model": "claude-haiku-4-5", "reasoning_effort": null}
+    "auxiliary": {"model": "claude-sonnet-4-6", "reasoning_effort": null},
+    "memory": {"model": "claude-sonnet-4-6", "reasoning_effort": null}
   },
   "embedding_model": "text-embedding-3-small",
   "integrations": {
@@ -133,7 +133,7 @@ curl -X DELETE http://localhost:6877/providers/openai \
 
 ## Services
 
-External service integrations (Exa web search, Telegram).
+External service credentials, including Exa, Telegram, and Slack tokens.
 
 ### List services
 

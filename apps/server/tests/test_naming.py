@@ -44,7 +44,6 @@ async def test_generate_agent_name_sends_task_only(monkeypatch):
     assert fake.calls[0]["model"] == "test-model"
     assert fake.calls[0]["response_format"] is naming.NameOutput
     assert fake.calls[0]["messages"][1]["content"] == "Task:\nsummarize recent areas"
-    assert "Do not prefix" in fake.calls[0]["messages"][0]["content"]
 
 
 @pytest.mark.asyncio

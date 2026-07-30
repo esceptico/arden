@@ -6,10 +6,10 @@ This is the sole normative human-readable contract for the ARDEN desktop interfa
 
 - `PRODUCT.md`: users, product purpose, and product-level principles.
 - `DESIGN.md`: design intent and rules.
-- `docs/mockups/board-surfaces.css`: raw surface colors and paired elevation recipes only.
-- `docs/mockups/board-system.css`: semantic tokens and shared static primitives.
-- `docs/mockups/board-motion.js`: motion values, geometry measurement, and interaction controllers.
-- Page mockups: composition and product-specific content only.
+- `apps/desktop/src/design/base.css`: canonical surface, elevation, geometry, and shared CSS primitives.
+- `apps/desktop/src/design/tokens.css`: production aliases and Tailwind token bridge.
+- `apps/desktop/src/lib/boardMotionEngine.js`: runtime motion, geometry, and interaction controllers.
+- Feature styles: composition and product-specific content only.
 
 If two sources disagree, fix the lower source. Do not add a local override to preserve the disagreement.
 
@@ -53,7 +53,7 @@ Elevated surfaces use their paired shadow. Do not add a decorative border around
 
 ## Geometry and layout
 
-- Shared dimensions, radii, breakpoints, and insets belong in `board-system.css`.
+- Shared dimensions, radii, breakpoints, and insets belong in `apps/desktop/src/design/base.css`.
 - Page files may set composition with shared tokens but may not redeclare those tokens.
 - Standard radius roles: shell, surface, row, control, tag, and mark. Pills are for compact controls, not arbitrary cards.
 - One element owns scrolling in each region. Body/root scroll must remain off for fixed-window workspaces.
@@ -122,7 +122,7 @@ The shared overlay order is shell/sticky, popover, peek, scrim, sheet, nested po
 
 Motion communicates state change. No bounce or elastic easing.
 
-- Shared durations, curves, distances, blur, springs, and controllers live in `board-motion.js`.
+- Shared motion values live in `apps/desktop/src/lib/tokens/motion.ts`; controllers live in `apps/desktop/src/lib/boardMotionEngine.js`.
 - Page files use shared controllers and CSS variables; they contain no local durations, cubic-beziers, or direct Web Animations calls.
 - Entering content may settle; exits are quicker tweens. Both remain interruptible.
 - Blur means continuous defocus and never snaps on or off.
@@ -159,7 +159,7 @@ Before a surface is complete, verify:
 1. Search for the primitive or token before creating one.
 2. Fix the shared class or controller, then verify every consumer.
 3. Add a failing regression before changing behavior.
-4. Keep `docs/mockups/REDESIGN_LEDGER.md` current with evidence.
+4. Keep this contract and behavioral regressions current with implementation evidence.
 5. Treat browser rendering as required evidence for visual completion; static source checks prove contracts, not pixels.
 
 ## Rejected patterns

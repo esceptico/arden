@@ -1,0 +1,43 @@
+---
+title: "Google Drive"
+description: "Connect Google Drive to search and work with Docs and Sheets."
+---
+
+## Connect
+
+1. In Google Cloud, enable the **Google Drive API**, **Google Docs API**, and
+   **Google Sheets API** for your OAuth project.
+2. Put OAuth Desktop app credentials at
+   `~/.arden/gmail_credentials.json`, or import them with the setup assistant in
+   **Settings → Integrations**.
+3. Open the **Google Drive** card and click **Connect**. Arden opens the local
+   browser OAuth flow and stores an account-specific token under `~/.arden/`.
+
+Use **Add account** to connect another Google account.
+
+## Available tools
+
+Deferred group: `google_drive`.
+
+| Tool | Description |
+|------|-------------|
+| `search_google_drive` | Search connected Google Docs and Sheets |
+| `read_google_doc` | Read a Google Doc by qualified reference |
+| `read_google_sheet` | Read a bounded A1 range |
+| `create_google_doc` | Create an empty Google Doc (requires approval) |
+| `edit_google_doc` | Append to or replace exact text (requires approval) |
+| `create_google_sheet` | Create an empty Google Sheet (requires approval) |
+| `update_google_sheet` | Replace values in an A1 range (requires approval) |
+| `append_google_sheet_rows` | Append rows to a range (requires approval) |
+
+Mutating tools require an `idempotency_key`. Create and populate are separate
+operations, so a retry cannot duplicate content silently.
+
+## Troubleshooting
+
+- **Missing credentials** — use OAuth credentials for a Google **Desktop app**.
+- **API not enabled / 403** — enable Drive, Docs, and Sheets APIs in the same
+  Google Cloud project.
+- **Access denied / test user** — add your account as a test user while the
+  OAuth app remains in Testing mode.
+- **Missing scope** — disconnect and reconnect Google Drive.

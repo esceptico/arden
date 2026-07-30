@@ -1,1 +1,0 @@
-"""Hermetic eval scenarios."""

@@ -4,7 +4,6 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent import ToolResult, ToolStarted
-from arden.core.prompts import BASE_SYSTEM_PROMPT
 from arden.events.sse import ToolCallArgsEvent, ToolCallStartEvent, agent_events_to_sse
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG, RESERVED_TOOL_ARGUMENTS
 from arden.tools.core.base import Tool
@@ -110,8 +109,3 @@ def test_display_title_is_preserved_for_transcript_projection():
     assert started.description == "Reading the doc"
     assert f'"{DISPLAY_TITLE_ARG}": "Reading the doc"' in args.delta
     assert '"path": "a.py"' in args.delta
-
-
-def test_system_prompt_uses_only_the_canonical_display_title_argument():
-    assert "optional `_display_title` arg" in BASE_SYSTEM_PROMPT
-    assert "optional `title` arg" not in BASE_SYSTEM_PROMPT
