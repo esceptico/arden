@@ -12,7 +12,7 @@ import { GhostBtn } from "@/features/memory/components/shared";
 import type { MemoryItem } from "@/api/memoryItems";
 import { stripCites } from "@/features/memory/lib/format";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
-import { displayTitle, noteDateGroup, prettyDate, sortNotes, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
+import { displayTitle, noteDateGroup, prettyDate, sortNotes, stem, type WorkspaceDir } from "@/features/memory/lib/workspaceTree";
 
 const COLLAPSED_KEY = "arden.desktop.memory.rail.collapsed";
 const NOTEBOOK_COLLAPSED_KEY = "arden.desktop.memory.notebook.collapsed";
@@ -261,7 +261,7 @@ export function NotebookRail({
           openFileContextMenu(artifact.path, event.currentTarget, "keyboard", rect.left + 12, rect.bottom - 4);
         }}
       >
-        <span className="mw-label">{displayTitle(artifact)}</span>
+        <span className="mw-label">{stem(artifact.path)}</span>
       </button>
     );
 

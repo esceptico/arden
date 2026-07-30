@@ -104,20 +104,20 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and titles"
   expect(host.querySelector('[aria-label="Page instruments"]')).not.toBeNull();
   expect(host.querySelector('button[aria-label="Open links"]')).not.toBeNull();
 
-  // The rail is a plain filesystem tree: folder nodes derive from managed
-  // paths and rows are labeled with the page's frontmatter title.
+  // Files mirrors managed paths and labels rows with filename stems.
   expect(rail?.querySelector('[data-memory-directory="topics/"]')).not.toBeNull();
   expect(rail?.querySelector('[data-memory-directory="research/"]')).not.toBeNull();
   expect(rail?.querySelector('[data-memory-directory="daily/"]')).not.toBeNull();
+  expect(rail?.querySelector('[data-memory-entry="README.md"]')?.textContent).toBe("README");
   const dexRow = rail?.querySelector<HTMLButtonElement>('[data-memory-entry="topics/dex.md"]');
-  expect(dexRow?.textContent).toBe("Dex");
+  expect(dexRow?.textContent).toBe("dex");
   expect(rail?.querySelector<HTMLButtonElement>('[data-memory-entry="daily/2026-07-13.md"]')?.textContent).toBe("2026-07-13");
-  expect(rail?.querySelector('[data-memory-entry="scratch.md"]')?.textContent).toBe("Scratch");
+  expect(rail?.querySelector('[data-memory-entry="scratch.md"]')?.textContent).toBe("scratch");
   expect(rail?.textContent).not.toContain("topics/dex.md");
   // Raw machine paths stay hidden; the readable health report remains visible.
   expect(rail?.querySelector('[data-memory-entry="raw/events/1.md"]')).toBeNull();
   expect(rail?.querySelector('[data-memory-entry=".arden/maintenance/state.md"]')).toBeNull();
-  expect(rail?.querySelector('[data-memory-entry="health.md"]')?.textContent).toBe("Health");
+  expect(rail?.querySelector('[data-memory-entry="health.md"]')?.textContent).toBe("health");
 
   // The mock rail is intentionally bare: no pinned cluster or hidden toolbar.
   expect(rail?.querySelector(".mw-tree-pins")).toBeNull();
@@ -171,6 +171,7 @@ test("memory opens as a filesystem notebook with a plain tree, tabs, and titles"
   await settle(500);
   expect(rail?.querySelector('[role="tab"][data-tab-value="notebook"]')?.getAttribute("aria-selected")).toBe("true");
   expect(rail?.querySelector("[data-memory-notebook-list]")).not.toBeNull();
+  expect(rail?.querySelector('[data-memory-entry="README.md"]')?.textContent).toContain("Wiki");
   expect(rail?.querySelector('[data-memory-entry="me.md"]')?.textContent).toContain("Me");
 
   await act(async () => modeTabs.find((tab) => tab.dataset.tabValue === "facts")?.click());

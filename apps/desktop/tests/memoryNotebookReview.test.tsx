@@ -95,7 +95,7 @@ afterEach(async () => {
   localStorage.removeItem("arden.desktop.memory.lastPath");
 });
 
-test("rail mirrors the plain directory structure with page titles and precise reserved paths", async () => {
+test("Files uses filename stems while preserving the plain directory structure", async () => {
   const rows = [
     artifact("README.md", "Wiki", null, { generated: true }),
     artifact("lab/README.md", "Lab guide"),
@@ -137,8 +137,9 @@ test("rail mirrors the plain directory structure with page titles and precise re
   ]) {
     expect(tree.querySelector(`[data-memory-entry="${path}"]`)).not.toBeNull();
   }
-  // Rows are labelled by the page's frontmatter title.
-  expect(tree.querySelector('[data-memory-entry="lab/first.md"]')?.textContent).toBe("First");
+  // Files shows filename stems, never frontmatter titles or extensions.
+  expect(tree.querySelector('[data-memory-entry="lab/README.md"]')?.textContent).toBe("README");
+  expect(tree.querySelector('[data-memory-entry="lab/first.md"]')?.textContent).toBe("first");
   // Reserved raw paths never render.
   expect(tree.querySelector('[data-memory-entry="lab/raw/secret.md"]')).toBeNull();
   expect(tree.querySelector('[data-memory-directory="lab/raw/"]')).toBeNull();

@@ -25,8 +25,8 @@ export function stem(path: string): string {
   return leaf.replace(/\.md$/, "");
 }
 
-/** Every managed page carries a human title in frontmatter; the filename is
- *  only its address. Labels read the title and fall back to the stem. */
+/** Notebook and reading surfaces use the human frontmatter title. The Files
+ *  view deliberately renders `stem(path)` instead. */
 export function displayTitle(artifact: Pick<MemoryArtifactSummary, "path" | "title">): string {
   return artifact.title.trim() || stem(artifact.path);
 }
