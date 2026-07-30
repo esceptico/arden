@@ -70,7 +70,10 @@ test("Area room keeps one focused decision and one current outcome", () => {
 
   expect(room).toContain('className="board-area-needs"');
   expect(room).toContain('className="board-area-room-scroll scroll-fade"');
-  expect(room).toContain("Current outcome");
+  // The heading says what an outcome is; the tally counts outcomes, not steps
+  // through the one on screen (which is how "0 of 2 complete" was being read).
+  expect(room).toContain("What this area is working toward");
+  expect(room).not.toContain("complete</span>");
   expect(room).toContain("AreaRequestDeck");
   expect(room).not.toContain("AreaSettingsButton");
   expect(room).not.toContain("AgentPresence");

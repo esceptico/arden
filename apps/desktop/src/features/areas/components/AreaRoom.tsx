@@ -26,11 +26,20 @@ function agentPresence(detail: AreaDetail): { running: string; checked: string }
   };
 }
 
-function currentOutcome(outcomes: readonly AreaOutcome[]): AreaOutcome | null {
-  return outcomes.find((outcome) => outcome.status === "active" || outcome.status === "paused")
-    ?? outcomes[0]
-    ?? null;
+/** Cancelled outcomes are not a tally the user needs; they are withdrawn. */
+function outcomeTally(outcomes: readonly AreaOutcome[]): string | null {
+  const open = outcomes.filter((o) => o.status === "active" || o.status === "paused").length;
+  const done = outcomes.filter((o) => o.status === "completed").length;
+  if (!open && !done) return null;
+  return [open ? `${open} open` : null, done ? `${done} done` : null].filter(Boolean).join(" · ");
 }
+
+const OUTCOME_STATE: Record<AreaOutcome["status"], string> = {
+  active: "In progress",
+  paused: "Paused",
+  completed: "Done",
+  cancelled: "Cancelled",
+};
 
 /**
  * An Area is a room for the current decision and its one active outcome.
@@ -70,8 +79,8 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
   }
 
   const stale = phase === "error";
-  const outcome = currentOutcome(detail.work.outcomes);
-  const completedOutcomes = detail.work.outcomes.filter((item) => item.status === "completed").length;
+  const outcomes = detail.work.outcomes.filter((o) => o.status !== "cancelled");
+  const tally = outcomeTally(detail.work.outcomes);
   const presence = agentPresence(detail);
 
   const discussAsk = (ask: { id: string }) => {
@@ -125,18 +134,26 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
         </section>
 
         <div className="board-area-room-scroll scroll-fade" tabIndex={0} aria-label="Area work and history" data-page-enter-item>
-          <section className="board-area-current-outcome" aria-labelledby="area-current-outcome-title">
+          <section className="board-area-outcomes" aria-labelledby="area-outcomes-title">
             <header>
-              <h2>Current outcome</h2>
-              <span>{completedOutcomes} of {detail.work.outcomes.length} complete</span>
+              <h2 id="area-outcomes-title">What this area is working toward</h2>
+              {tally ? <span>{tally}</span> : null}
             </header>
-            {outcome ? (
-              <>
-                <h3 id="area-current-outcome-title">{outcome.title}</h3>
-                <p>{outcome.success_criteria}</p>
-              </>
+            {outcomes.length ? (
+              <ol>
+                {outcomes.map((item) => (
+                  <li key={item.outcome_id} data-status={item.status}>
+                    <h3>{item.title}</h3>
+                    <p>{item.success_criteria}</p>
+                    <span>{OUTCOME_STATE[item.status]}</span>
+                  </li>
+                ))}
+              </ol>
             ) : (
-              <p id="area-current-outcome-title">No outcome has been recorded yet.</p>
+              <p className="board-area-outcomes__zero">
+                Nothing yet. The custodian proposes one once it has read enough to know what
+                finished looks like.
+              </p>
             )}
           </section>
 

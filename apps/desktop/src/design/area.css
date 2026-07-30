@@ -256,38 +256,69 @@
   border-radius: var(--r-panel);
 }
 
-.board-area-current-outcome > header {
+/* Every outcome, not one with a counter hinting at the rest. "0 of 2
+   complete" beside a singular heading read as progress through the outcome
+   shown, when it was really a tally of outcomes the room never rendered. */
+.board-area-outcomes > header {
   min-height: 1.875rem;
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.board-area-current-outcome > header h2 {
+.board-area-outcomes > header h2 {
   margin: 0;
   color: var(--ink-soft);
   font: 590 var(--text-sm)/1.2 var(--sans);
 }
 
-.board-area-current-outcome > header span {
+.board-area-outcomes > header span {
   margin-left: auto;
   color: var(--faint);
   font: 500 var(--text-2xs)/1 var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
-.board-area-current-outcome h3 {
-  margin: .4375rem 0 0;
+.board-area-outcomes ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.board-area-outcomes li {
+  margin-top: .4375rem;
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+}
+
+.board-area-outcomes h3 {
+  margin: 0;
   color: var(--ink-soft);
   font: 580 var(--text-base)/1.4 var(--sans);
 }
 
-.board-area-current-outcome > p {
+.board-area-outcomes p {
   max-width: 65ch;
-  margin: var(--space-1) 0 0;
+  margin: 0;
   color: var(--muted);
   font: 460 var(--text-sm)/1.45 var(--sans);
   text-wrap: pretty;
+}
+
+/* Status is a word in status ink — never a dot or a coloured rail. */
+.board-area-outcomes li > span {
+  color: var(--faint);
+  font: 500 var(--text-xs)/1 var(--sans);
+}
+
+.board-area-outcomes li[data-status="completed"] > span { color: var(--muted); }
+
+.board-area-outcomes__zero {
+  margin-top: .4375rem;
+  max-width: 58ch;
 }
 
 /* A reply only appears after an explicit Review action. It is intentionally
@@ -398,7 +429,7 @@
  */
 .area-settings { margin-top: clamp(1.75rem, 5vh, 2.75rem); }
 
-/* Peer of `Current outcome` — same heading, so the room reads as two sections
+/* Peer of the outcomes heading — same treatment, so the room reads as sections
    of one page rather than a page with a settings panel bolted under it. */
 .area-settings > h2 {
   min-height: 1.875rem;
