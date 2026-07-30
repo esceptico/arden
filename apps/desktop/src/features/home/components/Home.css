@@ -355,6 +355,25 @@
   white-space: nowrap;
 }
 
+/* The executable half of a proposal. Approval is what grants the capability,
+   so what will actually run reads at full contrast rather than as a caption. */
+/* Delimited by --line, not a tonal fill: every surface token collapses to a
+   0-3/255 delta against --card in light, and --accent-soft is near-black at
+   13% so it vanishes on dark. --line is the one token that reads in both. */
+.mission-control__focus-action {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-house);
+  color: var(--ink);
+  font: 400 var(--text-sm)/1.55 var(--sans);
+}
+
+.mission-control__focus-action > span {
+  display: block;
+  color: var(--faint);
+}
+
 .mission-control__focus-foot {
   margin-top: 1.125rem;
   display: grid;

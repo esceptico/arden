@@ -130,6 +130,27 @@
   text-wrap: pretty;
 }
 
+/* The executable half of a proposal. Approval is what grants the capability,
+   so what will actually run reads at full contrast rather than as a caption. */
+/* Delimited by --line, not a tonal fill: every surface token collapses to a
+   0-3/255 delta against --card in light, and --accent-soft is near-black at
+   13% so it vanishes on dark. --line is the one token that reads in both. */
+.board-area-deck__action {
+  max-width: 58ch;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-house);
+  color: var(--ink);
+  font: 400 var(--text-sm)/1.55 var(--sans);
+  text-wrap: pretty;
+}
+
+.board-area-deck__action span {
+  display: block;
+  color: var(--faint);
+}
+
 .board-area-deck__actions {
   margin-top: 1.125rem;
   display: flex;
@@ -218,7 +239,10 @@
   flex: 1;
   margin-top: .75rem;
   padding: var(--space-2) var(--space-0-5) var(--space-8);
-  overflow: auto;
+  /* Vertical only. `.scroll-fade` paints a vertical mask, so a horizontal
+     scroll here is unintended by construction — and sub-pixel rounding alone
+     was enough to open one and let the room drag sideways. */
+  overflow: clip auto;
   overscroll-behavior: contain;
   border-top: 1px solid var(--edge);
   scrollbar-width: none;
@@ -347,9 +371,87 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 1;
   }
+  .board-area-deck__action {
+    display: -webkit-box;
+    overflow: hidden;
+    margin-top: var(--space-1-5);
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
   .board-area-deck__actions { margin-top: var(--space-3); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .board-area * { scroll-behavior: auto !important; }
 }
+
+/*
+ * Area settings
+ * -------------
+ * The custodian's operating contract, in the room. An area with no asks and
+ * no outcome is otherwise a blank page, and these are the only things there
+ * are to decide about it — so they are content, not a trigger.
+ *
+ * Settings apply live: no Save, no footer, per the action-placement contract.
+ * Every control states the consequence it commits to rather than only naming
+ * the field, because none of these have an obvious effect from the label.
+ */
+.area-settings { margin-top: clamp(1.75rem, 5vh, 2.75rem); }
+
+/* Peer of `Current outcome` — same heading, so the room reads as two sections
+   of one page rather than a page with a settings panel bolted under it. */
+.area-settings > h2 {
+  min-height: 1.875rem;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  color: var(--ink-soft);
+  font: 590 var(--text-sm)/1.2 var(--sans);
+}
+
+.area-settings__section {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.area-settings__section--stacked { display: grid; gap: var(--space-2); }
+
+.area-settings__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* `.arden-field` is width:100%, so a control in this row claims the whole row
+   as its flex basis and starves the label to zero — the label then wraps one
+   character per line. Controls take a fixed column; only the label flexes. */
+.area-settings__row > * { flex: none; }
+
+.area-settings__row .arden-field { width: 8.5rem; }
+
+.area-settings__row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.area-settings__row-label b { display: block; font-weight: 500; }
+
+.area-settings__row-label small {
+  display: block;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.area-settings__consequence {
+  max-width: 65ch;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+

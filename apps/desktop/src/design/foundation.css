@@ -702,9 +702,18 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
 }
 .arden-field[data-size="sm"] { min-height: var(--control-size); padding-inline: .5rem; }
 .arden-field:hover { background: var(--surface-4); }
+/* One ring, not two. base.css's `input/textarea/button:focus-visible` outline
+   sits 2px off the box and stacked on top of this field's own ring — visibly
+   doubled, and the offset stroke needs 3px of clearance it does not always
+   have. The field owns its focus treatment, as `.command-palette__input`
+   already does — styles.css states that policy for the shared --focus-ring
+   and excludes fields from it for exactly this reason. Carries --focus-ring's
+   own accent mix so the two treatments match, and clears 3:1 against the page
+   in both themes (the old 58% outline measured 2.71 in light). */
 .arden-field:focus-visible {
+  outline: 0;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 72%, transparent);
 }
 .arden-field[aria-invalid="true"] { border-color: var(--danger); }
 textarea.arden-field {

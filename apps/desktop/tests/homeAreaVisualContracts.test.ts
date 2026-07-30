@@ -77,7 +77,9 @@ test("Area room keeps one focused decision and one current outcome", () => {
   expect(room).not.toContain("OpenLoops");
   expect(room).not.toContain("AreaWork");
   expect(css).toMatch(/\.board-area-page\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/);
-  expect(css).toMatch(/\.board-area-room-scroll\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow:\s*auto;/);
+  // Vertical only: `.scroll-fade` masks one axis, so the room must never open
+  // a horizontal scroll — sub-pixel rounding alone was enough to let it drag.
+  expect(css).toMatch(/\.board-area-room-scroll\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow:\s*clip auto;/);
 });
 
 test("Area room matches the mock's 720px typography and pressure hierarchy", () => {

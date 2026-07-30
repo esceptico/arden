@@ -149,6 +149,14 @@ function AreaRequestCard({
           <BlurSwap swapKey={`${ask.id}:reason`}>{reason}</BlurSwap>
         </p>
       )}
+      {ask.action && (
+        <p className="board-area-deck__action">
+          <BlurSwap swapKey={`${ask.id}:action`}>
+            <span>Approving runs</span>
+            {ask.action}
+          </BlurSwap>
+        </p>
+      )}
       <div className="board-area-deck__actions">
         <Button variant="primary" size="md" disabled={busy} onClick={primary.run}>
           <span className="board-area-deck__verb-key" aria-hidden>1</span>

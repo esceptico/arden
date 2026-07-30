@@ -3,6 +3,7 @@ import type { AreaDetail, AreaOutcome } from "@/api/areas";
 import { useStore } from "@/stores";
 import { fetchAreaDetail, replyToAsk } from "@/actions/areas";
 import { AreaRequestDeck } from "@/features/areas/components/AreaRequestDeck";
+import { AreaSettings } from "@/features/areas/components/AreaSettings";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { formatRelativePast } from "@/lib/format";
@@ -16,10 +17,12 @@ function runningAgentCount(detail: AreaDetail): number {
 function agentPresence(detail: AreaDetail): { running: string; checked: string } {
   const count = runningAgentCount(detail);
   const noun = count === 1 ? "agent" : "agents";
-  const checkedAt = detail.agent?.last_checked ?? detail.updated;
+  // A custodian that has never run has no `last_checked`, and a page-less area
+  // has no `updated` stamp — neither is a date to subtract from.
+  const checkedAt = detail.agent?.last_checked || detail.updated;
   return {
     running: `${count} ${noun} running`,
-    checked: `checked ${formatRelativePast(checkedAt)} ago`,
+    checked: checkedAt ? `checked ${formatRelativePast(checkedAt)} ago` : "never checked",
   };
 }
 
@@ -136,6 +139,8 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
               <p id="area-current-outcome-title">No outcome has been recorded yet.</p>
             )}
           </section>
+
+          <AreaSettings area={detail} />
         </div>
 
         {replyingTo && (

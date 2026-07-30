@@ -33,6 +33,10 @@ export interface AreaAsk {
   what_next?: string | null;
   expires_at?: string | null;
   stable_key?: string | null;
+  /** Set only on a `review` ask: the task that runs as a fresh top-level agent
+   *  when the user approves. Show it before approval — approval is what grants
+   *  the capability, so the user must see exactly what will execute. */
+  action?: string | null;
   resolution?: string | null;
   resolved_at?: string | null;
   /** The session a reply is dispatched into; null means the ask belongs to an
@@ -171,6 +175,8 @@ export interface AreaDetail {
   attention: AreaAttention;
   interrupts: AreaInterrupts;
   paused: boolean;
+  /** Standing intent for the custodian; reaches its prompt via AREA_BLOCK. */
+  instructions: string | null;
   agent: AreaAgentStatus | null;
   asks: AreaAsk[];
   sessions: { session_id: string; name: string }[];

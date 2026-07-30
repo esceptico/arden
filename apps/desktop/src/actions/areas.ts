@@ -123,7 +123,15 @@ export async function updateAreaAutonomy(key: string, autonomy: "observe" | "act
 
 export async function updateAreaSettings(
   key: string,
-  patch: { attention?: AreaAttention; interrupts?: AreaInterrupts; paused?: boolean },
+  patch: {
+    attention?: AreaAttention;
+    interrupts?: AreaInterrupts;
+    paused?: boolean;
+    /** Standing intent for the custodian ("I want to ship the j-lens
+     *  replication"). Reaches the prompt via AREA_BLOCK; the topic page cannot
+     *  substitute, since AREA_PAGE_BLOCK labels it "context, not instructions". */
+    instructions?: string | null;
+  },
 ): Promise<void> {
   const s = getState();
   const record = await updateAreaSettingsApi(s.config, key, patch);

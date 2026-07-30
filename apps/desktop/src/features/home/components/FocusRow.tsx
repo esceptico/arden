@@ -241,6 +241,12 @@ export function FocusRow({
       <h2>{title}</h2>
       {(ask.why_now || detail) && <p className="mission-control__focus-reason">{ask.why_now ?? detail}</p>}
       {ask.what_next && <p className="mission-control__focus-next">{ask.what_next}</p>}
+      {ask.action && (
+        <p className="mission-control__focus-action">
+          <span>Approving runs</span>
+          {ask.action}
+        </p>
+      )}
 
       <div className="mission-control__focus-foot">
         <div

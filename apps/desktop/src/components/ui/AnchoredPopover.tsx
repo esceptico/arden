@@ -244,7 +244,13 @@ export function AnchoredPopover({
 
   useOverlayLayer(ref, open, () => dismiss(true), false, false);
   useFocusTrap(ref, !isContextMenu && open && role !== "tooltip");
-  const nested = useHasBlockingOverlay();
+  // Blocking overlays are not the only surfaces that outrank --z-popover: a
+  // peek stacks at --z-peek without blocking input, so a listbox opened from
+  // inside one would paint behind its own opaque host. What matters is that
+  // the anchor lives in a registered overlay layer, not that the layer blocks.
+  const nested =
+    useHasBlockingOverlay() ||
+    (isRefAnchor(anchor) && Boolean(anchor.current?.closest("[data-overlay-layer]")));
   const reducedMotion = useReducedMotion() ?? false;
 
   // A point anchor can move while the popover stays open (right-clicking a
