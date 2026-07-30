@@ -3,23 +3,15 @@ services:
     build:
       context: .
       dockerfile: apps/server/Dockerfile
-    container_name: arden-backend
+    init: true
     restart: unless-stopped
     ports:
-      - "${ARDEN_PORT:-6877}:6877"
+      - "127.0.0.1:${ARDEN_PORT:-6877}:6877"
     volumes:
       - arden-data:/home/arden/.arden
     env_file: .env
     environment:
-      # browser history doesn't work in docker
-      - ARDEN_BROWSER=
-    networks:
-      - arden-network
+      ARDEN_DIR: /home/arden/.arden
 
 volumes:
   arden-data:
-    driver: local
-
-networks:
-  arden-network:
-    driver: bridge

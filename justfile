@@ -7,8 +7,8 @@ default:
 
 # Install dependencies for all apps.
 install:
-    cd apps/server && uv sync --extra dev
-    cd apps/desktop && bun install
+    cd apps/server && uv sync --locked --group dev
+    cd apps/desktop && bun install --frozen-lockfile
 
 # Run the backend server.
 server:

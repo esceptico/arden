@@ -37,6 +37,8 @@ docs/
 *.md
 !README.md
 !apps/server/README.md
+!apps/server/skills/
+!apps/server/skills/**
 
 # Environment & Config
 .env

@@ -3,28 +3,35 @@ name: CI
 on:
   push:
     branches: [main]
-    paths:
-      - "apps/server/**"
   pull_request:
     branches: [main]
-    paths:
-      - "apps/server/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  lint:
+  server:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/server/uv.lock
 
       - name: Set up Python
         run: uv python install 3.13
 
       - name: Install dependencies
         working-directory: apps/server
-        run: uv sync --extra dev
+        run: uv sync --locked --group dev
 
       - name: Run ruff check
         working-directory: apps/server
@@ -34,21 +41,73 @@ jobs:
         working-directory: apps/server
         run: uv run ruff format --check .
 
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install dependencies
-        working-directory: apps/server
-        run: uv sync --extra dev
-
       - name: Run tests
         working-directory: apps/server
-        run: uv run pytest tests/ -v
+        run: uv run pytest
+
+      - name: Build package
+        working-directory: apps/server
+        run: uv build
+
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.10
+
+      - name: Install dependencies
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: apps/desktop
+        run: bun run typecheck
+
+      - name: Lint
+        working-directory: apps/desktop
+        run: bun run lint
+
+      - name: Test
+        working-directory: apps/desktop
+        run: bun test
+
+      - name: Build
+        working-directory: apps/desktop
+        run: bun run build
+
+  container:
+    needs: server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build server image
+        run: docker build --file apps/server/Dockerfile --tag arden-server:ci .
+
+      - name: Smoke-test server image
+        shell: bash
+        run: |
+          docker run --detach --name arden-server-ci arden-server:ci
+          trap 'docker rm --force arden-server-ci >/dev/null' EXIT
+          for attempt in {1..30}; do
+            health="$(docker inspect --format '{{.State.Health.Status}}' arden-server-ci)"
+            if [ "$health" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$health" = "unhealthy" ]; then
+              docker logs arden-server-ci
+              exit 1
+            fi
+            sleep 2
+          done
+          docker logs arden-server-ci
+          exit 1
+
+      - name: Validate Compose configuration
+        run: cp .env.example .env && docker compose config --quiet
