@@ -169,6 +169,45 @@ def test_mechanical_approval_retires_when_no_longer_pending(tmp_path: Path):
     assert svc.overview()["focus"] == []
 
 
+def test_transient_run_failures_do_not_claim_attention(tmp_path: Path):
+    """Half of one area's lifetime asks were ChatIdempotencyConflict notices —
+    unactionable noise that trains the user to clear the lane unread, and those
+    dismissals then drive the one-way attention decay."""
+    automations = [
+        {
+            "task_id": "area:o-1a:daily",
+            "name": "Daily check",
+            "latest_run": {
+                "id": 7,
+                "status": "failed",
+                "error": "ChatIdempotencyConflict: idempotency_conflict",
+                "started_at": "2026-07-10",
+            },
+        }
+    ]
+    svc = AreaService(
+        areas=lambda: AREAS,
+        asks=AskStore(tmp_path / "state.json"),
+        get_page=lambda path: PAGE,
+        pending_approvals=lambda: [],
+        session_area=lambda sid: None,
+        area_automations=lambda key: automations,
+        area_sessions=lambda key: [],
+        get_area=lambda pid: None,
+    )
+    svc.refresh_mechanical()
+    assert svc.overview()["focus"] == []
+
+    automations[0]["latest_run"]["error"] = "interrupted by server restart"
+    svc.refresh_mechanical()
+    assert svc.overview()["focus"] == []
+
+    # A real, actionable failure still surfaces.
+    automations[0]["latest_run"]["error"] = "provider unavailable"
+    svc.refresh_mechanical()
+    assert svc.overview()["focus"][0]["source"] == "run_failed"
+
+
 def test_latest_failed_run_reconciles_and_success_retires_failure_ask(tmp_path: Path):
     automations = [
         {

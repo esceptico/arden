@@ -134,9 +134,12 @@ class CustodianStore:
             return False
 
         budget_day = pending.get("budget_day")
-        if budget_day is not None:
-            if st["runs_day"] != budget_day or st["runs_today"] < 1:
-                raise RuntimeError(f"Custodian run budget changed before delivery rollback for {area_id}")
+        # The refund only applies while the counter still belongs to the day this
+        # delivery was reserved on; past midnight it has already reset and there
+        # is nothing to give back. Raising instead would abort the release of
+        # pending_delivery below — from inside the very except-block that exists
+        # to guarantee it — and strand the run.
+        if budget_day is not None and st["runs_day"] == budget_day and st["runs_today"] >= 1:
             st["runs_today"] -= 1
         restored_events = [*pending.get("woken_by", ()), *st["pending_events"]]
         st["pending_events"] = list(dict.fromkeys(restored_events))[-8:]
@@ -146,6 +149,12 @@ class CustodianStore:
 
     def needs_intake(self, area_id: str) -> bool:
         return self.state(area_id)["last_report"] is None
+
+    def quiet_streak(self, area_id: str) -> int:
+        """Consecutive runs that produced neither an ask nor material progress.
+        The custodian sees this so a stall is a fact it must act on rather than
+        a pattern only the decay curve notices."""
+        return self.state(area_id)["quiet_streak"]
 
     # ── event wakes ─────────────────────────────────────────
 

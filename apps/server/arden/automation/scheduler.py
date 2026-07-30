@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
+from arden.areas.agent import is_custodian_task_id
 from arden.automation.event_dispatch import (
     claim_next_queued_event,
     enqueue_matching_events,
@@ -340,6 +341,11 @@ class Scheduler:
             or is_wiki_maintenance_backstop
             or is_managed_history_collection_backstop
             or (automation.builtin and automation.handler in _CATCH_UP_HANDLERS)
+            # An area custodian's due time is its own self-paced heartbeat, not a
+            # recurring slot it can skip to the next one of. Advancing past a
+            # window the machine slept through costs the area another whole
+            # attention interval — up to 7 days on ambient, 14 on dormant.
+            or is_custodian_task_id(automation.task_id)
         ):
             return False
         if len(automation.triggers) != 1 or not isinstance(automation.triggers[0], TimeTrigger):

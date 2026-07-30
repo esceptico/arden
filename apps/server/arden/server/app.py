@@ -405,8 +405,13 @@ async def lifespan(app: FastAPI):
                 attention = (record or {}).get("attention") or "ambient"
                 work_snapshot = await runtime.stores.area_work.snapshot(area_id)
 
+                quiet_streak = runtime.automation.custodians.quiet_streak(area_id)
+
                 def build_message(woken_by: tuple[str, ...]) -> str:
-                    parts = [render_work_context(work_snapshot)]
+                    parts = [
+                        render_work_context(work_snapshot),
+                        f"CONSECUTIVE QUIET RUNS (no asks, no material progress): {quiet_streak}",
+                    ]
                     if woken_by:
                         parts.append(
                             "WOKEN BY (events since your last run):\n" + "\n".join(f"- {event}" for event in woken_by)

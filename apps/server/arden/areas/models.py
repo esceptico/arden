@@ -20,8 +20,9 @@ class Area:
 
 
 def areas_from_records(areas: list[dict]) -> list[Area]:
-    """The containers that are areas: any area carrying a capability
-    (page or standing agent). Plain containers never surface as areas."""
+    """Every durable container is a first-class Area. A page and a standing
+    agent are optional capabilities layered on top, not the price of admission
+    — a container chats file into is an area even with neither."""
     return [
         Area(
             key=p["area_id"],
@@ -53,6 +54,10 @@ class Ask:
     # card expiry, stretched — a stale FYI is noise, not a queue item).
     expires_at: str | None = None
     stable_key: str | None = None
+    # Set only on a `review` ask: the task dispatched as a fresh top-level agent
+    # run when the user approves. Approval is what mints the capability — the
+    # custodian that proposed it stays read-only.
+    action: str | None = None
     resolution: str | None = None
     resolved_at: str | None = None
     # The session a reply is dispatched into. None means the ask belongs to an

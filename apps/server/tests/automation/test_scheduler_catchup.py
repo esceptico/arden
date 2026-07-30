@@ -81,6 +81,22 @@ def test_no_catch_up_for_user_automation():
     assert Scheduler._should_catch_up_missed(_auto(builtin=False), NOW) is False
 
 
+def test_catch_up_for_an_area_custodian():
+    """A custodian's due time is its own self-paced heartbeat, not a slot it can
+    skip to the next of: advancing past a window the machine slept through costs
+    the area another whole attention interval (7d ambient, 14d dormant)."""
+    custodian = _auto(task_id="area:proj_93f3fab93368", builtin=False, handler=None)
+    assert Scheduler._should_catch_up_missed(custodian, NOW) is True
+
+    # A child automation the custodian owns is an ordinary recurring task.
+    child = _auto(task_id="area:proj_93f3fab93368:nightly", builtin=False, handler=None)
+    assert Scheduler._should_catch_up_missed(child, NOW) is False
+
+    # Already ran since it came due — nothing to catch up.
+    ran = _auto(task_id="area:proj_93f3fab93368", builtin=False, handler=None, last_run_at=NOW)
+    assert Scheduler._should_catch_up_missed(ran, NOW) is False
+
+
 def test_no_catch_up_for_other_builtin_handler():
     assert Scheduler._should_catch_up_missed(_auto(handler="other"), NOW) is False
 

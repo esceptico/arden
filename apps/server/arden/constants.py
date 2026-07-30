@@ -1,4 +1,11 @@
+import os
 from datetime import timedelta
+from pathlib import Path
+
+# Every runtime artefact lives here: settings, databases, wiki, logs. Defined in
+# this leaf module (not settings.py) because arden.logging needs it for its file
+# sink and settings.py imports arden.logging — importing the other way would cycle.
+ARDEN_DIR = Path(os.environ.get("ARDEN_DIR", str(Path.home() / ".arden"))).expanduser()
 
 # --- Content Truncation Limits ---
 

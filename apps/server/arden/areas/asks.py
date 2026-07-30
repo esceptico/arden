@@ -7,10 +7,6 @@ from arden.areas.models import Ask, AskState
 
 _KIND_PRIORITY = {"question": 0, "review": 1, "notify": 2}
 
-# Pre-taxonomy kinds (review/decide/act/drift) fold into the three-verb
-# vocabulary (notify/question/review) on load — one-way, idempotent.
-_LEGACY_KINDS = {"review": "notify", "decide": "question", "act": "question", "drift": "notify"}
-
 
 def _parse(ts: str) -> datetime:
     dt = datetime.fromisoformat(ts)
@@ -23,14 +19,7 @@ class AskStore:
         self._asks: dict[str, Ask] = {}
         if path.exists():
             data = json.loads(path.read_text())
-            migrated = False
-            for a in data["asks"]:
-                if a.get("kind") in _LEGACY_KINDS:
-                    a["kind"] = _LEGACY_KINDS[a["kind"]]
-                    migrated = True
             self._asks = {a["id"]: Ask(**a) for a in data["asks"]}
-            if migrated:
-                self._flush()
 
     def _flush(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

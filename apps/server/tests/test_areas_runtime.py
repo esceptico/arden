@@ -30,7 +30,6 @@ def report() -> AreaCustodianReport:
             "report": "Prepared the booking",
             "next_check_hours": 24,
             "next_check_reason": "waiting for lab choice",
-            "made_progress": True,
             "work_remaining": True,
             "outcome_changes": [],
             "work_changes": [],
@@ -248,6 +247,40 @@ async def test_area_event_reschedules_and_wakes_the_scheduler(tmp_path: Path) ->
     assert len(calls) == 1
     assert calls[0][0] == "area:dex"
     assert calls[0][2] is True
+
+
+@pytest.mark.asyncio
+async def test_user_engagement_lifts_a_dormant_area_back_to_ambient(tmp_path: Path) -> None:
+    """Attention decay is one-way — note_ignored_asks only ever lowers it and
+    nothing in the runtime raises it. An area the user got busy and stopped
+    answering would otherwise stay dormant (72h-14d) permanently."""
+    updates: list[tuple[str, str]] = []
+
+    class Sessions:
+        async def get_area(self, area_id: str):
+            return {"area_id": area_id, "autonomy": "observe", "attention": "dormant", "paused_at": None}
+
+        async def update_area(self, area_id: str, **fields):
+            updates.append((area_id, fields["attention"]))
+
+    class Scheduler:
+        async def reschedule_run(self, task_id, deadline, *, only_if_earlier=False):
+            return True
+
+    def _runtime() -> AutomationRuntime:
+        runtime = AutomationRuntime.__new__(AutomationRuntime)
+        runtime.stores = SimpleNamespace(sessions=Sessions())
+        runtime.scheduler = Scheduler()
+        runtime.custodians = CustodianStore(tmp_path / "custodians.json")
+        return runtime
+
+    # Observing the area is not engagement — a custodian editing its own page
+    # must not resurrect the cadence the user's silence earned.
+    await _runtime().request_area_wake("dex", "topic page edited (topics/dex.md)")
+    assert updates == []
+
+    await _runtime().request_area_wake("dex", "user resolved ask 'ship it' as done", engaged=True)
+    assert updates == [("dex", "ambient")]
 
 
 def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:

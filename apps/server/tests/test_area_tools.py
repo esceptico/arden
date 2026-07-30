@@ -60,7 +60,6 @@ def report() -> AreaCustodianReport:
             "report": "Checked current work.",
             "next_check_hours": 24,
             "next_check_reason": "No earlier event is expected.",
-            "made_progress": False,
             "work_remaining": True,
         }
     )

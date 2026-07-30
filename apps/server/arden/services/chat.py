@@ -11,7 +11,8 @@ from arden.agent import Agent, Role, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
 from arden.agent.types.tool_call import PendingToolCall
-from arden.automation.prompts import AUTOMATION_SUFFIX
+from arden.areas.agent import is_custodian_task_id
+from arden.automation.prompts import AUTOMATION_SUFFIX, CUSTODIAN_SUFFIX
 from arden.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import AreaContext, SessionData, SessionState
 from arden.core.content import (
@@ -543,7 +544,8 @@ async def _prepare_messages(
         retrieval_context=wiki_retrieval,
     )
     if automation_id is not None:
-        system_blocks.append({"type": "text", "text": AUTOMATION_SUFFIX})
+        suffix = CUSTODIAN_SUFFIX if is_custodian_task_id(automation_id) else AUTOMATION_SUFFIX
+        system_blocks.append({"type": "text", "text": suffix})
 
     messages = _retain_user_content(messages)
 

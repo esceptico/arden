@@ -44,7 +44,6 @@ def _report(asks, report="tended", hours=24.0, reason="routine"):
     return AreaCustodianReport.model_validate(
         {
             **_nom(asks, report, hours, reason),
-            "made_progress": bool(asks),
             "work_remaining": False,
         }
     )
@@ -77,7 +76,6 @@ def test_custodian_report_requires_complete_explicit_work_operations():
     report = AreaCustodianReport.model_validate(
         {
             **_nom([], report="Started evidence collection"),
-            "made_progress": True,
             "work_remaining": True,
             "outcome_changes": [
                 {
@@ -108,7 +106,6 @@ def test_custodian_report_requires_complete_explicit_work_operations():
         AreaCustodianReport.model_validate(
             {
                 **_nom([]),
-                "made_progress": True,
                 "work_remaining": True,
                 "outcome_changes": [{"op": "create", "key": "missing-fields"}],
             }
@@ -195,25 +192,24 @@ def test_repeated_stable_nomination_updates_without_becoming_new(tmp_path):
 
 
 def test_observe_scope_is_area_locked_and_uses_canonical_facts():
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "submit_area_report")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "area_page_patch")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "area_page_write")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "search_facts")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "get_fact")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "list_recent_sessions")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "read_session")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "web_search")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "emails")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "calendar")
-    assert matches_scope(tuple(OBSERVE_TOOL_SCOPE), "slack_search")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_patch")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "memory_write")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "recall")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "remember")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "forget")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "send_email")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "bash")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "create_calendar_event")
+    """Asserted against the RESOLVED scope, not the authored list: reading is
+    granted by the declared `read:*` floor rather than by naming each tool, so
+    matching the raw patterns would prove nothing about what the run can do."""
+    from arden.tools.core.scope import expand_scope
+
+    reads = ("search_facts", "get_fact", "list_recent_sessions", "read_session", "web_search", "emails", "calendar")
+    resolved = expand_scope(tuple(OBSERVE_TOOL_SCOPE), (*reads, "slack_search"))
+
+    assert matches_scope(resolved, "submit_area_report")
+    assert matches_scope(resolved, "area_page_patch")
+    assert matches_scope(resolved, "area_page_write")
+    for name in (*reads, "slack_search"):
+        assert matches_scope(resolved, name), name
+
+    # Writes stay out however the floor expands — these are not read-only, so
+    # nothing can put them in scope except an explicit grant.
+    for name in ("send_email", "bash", "create_calendar_event", "slack_post_message", "write_file"):
+        assert not matches_scope(resolved, name), name
 
 
 def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():

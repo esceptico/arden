@@ -113,24 +113,31 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
     await conn.close()
 
 
-def test_with_read_floor_grants_on_top_of_reads():
-    from arden.tools.core.scope import with_read_floor
+def test_read_floor_is_granted_only_when_declared():
+    """The floor used to be unioned into every scoped run inside the executor,
+    which made "can read anything" a property of the plumbing that no author
+    had written down. It is an ordinary grant now."""
+    from arden.tools.core.scope import READ_FLOOR, expand_scope
 
-    # A user scope bounds the dangerous surface, never the safe one: the
-    # write grant rides on top of every read tool, deduped, order-stable.
     floor = ("list_recent_sessions", "read_session", "read_file")
-    assert with_read_floor(("archive_session",), floor) == (
+
+    # Declared: the write grant rides on top of every read tool, deduped,
+    # order-stable, and the marker itself does not survive into the result.
+    assert expand_scope((READ_FLOOR, "archive_session"), floor) == (
         "archive_session",
         "list_recent_sessions",
         "read_session",
         "read_file",
     )
-    assert with_read_floor(("read_file", "bash"), floor) == (
+    assert expand_scope(("read_file", READ_FLOOR, "bash"), floor) == (
         "read_file",
         "bash",
         "list_recent_sessions",
         "read_session",
     )
+
+    # Undeclared: the scope stands exactly as authored.
+    assert expand_scope(("archive_session",), floor) == ("archive_session",)
 
 
 def test_registry_read_only_names_lists_only_read_tools():
@@ -159,16 +166,22 @@ def test_registry_read_only_names_lists_only_read_tools():
     assert set(reg.read_only_names()) == {"slack_search", "read_file"}
 
 
-def test_executor_scope_adds_read_floor_without_unrelated_writes():
+def test_executor_grants_the_read_floor_only_to_a_scope_that_declares_it():
+    from arden.tools.core.scope import READ_FLOOR
     from arden.tools.executor import ToolExecutor
 
     executor = ToolExecutor(get_services=lambda: {"wiki": object(), "wiki_post_commit": object()})
-    names = {schema["function"]["name"] for schema in executor.get_tools(scope=("create_wiki_page",))}
+    resolve = lambda scope: {s["function"]["name"] for s in executor.get_tools(scope=scope)}  # noqa: E731
 
-    assert {"create_wiki_page", "list_wiki_pages", "read_wiki_page", "wiki_links"} <= names
-    assert "edit_wiki_page" not in names
-    assert "archive_wiki_page" not in names
-    assert "send_email" not in names
+    declared = resolve((READ_FLOOR, "create_wiki_page"))
+    assert {"create_wiki_page", "list_wiki_pages", "read_wiki_page", "wiki_links"} <= declared
+    # The floor is reads only — it never smuggles in a write the author omitted.
+    assert "edit_wiki_page" not in declared
+    assert "archive_wiki_page" not in declared
+    assert "send_email" not in declared
+
+    bare = resolve(("create_wiki_page",))
+    assert bare == {"create_wiki_page"}
 
 
 def test_is_custodian_task_id_matches_only_bare_area_tasks():

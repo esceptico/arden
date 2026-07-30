@@ -7,7 +7,7 @@ from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.middleware import ToolMiddleware
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.core.scope import with_read_floor
+from arden.tools.core.scope import expand_scope
 from arden.tools.core.types import ToolAction, ToolOverrideDecision
 from arden.tools.discover import discover_user_tools
 
@@ -110,7 +110,7 @@ class ToolExecutor:
         extra_names: frozenset[str] = frozenset(),
         scope: tuple[str, ...] | None = None,
     ) -> list[dict]:
-        effective_scope = with_read_floor(scope, self.registry.read_only_names()) if scope is not None else None
+        effective_scope = expand_scope(scope, self.registry.read_only_names()) if scope is not None else None
         return self.registry.get_schemas(
             capabilities=frozenset(self._get_services()),
             read_only=read_only,

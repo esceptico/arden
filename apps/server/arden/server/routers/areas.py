@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from arden.areas.agent import AREA_REPORT_TOOL_NAME
 from arden.areas.lifecycle import AreaWikiUnavailable
+from arden.areas.models import Ask
 from arden.areas.work_store import AreaWorkConflict
 from arden.server.schemas import (
     AreaResponse,
@@ -104,7 +105,7 @@ async def _require_active_area(request: Request, area_id: str) -> None:
 
 async def _finish_work_edit(request: Request, area_id: str, description: str) -> None:
     await request.app.state.emit_areas_changed([area_id])
-    await request.app.state.request_area_wake(area_id, description)
+    await request.app.state.request_area_wake(area_id, description, engaged=True)
 
 
 @router.post("/{area_id}/outcomes")
@@ -249,10 +250,36 @@ async def update_area_autonomy(request: Request, area_id: str, body: AutonomyBod
     return area
 
 
+async def _dispatch_approved_action(request: Request, ask: Ask) -> None:
+    """Run an approved proposal as a fresh top-level agent carrying the user's
+    own tool scope.
+
+    The custodian that proposed it never gains this reach: a child it spawned
+    would be intersected with its own read-only allowlist (see spawn_child).
+    Approval is what mints the capability, so it is granted per action and only
+    after the user has seen exactly what will run.
+    """
+    runtime = request.app.state.runtime
+    automation = await runtime.stores.automations.get(f"area:{ask.area_key}")
+    if automation is None or not automation.thread_id:
+        raise HTTPException(status_code=409, detail="Area channel unavailable")
+    await runtime.dispatch_session_message(
+        automation.thread_id,
+        f"APPROVED ACTION [{ask.id}]\nThe user approved this proposal. Carry it out now and "
+        f"report what changed, file:line.\n\n{ask.action}",
+        client_id=f"area-ask-action:{ask.id}",
+        skip_approvals=False,
+        tool_scope=None,
+    )
+
+
 @asks_router.post("/{ask_id}/resolve")
 async def resolve_ask(request: Request, ask_id: str, body: ResolveBody):
-    if _svc(request).get_ask(ask_id) is None:
+    pending = _svc(request).get_ask(ask_id)
+    if pending is None:
         raise HTTPException(status_code=404, detail="Ask not found")
+    if body.resolution == "approved" and pending.action:
+        await _dispatch_approved_action(request, pending)
     ask = _svc(request).resolve_ask(ask_id, body.state, body.snoozed_until, body.resolution)
     await request.app.state.emit_areas_changed([ask["area_key"]] if ask["area_key"] else [])
     if ask["area_key"]:
@@ -264,7 +291,7 @@ async def resolve_ask(request: Request, ask_id: str, body: ResolveBody):
             if body.state == "active"
             else f"user resolved ask '{ask['text'][:80]}' as {body.state}"
         )
-        await request.app.state.request_area_wake(ask["area_key"], activity)
+        await request.app.state.request_area_wake(ask["area_key"], activity, engaged=True)
     return ask
 
 

@@ -210,10 +210,10 @@ def client(tmp_path: Path):
     )
     test_app.state.emit_areas_changed = _emit_areas_changed
 
-    wakes: list[tuple[str, str]] = []
+    wakes: list[tuple[str, str, bool]] = []
 
-    async def _request_area_wake(area_id: str, description: str) -> None:
-        wakes.append((area_id, description))
+    async def _request_area_wake(area_id: str, description: str, *, engaged: bool = False) -> None:
+        wakes.append((area_id, description, engaged))
 
     test_app.state.request_area_wake = _request_area_wake
     test_app.state.wakes = wakes
@@ -405,6 +405,57 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
         ("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.", ("area_page_read", "search_facts"))
     ]
     assert emitted == [[o1a]]
+
+
+def test_approving_a_review_runs_its_action_with_the_users_own_scope(client):
+    """The custodian is read-only and a child it spawned would inherit that
+    allowlist, so approval is what mints the capability — an unrestricted
+    tool_scope, granted per action and only for what the user just saw."""
+    c, svc, _, o1a, _ = client
+    svc._asks.upsert(
+        Ask(
+            id=f"agent:{o1a}:assay",
+            area_key=o1a,
+            text="Implement the model-native assay v0",
+            kind="review",
+            source="agent",
+            actions=[],
+            state="active",
+            created_at="2026-07-06T10:00:00",
+            stable_key="assay",
+            action="Scaffold src/aside_oracle/jspace/ and make its replication-gate tests pass.",
+        )
+    )
+
+    res = c.post(f"/asks/agent:{o1a}:assay/resolve", json={"state": "done", "resolution": "approved"})
+
+    assert res.status_code == 200
+    session_id, message, tool_scope = c.app.state.dispatched[0]
+    assert session_id == "custodian-thread"
+    assert "Scaffold src/aside_oracle/jspace/" in message
+    assert tool_scope is None, "an approved action runs unrestricted, not inside the observe allowlist"
+
+
+def test_rejecting_a_review_runs_nothing(client):
+    c, svc, _, o1a, _ = client
+    svc._asks.upsert(
+        Ask(
+            id=f"agent:{o1a}:assay",
+            area_key=o1a,
+            text="Implement the model-native assay v0",
+            kind="review",
+            source="agent",
+            actions=[],
+            state="active",
+            created_at="2026-07-06T10:00:00",
+            stable_key="assay",
+            action="Scaffold src/aside_oracle/jspace/.",
+        )
+    )
+
+    c.post(f"/asks/agent:{o1a}:assay/resolve", json={"state": "dismissed", "resolution": "rejected"})
+
+    assert c.app.state.dispatched == []
 
 
 def _unfiled_ask(ask_id: str = "tool:chat-1:overdue", kind: str = "question") -> Ask:

@@ -13,6 +13,16 @@ def ask(
     )
 
 
+def test_review_kind_survives_reload(tmp_path: Path):
+    """A legacy migration folded `review` into `notify` on every load, silently
+    demoting each proposal to an FYI and making the Approve/Reject affordance —
+    gated on kind == 'review' — unreachable after any restart."""
+    path = tmp_path / "state.json"
+    AskStore(path).upsert(ask("a1", "mech-interp", "review"))
+    for _ in range(3):
+        assert AskStore(path).get("a1").kind == "review"
+
+
 def test_store_upsert_resolve_roundtrip(tmp_path: Path):
     store = AskStore(tmp_path / "state.json")
     store.upsert(ask("a1", "o-1a", "review"))

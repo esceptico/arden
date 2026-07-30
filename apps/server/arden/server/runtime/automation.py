@@ -302,6 +302,13 @@ class AutomationRuntime:
             return
         service = self.get_notifiers()
         if service is None or not service.notifiers:
+            # Say so: otherwise a correctly-raised ask that reached nobody is
+            # indistinguishable from an agent that never raised one.
+            _logger.warning(
+                "Area asks not delivered — no notifier configured",
+                area=area_.key,
+                asks=[a.id for a in to_send],
+            )
             return
         for ask in to_send:
             subject = f"arden · {area_.title}: {ask.kind}"
@@ -316,18 +323,41 @@ class AutomationRuntime:
                     await notifier.send(subject, body)
                 except Exception:
                     _logger.exception("Notifier %s failed for area ask", name)
+                else:
+                    # The delivery record. `notification_log` is written by
+                    # nothing any more, so without this line there is no way to
+                    # tell an ask that reached the user from one that did not.
+                    _logger.info(
+                        "Area ask delivered",
+                        area=area_.key,
+                        ask_id=ask.id,
+                        kind=ask.kind,
+                        notifier=name,
+                    )
 
-    async def request_area_wake(self, area_id: str, description: str) -> None:
+    async def request_area_wake(self, area_id: str, description: str, *, engaged: bool = False) -> None:
         """A domain event happened: note it for the custodian and, budget and
         pause permitting, pull the next run earlier (debounced so a burst of
-        events coalesces into one run)."""
+        events coalesces into one run).
+
+        `engaged` marks the event as a human acting on this area rather than
+        the system observing it.
+        """
         record = await self.stores.sessions.get_area(area_id)
         if record is None or record.get("autonomy") is None:
             return  # no standing agent to wake
+        attention = record.get("attention") or "ambient"
+        if engaged and attention == "dormant":
+            # Decay concluded the user had stopped answering; they just answered.
+            # Nothing else raises attention — note_ignored_asks only lowers it —
+            # so without this an area that goes quiet once stays quiet forever.
+            await self.stores.sessions.update_area(area_id, attention="ambient")
+            _logger.info("Area %s attention restored to ambient (user engaged: %s)", area_id, description)
+            attention = "ambient"
         deadline = self.custodians.note_event(
             area_id,
             description,
-            attention=record.get("attention") or "ambient",
+            attention=attention,
             paused=bool(record.get("paused_at")),
         )
         if deadline is None:

@@ -190,7 +190,6 @@ def report(**overrides) -> AreaCustodianReport:
         "report": "advanced work",
         "next_check_hours": 24,
         "next_check_reason": "continue tomorrow",
-        "made_progress": True,
         "work_remaining": True,
         "outcome_changes": [
             {

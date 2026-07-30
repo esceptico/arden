@@ -822,7 +822,7 @@ async def move_session_to_area(
     if req.area_id:
         # A chat filed into the area is domain activity — wake its custodian.
         name = data.state.name or "untitled chat"
-        await request.app.state.request_area_wake(req.area_id, f"chat filed into area: '{name}'")
+        await request.app.state.request_area_wake(req.area_id, f"chat filed into area: '{name}'", engaged=True)
     return {"session_id": session_id, "area_id": req.area_id}
 
 

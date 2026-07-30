@@ -15,7 +15,14 @@ def _store(tmp_path: Path) -> CustodianStore:
     return CustodianStore(tmp_path / "agent-state.json")
 
 
-def _nom(asks, hours, reason="r", report="did things", **extra):
+def _nom(asks, hours, reason="r", report="did things", made_progress=False, **extra):
+    # Progress is derived from applied operations, so a test that means
+    # "this run moved the work graph" must carry a real work change.
+    if made_progress:
+        extra.setdefault(
+            "work_changes",
+            [{"op": "create", "key": "moved", "kind": "action", "text": "moved something", "owner": "custodian"}],
+        )
     asks = (
         [
             {
@@ -36,11 +43,25 @@ def _nom(asks, hours, reason="r", report="did things", **extra):
             "report": report,
             "next_check_hours": hours,
             "next_check_reason": reason,
-            "made_progress": False,
             "work_remaining": False,
             **extra,
         }
     )
+
+
+def test_progress_is_read_from_applied_operations_not_claimed(tmp_path):
+    """Self-reported progress let a run rewrite page prose, reset the quiet
+    streak and dodge decay while emitting no asks."""
+    prose_only = _nom([], hours=24, evidence=[{"target_type": "area", "event_type": "updated", "summary": "tidied"}])
+    assert prose_only.made_progress is False
+
+    moved = _nom([], hours=24, made_progress=True)
+    assert moved.made_progress is True
+
+    c = _store(tmp_path)
+    c.record_run("a1", prose_only, run_ref="run:1", attention="ambient", now=NOW)
+    c.record_run("a1", prose_only, run_ref="run:2", attention="ambient", now=NOW)
+    assert c.quiet_streak("a1") == 2
 
 
 def test_next_check_clamped_to_attention_bounds(tmp_path):
@@ -333,6 +354,41 @@ def test_failed_delivery_refunds_budget_and_restores_wakes(tmp_path):
     assert c.state("a1")["pending_events"] == ["first wake", "later wake"]
     assert "pending_delivery" not in c.state("a1")
     assert not c.abandon_delivery("a1", client_id=delivery.client_id)
+
+
+def test_rollback_across_midnight_still_releases_the_delivery(tmp_path):
+    """The refund is only meaningful while the counter belongs to the day the
+    delivery was reserved on. Raising past midnight aborted the release of
+    pending_delivery from inside the except-block meant to guarantee it, which
+    dead-lettered the outbox event and stranded running_since."""
+    c = _store(tmp_path)
+    allowed, delivery = c.begin_or_resume_delivery(
+        "a1",
+        iteration=1,
+        client_id="loop:area:a1:1",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda events: "run",
+        now=NOW,
+    )
+    assert allowed and delivery is not None
+
+    tomorrow = NOW + timedelta(days=1)
+    c.note_event("a1", "next-day wake", attention="ambient", paused=False, now=tomorrow)
+    c.begin_or_resume_delivery(
+        "a1",
+        iteration=2,
+        client_id="loop:area:a1:2",
+        attention="ambient",
+        manual=False,
+        skip_approvals=True,
+        build_message=lambda events: "run",
+        now=tomorrow,
+    )
+
+    assert c.abandon_delivery("a1", client_id="loop:area:a1:2")
+    assert "pending_delivery" not in c.state("a1")
 
 
 def test_failed_bound_delivery_requires_its_exact_chat_run(tmp_path):

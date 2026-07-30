@@ -10,6 +10,16 @@ from arden.areas.work_models import AreaWorkSnapshot
 from arden.constants import AREA_ATTENTION_PRESETS, UNFILED_ASK_TITLE
 from arden.wiki.pages import WikiPage
 
+# A run-failure ask claims the user's attention to say "this is broken, look at
+# it". Transient infrastructure failures self-heal on the next run, so raising
+# them teaches the user to clear the lane unread — and those dismissals feed the
+# one-way attention decay that then quiets the area for real.
+_TRANSIENT_RUN_ERRORS = ("idempotency_conflict", "interrupted by server restart")
+
+
+def _is_transient_run_error(error: str) -> bool:
+    return any(marker in error for marker in _TRANSIENT_RUN_ERRORS)
+
 
 class AreaService:
     def __init__(
@@ -66,8 +76,10 @@ class AreaService:
                 latest = auto.get("latest_run") or {}
                 if latest.get("status") != "failed":
                     continue
-                ask_id = f"runfail:{auto['task_id']}:{latest.get('id')}"
                 error = latest.get("error") or "unknown failure"
+                if _is_transient_run_error(error):
+                    continue
+                ask_id = f"runfail:{auto['task_id']}:{latest.get('id')}"
                 failures.append(
                     Ask(
                         id=ask_id,
@@ -206,6 +218,10 @@ class AreaService:
             "attention": record.get("attention") or "ambient",
             "interrupts": record.get("interrupts") or "asks",
             "paused": bool(record.get("paused_at")),
+            # The custodian's standing intent. Writable through PATCH /areas/{id}
+            # since forever, but never readable — so nothing could show the user
+            # what the agent had been told.
+            "instructions": record.get("instructions"),
             "agent": agent,
             "open_loops": summary["open_loops"],
             "updated": summary["updated"],

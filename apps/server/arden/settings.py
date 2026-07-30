@@ -1,15 +1,16 @@
 import hashlib
 import hmac
 import json
-import os
 import secrets
-from pathlib import Path
 
+from arden.constants import ARDEN_DIR
 from arden.logging import get_logger
 
 _logger = get_logger(__name__)
 
-ARDEN_DIR = Path(os.environ.get("ARDEN_DIR", str(Path.home() / ".arden"))).expanduser()
+# Re-exported: ARDEN_DIR's canonical home is arden.constants, but config.py and
+# others have always imported it from here.
+__all__ = ["ARDEN_DIR"]
 
 
 def load_user_settings() -> dict:

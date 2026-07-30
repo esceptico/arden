@@ -10,6 +10,16 @@ structured outputs keep their own local stubs (admit/reconcile/consolidate),
 since those assert exact-call semantics per CONTRACTS.md.
 """
 
+import os
+import tempfile
+
+# Must precede every `arden` import: arden.logging attaches its rotating file
+# handler at import time, so without this a test run appends thousands of lines
+# to the developer's real ~/.arden/logs/arden.log. Only the log sink is moved —
+# redirecting ARDEN_DIR itself also hides settings.json, and a number of tests
+# silently depend on the provider keys there to resolve a model.
+os.environ.setdefault("ARDEN_LOG_DIR", tempfile.mkdtemp(prefix="arden-test-logs-"))
+
 import numpy as np
 import pytest
 
