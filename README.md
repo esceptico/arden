@@ -6,14 +6,14 @@ A local-first personal assistant. Not a coding agent: a place to keep the moving
 
 ![Arden](docs/images/main.png)
 
-Details, screenshots, and the API reference live in [`docs/`](docs/).
+**Documentation: [arden.timganiev.com](https://arden.timganiev.com)**
 
 ## Install
 
 The desktop app and the supported development setup run from a source checkout:
 
 ```bash
-git clone https://github.com/esceptico/ntrp.git arden
+git clone https://github.com/esceptico/arden.git arden
 cd arden
 cp .env.example .env  # set one provider key, or connect in Desktop
 just install
@@ -21,7 +21,7 @@ just server      # terminal 1
 just desktop     # terminal 2
 ```
 
-Paste the API key printed by the server on first desktop launch.
+Paste the API key printed by the server on first desktop launch. Full walkthrough in the [quickstart](https://arden.timganiev.com/quickstart).
 
 Server-only Docker deployment:
 

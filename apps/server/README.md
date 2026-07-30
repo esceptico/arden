@@ -25,4 +25,4 @@ Run tests:
 uv run pytest
 ```
 
-Repository and full documentation: https://github.com/esceptico/ntrp
+Repository and full documentation: https://github.com/esceptico/arden

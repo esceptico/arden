@@ -14,7 +14,7 @@ description: "Get arden running locally."
 Arden currently runs from a source checkout:
 
 ```bash
-git clone https://github.com/esceptico/ntrp.git arden
+git clone https://github.com/esceptico/arden.git arden
 cd arden
 cp .env.example .env
 just install
@@ -69,15 +69,7 @@ Enter this in a desktop client to connect. It won't be shown again.
 Desktop currently requires a source checkout. In a second terminal:
 
 ```bash
-cd arden
 just desktop
-```
-
-Or directly:
-
-```bash
-cd apps/desktop
-bun run dev
 ```
 
 Paste your API key in the connection screen. If no LLM provider is configured, provider onboarding appears so you can connect a provider and choose defaults.

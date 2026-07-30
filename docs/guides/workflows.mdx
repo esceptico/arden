@@ -1,0 +1,180 @@
+---
+title: "Workflows and subagents"
+description: "The five ways Arden spawns agents, and the curated multi-agent presets."
+---
+
+## Overview
+
+A single agent turn is one model in one context. Some work doesn't fit that:
+it's too broad to read in one pass, too easy to get confidently wrong, or it
+should keep running after you've closed the chat.
+
+Arden answers that with five spawn surfaces. They differ in one axis — who waits
+for the result — and picking the wrong one is the most common mistake.
+
+| Surface | Awaited? | Use for |
+|---------|----------|---------|
+| `research` | Yes | One investigation whose answer you need now |
+| `background` | No | One detached investigation that delivers itself when done |
+| `workflow` | Yes | A curated multi-agent pipeline over a known shape of work |
+| `create_automation` | No | Recurring scheduled or event-driven work |
+| `create_loop` | No | Adaptive repeated work in this chat that stops on a condition |
+
+## research
+
+Spawns a subagent with every read-only tool and waits for its answer. Several
+can run in parallel in one turn, and a research agent can nest its own children.
+
+`depth` scales thoroughness: `quick` for a fast lookup, `normal` for balanced,
+`deep` for exhaustive. At `normal` and `deep` the agent writes bulky
+intermediates to research artifacts and returns a distilled summary plus a
+manifest, so a long investigation doesn't flood the parent's context.
+
+Nested research shares an **exploration ledger**: every active and completed
+task in the spawn tree, injected into each new child's prompt so siblings don't
+re-read the same sources.
+
+## background
+
+Spawns a read-only agent in its own session, detached. The tool returns a session
+ID immediately and the result arrives later as a hidden message in your
+conversation — don't poll for it.
+
+Because it owns a session, you can steer it while it runs:
+
+- `send_message(session_id=...)` to redirect it
+- `read_session(session_id=...)` to watch its work
+- `cancel_agent(session_id=...)` to stop it
+
+Use it for work that outlives your attention: deep research, multi-source
+investigation, slow data gathering.
+
+## workflow
+
+`research` and `background` delegate a task and trust the agent to figure out
+the shape. A **workflow** fixes the shape and lets the agents fill it in.
+
+Workflows are deterministic scripts over three combinators:
+
+- `agent(task)` — spawn one worker; with a schema it returns a validated object
+  instead of prose
+- `parallel([...])` — fan out with a barrier, when the next stage needs every
+  result together
+- `pipeline(items, stage1, stage2, ...)` — run each item through every stage
+  independently, with no barrier, so item A can reach stage 3 while item B is
+  still in stage 1
+
+Workers are leaves: they can't call `workflow`, `research`, or `background`, so a
+pipeline can't recurse into itself or fan out without bound. Concurrency and
+total spawns are capped per run, and a workflow shares the turn's token budget.
+
+<Note>
+Only curated built-in presets run. Inline and user-authored Python workflow
+scripts are disabled — a workflow script executes in-process, so the trust
+boundary is "shipped with Arden", not "written by an agent at runtime".
+</Note>
+
+### Built-in presets
+
+Run one by name with the `workflow` tool, or invoke its slash command in chat.
+
+#### `/audit` — find, verify, rank
+
+Parallel finders sweep a target along each dimension, every fresh finding is
+adversarially verified by independent skeptics, and only survivors get ranked
+into a report. Loops until a round finds nothing new.
+
+```
+workflow(name="audit", args={"target": "apps/server/arden/server", "dimensions": ["bugs", "security"], "depth": "normal"})
+```
+
+- `target` (default `"."`) — a dir, file, glob, or `"the diff"`
+- `dimensions` — defaults to a correctness/security/performance/edge-cases set
+- `depth` — `quick` | `normal` | `deep`; scales skeptics per finding and max rounds
+
+The adversarial pass is the point: a single finder reports plausible-sounding
+issues, and skeptics prompted to refute them kill most of the false ones.
+
+#### `/investigate` — parallel readers, cited synthesis
+
+Derives distinct investigation angles, sends a reader at each in parallel (each
+citing sources rather than dumping files), then synthesizes one cited answer.
+
+```
+workflow(name="investigate", args={"target": "apps/server/arden", "question": "How does the SSE pipeline work end to end?", "breadth": "normal"})
+```
+
+- `target` (default `"."`) — a dir, repo, or topic for web research
+- `question` — what you want answered
+- `breadth` — `focused` | `normal` | `wide`; number of parallel readers
+
+#### `/panel` — diverge, judge, synthesize
+
+Proposes N approaches from deliberately different lenses (simplest, most robust,
+unconventional, lowest-risk), scores each against your criteria with independent
+judges, then recommends one while grafting the best ideas from the runners-up.
+
+```
+workflow(name="panel", args={"question": "How should we shard the event bus per tenant?", "n": 3, "criteria": ["correctness", "simplicity", "blast radius"]})
+```
+
+- `question` — the decision to make
+- `n` (1–5, default 3) — number of proposals
+- `criteria` — defaults to correctness/simplicity/risk
+
+Use it when the solution space is wide enough that one-shot reasoning would
+anchor on the first idea.
+
+#### `/implement` — recon, blueprint, build, review, verify
+
+Recon readers answer the questions an implementer would otherwise have to ask.
+An architect writes a blueprint pinning every cross-file contract and splitting
+the work into 1–3 workstreams with disjoint files. Builders implement those in
+parallel from the blueprint alone. Review lenses feed skeptics, survivors get
+fixed, and a final gate runs the tests and judges the result against the spec.
+
+```
+workflow(name="implement", args={"spec": "<requirements, contracts, non-goals>", "target": "apps", "depth": "normal"})
+```
+
+- `spec` (required) — the richer, the better
+- `target` (default `"."`) — the dir or repo to work in
+- `depth` — `quick` | `normal` | `deep`
+
+Disjoint files are what makes parallel builders safe: the blueprint is their
+only shared context, so they can't disagree about a contract mid-build.
+
+## Agent types
+
+Workflow stages can request an agent type instead of writing a persona from
+scratch. Each type is a tool profile plus a prompt: `explorer`, `reviewer`,
+`planner`, `verifier` (all read-only), and `builder` (may write).
+
+## Watching a run
+
+Workflow and subagent runs stream as first-class events, not text. In the
+desktop app you get a workflow card with per-phase progress and agent counts,
+and the Activity/Inspect surfaces show tool calls and run lifecycle events for
+each child.
+
+Subagent sessions never live-stream into their own transcript — their events
+surface on the parent's stream. Over the API:
+
+```bash
+curl http://localhost:6877/chat/{session_id}/workflows \
+  -H "Authorization: Bearer $ARDEN_API_KEY"
+```
+
+See the [Chat API](/api-reference/chat) for inspecting and controlling child
+agents.
+
+## Models and cost
+
+Workflow agents default to the model configured for the `workflow` role in
+**Settings → Models**, and research agents to the `research` role. Presets accept
+per-stage model overrides so a cheap tier can do the finding while a stronger one
+does the synthesis.
+
+A workflow is genuinely more expensive than one turn — `audit` at `deep` spawns
+finders, skeptics per finding, and a synthesizer. Reach for a preset when being
+wrong is costly, not for a question one agent could answer.

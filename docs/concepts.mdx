@@ -1,0 +1,107 @@
+---
+title: "Concepts"
+description: "How facts, wiki pages, areas, automations, and agents fit together."
+---
+
+Arden is five ideas stacked on each other. Read this once and the rest of the
+docs stop looking like unrelated features.
+
+## The stack
+
+| Layer | What it is | Guide |
+|-------|------------|-------|
+| **Facts** | The correctness layer: durable, source-backed, event-sourced knowledge | [Memory](/guides/memory) |
+| **Wiki pages** | The readable layer: versioned Markdown that cites facts | [Memory](/guides/memory) |
+| **Areas** | Life domains, each optionally attached to one managed page | [Areas](/guides/areas) |
+| **Automations** | The engine: triggers that run an agent on their own | [Automations](/guides/automations) |
+| **Agents** | The workers: chat, subagents, workflows, background runs | [Workflows](/guides/workflows) |
+
+Each layer only depends on the one below it. Areas don't have their own storage —
+they attach a wiki page. Area agents aren't a separate runtime — they're
+automations with a narrow tool scope.
+
+## Facts vs wiki pages
+
+The split exists because two different jobs were fighting inside one store.
+
+**Facts** answer *"what is true, and how do we know?"* A fact has a stable ID,
+a lifecycle, provenance, and immutable event history. Nothing edits a fact in
+place: Arden prepares an exact change plan, then commits it only if the affected
+facts haven't moved underneath it. Plans can create, review, amend, supersede,
+expire, or retract.
+
+**Wiki pages** answer *"what should I read to understand this?"* They're
+Markdown, versioned, and organized in directories. A page cites the facts it
+rests on rather than duplicating them, so correcting a fact doesn't require
+rewriting prose.
+
+The rule of thumb: if you'd want to see the receipt, it's a fact. If you'd want
+to read it over coffee, it's a page.
+
+## Where the proactivity comes from
+
+Nothing above acts on its own. **Automations** are the only thing that does.
+
+An automation is a trigger plus a prompt. Triggers can be scheduled, interval,
+event-driven, idle, message-count, or a Slack message. When one fires, it runs
+an agent — by default in a durable **channel session** whose transcript you can
+open, read, and reply to.
+
+Two things constrain what that agent may do:
+
+- A **tool scope**: an allowlist on top of a read-only floor. No scope means
+  read-only, regardless of what the prompt asks for.
+- **Approval**: mutating or external actions stop and wait for you unless
+  auto-approve is on for actions the scope already granted.
+
+## What an area adds
+
+An automation on its own still reports into a transcript you have to go read.
+An **area** is what turns that into something you don't have to check.
+
+An area is a domain — apartment hunt, health, a side project. It may attach one
+managed wiki page and delegate a standing custodian. The custodian is a channel
+automation with an observe-only scope and one terminal action,
+`submit_area_report`, which atomically commits its work, evidence, at most three
+salient asks, and when to look again.
+
+That cap is the whole point. Every run re-decides the area's asks against stable
+keys, so you get a current shortlist instead of a growing backlog. Home shows
+each area's current ask gathered into one focus set. **A quiet area is a good
+outcome, not a gap.**
+
+## Which agent surface to use
+
+Arden spawns agents five ways, and picking the wrong one is the most common
+mistake:
+
+| Surface | Use when |
+|---------|----------|
+| `research` | One investigation you want to wait for |
+| `background` | One detached investigation that delivers itself when done |
+| `workflow` | A curated multi-agent pipeline (find→verify, diverge→judge) |
+| `create_automation` | Recurring scheduled or event-driven work |
+| `create_loop` | Adaptive repeated work in this chat that stops on a condition |
+
+See [Workflows and subagents](/guides/workflows) for what each one actually does.
+
+## Everything runs locally
+
+The server, the desktop client, the facts database, and the wiki all live on
+your machine. Arden talks to LLM providers and to the integrations you connect;
+it has no backend of its own.
+
+<CardGroup cols={2}>
+  <Card title="Memory" icon="brain" href="/guides/memory">
+    Facts, wiki pages, and how recall works.
+  </Card>
+  <Card title="Areas" icon="layer-group" href="/guides/areas">
+    Life domains and standing custodians.
+  </Card>
+  <Card title="Automations" icon="clock" href="/guides/automations">
+    Triggers, channels, and tool scoping.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/guides/workflows">
+    Subagents, presets, and the spawn surfaces.
+  </Card>
+</CardGroup>

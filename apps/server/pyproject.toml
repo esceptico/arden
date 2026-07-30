@@ -42,8 +42,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/esceptico/ntrp"
-Issues = "https://github.com/esceptico/ntrp/issues"
+Repository = "https://github.com/esceptico/arden"
+Issues = "https://github.com/esceptico/arden/issues"
 
 [project.scripts]
 arden-server = "arden.cli:main"

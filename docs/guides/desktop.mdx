@@ -9,20 +9,24 @@ The desktop app is the primary arden client. It connects to the local server ove
 
 ## Run from source
 
+Install once from the repo root, then run the two processes in separate
+terminals:
+
 ```bash
-cd apps/desktop
-bun install
-bun run dev
+just install
+just server
+just desktop
 ```
 
-The app connects to `http://localhost:6877` by default. Start the server first with `arden-server serve` or `just server`.
+The app connects to `http://localhost:6877` by default. Start the server first.
+See the [Quickstart](/quickstart) for the full first-run walkthrough.
 
 ## Connect
 
 On first launch, enter:
 
 - **Server URL**: usually `http://localhost:6877`
-- **API key**: the one-time key printed by `arden-server serve`
+- **API key**: the one-time key printed by the server on first start
 
 The API key is stored locally. When the OS supports Electron `safeStorage`, the desktop app encrypts it before persisting.
 

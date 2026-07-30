@@ -18,6 +18,7 @@
             "pages": [
               "index",
               "quickstart",
+              "concepts",
               "guides/desktop"
             ]
           },
@@ -27,6 +28,7 @@
               "guides/areas",
               "guides/memory",
               "guides/automations",
+              "guides/workflows",
               "guides/tools",
               "guides/html-widgets",
               "guides/skills"
@@ -80,7 +82,7 @@
       "anchors": [
         {
           "anchor": "GitHub",
-          "href": "https://github.com/esceptico/ntrp",
+          "href": "https://github.com/esceptico/arden",
           "icon": "github"
         }
       ]
@@ -102,7 +104,7 @@
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/esceptico/ntrp"
+      "github": "https://github.com/esceptico/arden"
     }
   }
 }
