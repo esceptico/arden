@@ -48,7 +48,7 @@ class Indexer:
         store = SearchStore(
             self._conn,
             self.embedding.dim if self.embedding else None,
-            self.embedding.model if self.embedding else None,
+            (self.embedding.identity or self.embedding.model) if self.embedding else None,
         )
         self.needs_rebuild = await store.init_schema()
         retry_at = await store.get_embedding_retry_at() if self.embedding is not None else None

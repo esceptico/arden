@@ -12,7 +12,7 @@ from arden.llm.models import EmbeddingModel, Provider
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.core import Runtime
 from arden.server.runtime.knowledge import KnowledgeRuntime
-from arden.server.schemas import AddCustomModelRequest, UpdateConfigRequest
+from arden.server.schemas import AddCustomEmbeddingModelRequest, AddCustomModelRequest, UpdateConfigRequest
 
 
 class _Integrations:
@@ -85,6 +85,22 @@ def test_custom_model_request_rejects_output_larger_than_context():
         max_output_tokens=4096,
     )
     assert request.max_output_tokens == 4096
+
+
+def test_custom_embedding_request_requires_supported_dimensions():
+    with pytest.raises(ValidationError):
+        AddCustomEmbeddingModelRequest(
+            model_id="local/qwen",
+            base_url="http://127.0.0.1:8081/v1",
+            dimensions=0,
+        )
+
+    request = AddCustomEmbeddingModelRequest(
+        model_id="local/qwen",
+        base_url="http://127.0.0.1:8081/v1",
+        dimensions=1024,
+    )
+    assert request.dimensions == 1024
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from arden.server.deps import require_config_service
 from arden.server.routers.providers import connected_providers
 from arden.server.runtime import Runtime, get_runtime
 from arden.server.schemas import (
+    AddCustomEmbeddingModelRequest,
     AddCustomModelRequest,
     UpdateConfigRequest,
     UpdateEmbeddingRequest,
@@ -290,6 +291,35 @@ async def create_custom_model(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "created", "model_id": model.id}
+
+
+@router.post("/models/custom/embedding")
+async def create_custom_embedding_model(
+    req: AddCustomEmbeddingModelRequest,
+    cfg_svc: ConfigService = Depends(require_config_service),
+):
+    try:
+        model = await cfg_svc.create_custom_embedding_model(
+            model_id=req.model_id,
+            base_url=req.base_url,
+            dim=req.dimensions,
+            api_key=req.api_key,
+        )
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"status": "created", "model_id": model.id}
+
+
+@router.delete("/models/custom/embedding/{model_id:path}")
+async def delete_custom_embedding_model(
+    model_id: str,
+    cfg_svc: ConfigService = Depends(require_config_service),
+):
+    try:
+        await cfg_svc.delete_custom_embedding_model(model_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"status": "deleted", "model_id": model_id}
 
 
 @router.delete("/models/custom/{model_id:path}")

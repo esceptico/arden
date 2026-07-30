@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import {
+  createCustomEmbeddingModelApi,
+  deleteCustomEmbeddingModelApi,
   getEmbeddingModelsApi,
   getIndexStatusApi,
   getSetupStatusApi,
@@ -182,6 +184,31 @@ test("embedding API wrappers preserve explicit confirmation and nullable disable
   expect(JSON.parse(requests[1].body ?? "{}")).toEqual({ embedding_model: null, confirmed: true });
   expect(requests[1].method).toBe("POST");
   expect(requests[3].method).toBe("POST");
+});
+
+test("custom embedding API wrappers preserve endpoint, dimensions, and encoded model ids", async () => {
+  const requests = installRequestRecorder({});
+  const appConfig = { serverUrl: "http://localhost:6877", apiKey: "" };
+
+  await createCustomEmbeddingModelApi(appConfig, {
+    model_id: "local/qwen embed",
+    base_url: "http://127.0.0.1:8081/v1",
+    dimensions: 1024,
+    api_key: null,
+  });
+  await deleteCustomEmbeddingModelApi(appConfig, "local/qwen embed");
+
+  expect(requests.map((request) => request.path)).toEqual([
+    "/models/custom/embedding",
+    "/models/custom/embedding/local%2Fqwen%20embed",
+  ]);
+  expect(JSON.parse(requests[0].body ?? "{}")).toEqual({
+    model_id: "local/qwen embed",
+    base_url: "http://127.0.0.1:8081/v1",
+    dimensions: 1024,
+    api_key: null,
+  });
+  expect(requests.map((request) => request.method)).toEqual(["POST", "DELETE"]);
 });
 
 test("setup API wrappers preserve endpoint contracts", async () => {

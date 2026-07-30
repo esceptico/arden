@@ -6,7 +6,7 @@ import pytest
 from google.genai.errors import ClientError
 
 from arden.config import Config
-from arden.embedder import EmbeddingConfig
+from arden.embedder import Embedder, EmbeddingConfig
 from arden.llm.base import EmbeddingClient
 from arden.llm.models import EmbeddingModel, Provider
 from arden.search.types import RawItem
@@ -81,6 +81,14 @@ class _RateLimitedOnceClient(_SuccessClient):
                 },
             )
         return [[1.0] for _text in texts]
+
+
+async def test_embedder_rejects_a_custom_endpoint_with_the_wrong_dimensions(monkeypatch):
+    client = _SuccessClient()
+    monkeypatch.setattr("arden.embedder.get_embedding_client", lambda _model: client)
+
+    with pytest.raises(ValueError, match=r"returned shape \(1, 1\); expected \(1, 1024\)"):
+        await Embedder(EmbeddingConfig("Qwen3-Embedding-0.6B", 1024)).embed_one("hello")
 
 
 async def test_rate_limit_cooldown_survives_restart_and_delays_the_next_call(tmp_path, monkeypatch):

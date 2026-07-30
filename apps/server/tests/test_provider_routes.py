@@ -13,6 +13,8 @@ def test_provider_routes_are_registered_once():
 
     assert "/providers" in paths
     assert "/providers/{provider_id}/connect" in paths
+    assert "/models/custom/embedding" in paths
+    assert "/models/custom/embedding/{model_id}" in paths
     assert "/services" in paths
     assert "/services/{service_id}/connect" in paths
     assert "/tool-providers" in paths
@@ -41,3 +43,6 @@ async def test_custom_embedding_only_provider_is_connected(monkeypatch):
     custom = next(provider for provider in payload["providers"] if provider["id"] == "custom")
     assert custom["connected"] is True
     assert custom["embedding_models"] == ["local/embed"]
+    assert custom["custom_embedding_models"] == [
+        {"id": "local/embed", "base_url": "http://localhost", "dimensions": 3}
+    ]

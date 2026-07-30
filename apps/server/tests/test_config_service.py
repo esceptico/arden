@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from arden.config import Config
-from arden.llm.models import Model, Provider
+from arden.llm.models import EmbeddingModel, Model, Provider
 from arden.services.config import ConfigService
 
 
@@ -132,6 +132,96 @@ async def test_config_service_creates_custom_model_and_stores_api_key(monkeypatc
     ]
     assert persisted == {"custom_model_keys": {"local/test": "secret"}}
     assert reload_seen == [{"custom_model_keys": {"local/test": "secret"}}]
+
+
+@pytest.mark.asyncio
+async def test_config_service_creates_custom_embedding_model_and_stores_api_key(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted = {}
+    added: list[dict] = []
+    reload_seen: list[dict] = []
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    def add_model(**kwargs) -> EmbeddingModel:
+        added.append(kwargs)
+        return EmbeddingModel(
+            id=kwargs["model_id"],
+            provider=Provider.CUSTOM,
+            dim=kwargs["dim"],
+            base_url=kwargs["base_url"],
+        )
+
+    async def reload_config() -> None:
+        reload_seen.append(deepcopy(persisted))
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "add_custom_embedding_model", add_model)
+    monkeypatch.setattr(config_module, "get_embedding_models", lambda: {})
+    monkeypatch.setattr(config_module, "get_models", lambda: {})
+
+    service = ConfigService(on_config_change=reload_config)
+    model = await service.create_custom_embedding_model(
+        model_id="Qwen3-Embedding-0.6B",
+        base_url="http://127.0.0.1:8081/v1",
+        dim=1024,
+        api_key="secret",
+    )
+
+    assert model.id == "Qwen3-Embedding-0.6B"
+    assert added == [
+        {
+            "model_id": "Qwen3-Embedding-0.6B",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "dim": 1024,
+        }
+    ]
+    assert persisted == {"custom_model_keys": {"Qwen3-Embedding-0.6B": "secret"}}
+    assert reload_seen == [persisted]
+
+
+@pytest.mark.asyncio
+async def test_deleting_active_custom_embedding_clears_selection_and_key(monkeypatch):
+    import arden.services.config as config_module
+
+    model = EmbeddingModel(
+        id="local/embed",
+        provider=Provider.CUSTOM,
+        dim=1024,
+        base_url="http://127.0.0.1:8081/v1",
+    )
+    persisted = {
+        "embedding_model": model.id,
+        "custom_model_keys": {model.id: "secret"},
+    }
+    removed: list[str] = []
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(
+        config_module,
+        "get_embedding_models_by_provider",
+        lambda _provider: {model.id: model},
+    )
+    monkeypatch.setattr(
+        config_module,
+        "remove_custom_embedding_model",
+        lambda model_id: removed.append(model_id),
+    )
+
+    service = ConfigService(on_config_change=lambda: _noop())
+    await service.delete_custom_embedding_model(model.id)
+
+    assert removed == [model.id]
+    assert persisted == {"embedding_model": None}
 
 
 @pytest.mark.asyncio

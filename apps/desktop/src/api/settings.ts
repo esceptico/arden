@@ -130,6 +130,12 @@ export interface CustomModelSummary {
   context_window: number;
 }
 
+export interface CustomEmbeddingModelSummary {
+  id: string;
+  base_url: string | null;
+  dimensions: number;
+}
+
 export interface ModelProvider {
   id: string;
   name: string;
@@ -140,6 +146,7 @@ export interface ModelProvider {
   model_count?: number;
   models: string[] | CustomModelSummary[];
   embedding_models: string[];
+  custom_embedding_models?: CustomEmbeddingModelSummary[];
 }
 
 export interface OpenAICodexOAuthStart {
@@ -288,6 +295,13 @@ export interface CreateCustomModelPayload {
   api_key?: string | null;
 }
 
+export interface CreateCustomEmbeddingModelPayload {
+  model_id: string;
+  base_url: string;
+  dimensions: number;
+  api_key?: string | null;
+}
+
 export async function listServicesApi(config: AppConfig): Promise<ServiceConnection[]> {
   const r = await apiWithConfig<{ services: ServiceConnection[] }>(config, "/services");
   return r.services;
@@ -386,6 +400,27 @@ export async function deleteCustomModelApi(
   return apiWithConfig<{ status: string; model_id: string }>(
     config,
     `/models/custom/${encodeURIComponent(modelId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function createCustomEmbeddingModelApi(
+  config: AppConfig,
+  payload: CreateCustomEmbeddingModelPayload,
+): Promise<{ status: string; model_id: string }> {
+  return apiWithConfig<{ status: string; model_id: string }>(config, "/models/custom/embedding", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCustomEmbeddingModelApi(
+  config: AppConfig,
+  modelId: string,
+): Promise<{ status: string; model_id: string }> {
+  return apiWithConfig<{ status: string; model_id: string }>(
+    config,
+    `/models/custom/embedding/${encodeURIComponent(modelId)}`,
     { method: "DELETE" },
   );
 }

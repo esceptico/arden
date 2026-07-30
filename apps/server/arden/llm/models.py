@@ -407,6 +407,9 @@ class ModelRegistry:
     def add_embedding_model(self, model: EmbeddingModel) -> None:
         self._embedding_models[model.id] = model
 
+    def remove_embedding_model(self, model_id: str) -> None:
+        del self._embedding_models[model_id]
+
 
 _registry = ModelRegistry(DEFAULTS, EMBEDDING_DEFAULTS)
 _custom_loaded = False
@@ -544,6 +547,35 @@ def add_custom_model(
     return model
 
 
+def add_custom_embedding_model(
+    model_id: str,
+    base_url: str,
+    dim: int,
+    api_key_env: str | None = None,
+) -> EmbeddingModel:
+    raw = _read_models_json() or {}
+    embedding_raw = raw.setdefault("embedding", {})
+    if not isinstance(embedding_raw, dict):
+        raise ValueError("Custom embedding model configuration must be an object")
+
+    entry: dict = {"base_url": base_url, "dim": dim}
+    if api_key_env:
+        entry["api_key_env"] = api_key_env
+    embedding_raw[model_id] = entry
+    _models_path().parent.mkdir(exist_ok=True)
+    _models_path().write_text(json.dumps(raw, indent=2))
+
+    model = EmbeddingModel(
+        id=model_id,
+        provider=Provider.CUSTOM,
+        dim=dim,
+        base_url=base_url,
+        api_key_env=api_key_env,
+    )
+    _registry.add_embedding_model(model)
+    return model
+
+
 def remove_custom_model(model_id: str) -> None:
     try:
         model = get_model(model_id)
@@ -558,3 +590,23 @@ def remove_custom_model(model_id: str) -> None:
     if raw is not None:
         raw.pop(model_id, None)
         _models_path().write_text(json.dumps(raw, indent=2))
+
+
+def remove_custom_embedding_model(model_id: str) -> None:
+    try:
+        model = get_embedding_model(model_id)
+    except ValueError:
+        raise ValueError(f"Not a custom embedding model: {model_id}") from None
+    if model.provider != Provider.CUSTOM:
+        raise ValueError(f"Not a custom embedding model: {model_id}")
+
+    raw = _read_models_json()
+    if raw is not None:
+        embedding_raw = raw.get("embedding")
+        if isinstance(embedding_raw, dict):
+            embedding_raw.pop(model_id, None)
+            if not embedding_raw:
+                raw.pop("embedding", None)
+        _models_path().write_text(json.dumps(raw, indent=2))
+
+    _registry.remove_embedding_model(model_id)

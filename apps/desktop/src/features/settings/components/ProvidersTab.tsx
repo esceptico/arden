@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { connectServiceApi, createCustomModelApi, connectModelProviderApi, deleteCustomModelApi, disconnectModelProviderApi, disconnectServiceApi, getOpenAICodexOAuthStatusApi, listModelProvidersApi, listServicesApi, startOpenAICodexOAuthApi, type ModelProvider, type OpenAICodexOAuthStatus, type ServiceConnection } from "@/api/settings";
+import {
+  connectServiceApi,
+  createCustomEmbeddingModelApi,
+  createCustomModelApi,
+  connectModelProviderApi,
+  deleteCustomEmbeddingModelApi,
+  deleteCustomModelApi,
+  disconnectModelProviderApi,
+  disconnectServiceApi,
+  getOpenAICodexOAuthStatusApi,
+  listModelProvidersApi,
+  listServicesApi,
+  startOpenAICodexOAuthApi,
+  type ModelProvider,
+  type OpenAICodexOAuthStatus,
+  type ServiceConnection,
+} from "@/api/settings";
 import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
 import { ProviderRow } from "@/features/settings/components/ProviderRow";
@@ -24,8 +40,11 @@ import { Loader2, X } from "@/components/icons";
 import { ICON } from "@/lib/icons";
 import { providerReadinessSummary } from "@/features/settings/lib/providerConnection";
 import {
+  canSaveCustomEmbeddingModelDraft,
   canSaveCustomModelDraft,
+  defaultCustomEmbeddingModelDraft,
   defaultCustomModelDraft,
+  type CustomEmbeddingModelDraft,
   type CustomModelDraft,
 } from "@/features/settings/lib/customModelDraft";
 import {
@@ -52,6 +71,9 @@ export function ProvidersTab() {
   const [codexStatus, setCodexStatus] = useState<OpenAICodexOAuthStatus | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState<CustomModelDraft>(() => defaultCustomModelDraft());
+  const [customEmbeddingDraft, setCustomEmbeddingDraft] = useState<CustomEmbeddingModelDraft>(
+    () => defaultCustomEmbeddingModelDraft(),
+  );
 
   const sortedProviders = useMemo(() => {
     const rank = new Map(PRIMARY_PROVIDERS.map((id, index) => [id, index]));
@@ -156,7 +178,7 @@ export function ProvidersTab() {
   }
 
   async function createCustomModel() {
-    if (!canSaveCustomModelDraft(customDraft)) return;
+    if (pendingId || !canSaveCustomModelDraft(customDraft)) return;
     setPendingId("custom:create");
     setError(null);
     try {
@@ -178,6 +200,7 @@ export function ProvidersTab() {
   }
 
   async function deleteCustomModel(modelId: string) {
+    if (pendingId) return;
     setPendingId(`custom:delete:${modelId}`);
     setError(null);
     try {
@@ -191,8 +214,48 @@ export function ProvidersTab() {
     }
   }
 
+  async function createCustomEmbeddingModel() {
+    if (pendingId || !canSaveCustomEmbeddingModelDraft(customEmbeddingDraft)) return;
+    setPendingId("custom:embedding:create");
+    setError(null);
+    try {
+      await createCustomEmbeddingModelApi(config, {
+        model_id: customEmbeddingDraft.model_id.trim(),
+        base_url: customEmbeddingDraft.base_url.trim(),
+        dimensions: customEmbeddingDraft.dimensions,
+        api_key: customEmbeddingDraft.api_key.trim() || null,
+      });
+      setCustomEmbeddingDraft(defaultCustomEmbeddingModelDraft());
+      await refresh();
+      await fetchServerConfig();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function deleteCustomEmbeddingModel(modelId: string) {
+    if (pendingId) return;
+    setPendingId(`custom:embedding:delete:${modelId}`);
+    setError(null);
+    try {
+      await deleteCustomEmbeddingModelApi(config, modelId);
+      await refresh();
+      await fetchServerConfig();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPendingId(null);
+    }
+  }
+
   function updateCustomDraft(patch: Partial<CustomModelDraft>) {
     setCustomDraft((prev) => ({ ...prev, ...patch }));
+  }
+
+  function updateCustomEmbeddingDraft(patch: Partial<CustomEmbeddingModelDraft>) {
+    setCustomEmbeddingDraft((prev) => ({ ...prev, ...patch }));
   }
 
   const hasLoadedData = loadedOnce || providers.length > 0;
@@ -240,10 +303,14 @@ export function ProvidersTab() {
                 <CustomModelsPanel
                   provider={provider}
                   draft={customDraft}
+                  embeddingDraft={customEmbeddingDraft}
                   pendingId={pendingId}
                   onDraftChange={updateCustomDraft}
+                  onEmbeddingDraftChange={updateCustomEmbeddingDraft}
                   onCreate={() => void createCustomModel()}
+                  onCreateEmbedding={() => void createCustomEmbeddingModel()}
                   onDelete={(modelId) => void deleteCustomModel(modelId)}
+                  onDeleteEmbedding={(modelId) => void deleteCustomEmbeddingModel(modelId)}
                 />
               </motion.div>
             )}

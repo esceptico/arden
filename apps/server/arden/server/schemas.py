@@ -641,6 +641,13 @@ class AddCustomModelRequest(BaseModel):
         return self
 
 
+class AddCustomEmbeddingModelRequest(BaseModel):
+    model_id: str = Field(..., min_length=1)
+    base_url: str = Field(..., min_length=1)
+    dimensions: int = Field(..., gt=0, le=65_536)
+    api_key: str | None = None
+
+
 # --- Skills ---
 
 

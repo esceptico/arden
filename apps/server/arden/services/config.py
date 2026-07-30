@@ -3,7 +3,19 @@ from contextlib import suppress
 from copy import deepcopy
 
 from arden.config import PERSIST_KEYS, PROVIDER_KEY_FIELDS, ROLE_NAMES
-from arden.llm.models import Model, Provider, add_custom_model, get_models_by_provider, remove_custom_model
+from arden.llm.models import (
+    EmbeddingModel,
+    Model,
+    Provider,
+    add_custom_embedding_model,
+    add_custom_model,
+    get_embedding_models,
+    get_embedding_models_by_provider,
+    get_models,
+    get_models_by_provider,
+    remove_custom_embedding_model,
+    remove_custom_model,
+)
 from arden.logging import get_logger
 from arden.settings import load_user_settings, save_user_settings
 
@@ -167,6 +179,8 @@ class ConfigService:
         max_output_tokens: int,
         api_key: str | None = None,
     ) -> Model:
+        if model_id in get_embedding_models():
+            raise ValueError(f"Model ID {model_id!r} is already used by an embedding model")
         existing_custom = model_id in get_models_by_provider(Provider.CUSTOM)
         try:
             model = add_custom_model(
@@ -185,6 +199,29 @@ class ConfigService:
             raise
         return model
 
+    async def create_custom_embedding_model(
+        self,
+        *,
+        model_id: str,
+        base_url: str,
+        dim: int,
+        api_key: str | None = None,
+    ) -> EmbeddingModel:
+        if model_id in get_embedding_models():
+            raise ValueError(f"Embedding model {model_id!r} already exists")
+        if model_id in get_models():
+            raise ValueError(f"Model ID {model_id!r} is already used by a chat model")
+        try:
+            model = add_custom_embedding_model(model_id=model_id, base_url=base_url, dim=dim)
+            if api_key:
+                await self._set_custom_model_key(model_id, api_key)
+            else:
+                await self._on_config_change()
+        except Exception:
+            await self._remove_custom_embedding_model_after_failed_create(model_id)
+            raise
+        return model
+
     async def _set_custom_model_key(self, model_id: str, api_key: str) -> None:
         def mutate(settings: dict) -> None:
             settings.setdefault("custom_model_keys", {})[model_id] = api_key
@@ -199,6 +236,14 @@ class ConfigService:
         except Exception:
             _logger.exception("Failed to reload runtime after reverting custom model creation")
 
+    async def _remove_custom_embedding_model_after_failed_create(self, model_id: str) -> None:
+        with suppress(Exception):
+            remove_custom_embedding_model(model_id)
+        try:
+            await self._on_config_change()
+        except Exception:
+            _logger.exception("Failed to reload runtime after reverting custom embedding model creation")
+
     async def delete_custom_model(self, model_id: str) -> None:
         existing = get_models_by_provider(Provider.CUSTOM).get(model_id)
         if existing is None:
@@ -209,6 +254,18 @@ class ConfigService:
             await self._remove_custom_model_settings(model_id)
         except Exception:
             await self._restore_custom_model_after_failed_delete(existing)
+            raise
+
+    async def delete_custom_embedding_model(self, model_id: str) -> None:
+        existing = get_embedding_models_by_provider(Provider.CUSTOM).get(model_id)
+        if existing is None:
+            raise ValueError(f"Not a custom embedding model: {model_id}")
+
+        remove_custom_embedding_model(model_id)
+        try:
+            await self._remove_custom_embedding_model_settings(model_id)
+        except Exception:
+            await self._restore_custom_embedding_model_after_failed_delete(existing)
             raise
 
     async def _remove_custom_model_settings(self, model_id: str) -> None:
@@ -225,6 +282,19 @@ class ConfigService:
 
         await self._with_rollback(mutate)
 
+    async def _remove_custom_embedding_model_settings(self, model_id: str) -> None:
+        def mutate(settings: dict) -> None:
+            custom_keys = settings.get("custom_model_keys", {})
+            custom_keys.pop(model_id, None)
+            if custom_keys:
+                settings["custom_model_keys"] = custom_keys
+            else:
+                settings.pop("custom_model_keys", None)
+            if settings.get("embedding_model") == model_id:
+                settings["embedding_model"] = None
+
+        await self._with_rollback(mutate)
+
     async def _restore_custom_model_after_failed_delete(self, model: Model) -> None:
         with suppress(Exception):
             add_custom_model(
@@ -238,6 +308,19 @@ class ConfigService:
             await self._on_config_change()
         except Exception:
             _logger.exception("Failed to reload runtime after restoring custom model deletion")
+
+    async def _restore_custom_embedding_model_after_failed_delete(self, model: EmbeddingModel) -> None:
+        with suppress(Exception):
+            add_custom_embedding_model(
+                model_id=model.id,
+                base_url=model.base_url or "",
+                dim=model.dim,
+                api_key_env=model.api_key_env,
+            )
+        try:
+            await self._on_config_change()
+        except Exception:
+            _logger.exception("Failed to reload runtime after restoring custom embedding model deletion")
 
 
 def _remove_model_selections(settings: dict, model_ids: set[str]) -> None:

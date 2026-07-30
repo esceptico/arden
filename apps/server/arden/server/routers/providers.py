@@ -114,6 +114,10 @@ async def get_providers(runtime: Runtime = Depends(get_runtime)):
                 for mid, m in custom_models.items()
             ],
             "embedding_models": list(custom_embedding_models.keys()),
+            "custom_embedding_models": [
+                {"id": mid, "base_url": model.base_url, "dimensions": model.dim}
+                for mid, model in custom_embedding_models.items()
+            ],
         }
     )
 

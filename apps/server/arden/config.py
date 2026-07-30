@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 from typing import Literal, Self
@@ -375,7 +376,11 @@ class Config(BaseSettings):
         if not self.embedding_model:
             return None
         model = get_embedding_model(self.embedding_model)
-        return EmbeddingConfig(model=model.id, dim=model.dim)
+        identity = model.id
+        if model.provider is Provider.CUSTOM:
+            endpoint_hash = hashlib.sha256((model.base_url or "").encode()).hexdigest()[:12]
+            identity = f"{model.id}@{endpoint_hash}"
+        return EmbeddingConfig(model=model.id, dim=model.dim, identity=identity)
 
     def integration_enabled(self, integration_id: str) -> bool:
         return self.integration_states.get(integration_id, False)

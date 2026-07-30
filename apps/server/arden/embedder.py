@@ -15,6 +15,7 @@ type RateLimitChangeCallback = Callable[[datetime | None], Awaitable[None]]
 class EmbeddingConfig:
     model: str
     dim: int
+    identity: str | None = None
 
 
 class Embedder:
@@ -64,7 +65,13 @@ class Embedder:
                 texts=truncated,
                 on_rate_limit_wait=self._on_rate_limit_wait,
             )
-        embeddings = np.array(vectors)
+        embeddings = np.asarray(vectors, dtype=np.float32)
+        if embeddings.ndim != 2 or embeddings.shape != (len(texts), self.config.dim):
+            shape = tuple(embeddings.shape)
+            raise ValueError(
+                f"Embedding model {self.config.model!r} returned shape {shape}; "
+                f"expected ({len(texts)}, {self.config.dim})"
+            )
         return self._normalize(embeddings)
 
     async def embed_one(self, text: str) -> np.ndarray:
