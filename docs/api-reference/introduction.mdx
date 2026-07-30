@@ -1,6 +1,6 @@
 ---
 title: "API Overview"
-description: "HTTP API for building on top of arden."
+description: "HTTP API for building on top of Arden."
 ---
 
 ## Base URL
@@ -32,8 +32,9 @@ All endpoints return JSON. The event stream (`GET /chat/events/{session_id}`) us
 |-------|-----------|-------------|
 | [Chat](/api-reference/chat) | `GET /chat/events/{session_id}`, `POST /chat/message`, `POST /chat/background`, `POST /cancel` | SSE stream, messaging, background mode |
 | [Sessions](/api-reference/sessions) | `/session*`, `/sessions*` | Session management |
+| [Areas](/api-reference/areas) | `/areas*`, `/asks*` | Areas, outcomes, standing agents, and requests |
 | [Facts and Wiki](/api-reference/memory) | `/admin/facts*`, `/admin/wiki/pages*` | Fact reads and pins; versioned managed wiki pages |
-| [Automations](/api-reference/automations) | `/automations*`, `/notifiers*` | Scheduled tasks, notifier configs |
+| [Automations](/api-reference/automations) | `/automations*`, `/loops*` | Scheduled tasks and in-chat loops |
 | [Config](/api-reference/config) | `/config*`, `/models*`, `/providers*`, `/services*`, `/directives` | Configuration, providers, models |
 | Health | `GET /health` | Server status (public) |
 
@@ -46,7 +47,7 @@ curl http://localhost:6877/health
 ```json
 {
   "status": "ok",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0rc3",
   "has_providers": true,
   "outbox": {
     "worker_running": true,

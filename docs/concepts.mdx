@@ -16,8 +16,8 @@ docs stop looking like unrelated features.
 | **Automations** | The engine: triggers that run an agent on their own | [Automations](/guides/automations) |
 | **Agents** | The workers: chat, subagents, workflows, background runs | [Workflows](/guides/workflows) |
 
-Each layer only depends on the one below it. Areas don't have their own storage —
-they attach a wiki page. Area agents aren't a separate runtime — they're
+Each layer only depends on the one below it. Areas do not have their own storage
+– they attach a wiki page. Area agents are not a separate runtime – they are
 automations with a narrow tool scope.
 
 ## Facts vs wiki pages
@@ -33,7 +33,8 @@ expire, or retract.
 **Wiki pages** answer *"what should I read to understand this?"* They're
 Markdown, versioned, and organized in directories. A page cites the facts it
 rests on rather than duplicating them, so correcting a fact doesn't require
-rewriting prose.
+losing its evidence trail. Memory Synthesis updates page prose when the facts
+behind it change.
 
 The rule of thumb: if you'd want to see the receipt, it's a fact. If you'd want
 to read it over coffee, it's a page.
@@ -44,7 +45,7 @@ Nothing above acts on its own. **Automations** are the only thing that does.
 
 An automation is a trigger plus a prompt. Triggers can be scheduled, interval,
 event-driven, idle, message-count, or a Slack message. When one fires, it runs
-an agent — by default in a durable **channel session** whose transcript you can
+an agent – by default in a durable **channel session** whose transcript you can
 open, read, and reply to.
 
 Two things constrain what that agent may do:
@@ -59,16 +60,15 @@ Two things constrain what that agent may do:
 An automation on its own still reports into a transcript you have to go read.
 An **area** is what turns that into something you don't have to check.
 
-An area is a domain — apartment hunt, health, a side project. It may attach one
+An area is a domain – health, research, a job search, or a side project. It may attach one
 managed wiki page and delegate a standing custodian. The custodian is a channel
 automation with an observe-only scope and one terminal action,
 `submit_area_report`, which atomically commits its work, evidence, at most three
 salient asks, and when to look again.
 
-That cap is the whole point. Every run re-decides the area's asks against stable
-keys, so you get a current shortlist instead of a growing backlog. Home shows
-each area's current ask gathered into one focus set. **A quiet area is a good
-outcome, not a gap.**
+Every run re-decides the area's requests against stable keys, so you get a
+current shortlist instead of a duplicate backlog. Home brings requests and
+agent activity together. **A quiet area is a good outcome, not a gap.**
 
 ## Which agent surface to use
 

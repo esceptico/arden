@@ -17,17 +17,18 @@ step; it does not execute the tool or bypass approvals.
 | Tool | Description | Approval |
 |------|-------------|----------|
 | `bash` | Execute shell commands | 🔒 Dangerous commands |
-| `read_file` / `list_files` / `find_files` / `search_text` | Inspect local files without editing them | — |
+| `read_file` / `list_files` / `find_files` / `search_text` | Inspect local files without editing them | – |
 | `write_file` / `edit_file` | Create or modify local files | 🔒 |
-| `current_time` | Get current date and time | — |
-| `research` | Spawn a research agent with all read-only tools (`depth`: quick/normal/deep) | — |
-| `workflow` | Run a curated built-in multi-agent workflow | — |
-| `background` | Spawn an autonomous background agent for long-running tasks | — |
-| `render_html` | Render a sandboxed rich card in desktop chat (`display` or `input` mode) | — |
-| `load_tools` | Load deferred tool schemas by group or exact name | — |
-| `tool_search` | Find and load exact deferred tools in native-search runs | — |
-| `request_connection` | Ask you to connect one required registered integration | — |
-| `set_directives` | Set persistent behavioral directives injected into the system prompt | 🔒 |
+| `current_time` | Get current date and time | – |
+| `research` | Spawn a research agent with all read-only tools (`depth`: quick/normal/deep) | – |
+| `workflow` | Run a curated built-in multi-agent workflow | – |
+| `background` | Spawn an autonomous background agent for long-running tasks | – |
+| `render_html` | Render a sandboxed rich card in desktop chat (`display` or `input` mode) | – |
+| `load_tools` | Load deferred tool schemas by group or exact name | – |
+| `tool_search` | Find and load exact deferred tools in native-search runs | – |
+| `request_connection` | Ask you to connect one required registered integration | – |
+| `get_directives` | Read persistent behavioral directives | – |
+| `set_directives` | Update persistent behavioral directives | 🔒 |
 
 File write tools and `set_directives` are deferred. The `background` tool can start new background work immediately; the `background` deferred group is only for listing, reading, or canceling existing background tasks.
 
@@ -39,8 +40,8 @@ Deferred group: `email`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `emails` | Search and list emails | — |
-| `read_email` | Read full email content | — |
+| `emails` | Search and list emails | – |
+| `read_email` | Read full email content | – |
 | `send_email` | Send an email | 🔒 |
 | `reply_email` | Reply in an existing thread by qualified `account:message_id` | 🔒 |
 
@@ -52,7 +53,7 @@ Deferred group: `calendar`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `calendar` | Search and list events | — |
+| `calendar` | Search and list events | – |
 | `create_calendar_event` | Create an event | 🔒 |
 | `edit_calendar_event` | Edit an event | 🔒 |
 | `delete_calendar_event` | Delete an event | 🔒 |
@@ -65,9 +66,9 @@ Deferred group: `google_drive`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `search_google_drive` | Search Docs and Sheets | — |
-| `read_google_doc` | Read a Google Doc | — |
-| `read_google_sheet` | Read a bounded A1 range | — |
+| `search_google_drive` | Search Docs and Sheets | – |
+| `read_google_doc` | Read a Google Doc | – |
+| `read_google_sheet` | Read a bounded A1 range | – |
 | `create_google_doc` / `create_google_sheet` | Create an empty document or sheet | 🔒 |
 | `edit_google_doc` | Append to or replace exact text | 🔒 |
 | `update_google_sheet` / `append_google_sheet_rows` | Write cells or append rows | 🔒 |
@@ -79,12 +80,12 @@ an exact plan and commit; do not use a generic memory-record mutation tool.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `search_facts` | Search visible canonical facts; returns stable `fact_id` values. | — |
-| `get_fact` | Read one fact, including lifecycle and saved provenance. | — |
-| `get_fact_history` | Read a fact's immutable event history and provenance. | — |
-| `get_due_fact_reviews` | List facts due for evidence-based review. | — |
-| `plan_fact_changes` | Validate creates, reviews, amendments, supersessions, expiries, or retractions without publishing them. | — |
-| `commit_fact_changes` | Commit one exact returned plan if its facts remain unchanged. | — |
+| `search_facts` | Search visible canonical facts; returns stable `fact_id` values. | – |
+| `get_fact` | Read one fact, including lifecycle and saved provenance. | – |
+| `get_fact_history` | Read a fact's immutable event history and provenance. | – |
+| `get_due_fact_reviews` | List facts due for evidence-based review. | – |
+| `plan_fact_changes` | Validate creates, reviews, amendments, supersessions, expiries, or retractions without publishing them. | – |
+| `commit_fact_changes` | Commit one exact returned plan if its facts remain unchanged. | – |
 
 `plan_fact_changes` returns the preview and `plan_id`; `commit_fact_changes`
 accepts only that `plan_id`. The server derives authority and provenance from
@@ -100,14 +101,14 @@ This group is deferred: load it with `load_tools(group="wiki")`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `list_wiki_pages` | List active pages and direct child directories in one managed directory. | — |
-| `read_wiki_page` | Read one active page by exact managed path. | — |
-| `wiki_links` | Read a page's outgoing links and backlinks. | — |
+| `list_wiki_pages` | List active pages and direct child directories in one managed directory. | – |
+| `read_wiki_page` | Read one active page by exact managed path. | – |
+| `wiki_links` | Read a page's outgoing links and backlinks. | – |
 | `create_wiki_page` | Create one common page from its path, title, and body. | 🔒 |
 | `edit_wiki_page` | Replace one page body by its exact managed path. | 🔒 |
 | `archive_wiki_page` | Recoverably archive one page by its exact managed path. | 🔒 |
 | `move_wiki_page` | Move one page by its exact managed path and rewrite its wiki links atomically. | 🔒 |
-| `publish_wiki_generated` | Atomically update only an explicit automation owner's existing generated region by exact managed path. | 🔒 |
+| `publish_wiki_generated` | Update one automation-owned section without touching the rest of its page. | 🔒 |
 
 ## Web
 
@@ -115,8 +116,8 @@ Web search uses `WEB_SEARCH` mode (`auto`, `exa`, `ddgs`, `none`). `EXA_API_KEY`
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `web_search` | Search the web | — |
-| `web_fetch` | Fetch content from a URL | — |
+| `web_search` | Search the web | – |
+| `web_fetch` | Fetch content from a URL | – |
 
 ## Slack
 
@@ -126,14 +127,15 @@ Deferred group: `slack`.
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `slack_search` | Search Slack messages | — |
-| `slack_channel` | Read recent channel history | — |
-| `slack_thread` | Read a message thread | — |
-| `slack_channels` | List accessible channels | — |
-| `slack_dms` | List open direct messages | — |
-| `slack_dm` | Read a direct message conversation | — |
-| `slack_users` | Search workspace members | — |
-| `slack_user` | Read a user profile | — |
+| `slack_search` | Search Slack messages | – |
+| `slack_channel` | Read recent channel history | – |
+| `slack_thread` | Read a message thread | – |
+| `slack_channels` | List accessible channels | – |
+| `slack_dms` | List open direct messages | – |
+| `slack_dm` | Read a direct message conversation | – |
+| `slack_users` | Search workspace members | – |
+| `slack_user` | Read a user profile | – |
+| `slack_file` | Read a Slack file or image by its returned reference | – |
 | `slack_post_message` | Post a message | 🔒 |
 | `slack_post_blocks` | Post Block Kit content | 🔒 |
 
@@ -147,22 +149,22 @@ Deferred group: `automations`.
 | `create_loop` | Start an in-chat recurring loop | 🔒 |
 | `schedule_wakeup` | Schedule a one-off wakeup into the current session | 🔒 |
 | `loop_done` | Stop the current loop after its completion condition is met | 🔒 |
-| `list_automations` | List all automations | — |
+| `list_automations` | List all automations | – |
 | `update_automation` | Modify an automation | 🔒 |
 | `delete_automation` | Remove an automation | 🔒 |
 | `run_automation` | Trigger immediate run | 🔒 |
-| `get_automation_result` | Get last run result | — |
+| `get_automation_result` | Get last run result | – |
 
 ## Runtime state
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `update_todos` | Update the visible task list for complex work | — |
-| `get_goal` | Read the active durable session goal | — |
-| `complete_goal` | Mark the active goal complete after verification | — |
-| `block_goal` | Mark the active goal blocked on missing input | — |
-| `create_session` | Create a new chat/channel session | — |
-| `list_recent_sessions` / `read_session` / `search_transcripts` | Inspect readable chat history | — |
+| `update_todos` | Update the visible task list for complex work | – |
+| `get_goal` | Read the active durable session goal | – |
+| `complete_goal` | Mark the active goal complete after verification | – |
+| `block_goal` | Mark the active goal blocked on missing input | – |
+| `create_session` | Create a new chat/channel session | – |
+| `list_recent_sessions` / `read_session` / `search_transcripts` | Inspect readable chat history | – |
 | `send_message` | Message a chat, or steer an agent you spawned | 🔒 (chats only) |
 
 ## App control
@@ -250,7 +252,7 @@ Follow the same sequence for source-of-truth work: **search → inspect → prev
 
 | Tool | Description | Approval |
 |------|-------------|----------|
-| `use_skill` | Activate a skill for specialized instructions | — |
+| `use_skill` | Activate a skill for specialized instructions | – |
 | `create_skill` | Save an approved reusable global skill | 🔒 |
 
 Obsidian should be connected as an MCP server and loaded with `load_tools(group="mcp:obsidian")` when needed.
@@ -278,7 +280,8 @@ An automation can carry a **tool scope**: an allowlist of tool-name patterns tha
 
 This is how [area agents](/guides/areas) stay observe-only: they get bounded
 fact and wiki reads, but no fact commits, generated-page publishing, or external
-actions. A scope of `null` (the default) is unrestricted.
+actions. A missing scope gives an automation only the read-only floor. Use
+`"*"` only when unrestricted tool access is intentional.
 
 Area custodians finish by calling `submit_area_report`. Invalid or stale reports
 return a tool error inside the same agent loop, so the custodian can correct the

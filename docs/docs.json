@@ -69,6 +69,7 @@
             "pages": [
               "api-reference/chat",
               "api-reference/sessions",
+              "api-reference/areas",
               "api-reference/memory",
               "api-reference/automations",
               "api-reference/notifiers",

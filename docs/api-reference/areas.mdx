@@ -1,0 +1,42 @@
+---
+title: "Areas"
+description: "Create areas, attach pages, manage outcomes, and respond to requests."
+---
+
+Areas group context, one current outcome, optional wiki memory, and an optional
+standing agent.
+
+## Main endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/areas` | List active areas |
+| `POST` | `/areas` | Create or reuse an area by name |
+| `GET` | `/areas/overview` | Read Home requests and activity |
+| `GET` | `/areas/{area_id}` | Read one area room |
+| `PATCH` | `/areas/{area_id}` | Update name, instructions, scope, or page path |
+| `DELETE` | `/areas/{area_id}` | Archive an area |
+| `POST` | `/areas/{area_id}/restore` | Restore an archived area |
+
+## Page and agent
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/areas/{area_id}/page` | Create and attach the area's wiki page |
+| `DELETE` | `/areas/{area_id}/page` | Detach its page |
+| `PUT` | `/areas/{area_id}/autonomy` | Set `observe`, `act`, or `null` |
+
+An area must have an attached page before autonomy can be enabled.
+
+## Outcomes and requests
+
+Create an outcome with `POST /areas/{area_id}/outcomes`. Update outcomes and
+work items with:
+
+```text
+PATCH /areas/{area_id}/outcomes/{key}
+PATCH /areas/{area_id}/work/{key}
+```
+
+Use `POST /asks/{ask_id}/reply` to answer a request. Use
+`POST /asks/{ask_id}/resolve` to mark it active, dismissed, done, or snoozed.

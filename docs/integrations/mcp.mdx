@@ -1,6 +1,6 @@
 ---
 title: "MCP Servers"
-description: "Connect external MCP servers and expose their tools to arden."
+description: "Connect external MCP servers and expose their tools to Arden."
 ---
 
 ## Recommended setup
@@ -19,8 +19,8 @@ Click **Run setup assistant**.
 
 Choose the transport:
 
-- **stdio** — arden launches a local command, such as `npx` or a local binary
-- **HTTP** — Arden connects to a remote or local HTTP/SSE MCP endpoint
+- **stdio** – Arden launches a local command, such as `npx` or a local binary
+- **Streamable HTTP** – Arden connects to a remote or local MCP endpoint
 
 ### Fill the fields or import JSON
 
@@ -43,7 +43,7 @@ It also accepts direct server objects with `name` and `transport`.
 
 ### Save and reload
 
-After saving, arden reloads MCP providers and shows their tools in the provider list.
+After saving, Arden reloads MCP providers and shows their tools in the provider list.
 
 </Steps>
 
@@ -64,7 +64,7 @@ load_tools(group="mcp:obsidian")
 
 ## Troubleshooting
 
-- **Command not found** — use an absolute command path or install the package/binary first.
-- **Missing env var** — add required `KEY=value` entries in the server config.
-- **HTTP auth failure** — check headers/tokens and whether the server expects OAuth.
-- **No tools appear** — verify the server starts successfully and then reload MCP/settings.
+- **Command not found** – use an absolute command path or install the package/binary first.
+- **Missing env var** – add required `KEY=value` entries in the server config.
+- **HTTP auth failure** – check headers or tokens and whether the server expects OAuth.
+- **No tools appear** – verify the server starts successfully and then reload MCP settings.

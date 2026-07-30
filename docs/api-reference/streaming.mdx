@@ -5,7 +5,7 @@ description: "Server-Sent Events for real-time agent execution."
 
 ## Overview
 
-Arden uses a persistent SSE connection per session. Connect to `GET /chat/events/{session_id}` to receive all events (agent responses, tool calls, background task results). Messages are sent via `POST /chat/message` as fire-and-forget — the response arrives on the SSE stream.
+Arden uses a persistent SSE connection per session. Connect to `GET /chat/events/{session_id}` to receive all events (agent responses, tool calls, background task results). Messages are sent via `POST /chat/message` as fire-and-forget – the response arrives on the SSE stream.
 
 Each event has a `type` field indicating what happened.
 
@@ -27,7 +27,7 @@ The SSE `id` field is the same value as `seq`. Clients should reconnect with `af
 
 If `after_seq` is older than the server's checkpoint watermark (events at or below the watermark are persisted to disk and only available via the history endpoint), or points past the server's known stream generation, the server emits `stream_reset`. Desktop responds by reloading session history before applying more events for that session.
 
-A checkpoint advances after every agent step (and at run finish) when the chat service persists messages. The replay buffer itself is *not* cleared at the checkpoint — it grows up to a fixed size and evicts oldest. Cursors at or above the checkpoint can replay from the buffer alone, no history reload needed; this is the fast path for tab-switch / brief disconnects.
+A checkpoint advances after every agent step (and at run finish) when the chat service persists messages. The replay buffer itself is *not* cleared at the checkpoint – it grows up to a fixed size and evicts oldest. Cursors at or above the checkpoint can replay from the buffer alone, no history reload needed; this is the fast path for tab-switch / brief disconnects.
 
 While idle, the SSE keepalive comment frame carries the bus's latest emitted sequence: `: seq=<latest>\n\n`. Clients can use this to confirm they are caught up without waiting for a real event.
 

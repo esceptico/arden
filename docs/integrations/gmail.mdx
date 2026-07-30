@@ -39,7 +39,9 @@ curl -X PATCH http://localhost:6877/config \
 
 ## Google verification note
 
-arden currently uses **bring-your-own Google OAuth credentials**. Gmail scopes such as read/send are restricted Google scopes, so shipping a shared public OAuth app would require Google's verification/security-assessment process. BYO credentials keep setup local and avoid routing Gmail access through a third-party auth broker.
+Arden currently uses **bring-your-own Google OAuth credentials**. Gmail scopes
+such as read and send are restricted Google scopes. Your credentials keep setup
+local and avoid routing Gmail access through a third-party auth broker.
 
 ## Configuration
 
@@ -58,10 +60,10 @@ arden currently uses **bring-your-own Google OAuth credentials**. Gmail scopes s
 
 ## Troubleshooting
 
-- **Missing credentials** — import a Google OAuth Desktop app JSON; Web application credentials are rejected.
-- **Access denied / test user** — if your OAuth app is still in Testing mode, add your Google account as a test user.
-- **API not enabled / 403** — enable the Gmail API in the same Google Cloud project.
-- **Missing scope** — disconnect and reconnect Gmail.
+- **Missing credentials** – import a Google OAuth Desktop app JSON; Web application credentials are rejected.
+- **Access denied / test user** – if your OAuth app is still in Testing mode, add your Google account as a test user.
+- **API not enabled / 403** – enable the Gmail API in the same Google Cloud project.
+- **Missing scope** – disconnect and reconnect Gmail.
 
 ## Multiple accounts
 

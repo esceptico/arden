@@ -1,62 +1,55 @@
 ---
 title: "Memory"
-description: "How Arden uses canonical facts and managed wiki pages."
+description: "How Arden keeps durable facts and readable wiki pages."
 ---
 
-## Overview
+## Two parts
 
-Arden's long-term memory has two canonical layers:
+Arden's long-term memory has two parts:
 
-- **Facts** are the durable, source-backed correctness layer. A fact has a
-  stable ID, current lifecycle, provenance, and immutable event history.
-- **Wiki pages** are the readable, versioned Markdown layer. They organize
-  subject context, links, and generated summaries without replacing the facts
-  they cite.
+- **Facts** hold durable, source-backed knowledge. Corrections keep their
+  history and provenance.
+- **Wiki pages** turn related facts and notes into readable Markdown.
 
-The [Areas](/guides/areas) surface is backed by managed wiki pages.
+Facts are the evidence. Pages are the useful view.
+
+![Memory](../images/memory.png)
 
 ## Facts
 
-Facts are not edited or deleted through a generic record API. To add or correct
-knowledge, Arden first prepares an exact change plan, then commits that plan if
-the affected facts have not changed. A plan can create, review, amend,
-supersede, expire, or retract facts; history and provenance remain available for
-inspection.
+Good facts include preferences, decisions, relationships, reusable procedures,
+and significant events. Temporary chatter and guesses do not belong here.
 
-Use facts for explicit, durable knowledge: preferences, decisions,
-relationships, reusable procedures, and significant events. Do not infer facts
-from silence or store temporary operational noise.
+Arden can create, amend, supersede, expire, or retract a fact. It never needs
+to erase history to correct one.
 
-For exact evidence, Arden searches facts and can read a fact or its event
-history. Facts due for evidence-based review are listed separately; a review
-does not change a fact by itself.
+## Wiki pages
 
-## Wiki context
+The Memory view has two ways to browse the same pages:
 
-Arden automatically receives a bounded resident wiki context from `README.md`,
-`directives.md`, `me.md`, and `profile.md`, when those pages are present. For a
-substantive prompt, it may also receive a small set of relevant indexed wiki
-pages.
+- **Files** shows their managed paths and directory structure.
+- **Notebook** shows page titles and a reading-oriented view.
 
-The agent can browse the managed wiki by directory, read one page by its exact
-managed path, inspect links, create common pages, replace or move a page, and
-recoverably archive it. Agents read before writing, then use paths; the backend
-keeps page identity and concurrency state internal. On a conflict, they reread
-the page or directory and retry.
+Open a page to edit it, inspect links and cited records, or restore an earlier
+revision. Agents use paths such as `topics/reinforcement-learning.md`; internal
+page IDs and revision hashes stay inside the backend.
 
-Scheduled automations can use those generic writes only below `automations/`.
-Interactive agents can write other ordinary pages after approval.
+Each directory can have a `README.md` that explains what belongs there and how
+agents should use it. It is guidance, not a generated file listing.
 
-Only an explicit automation may use `publish_wiki_generated` to update a page's
-generated region. It must first read the page; the backend prevents it from
-overwriting user-managed prose.
+Arden loads a small resident context from root pages such as `README.md`,
+`directives.md`, `me.md`, and `profile.md` when they exist. It retrieves other
+pages when they are relevant.
 
-## Desktop and API
+Interactive agents can create, edit, move, and archive ordinary pages through
+the normal approval flow. Scheduled automations can write only below
+`automations/` unless you grant a different supported workflow.
 
-The desktop Memory view reads managed wiki pages and the facts they cite. The
-[Facts and Wiki API](/api-reference/memory) supports fact reads, batch reads,
-explicit user pins, and versioned wiki-page management.
+## Maintenance
 
-## Agent tools
+Memory Maintenance reviews facts. Memory Synthesis updates fact-backed pages.
+Wiki Maintenance keeps page structure, links, titles, and metadata healthy.
+Every change is versioned and reversible.
 
-See [Tools](/guides/tools#facts) for the canonical Facts and Wiki tool set.
+See [Tools](/guides/tools#facts) for agent-facing memory tools and
+[Facts and Wiki API](/api-reference/memory) for the server API.

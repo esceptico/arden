@@ -100,3 +100,12 @@ curl -X POST http://localhost:6877/admin/wiki/pages/page_123/archive \
 Writes are optimistic: supply the version and repository head you read. A stale
 write returns `409` with the current revision, head, and, when available, content.
 Invalid paths or request values return `422`; unknown resources return `404`.
+
+Restore one historical revision with:
+
+```text
+POST /admin/wiki/pages/{page_id}/history/{commit_id}/restore
+```
+
+The request uses the current `expected_version` and `expected_head`, just like
+other wiki writes.

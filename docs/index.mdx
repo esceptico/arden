@@ -1,17 +1,20 @@
 ---
 title: "Arden"
-description: "Personal entropy reduction system — an AI assistant with persistent memory, scheduled automations, and deep integrations."
+description: "A local AI assistant with persistent memory, autonomous work, and deep integrations."
 ---
 
-## What is arden?
+## What is Arden?
 
-arden gives you a local AI assistant that actually remembers. It connects to your email, calendar, Slack, web, MCP tools, local files, shell, and long-term memory — then keeps the useful parts available across sessions.
+Arden is a local AI assistant that remembers useful context between
+conversations. It connects to your email, calendar, Slack, web, MCP tools,
+local files, and shell.
 
-It isn't a coding agent. Its home surface is **Areas**: your life domains (apartment hunt, health, a side project) mapped to memory pages, each watched by a standing agent that compresses its domain into at most one ask. See the [Areas guide](/guides/areas).
+Its home screen brings together conversations, requests, agent activity, and
+**Areas**: the parts of your life or work you want Arden to keep watching.
 
-Unlike stateless chat interfaces, arden:
+Unlike stateless chat interfaces, Arden:
 
-- **Focuses** by watching each life domain and surfacing only the one thing that needs you
+- **Focuses** by surfacing work and requests that need you
 - **Remembers** conversations, commitments, and preferences across sessions, synthesized into readable topic pages
 - **Acts autonomously** via scheduled automations, standing area agents, background agents, and multi-agent workflows
 - **Returns structured results**: agent runs can produce validated objects, not just prose
@@ -19,26 +22,28 @@ Unlike stateless chat interfaces, arden:
 - **Renders rich output** through sandboxed HTML widgets for charts, tables, forms, and visualizations
 - **Integrates** with Gmail, Google Calendar, Slack, web search, MCP tools, local files, and notifications
 - **Keeps context lean** by loading infrequent tool schemas only when needed
-- **Runs locally** — the server and clients run on your machine
+- **Runs locally** – the server and clients run on your machine
 
 ## Architecture
 
 Arden is split into two main surfaces:
 
-- **Server** — Python/FastAPI backend that runs the agent loop, manages memory, exposes HTTP/SSE APIs, and connects to LLM/tool providers
-- **Desktop** — Electron client for chat, settings, memory inspection, automations, approvals, traces, and HTML widgets
+- **Server** – Python/FastAPI backend for agents, tools, memory, automations, and
+  the HTTP/SSE API
+- **Desktop** – Electron client for chat, areas, memory, automations, settings,
+  approvals, and HTML widgets
 
 ## Quick links
 
 <Columns cols={2}>
   <Card title="Quickstart" icon="rocket" href="/quickstart">
-    Install and run arden locally.
+    Install and run Arden locally.
   </Card>
   <Card title="Concepts" icon="diagram-project" href="/concepts">
     How facts, wiki pages, areas, automations, and agents fit together.
   </Card>
   <Card title="Areas" icon="layer-group" href="/guides/areas">
-    Life domains, standing agents, and the focus set on Home.
+    Life domains, outcomes, requests, and standing agents.
   </Card>
   <Card title="Desktop Guide" icon="desktop" href="/guides/desktop">
     Connect the app and use the main UI surfaces.
@@ -56,6 +61,6 @@ Arden is split into two main surfaces:
     Subagents, multi-agent presets, and the five spawn surfaces.
   </Card>
   <Card title="API Reference" icon="code" href="/api-reference/introduction">
-    HTTP API for building on top of arden.
+    HTTP API for building on top of Arden.
   </Card>
 </Columns>

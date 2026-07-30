@@ -5,7 +5,8 @@ description: "Connect Slack with token-backed search, reading, posting, and noti
 
 ## Recommended setup
 
-arden currently supports Slack through workspace tokens. A polished Slack OAuth install flow can be added later, but today the desktop setup assistant makes the token path explicit and verifies the token before saving.
+Arden currently supports Slack through workspace tokens. The desktop setup
+assistant makes the token path explicit and verifies it before saving.
 
 <Steps>
 
@@ -19,16 +20,18 @@ Click **Run setup assistant**.
 
 Choose the token type:
 
-- **Bot token** — starts with `xoxb-`; best for posting and notifier-style behavior
-- **User token** — starts with `xoxp-`; useful when you need user-level Slack access
+- **Bot token** – starts with `xoxb-`; best for posting and notifier-style behavior
+- **User token** – starts with `xoxp-`; useful when you need user-level Slack access
 
 ### Paste and verify the token
 
-Paste the token into the assistant and click verify. arden calls Slack `auth.test` and shows the workspace/user details if the token works.
+Paste the token into the assistant and click verify. Arden calls Slack
+`auth.test` and shows the workspace and user details if the token works.
 
 ### Save the connection
 
-After verification, save the token from the Integrations card. arden reloads integration clients automatically.
+After verification, save the token from the Integrations card. Arden reloads
+integration clients automatically.
 
 </Steps>
 

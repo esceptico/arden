@@ -17,9 +17,9 @@ Set at least one provider API key, or connect OpenAI Codex with browser sign-in 
 
 | Provider | Setup | Typical chat model | Embedding model |
 |----------|-------|--------------------|-----------------|
-| Anthropic | `ANTHROPIC_API_KEY` | Claude | — |
+| Anthropic | `ANTHROPIC_API_KEY` | Claude | – |
 | OpenAI API | `OPENAI_API_KEY` | GPT | `text-embedding-3-small` |
-| OpenAI Codex | Browser sign-in in desktop onboarding/settings | OpenAI account models | — |
+| OpenAI Codex | Browser sign-in in desktop onboarding/settings | OpenAI account models | – |
 | Google | `GEMINI_API_KEY` | Gemini | `gemini-embedding-001` |
 | OpenRouter/custom | Desktop settings or custom model config | Provider model | depends |
 
@@ -38,7 +38,7 @@ Configure role-specific models and reasoning effort in Desktop Settings. They
 are persisted in `model_roles` and `model_reasoning_efforts` in the settings
 file; the legacy `ARDEN_<ROLE>_MODEL` variables are not configuration inputs.
 
-Choose an embedding model—or **No embeddings**—in **Desktop Settings → Models**.
+Choose an embedding model, or **No embeddings**, in **Desktop Settings → Models**.
 Changing it rebuilds the semantic index after confirmation. A disabled choice
 is persisted as `"embedding_model": null`.
 
@@ -83,7 +83,7 @@ Deferred tools reduce prompt size and improve cache stability. Gmail, calendar, 
 
 ## Authentication
 
-On first `arden-server serve`, an API key is generated and printed. The server stores only a salted SHA-256 hash — the plaintext key is never persisted.
+On first `arden-server serve`, an API key is generated and printed. The server stores only a salted SHA-256 hash – the plaintext key is never persisted.
 
 ```bash
 arden-server serve --reset-key

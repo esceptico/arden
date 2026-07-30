@@ -1,54 +1,68 @@
 ---
 title: "Areas"
-description: "Life domains attached to managed wiki pages, each watched by a standing custodian."
+description: "Keep a life domain, its current outcome, and its standing agent in one place."
 ---
 
-## Overview
+## What an area is
 
-An area is a domain of your life: an apartment hunt, your health, a side project, your finances. It may attach one managed wiki page and delegate a standing custodian. The custodian runs on its own cadence, keeps structured work and the page current, and raises only salient asks.
+An area is a domain you want Arden to keep watching, such as health, a job
+search, research, or a side project.
 
-Home is the desktop app's landing surface. It has a composer, the focus set (each area's current ask, gathered into one list), and a strip of your areas.
+Each area can have:
+
+- one attached wiki page for durable context
+- one current outcome with success criteria
+- a standing agent that checks the area on a schedule
+- requests that need your answer, review, or attention
+
+Create one from **Command → New area**. You can use an area without a standing
+agent. Attach a wiki page before enabling one.
 
 ![Home](../images/main.png)
 
-The point is focus, not a feed. An area agent's job is to pick the single most important thing in its domain, or to say nothing. A quiet area is a good outcome, not a gap.
+## Home
 
-## Where areas come from
+Home is your mission control:
 
-You don't register areas by hand. A daily suggester reads the unpromoted topic pages in your memory, finds the ones that look like real life domains, and offers them on Home. Accept one and Arden sets up the topic page, standing agent, channel, and room. Dismiss one and it won't be suggested again.
+- **Ask, search, or start a chat** opens a new conversation.
+- Requests that need you appear first.
+- **Agent Activity** separates work that is running, scheduled, done, or set
+  aside.
+- Your areas stay in the sidebar with their current status.
 
-You can also promote a page yourself from the areas strip, or ask in chat.
+A quiet area is healthy. Arden should interrupt you only when it needs a
+decision or finds something important.
 
-## Area rooms
+## Area room
 
-Open an area to get its room:
+Open an area from the sidebar:
 
 ![An area room](../images/area-room.png)
 
-- Its active asks, with a Discuss action that replies in the custodian channel.
-- Open loops: the unresolved threads the agent parses from the page's `## Open loops` section.
-- The agent's status: whether it's running now, a summary of its last run, or that it hasn't run yet. That line opens the agent's channel transcript, with a Run now button next to it.
-- Related areas, from the page's wikilinks.
-- Activity: your own chats scoped to this area.
-- A composer. A chat you start here carries the area's topic page as context, so the agent already knows the domain.
+The room shows:
 
-## The standing agent
+- whether its agent is running and when it last checked
+- one request at a time, with a direct action or **Later**
+- the current outcome and its completed work
 
-An area agent is a normal automation. You'll find it in the Automations panel under Area agents, and you can edit, pause, reschedule, or run it like any other. What makes it an area agent is data on the automation, not a separate code path:
+Broader history and activity live in the inspector, so the room stays focused
+on what needs action now.
 
-- It runs as a channel automation, so a durable session owns its runs and the full transcript is visible and replyable in the room.
-- Its tool scope is an observe-only allowlist: reads plus edits to its attached managed page, nothing that acts on the outside world. See [tool scoping](/guides/tools#per-automation-tool-scoping).
-- Its final `submit_area_report` action validates and atomically commits work changes, evidence, up to three salient asks, and its next-check cadence.
+## Standing agent
 
-Every run re-decides the area's active asks. Stable ask keys update the same decision instead of creating a growing duplicate backlog.
+An area agent is a normal channel automation. You can find it under
+**Automations → Area agents**, inspect its transcript, run it now, pause it, or
+change its schedule.
 
-### Observe vs act
+It reads the attached page, works toward the current outcome, and reports
+evidence, progress, and at most a few useful requests. Stable request keys
+update an existing request instead of creating duplicates.
 
-Area agents run in observe mode by default: they read anything and update their own page, but take no external action. Act mode lets an agent run the area's own automations and workflows; irreversible actions still require approval. Toggle it from the area room.
+Area agents start in observe mode. They can read context and update their own
+area state. Act mode can grant more tools, but risky external actions still
+follow normal approval rules.
 
-## How this relates to memory and automations
+## Related systems
 
-Areas sit on top of two systems that already exist:
-
-- [Memory](/guides/memory) is the substrate. An area may attach one managed wiki page, and the Memory view shows the same page the custodian reads and edits.
-- [Automations](/guides/automations) is the engine. Area custodians are seeded channel automations with an explicit tool scope and a trusted report action.
+- [Memory](/guides/memory) stores the page the area and its agent share.
+- [Automations](/guides/automations) schedules and runs the standing agent.

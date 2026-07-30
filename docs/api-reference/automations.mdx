@@ -109,7 +109,9 @@ Its prompt should list the target directory before creating a page, and read
 the exact path before editing one. The backend protects a fresh read from being
 overwritten; on a write conflict, list/read again before retrying. Ordinary
 automation pages belong under `automations/`. `publish_wiki_generated` is
-separate: use it only for an explicit automation owner's existing generated region.
+separate: use it only for a section owned by that automation.
+
+If `tool_scope` is omitted, the run gets only the read-only tool floor.
 
 ## List automations
 
@@ -176,3 +178,15 @@ curl http://localhost:6877/automations/events \
 curl -X DELETE http://localhost:6877/automations/1 \
   -H "Authorization: Bearer $API_KEY"
 ```
+
+## Loops
+
+Loops run repeatedly in an existing chat and stop when their condition is met.
+They do not create a separate automation channel.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/loops` | Create a loop for a `session_id` |
+| `GET` | `/loops?session_id=...` | List one chat's loops |
+| `PATCH` | `/loops/{task_id}` | Change prompt, cadence, limits, or enabled state |
+| `DELETE` | `/loops/{task_id}` | Stop and remove a loop |
