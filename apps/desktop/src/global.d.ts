@@ -65,10 +65,6 @@ interface Window {
        *  to "" on success, an error message otherwise. */
       openPath: (path: string) => Promise<string>;
     };
-    dialog: {
-      /** Opens a native directory picker. Resolves null when cancelled. */
-      selectDirectory: (options?: { defaultPath?: string }) => Promise<string | null>;
-    };
     clipboard: {
       /** Writes text to the system clipboard via Electron's main process. */
       writeText: (text: string) => Promise<boolean>;

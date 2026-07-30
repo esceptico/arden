@@ -7,7 +7,6 @@ test("context save action uses the mockup's shared primary button", async () => 
 
   expect(source).toContain('<Button type="submit" variant="primary"');
   expect(source).toContain('{saving ? "Saving" : "Save changes"}');
-  expect(source).not.toContain("<SaveButton");
   expect(source).not.toContain("disabled={!dirty}");
 });
 

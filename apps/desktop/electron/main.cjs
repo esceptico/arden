@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeTheme, safeStorage, screen, session, shell } = require("electron");
+const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeTheme, safeStorage, screen, session, shell } = require("electron");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
@@ -612,19 +612,6 @@ app.whenReady().then(() => {
     if (typeof targetPath !== "string" || targetPath.length === 0) return "Invalid path";
     // shell.openPath returns "" on success, an error string otherwise.
     return shell.openPath(targetPath);
-  });
-  ipcMain.handle("dialog:select-directory", async (event, options = {}) => {
-    assertTrustedSender(event);
-    const defaultPath = typeof options?.defaultPath === "string" && options.defaultPath.trim()
-      ? options.defaultPath.trim()
-      : undefined;
-    const win = BrowserWindow.fromWebContents(event.sender);
-    const result = await dialog.showOpenDialog(win ?? undefined, {
-      properties: ["openDirectory", "createDirectory"],
-      defaultPath,
-    });
-    if (result.canceled) return null;
-    return result.filePaths[0] ?? null;
   });
   ipcMain.handle("clipboard:write", (event, text) => {
     assertTrustedSender(event);

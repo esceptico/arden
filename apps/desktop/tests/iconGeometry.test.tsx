@@ -24,6 +24,5 @@ test("shared controls preserve the source icon geometry", () => {
   expect(read("../src/components/ui/Button.tsx")).not.toContain("strokeWidth");
   expect(read("../src/components/ui/SearchInput.tsx")).not.toContain("strokeWidth");
   expect(read("../src/components/ui/SidebarToggle.tsx")).not.toContain("strokeWidth");
-  expect(read("../src/components/ui/SaveButton.tsx")).not.toContain("<svg");
   expect(read("../src/features/memory/components/MemoryProperties.tsx")).not.toContain("×");
 });

@@ -9,7 +9,6 @@ from arden.events.sse import (
     state_for_event,
 )
 from arden.workflow.models import WorkflowState, state_for_event_type
-from arden.workflow.store import WorkflowStateStore
 
 
 def test_event_types_map_to_normalized_workflow_states():
@@ -46,14 +45,3 @@ def test_event_from_payload_ignores_workflow_state_for_compatibility():
 
     assert isinstance(event, RunFinishedEvent)
     assert event.run_id == "run-1"
-
-
-def test_workflow_state_store_persists_latest_state(tmp_path):
-    path = tmp_path / "workflow-states.json"
-    store = WorkflowStateStore(path)
-    store.set_state("sess-1", "run-1", WorkflowState.WAITING_FOR_INPUT, reason="input_needed")
-
-    reloaded = WorkflowStateStore(path)
-
-    assert reloaded.get_state("sess-1", "run-1").state == WorkflowState.WAITING_FOR_INPUT
-    assert reloaded.get_state("sess-1", "run-1").reason == "input_needed"

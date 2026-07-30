@@ -33,9 +33,6 @@ contextBridge.exposeInMainWorld("ardenDesktop", {
   shell: {
     openPath: path => ipcRenderer.invoke("shell:open-path", path),
   },
-  dialog: {
-    selectDirectory: options => ipcRenderer.invoke("dialog:select-directory", options),
-  },
   clipboard: {
     writeText: text => ipcRenderer.invoke("clipboard:write", text),
   },

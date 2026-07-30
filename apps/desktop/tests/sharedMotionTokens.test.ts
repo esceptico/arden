@@ -43,7 +43,6 @@ test("shared primitives consume the motion contract rather than local values", (
   const theme = read("../src/components/ui/ThemeToggle.tsx");
   const slider = read("../src/components/ui/Slider.tsx");
   const foundation = read("../src/design/foundation.css");
-  const save = read("../src/components/ui/SaveButton.tsx");
   const confirmDelete = read("../src/components/ui/ConfirmDeleteButton.tsx");
   const radio = read("../src/components/ui/RadioGroup.tsx");
   const anchoredPopover = read("../src/components/ui/AnchoredPopover.tsx");
@@ -61,9 +60,6 @@ test("shared primitives consume the motion contract rather than local values", (
   expect(slider).not.toContain("SPRING_SLIDER");
   expect(foundation).toContain("--slider-fill-x var(--motion-tab-shift) var(--smooth-out)");
   expect(foundation).toContain("--slider-marker-x var(--motion-tab-shift) var(--smooth-out)");
-  expect(save).toContain("<Loader2");
-  expect(save).toContain("<Check");
-  expect(save).not.toContain("<svg");
   expect(confirmDelete).toContain("EASE_LINEAR");
   expect(radio).toContain("duration-indicator");
   expect(anchoredPopover).toContain("useHasBlockingOverlay");

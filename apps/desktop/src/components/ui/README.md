@@ -8,7 +8,7 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - **Button** — text button; variants `primary | secondary | ghost | quiet | danger`, sizes `sm | md`, `leadingIcon`/`trailingIcon`, `active`.
 - **IconButton** — icon-only button; sizes `xs(22) | sm | md | lg`, `shape square|circle`, `tone faint|muted|primary`, `danger`, `active`, `title`→Tooltip.
 - **ConfirmDeleteButton** — two-step destructive control (neutral → armed).
-- **SaveButton** / **CopyGlyph** / **ThemeToggle** — save w/ saved-state, click-to-copy, light/dark toggle.
+- **CopyGlyph** / **ThemeToggle** — click-to-copy and light/dark toggle.
 
 ## Form inputs  (chrome = `.input-field` / `.input-field-sm`; never re-derive it)
 - **Input** — labelled `<input>` (label/help/error/size). **Textarea** — labelled `<textarea>`.
@@ -18,13 +18,13 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - settings forms: **Field** wraps Input; **NumberField / PercentField** (in `features/settings`) are **SliderComfortable** rows.
 
 ## Feedback & status
-- **Callout** — alert/notice box (`tone bad|warn|ok|neutral`, icon/title/action). **Badge** / **Chip** / **Pill** — labels/tags. **Skeleton** — loading. **EmptyState** — icon + copy + action (the store-wired home screen lives at `features/home/components/Home.tsx`, not here — not generic). **EmptyNote** — compact inline "list is empty" italic note for sub-lists (settings tabs, MCP servers), not the full icon-chip state.
+- **Callout** — alert/notice box (`tone bad|warn|ok|neutral`, icon/title/action). **Badge** / **Chip** — labels/tags. **Skeleton** — loading. **EmptyState** — icon + copy + action (the store-wired home screen lives at `features/home/components/Home.tsx`, not here — not generic). **EmptyNote** — compact inline "list is empty" italic note for sub-lists (settings tabs, MCP servers), not the full icon-chip state.
 
 ## Overlays & menus
 - **PageModal** — portal+scrim+panel modal shell (`origin`, `elevated`, `grid`, `header`). **AnchoredPopover** — cursor/trigger-anchored popover (`variant menu|popover`). **HoverPopover** / **Tooltip** — hover surfaces. **MenuItem** — one menu/popover row.
 
 ## Layout, lists, content
-- **SurfaceCard** — interactive card shell (stretched click-target). **ListColumn** / **DividedList** — list containers. **DetailShell** — pane scaffolding. **MetaGrid** — label/value grid. **SectionHeader** — section title + count. **Collapse** / **Tabs** + **TabPanels** / **PickerRow**.
+- **SurfaceCard** — interactive card shell (stretched click-target). **ListColumn** — list container. **Collapse** / **Tabs** + **TabPanels** / **PickerRow** — shared layout controls.
 - **Markdown** / **MarkdownViewer** / **Mermaid** — rendered content.
 - **DiffReview** — shared review shell. Memory edits pass complete before/after Markdown plus server operations; tool approvals use raw-only mode with a server-authored `rawPatch` and omit `operations`, so they never display or apply memory effects. Raw rendering is lazy-loaded, keyboard-accessible, wraps full-file comparisons, and preserves unified patches exactly. The server remains authoritative for every mutation.
 
