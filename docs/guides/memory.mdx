@@ -45,11 +45,24 @@ Interactive agents can create, edit, move, and archive ordinary pages through
 the normal approval flow. Scheduled automations can write only below
 `automations/` unless you grant a different supported workflow.
 
+## Daily notes
+
+A predefined **Daily Notes** automation runs each night and keeps one page per
+day at `daily/YYYY-MM-DD.md`. It reads the day's conversations and records the
+meaningful events, decisions, and context that belong to that date — not your
+open work or standing facts, which live elsewhere and would only be repeated.
+A day with nothing worth recording gets no page.
+
+It is an ordinary automation: you can disable, reschedule, or edit it. Its
+write path is enforced rather than merely instructed — it may create and edit
+dated `daily/` pages and nothing else.
+
 ## Maintenance
 
-Memory Maintenance reviews facts. Memory Synthesis updates fact-backed pages.
-Wiki Maintenance keeps page structure, links, titles, and metadata healthy.
-Every change is versioned and reversible.
+Memory Maintenance reviews facts. Memory Synthesis updates fact-backed pages
+from confirmed facts — it publishes only the managed regions of those pages and
+no longer keeps the daily log. Wiki Maintenance keeps page structure, links,
+titles, and metadata healthy. Every change is versioned and reversible.
 
 See [Tools](/guides/tools#facts) for agent-facing memory tools and
 [Facts and Wiki API](/api-reference/memory) for the server API.

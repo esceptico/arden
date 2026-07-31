@@ -74,10 +74,11 @@ it always attaches the current chat instead of creating a channel.
 
 ## Tool scoping
 
-An automation can carry a **tool scope**: an allowlist of exact names or prefix
-patterns such as `slack_*`. It grants write/action tools on top of the normal
-read-only floor; use the narrowest scope that performs the task. `auto_approve`
-skips approval only for tools already granted by that scope. See [tool scoping](/guides/tools#per-automation-tool-scoping).
+Every automation runs under a **tool scope**, and you choose between two:
+`read_only` (the default — the runs read but never write or execute) and `all`.
+Pick `all` only when the prompt genuinely has to act. `auto_approve` skips
+approval for tools the scope already grants; it never widens the scope. See
+[tool scoping](/guides/tools#per-automation-tool-scoping).
 
 ## Area agents
 
@@ -145,9 +146,9 @@ Send a stable semantic `idempotency_key` with `idempotency_scope: "global"` for 
 
 ## Approvals and permissions
 
-By default, mutating or external actions still require approval. Grant only the
-needed actions through `tool_scope`; toggle **auto-approve** only when those
-already-granted actions must run headlessly without per-call approval.
+By default, mutating or external actions still require approval. Leave an
+automation `read_only` unless it must act; toggle **auto-approve** only when the
+actions its scope already grants must run headlessly without per-call approval.
 
 Examples that may need auto-approve:
 

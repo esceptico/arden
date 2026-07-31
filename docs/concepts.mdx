@@ -50,8 +50,8 @@ open, read, and reply to.
 
 Two things constrain what that agent may do:
 
-- A **tool scope**: an allowlist on top of a read-only floor. No scope means
-  read-only, regardless of what the prompt asks for.
+- A **tool scope**: read-only, or every tool. Read-only is the default, and it
+  holds regardless of what the prompt asks for.
 - **Approval**: mutating or external actions stop and wait for you unless
   auto-approve is on for actions the scope already granted.
 

@@ -277,20 +277,39 @@ Settings → Tools can override individual tools:
 
 ## Per-automation tool scoping
 
-An automation can carry a **tool scope**: an allowlist of tool-name patterns that bounds what its runs may touch, applied as a hard outer gate before any other selection. Patterns are `*` (everything), an exact name, or a `prefix*` wildcard.
+Every automation carries a **tool scope**: a named contract bounding what its
+runs may touch, applied as a hard outer gate before any other selection. The
+automation stores only the scope's name. The contract itself is written in
+Arden's code, so no stored value pins a tool name and renaming a tool cannot
+quietly narrow a saved scope.
 
-```json
-"tool_scope": ["search_facts", "get_fact", "get_fact_history", "list_wiki_pages", "read_wiki_page", "wiki_links", "web_search"]
-```
+You and the agent choose between exactly two:
 
-This is how [area agents](/guides/areas) stay observe-only: they get bounded
-fact and wiki reads, but no fact commits, generated-page publishing, or external
-actions. A missing scope gives an automation only the read-only floor. Use
-`"*"` only when unrestricted tool access is intentional.
+| Scope | What the runs may use |
+|-------|-----------------------|
+| `read_only` | Every read-only tool, and nothing else. The default. |
+| `all` | Every tool. Consequential calls still require approval unless auto-approve is on. |
 
-Area custodians finish by calling `submit_area_report`. Invalid or stale reports
-return a tool error inside the same agent loop, so the custodian can correct the
-report before the automation is allowed to settle.
+Through the API this is the `tool_scope` field; the agent sets it with
+`all_tools` on `create_automation`. Nothing else is selectable — an automation
+cannot be handed a hand-written list of tool names by you or by a model.
+
+The remaining scopes are contracts Arden assigns from code and cannot be set
+from outside:
+
+| Scope | Assigned to |
+|-------|-------------|
+| `area_observe` / `area_act` | [Area custodians](/guides/areas), by autonomy mode |
+| `area_reply` | A custodian turn answering you — the same reach, minus the terminal report |
+| `area_action` | A proposal you approved: everything internal, no outside services |
+| `fact_maintenance`, `fact_retention` | Memory workers |
+| `wiki_maintenance`, `wiki_producer`, `daily_notes` | Wiki workers |
+
+This is how area agents stay observe-only: they read anything and tend their own
+topic page, but take no external action. Area custodians finish by calling
+`submit_area_report`. Invalid or stale reports return a tool error inside the
+same agent loop, so the custodian can correct the report before the automation
+is allowed to settle.
 
 ## User-defined tools
 

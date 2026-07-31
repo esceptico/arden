@@ -45,8 +45,9 @@ The room shows:
 - one request at a time, with a direct action or **Later**
 - the current outcome and its completed work
 
-Broader history and activity live in the inspector, so the room stays focused
-on what needs action now.
+You can read the area's page without leaving the room, and pause or resume its
+custodian from here. Broader history and activity live in the inspector, so the
+room stays focused on what needs action now.
 
 ## Standing agent
 
@@ -58,9 +59,26 @@ It reads the attached page, works toward the current outcome, and reports
 evidence, progress, and at most a few useful requests. Stable request keys
 update an existing request instead of creating duplicates.
 
-Area agents start in observe mode. They can read context and update their own
-area state. Act mode can grant more tools, but risky external actions still
-follow normal approval rules.
+Area agents start in observe mode: they read anything and tend their own page,
+but take no external action. Act mode additionally lets them run child
+automations belonging to the area; consequential actions still follow normal
+approval rules.
+
+## Requests and approval
+
+A request is one of three kinds. An FYI expires on its own. A question waits
+because the agent is blocked on your judgment. A **review** carries a proposed
+action, and you see exactly what will run before you approve it.
+
+Approving one is what grants the capability. An observe-mode custodian cannot
+perform what it proposes, so the approved action runs as a fresh agent with
+wider reach than the custodian has — every tool inside Arden, and nothing that
+touches an outside service. Reaching an outside service is a separate consent
+from "yes, do this", so an action that needs one stops rather than escalating
+quietly.
+
+Replying to a request is a conversation, not a scheduled run: the turn keeps the
+custodian's reach minus the report it files at the end of a real run.
 
 ## Related systems
 

@@ -97,21 +97,41 @@ resolves and stores stable Slack IDs when it saves the automation.
 
 ## Tool scoping and approval
 
-`tool_scope` grants only the write/action tools an automation needs; read-only
-tools remain available. `auto_approve=true` skips per-run approvals for those
-already-granted tools and never expands the scope.
+`tool_scope` names the contract an automation's runs execute under. It accepts
+exactly two values:
 
-For example, a wiki-producing automation can use
-`"tool_scope": ["create_wiki_page", "edit_wiki_page"]` with
-`"auto_approve": true`.
+| Value | Effect |
+|-------|--------|
+| `"read_only"` | Every read-only tool, nothing else. Applied when the field is omitted. |
+| `"all"` | Every tool. |
 
-Its prompt should list the target directory before creating a page, and read
-the exact path before editing one. The backend protects a fresh read from being
-overwritten; on a write conflict, list/read again before retrying. Ordinary
-automation pages belong under `automations/`. `publish_wiki_generated` is
-separate: use it only for a section owned by that automation.
+`auto_approve=true` skips per-run approvals for tools the scope already grants
+and never expands it.
 
-If `tool_scope` is omitted, the run gets only the read-only tool floor.
+```json
+{
+  "name": "Publish the ops page",
+  "prompt": "Refresh the ops summary page.",
+  "tool_scope": "all",
+  "auto_approve": true,
+  "idempotency_key": "automation:ops-page",
+  "idempotency_scope": "global"
+}
+```
+
+A wiki-writing prompt should list the target directory before creating a page,
+and read the exact path before editing one. The backend protects a fresh read
+from being overwritten; on a write conflict, list/read again before retrying.
+Ordinary automation pages belong under `automations/`. `publish_wiki_generated`
+is separate: use it only for a section owned by that automation.
+
+Responses also carry `tool_scope_label`, a rendering of what the scope actually
+grants (for example `read | create_wiki_page | edit_wiki_page`). It is
+informational — the server owns the wording.
+
+Arden's own custodians and workers run under finer contracts assigned in code
+(`area_observe`, `wiki_producer`, `daily_notes`, and others). Those names appear
+in `tool_scope` on read, but the API will not accept them on create or update.
 
 ## List automations
 
@@ -146,7 +166,7 @@ curl -X POST http://localhost:6877/automations/1/toggle \
 ## Toggle auto-approve
 
 Allow a headless automation to skip per-call approval for mutating/external
-tools already granted by its `tool_scope`. This setting does not grant tools:
+tools its `tool_scope` already grants. This setting does not widen the scope:
 
 ```bash
 curl -X POST http://localhost:6877/automations/1/auto-approve \
