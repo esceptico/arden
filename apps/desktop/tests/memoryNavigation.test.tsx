@@ -8,7 +8,7 @@ import { ArtifactCache } from "@/features/memory/lib/artifactCache";
 import { NavigationHistory } from "@/features/memory/lib/navigationHistory";
 import { resolveWikiTarget } from "@/features/memory/lib/wikiResolution";
 import type { MemoryArtifactDetail, MemoryArtifactSummary, PageLinks } from "@/features/memory/lib/notebookTypes";
-import { useStore } from "@/stores";
+import { getState, useStore } from "@/stores";
 import {
   error,
   installCanonicalMemoryBridge,
@@ -445,7 +445,7 @@ test("preview hover bridge covers the full padded surface", async () => {
   expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
 });
 
-test("notebook history shortcuts restore pages and ignore focused editors", async () => {
+test("returning to a page restores where it was left, whoever navigates", async () => {
   const index = summary("index.md", "Index");
   const a = summary("a.md", "A");
   const b = summary("b.md", "B");
@@ -474,7 +474,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   inlinePaths[1]!.focus();
   await act(async () => inlinePaths[1]!.click());
   await settle(250);
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
+  await act(async () => getState().openMemory("a.md"));
   await settleUntil(() => {
     const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-memory-path="b.md"]'));
     return links.indexOf(document.activeElement as HTMLAnchorElement) === 1;
@@ -492,7 +492,7 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   beeLinks[1]!.focus();
   await act(async () => beeLinks[1]!.click());
   await settle(250);
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
+  await act(async () => getState().openMemory("a.md"));
   await settleUntil(() => {
     const links = Array.from(host.querySelectorAll<HTMLAnchorElement>('[data-wikilink="Bee"]'));
     return links.indexOf(document.activeElement as HTMLAnchorElement) === 1;
@@ -504,21 +504,15 @@ test("notebook history shortcuts restore pages and ignore focused editors", asyn
   await settle(250);
   expect(bridge.requests.some((request) => request.path === `/admin/wiki/pages/${bPage.pageId}`)).toBe(true);
   expect(host.querySelector("h1")?.textContent).toBe("B");
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, bubbles: true })));
+  await act(async () => getState().openMemory("a.md"));
   await settle(250);
   expect(host.querySelector("h1")?.textContent).toBe("A");
 
-  // A focused quick-switcher input must swallow history shortcuts.
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", metaKey: true, bubbles: true })));
-  await settle();
-  const input = document.querySelector<HTMLInputElement>('[aria-label="Quick switcher"] input')!;
-  await act(async () => input.focus());
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", metaKey: true, bubbles: true })));
-  await settle(250);
-  expect(host.querySelector("h1")?.textContent).toBe("A");
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await settle();
-  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", ctrlKey: true, bubbles: true })));
+  // Page order is the shell's route trail now (⌘[ / ⌘] in App.tsx), so this
+  // component no longer binds the chord. What stays here is restoration: the
+  // page comes back scrolled and focused where it was left, no matter what
+  // navigated to it.
+  await act(async () => getState().openMemory("b.md"));
   await settle(250);
   expect(host.querySelector("h1")?.textContent).toBe("B");
   expect(bridge.requests.some((request) => request.path.includes("/history"))).toBe(false);

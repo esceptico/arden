@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -94,6 +95,16 @@ class _StubAutomationService:
         return {"task_id": task_id}
 
 
+class _StubWikiService:
+    """Only what _invalid_destination reads: the paths that exist."""
+
+    def __init__(self, paths: set[str] | None = None):
+        self._paths = paths or set()
+
+    def list_pages(self):
+        return tuple(SimpleNamespace(resource=SimpleNamespace(path=path)) for path in self._paths)
+
+
 class _StubAppControl:
     def __init__(self):
         self.dispatched: list[dict] = []
@@ -132,12 +143,15 @@ def _make_execution(
     background_tasks: BackgroundTaskRegistry | None = None,
     areas: list[str] | None = None,
     automation: _StubAutomationService | None = None,
+    wiki: _StubWikiService | None = None,
 ) -> tuple[ToolExecution, _StubSessionService, _StubAppControl]:
     service = _StubSessionService(sessions if sessions is not None else {}, archived, areas)
     app_control = _StubAppControl()
     services: dict[str, object] = {"session": service, "app_control": app_control}
     if automation is not None:
         services["automation"] = automation
+    if wiki is not None:
+        services["wiki"] = wiki
     ctx = ToolContext(
         session_state=SessionState(session_id="cur", started_at=datetime.now(UTC), area_id=area_id),
         registry=ToolRegistry(),
@@ -599,3 +613,46 @@ def test_sync_session_name_leaves_settled_runs_alone():
     registry.sync_session_name("s1", "New name")
 
     assert run.session_state.name == "Old name"
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_sends_the_user_to_a_wiki_page():
+    """A page is an address. An agent citing one can land the user on it
+    rather than at the vault root — the same vocabulary the desktop's route
+    history walks."""
+    execution, _, app_control = _make_execution(wiki=_StubWikiService({"areas/health.md"}))
+
+    result = await open_in_app(
+        execution,
+        OpenInAppInput(
+            destination={"kind": "memory", "path": "areas/health.md"},
+            label="Open the Health page",
+        ),
+    )
+
+    assert not result.is_error
+    assert app_control.emitted[0].destination == {"kind": "memory", "path": "areas/health.md"}
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_refuses_an_unknown_wiki_page():
+    execution, _, app_control = _make_execution(wiki=_StubWikiService({"areas/health.md"}))
+
+    result = await open_in_app(
+        execution,
+        OpenInAppInput(destination={"kind": "memory", "path": "areas/ghost.md"}, label="Open the page"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
+    assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_still_opens_memory_without_a_page():
+    execution, _, app_control = _make_execution()
+
+    result = await open_in_app(execution, OpenInAppInput(destination={"kind": "memory"}, label="Open memory"))
+
+    assert not result.is_error
+    assert app_control.emitted[0].destination == {"kind": "memory"}

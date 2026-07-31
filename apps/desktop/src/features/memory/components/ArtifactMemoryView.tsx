@@ -259,6 +259,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [selected, setSelected] = useState<string | null>(null);
   const memoryTargetPath = useStore((state) => state.memoryTargetPath);
   const clearMemoryTarget = useStore((state) => state.clearMemoryTarget);
+  const setMemoryCurrentPath = useStore((state) => state.setMemoryCurrentPath);
   const [activeDetail, setActiveDetail] = useState<MemoryArtifactDetail | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
@@ -313,6 +314,9 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const detailCache = useRef(new ArtifactCache());
   const navigationHistory = useRef(new NavigationHistory());
   const pendingRestore = useRef<NavigationLocation | null>(null);
+  /** Where each visited page was left: scroll offset and focus. Keyed by path
+   *  rather than ordered, because the shell owns the order now. */
+  const restoreByPath = useRef(new Map<string, NavigationLocation>());
   const linksRequestId = useRef(0);
   const historyRequestId = useRef(0);
   const retainedInspectorDetail = useRef<MemoryArtifactDetail | null>(null);
@@ -616,21 +620,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setSelected(fallback);
   }, [activeTab, loading, navigableArtifacts, reviewPending, selected, tabs, workspaceEmpty]);
 
-  // A caller can ask Memory to land on a specific page — the Area room's page
-  // link does. It outranks the restored/README fallback above, and is consumed
-  // on arrival so the next plain open behaves normally.
-  useLayoutEffect(() => {
-    if (loading || !memoryTargetPath) return;
-    if (!navigableArtifacts.some((artifact) => artifact.path === memoryTargetPath)) return;
-    clearMemoryTarget();
-    if (selected === memoryTargetPath) return;
-    navigationHistory.current.push({
-      path: memoryTargetPath, anchor: null, scrollTop: 0, focusSelector: null,
-    });
-    setHistoryVersion((version) => version + 1);
-    setSelected(memoryTargetPath);
-  }, [clearMemoryTarget, loading, memoryTargetPath, navigableArtifacts, selected]);
-
   const setInspectorVisibility = useCallback((open: boolean) => {
     persistInspectorOpen(open);
     setInspectorOpen(open);
@@ -678,8 +667,20 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       return;
     }
     const current = currentLocation();
-    if (current) navigationHistory.current.replaceCurrent(current);
-    const next = { path, anchor, scrollTop: 0, focusSelector: null };
+    if (current) {
+      navigationHistory.current.replaceCurrent(current);
+      restoreByPath.current.set(current.path, current);
+    }
+    // Land where this page was left, whatever brought us back to it — the
+    // shell's back control, a wiki link, the quick switcher. An explicit
+    // anchor outranks the remembered offset: it names its own position.
+    const remembered = anchor ? null : restoreByPath.current.get(path);
+    const next = {
+      path,
+      anchor,
+      scrollTop: remembered?.scrollTop ?? 0,
+      focusSelector: remembered?.focusSelector ?? null,
+    };
     navigationHistory.current.push(next);
     pendingRestore.current = next;
     setHistoryVersion((version) => version + 1);
@@ -688,36 +689,37 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     setSelected(path);
   }, [currentLocation, selected, workspaceEmpty]);
 
+  // A caller can ask Memory to land on a specific page: the Area room's page
+  // link, an agent's open_in_app destination, or the shell walking its route
+  // trail back to a page you were reading. It outranks the restored/README
+  // fallback above, and is consumed on arrival so the next plain open behaves
+  // normally.
+  //
+  // Through navigateTo, so an arrival from outside restores the page exactly
+  // as an arrival from inside does — same scroll offset, same focus.
+  useLayoutEffect(() => {
+    if (loading || !memoryTargetPath) return;
+    if (!navigableArtifacts.some((artifact) => artifact.path === memoryTargetPath)) return;
+    clearMemoryTarget();
+    if (selected === memoryTargetPath) return;
+    navigateTo(memoryTargetPath);
+  }, [clearMemoryTarget, loading, memoryTargetPath, navigableArtifacts, navigateTo, selected]);
+
   const selectFile = useCallback((path: string, direction: number) => {
     navigateTo(path, null, direction);
   }, [navigateTo]);
 
-  const moveHistory = useCallback((movement: "back" | "forward") => {
-    if (mutationPendingRef.current) return;
-    const current = currentLocation();
-    if (current) navigationHistory.current.replaceCurrent(current);
-    const location = movement === "back" ? navigationHistory.current.back() : navigationHistory.current.forward();
-    if (!location) return;
-    pendingRestore.current = location;
-    setHistoryVersion((version) => version + 1);
-    setContentNotice(null);
-    setContentDirection(movement === "back" ? -1 : 1);
-    setSelected(location.path);
-  }, [currentLocation]);
-
+  // Pages are part of the shell's one route trail, so ⌘[ / ⌘] and the shell's
+  // back control mean the same thing here as everywhere else. Memory used to
+  // own the chord for a second, private history: the key moved between pages
+  // while the button left the vault, and which one you got depended on whether
+  // you reached for the mouse or the keyboard.
+  //
+  // What stays local is restoration, not order: where each page was scrolled
+  // and what was focused. The shell says which page; this says how it looked.
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((!event.metaKey && !event.ctrlKey) || (event.key !== "[" && event.key !== "]")) return;
-      const targets = [event.target, document.activeElement];
-      if (targets.some((target) => target instanceof HTMLElement && (
-        target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
-      ))) return;
-      event.preventDefault();
-      moveHistory(event.key === "[" ? "back" : "forward");
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [moveHistory]);
+    setMemoryCurrentPath(selectedMeta?.path ?? selected);
+  }, [selected, selectedMeta?.path, setMemoryCurrentPath]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

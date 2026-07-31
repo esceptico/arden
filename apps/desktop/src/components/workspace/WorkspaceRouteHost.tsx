@@ -18,10 +18,16 @@ const ROUTE_EXIT_VARIANTS = {
 };
 
 /**
- * One route stage for Home, Chat, and Area rooms. The outgoing room completes
- * the canonical 160ms content exit; only then does the incoming room run its
- * shared staged PageEntrance. This avoids double-animating the new page while
- * preserving the mock's sequential handoff.
+ * One route stage for Home, Chat, Area rooms, Memory and Automations. The
+ * outgoing room completes the canonical 160ms content exit; only then does the
+ * incoming room run its shared staged PageEntrance. This avoids
+ * double-animating the new page while preserving the mock's sequential handoff.
+ *
+ * A route must never suspend. mode="wait" holds the outgoing room on screen
+ * until the incoming one mounts, and a child that suspends never gets there:
+ * the swap deadlocks, leaving the previous page rendered under the new route's
+ * data-workspace. Import route components eagerly — lazy() belongs to
+ * takeovers, which mount outside this host.
  */
 export function WorkspaceRouteHost({
   routeKey,

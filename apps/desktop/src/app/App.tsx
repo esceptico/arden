@@ -10,6 +10,8 @@ import { IS_DESKTOP_MAC } from "@/lib/platform";
 import { Sidebar } from "@/features/sessions/components/Sidebar";
 import { Chat } from "@/features/chat/components/Chat";
 import { Home } from "@/features/home/components/Home";
+import { MemorySurface } from "@/features/memory/components/MemorySurface";
+import { AutomationsModal } from "@/features/automations/components/AutomationsModal";
 import { AreaRoom } from "@/features/areas/components/AreaRoom";
 import { CommandPalette } from "@/features/command-palette/components/CommandPalette";
 import { MarkdownViewer } from "@/components/ui/MarkdownViewer";
@@ -45,34 +47,28 @@ import { createSession, switchSession } from "@/actions/sessions";
 import { goBack, goForward, goHome, recordCurrentDestination } from "@/actions/navigation";
 import { sendMessage } from "@/actions/messages";
 
-// The five "open from chrome" modals only mount when the user actually
-// opens them. Lazy boundaries here keep ~300 KB of MCP/Providers/Memory/
-// Automations code out of the initial bundle. Suspense fallback is null
-// — modals are conditional anyway, no spinner needed for the brief
-// chunk-fetch in an Electron renderer.
+// Takeovers stay lazy: they mount outside the route host, so a chunk fetch
+// costs nothing but a beat before the sheet appears.
+//
+// The Memory and Automations ROUTES are eager. A route may not suspend: the
+// route host swaps with AnimatePresence mode="wait", which holds the outgoing
+// room until the incoming one mounts, and a child that suspends never gets
+// there — the swap deadlocks on the old page. They were preloaded a second
+// after boot anyway, so the deferral bought a second of bundle, not a page.
 const SettingsModal = lazy(() =>
   import("@/features/settings/components/SettingsModal").then((m) => ({ default: m.SettingsModal })),
-);
-const AutomationsModal = lazy(() =>
-  import("@/features/automations/components/AutomationsModal").then((m) => ({ default: m.AutomationsModal })),
-);
-const MemorySurface = lazy(() =>
-  import("@/features/memory/components/MemorySurface").then((m) => ({ default: m.MemorySurface })),
 );
 const ToolViewer = lazy(() =>
   import("@/features/chat/components/ToolViewer").then((m) => ({ default: m.ToolViewer })),
 );
 
-/** Fetch the takeover chunks once the app is idle. Without this the FIRST
- *  open of Memory/Automations/Settings spends ~300ms fetching its chunk
- *  behind a null Suspense fallback: the click lands, nothing moves, and the
- *  surface then arrives mid-animation. One rule for every takeover — no
- *  per-surface preloading. */
+/** Fetch the takeover chunk once the app is idle. Without this the FIRST
+ *  open of Settings spends ~300ms fetching it behind a null Suspense
+ *  fallback: the click lands, nothing moves, and the surface arrives
+ *  mid-animation. */
 function usePreloadTakeovers(): void {
   useEffect(() => {
     const warm = () => {
-      void import("@/features/memory/components/MemorySurface");
-      void import("@/features/automations/components/AutomationsModal");
       void import("@/features/settings/components/SettingsModal");
     };
     const idle = window.requestIdleCallback;
@@ -110,6 +106,13 @@ function useHash(): string {
     return () => window.removeEventListener("hashchange", handler);
   }, []);
   return hash;
+}
+
+/** Whether a keystroke is landing in something the user is typing into.
+ *  Route history must not steal a chord out from under an editor. */
+function isTextEntry(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 }
 
 function useFullscreenClass(): void {
@@ -155,7 +158,8 @@ export function App() {
   const memoryOpen = useStore((s) => s.memoryOpen);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const automationsOpen = useStore((s) => s.automationsOpen);
-  const automationTargetId = useStore((s) => s.automationTargetId);
+  const automationCurrentId = useStore((s) => s.automationCurrentId);
+  const memoryCurrentPath = useStore((s) => s.memoryCurrentPath);
   // Memory and Automations are routes, not dialogs: each brings its own rail
   // and its own internal navigation, so they replace the stage rather than
   // covering it. Settings stays a Takeover — you enter, change one thing,
@@ -210,7 +214,7 @@ export function App() {
   // one, including whichever is added next.
   useEffect(() => {
     recordCurrentDestination();
-  }, [workspaceRouteKey, currentSessionId, automationTargetId]);
+  }, [workspaceRouteKey, currentSessionId, automationCurrentId, memoryCurrentPath]);
   // Session identity dismisses the compact rail, but does not own the
   // workspace route: switching chats must not replay the full page entrance.
   useEffect(() => {
@@ -274,7 +278,7 @@ export function App() {
         // trail and calls preventDefault, so while the vault is open it wins
         // — the innermost history owns the key, as in a browser.
         if (e.key === "[" || e.key === "]") {
-          if (memoryOpen || hasBlockingOverlay()) return;
+          if (hasBlockingOverlay() || isTextEntry(e.target) || isTextEntry(document.activeElement)) return;
           e.preventDefault();
           if (e.key === "[") goBack();
           else goForward();
@@ -407,13 +411,9 @@ export function App() {
           >
             <WorkspaceRouteHost routeKey={workspaceRouteKey}>
               {workspaceKind === "memory" ? (
-                <Suspense fallback={null}>
-                  <MemorySurface />
-                </Suspense>
+                <MemorySurface />
               ) : workspaceKind === "automations" ? (
-                <Suspense fallback={null}>
-                  <AutomationsModal />
-                </Suspense>
+                <AutomationsModal />
               ) : workspaceKind === "area" && openAreaKey ? (
                 <AreaRoom areaKey={openAreaKey} />
               ) : workspaceKind === "home" ? (

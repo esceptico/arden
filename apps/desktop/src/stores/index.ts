@@ -283,6 +283,8 @@ export const useStore = create<State & Actions>((set) => ({
   compacting: false,
   memoryOpen: false,
   memoryTargetPath: null,
+  memoryCurrentPath: null,
+  automationCurrentId: null,
   sourceFocus: null,
   rightInspectorTab: "activity",
   sourceTurnId: null,
@@ -624,6 +626,8 @@ export const useStore = create<State & Actions>((set) => ({
       automationTargetRun: null,
       memoryOpen: false,
       memoryTargetPath: null,
+      memoryCurrentPath: null,
+  automationCurrentId: null,
       settingsTab: tab ?? null,
       connectionDraft: { ...s.config },
       connectionError: null,
@@ -829,11 +833,14 @@ export const useStore = create<State & Actions>((set) => ({
       settingsOpen: false,
       memoryOpen: false,
       memoryTargetPath: null,
+      memoryCurrentPath: null,
+  automationCurrentId: null,
       automationTargetId: taskId ?? null,
       automationTargetRun: taskId ? options?.run ?? null : null,
       modalOrigin: null,
     }),
-  closeAutomations: () => set({ automationsOpen: false, automationTargetId: null, automationTargetRun: null }),
+  closeAutomations: () =>
+    set({ automationsOpen: false, automationTargetId: null, automationTargetRun: null, automationCurrentId: null }),
   clearAutomationTarget: () => set({ automationTargetId: null, automationTargetRun: null }),
   automationStreamConnecting: () =>
     set((s) => ({
@@ -892,7 +899,9 @@ export const useStore = create<State & Actions>((set) => ({
       modalOrigin: null,
     }),
   clearMemoryTarget: () => set({ memoryTargetPath: null }),
-  closeMemory: () => set({ memoryOpen: false, memoryTargetPath: null }),
+  setMemoryCurrentPath: (memoryCurrentPath) => set({ memoryCurrentPath }),
+  setAutomationCurrentId: (automationCurrentId) => set({ automationCurrentId }),
+  closeMemory: () => set({ memoryOpen: false, memoryTargetPath: null, memoryCurrentPath: null }),
   setSourceFocus: (sourceFocus) => set({ sourceFocus }),
   setRightInspectorTab: (rightInspectorTab) =>
     set({

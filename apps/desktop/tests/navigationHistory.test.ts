@@ -1,4 +1,4 @@
-import { expect, test, beforeEach } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { getState, setState } from "@/stores";
 import { NavigationHistory } from "@/lib/navigationHistory";
 import { setNavigationGuard, withNavigationGuard } from "@/lib/navigationGuard";
@@ -69,6 +69,21 @@ test("a guard can block navigation and replay it later", () => {
 
 const SESSION = { session_id: "s1", title: "One", updated_at: "", created_at: "" };
 
+// Entering a session destination loads its transcript. That request is
+// incidental here — this file tests the trail, not history loading — and left
+// unstubbed it escapes as a floating rejection whose timing depends on which
+// test file ran first.
+const originalDesktop = window.ardenDesktop;
+beforeAll(() => {
+  window.ardenDesktop = {
+    ...(window.ardenDesktop ?? {}),
+    api: {
+      request: async () => ({ ok: true, status: 200, contentType: "application/json", data: { messages: [] } }),
+    },
+  } as typeof window.ardenDesktop;
+});
+afterAll(() => { window.ardenDesktop = originalDesktop; });
+
 function resetShell() {
   setNavigationGuard(null);
   while (appHistory.canBack) appHistory.back();
@@ -78,8 +93,10 @@ function resetShell() {
     sessions: [SESSION as never],
     currentSessionId: null,
     memoryOpen: false,
+    memoryCurrentPath: null,
     automationsOpen: false,
     automationTargetId: null,
+    automationCurrentId: null,
     settingsOpen: false,
   });
 }
@@ -108,7 +125,7 @@ test("leaving Memory returns to the session it was opened from, not Home", () =>
 
   getState().openMemory();
   recordCurrentDestination();
-  expect(currentDestination()).toEqual({ kind: "memory" });
+  expect(currentDestination()).toEqual({ kind: "memory", path: null });
 
   goBack();
 
@@ -147,4 +164,41 @@ test("a guard holds route changes until the route releases them", () => {
   setNavigationGuard(null);
   resume!();
   expect(getState().memoryOpen).toBe(false);
+});
+
+test("wiki pages are addresses, so back steps between them before leaving", () => {
+  getState().setCurrentSession("s1");
+  recordCurrentDestination();
+
+  getState().openMemory();
+  getState().setMemoryCurrentPath("areas/health.md");
+  recordCurrentDestination();
+  getState().setMemoryCurrentPath("areas/ops.md");
+  recordCurrentDestination();
+
+  // One trail: back walks page → page → out of the vault, rather than
+  // leaving the route on the first press and stranding the page trail in a
+  // second, private history only the keyboard could reach.
+  goBack();
+  expect(getState().memoryTargetPath).toBe("areas/health.md");
+  expect(getState().memoryOpen).toBe(true);
+
+  getState().setMemoryCurrentPath("areas/health.md");
+  goBack();
+  expect(getState().memoryOpen).toBe(false);
+  expect(getState().currentSessionId).toBe("s1");
+});
+
+test("an automation selection is an address too", () => {
+  getState().setCurrentSession("s1");
+  recordCurrentDestination();
+
+  getState().openAutomations();
+  getState().setAutomationCurrentId("task-a");
+  recordCurrentDestination();
+  getState().setAutomationCurrentId("task-b");
+  recordCurrentDestination();
+
+  expect(currentDestination()).toEqual({ kind: "automation", task_id: "task-b" });
+  expect(appHistory.canBack).toBe(true);
 });

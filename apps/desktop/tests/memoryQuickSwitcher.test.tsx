@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
+import { getState } from "@/stores";
 import { createRoot, type Root } from "react-dom/client";
 import type { AppConfig } from "@/api/core";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
@@ -132,10 +133,11 @@ test("Cmd+O opens the switcher, typing filters, Enter navigates", async () => {
   expect(document.querySelector('[aria-label="Quick switcher"]')).toBeNull();
   expect(host.querySelector("h1")?.textContent).toBe("Dex");
 
-  // History recorded the jump — Cmd+[ returns to the previous note.
-  await shortcut("[");
-  await settle(260);
-  expect(host.querySelector("h1")?.textContent).toBe(initialTitle);
+  // The jump is a route change, so it lands in the shell's trail rather than
+  // a history private to this view. Walking it back is App.tsx's ⌘[ (covered
+  // in navigationHistory.test.ts); what this test owns is the switcher.
+  expect(getState().memoryCurrentPath).toBe("topics/dex.md");
+  expect(initialTitle).not.toBe("Dex");
 });
 
 test("Escape closes only the switcher, memory view stays mounted", async () => {

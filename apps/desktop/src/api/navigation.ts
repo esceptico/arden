@@ -7,5 +7,5 @@ export type AppDestination =
   | { kind: "session"; session_id: string }
   | { kind: "settings"; tab?: SettingsTabId | null }
   | { kind: "automation"; task_id?: string | null }
-  | { kind: "memory" }
+  | { kind: "memory"; path?: string | null }
   | { kind: "area"; area_id: string };

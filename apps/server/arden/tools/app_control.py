@@ -16,7 +16,13 @@ from pydantic import BaseModel, Field
 from arden.areas.agent import NOTIFY_ASK_TTL_HOURS
 from arden.areas.asks import nominate_focus
 from arden.areas.models import Ask
-from arden.events.destinations import AppDestination, AreaDestination, AutomationDestination, SessionDestination
+from arden.events.destinations import (
+    AppDestination,
+    AreaDestination,
+    AutomationDestination,
+    MemoryDestination,
+    SessionDestination,
+)
 from arden.events.sse import AreasChangedEvent, NavigationRequestedEvent
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
@@ -112,9 +118,9 @@ class OpenInAppInput(BaseModel):
         description=(
             'Where to send the user. One of: {"kind":"home"}, '
             '{"kind":"session","session_id":"..."}, {"kind":"settings","tab":"models"}, '
-            '{"kind":"automation","task_id":"..."}, {"kind":"memory"}, '
-            '{"kind":"area","area_id":"..."}. task_id and tab may be omitted to '
-            "open the surface itself."
+            '{"kind":"automation","task_id":"..."}, {"kind":"memory","path":"..."}, '
+            '{"kind":"area","area_id":"..."}. task_id, tab and path may be omitted '
+            "to open the surface itself; a memory path opens that wiki page."
         )
     )
     label: str = Field(
@@ -364,6 +370,22 @@ async def _invalid_destination(execution: ToolExecution, destination: AppDestina
                     message=f"No automation {task_id}.",
                     preview="Unknown automation",
                     recovery_action="Call list_automations and retry with an exact task_id.",
+                )
+        case MemoryDestination(path=str() as path):
+            svc = execution.ctx.services.get("wiki")
+            if svc is None:
+                return ToolResult.failure(
+                    code="not_found",
+                    message=f"No wiki page {path} — the wiki is not available here.",
+                    preview="No wiki",
+                    recovery_action="Open the memory surface itself: destination={'kind':'memory'}.",
+                )
+            if not any(record.resource.path == path for record in svc.list_pages()):
+                return ToolResult.failure(
+                    code="not_found",
+                    message=f"No wiki page at {path}.",
+                    preview="Unknown page",
+                    recovery_action="Call read_wiki to list pages and retry with an exact path.",
                 )
     return None
 

@@ -11,6 +11,7 @@ function sameDestination(left: AppDestination, right: AppDestination): boolean {
   if (left.kind === "session" && right.kind === "session") return left.session_id === right.session_id;
   if (left.kind === "area" && right.kind === "area") return left.area_id === right.area_id;
   if (left.kind === "automation" && right.kind === "automation") return left.task_id === right.task_id;
+  if (left.kind === "memory" && right.kind === "memory") return (left.path ?? null) === (right.path ?? null);
   return true;
 }
 
@@ -57,8 +58,8 @@ export function readHistoryAvailability(snapshot: number) {
  *  Settings returns to what you were doing before it, never into it. */
 export function currentDestination(): AppDestination {
   const state = getState();
-  if (state.memoryOpen) return { kind: "memory" };
-  if (state.automationsOpen) return { kind: "automation", task_id: state.automationTargetId };
+  if (state.memoryOpen) return { kind: "memory", path: state.memoryCurrentPath };
+  if (state.automationsOpen) return { kind: "automation", task_id: state.automationCurrentId };
   if (state.areas.openAreaKey) return { kind: "area", area_id: state.areas.openAreaKey };
   if (state.currentSessionId) return { kind: "session", session_id: state.currentSessionId };
   return { kind: "home" };
@@ -102,7 +103,10 @@ export function applyAppDestination(destination: AppDestination): AppNavigationR
       state.openAutomations(destination.task_id ?? null);
       return { ok: true };
     case "memory":
-      state.openMemory();
+      // A path makes this a page address, not just the surface: the same
+      // vocabulary an agent uses in open_in_app, and the same one history
+      // walks. openMemory hands it to the vault, which selects that page.
+      state.openMemory(destination.path ?? undefined);
       return { ok: true };
     case "area":
       if (!state.areas.recordsById[destination.area_id]) {

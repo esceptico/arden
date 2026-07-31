@@ -47,10 +47,10 @@ class AutomationDestination(_StrictModel):
 
 
 class MemoryDestination(_StrictModel):
-    # No page path: the desktop can only open the memory surface itself
-    # (`openMemory()`), and a field the applier always refuses would just
-    # invite a guaranteed-failing tool call.
     kind: Literal["memory"]
+    # An agent citing a wiki page can send the user to that page rather than
+    # to the vault root. Omit it to open the surface itself.
+    path: str | None = Field(default=None, min_length=1, max_length=400)
 
 
 class AreaDestination(_StrictModel):

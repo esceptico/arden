@@ -115,7 +115,7 @@ function AutomationRunPeek({ view, onClose }: { view: RunPeek | null; onClose: (
         </IconButton>
       </header>
       <div className="automation-result-peek__body">
-        <Markdown content={content} typeset />
+        <Markdown content={content} codeChrome={false} />
       </div>
     </PeekSurface>
   );
@@ -253,6 +253,16 @@ export function AutomationsModal() {
     }
     executeIntent(intent);
   }, [detailDirty, executeIntent]);
+
+  // The selected automation is part of the route, so the shell can put it in
+  // the trail: back steps between automations before it leaves the workspace,
+  // exactly as it steps between memory pages. Drafts are deliberately absent —
+  // an unsaved draft is not a place you can return to.
+  const setAutomationCurrentId = useStore((state) => state.setAutomationCurrentId);
+  useEffect(() => {
+    if (draft) return;
+    setAutomationCurrentId(selectedId);
+  }, [draft, selectedId, setAutomationCurrentId]);
 
   // An unsaved draft blocks leaving the route, wherever the navigation came
   // from — the shell's back control, ⌘[, or Escape. The guard hands us the

@@ -444,6 +444,13 @@ export interface State {
   /** Page path Memory should land on when it opens, instead of its usual
    *  restored/README fallback. Cleared once Memory has honoured it. */
   memoryTargetPath: string | null;
+  /** The wiki page Memory is showing right now, published so the shell can
+   *  put it in the route trail. Memory owns the value; nothing else sets it. */
+  memoryCurrentPath: string | null;
+  /** The automation the workspace is showing right now, published so the shell
+   *  can put it in the route trail. Distinct from automationTargetId, which is
+   *  a one-shot deep-link inbox that clears itself once honoured. */
+  automationCurrentId: string | null;
   sourceFocus: MessageSourceFocus | null;
   rightInspectorTab: "activity" | "sources";
   sourceTurnId: string | null;
@@ -658,6 +665,8 @@ export interface Actions {
   setCompacting: (compacting: boolean) => void;
   openMemory: (targetPath?: string) => void;
   clearMemoryTarget: () => void;
+  setMemoryCurrentPath: (path: string | null) => void;
+  setAutomationCurrentId: (taskId: string | null) => void;
   closeMemory: () => void;
   setSourceFocus: (focus: MessageSourceFocus | null) => void;
   setRightInspectorTab: (tab: "activity" | "sources") => void;
