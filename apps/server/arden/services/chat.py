@@ -65,7 +65,7 @@ from arden.tools.deferred import (
 )
 from arden.tools.directives import load_directives
 from arden.tools.executor import ToolExecutor
-from arden.tools.scopes import ScopeKey
+from arden.tools.scopes import ScopeKey, resolve
 from arden.wiki.context import WikiContextBuilder
 
 _logger = get_logger(__name__)
@@ -743,7 +743,7 @@ async def prepare_chat(
     run.loop_task_id = loop_task_id
     run.automation_id = automation_id
 
-    tools = deps.executor.get_tools(scope=tool_scope) if tool_scope else deps.executor.get_tools()
+    tools = deps.executor.get_tools(scope=resolve(tool_scope)) if tool_scope else deps.executor.get_tools()
     get_goal = getattr(deps.session_service, "get_goal", None)
     goal_context = await get_goal(session_state.session_id) if get_goal else None
     get_todo_override = getattr(deps.session_service, "get_todo_override", None)

@@ -8,6 +8,7 @@ the system message at index 0 and keeping the most recent tail.
 Trimming is runtime-only — disk history is untouched.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -30,6 +31,7 @@ from arden.services.chat import (
     prepare_chat,
     resume_suspended_chat_run,
 )
+from arden.tools.executor import ToolExecutor
 
 
 def _make_history(n: int, *, with_system: bool = True) -> list[dict]:
@@ -259,6 +261,32 @@ async def test_prepare_chat_adds_autonomous_guard_for_session_bound_loop():
 
     system_blocks = ctx.run.messages[0]["content"]
     assert sum(block["text"].count(AUTOMATION_SUFFIX) for block in system_blocks) == 1
+
+
+@pytest.mark.asyncio
+async def test_prepare_chat_resolves_daily_notes_tool_scope():
+    deps = replace(
+        _make_deps(_StubSessionService([])),
+        executor=ToolExecutor(
+            get_services=lambda: {
+                "wiki": object(),
+                "wiki_post_commit": object(),
+            }
+        ),
+    )
+
+    ctx = await prepare_chat(
+        deps,
+        message="/daily-notes",
+        session_id="sess-1",
+        loop_task_id="daily-notes",
+        automation_id="daily-notes",
+        tool_scope="daily_notes",
+    )
+
+    names = {schema["function"]["name"] for schema in ctx.tools}
+    assert {"create_wiki_page", "edit_wiki_page"} <= names
+    assert "archive_wiki_page" not in names
 
 
 @pytest.mark.asyncio
