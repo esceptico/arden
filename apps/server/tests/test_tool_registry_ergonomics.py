@@ -6,6 +6,7 @@ from arden.integrations.core import DIRECTIVES
 from arden.integrations.web.tools import WebSearchInput
 from arden.tools.app_control import SendMessageInput
 from arden.tools.core import ToolResult, tool
+from arden.tools.core.scope import tools
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.tools.discover import discover_user_tools
 from arden.tools.executor import ToolExecutor
@@ -60,7 +61,7 @@ def test_dead_tools_are_not_registered_or_exposed_in_workflow_schema():
 
 
 def test_stateful_spawns_do_not_leak_into_read_only_schema():
-    read_names = {schema["function"]["name"] for schema in ToolExecutor().get_tools(read_only=True)}
+    read_names = {schema["function"]["name"] for schema in ToolExecutor().get_tools(scope=tools.read)}
 
     assert "background" not in read_names
     assert "research" not in read_names

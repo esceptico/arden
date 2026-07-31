@@ -51,7 +51,11 @@ from arden.logging import get_logger
 from arden.observability import observed_trace
 from arden.tools.core.base import Tool
 from arden.tools.core.context import ChildIOParams, IOBridge, RunContext, ToolContext
-from arden.tools.core.types import ToolAction
+
+# `tools` is already this module's schema-list parameter; alias the filter
+# namespace rather than shadow it.
+from arden.tools.core.scope import ToolFilter
+from arden.tools.core.scope import tools as tool_filters
 from arden.tools.deferred import append_deferred_tools_prompt, tool_schema_names
 from arden.tools.executor import ToolExecutor
 
@@ -343,7 +347,7 @@ def create_spawn_fn(
         lifecycle_id: str | None = None,
         workflow_id: str | None = None,
         phase: str | None = None,
-        actions: frozenset[ToolAction] | None = None,
+        scope: ToolFilter | None = None,
         exclude_tools: frozenset[str] | None = None,
     ) -> str:
         should_wait = (not background) if wait is None else wait
@@ -369,14 +373,17 @@ def create_spawn_fn(
                 child_registry = executor.registry.copy_with(missing)
                 child_executor_source = executor.with_registry(child_registry)
 
-        # `actions` is the agent-type capability filter ({READ} for analysts, None
-        # for full): it narrows the base toolset to those ToolActions, the same way
-        # research read-only-filtered its tools. extra_tools (merged into the child
-        # registry above) and exclude_tools then add/remove on top.
-        full_tools = child_executor_source.get_tools(
-            actions=actions,
-            extra_names=frozenset(extra_tools or ()),
-        )
+        # `scope` is the agent-type capability filter (tools.read for analysts,
+        # None for full). A type's own extra_tools are unioned onto it by name:
+        # research's ledger tools WRITE, so a read-only analyst scope would drop
+        # the very tools that define the type. The hard gate for a child is
+        # `parent_allowed` below, not this — a child can never exceed its parent
+        # however wide its type is.
+        child_scope = scope
+        if child_scope is not None and extra_tools:
+            for extra_name in extra_tools:
+                child_scope = child_scope | tool_filters.named(extra_name)
+        full_tools = child_executor_source.get_tools(scope=child_scope)
         # `tools` is either schema dicts (research/background pass these) or a
         # name allowlist a workflow author wrote, e.g. ["slack_search", ...].
         # Resolve names against the full toolset so a name-restricted agent still

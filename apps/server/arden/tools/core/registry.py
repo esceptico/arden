@@ -90,29 +90,21 @@ class ToolRegistry:
         *,
         capabilities: frozenset[str] = frozenset(),
         names: set[str] | None = None,
-        read_only: bool | None = None,
-        actions: frozenset[ToolAction] | None = None,
-        extra_names: frozenset[str] = frozenset(),
         scope: ToolFilter | None = None,
     ) -> list[dict]:
         schemas = []
         for name, tool in self._tools.items():
             if self._tool_overrides.get(name) == ToolOverrideDecision.DENY:
                 continue
-            # Scope is the hard outer gate — applied before every other
-            # selection (including extra_names) so no path widens a run past
-            # its author's declaration.
+            # Scope is the only capability filter, and it is the hard outer
+            # gate: nothing downstream widens a run past its author's
+            # declaration. `names` narrows further (the deferred middleware's
+            # visible/deferred split), it never adds.
             if scope is not None and not scope.matches(self.facts(name)):
                 continue
             tool = self._effective_tool(name, tool)
             if names is not None and name not in names:
                 continue
-            included_by_name = name in extra_names
-            if not included_by_name:
-                if read_only is not None and (tool.policy.action == ToolAction.READ) != read_only:
-                    continue
-                if actions is not None and tool.policy.action not in actions:
-                    continue
             if not tool.policy.permissions.issubset(capabilities):
                 continue
             schemas.append(tool.to_dict(name))

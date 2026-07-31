@@ -13,7 +13,7 @@ from arden.orchestra.engine import (
     WorkflowStructuredOutputMissing,
 )
 from arden.orchestra.schema import model_from_schema
-from arden.tools.core.types import ToolAction
+from arden.tools.core.scope import tools
 
 
 class _Schema(BaseModel):
@@ -227,35 +227,35 @@ async def test_workflow_agents_exclude_spawn_tools():
 
 
 async def test_agent_type_threads_capability_and_persona():
-    # A read-only persona resolves to actions={READ} + the persona prompt + the
+    # A read-only persona resolves to scope=tools.read + the persona prompt + the
     # agent_type label, none of which the script wrote.
     captured = {}
 
-    async def spawn_fn(ctx, *, task, actions=None, system_prompt=None, agent_type=None, **kwargs):
-        captured.update(actions=actions, system_prompt=system_prompt, agent_type=agent_type)
+    async def spawn_fn(ctx, *, task, scope=None, system_prompt=None, agent_type=None, **kwargs):
+        captured.update(scope=scope, system_prompt=system_prompt, agent_type=agent_type)
         return SimpleNamespace(text="ok")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
     await o.agent("review this", agent_type="reviewer")
-    assert captured["actions"] == frozenset({ToolAction.READ})
+    assert captured["scope"] == tools.read
     assert "code reviewer" in captured["system_prompt"]
     assert captured["agent_type"] == "reviewer"
 
 
 async def test_builder_agent_type_is_full_capability():
-    # The capability axis is a set of actions, so a write-capable builder is just
-    # actions=None (full) — read-only is one value, not the axis.
+    # The capability axis is a ToolFilter, so a write-capable builder is just
+    # scope=None (full) — read-only is one value, not the axis.
     captured = {}
 
-    async def spawn_fn(ctx, *, task, actions=None, **kwargs):
-        captured["actions"] = actions
+    async def spawn_fn(ctx, *, task, scope=None, **kwargs):
+        captured["scope"] = scope
         return SimpleNamespace(text="ok")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
     await o.agent("build it", agent_type="builder")
-    assert captured["actions"] is None
+    assert captured["scope"] is None
 
 
 async def test_unknown_agent_type_raises_listing_options():
@@ -268,22 +268,22 @@ async def test_unknown_agent_type_raises_listing_options():
 async def test_explicit_system_prompt_overrides_persona_but_keeps_capability():
     captured = {}
 
-    async def spawn_fn(ctx, *, task, system_prompt=None, actions=None, **kwargs):
-        captured.update(system_prompt=system_prompt, actions=actions)
+    async def spawn_fn(ctx, *, task, system_prompt=None, scope=None, **kwargs):
+        captured.update(system_prompt=system_prompt, scope=scope)
         return SimpleNamespace(text="ok")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
     await o.agent("x", agent_type="reviewer", system_prompt="be a poet")
     assert captured["system_prompt"] == "be a poet"
-    assert captured["actions"] == frozenset({ToolAction.READ})
+    assert captured["scope"] == tools.read
 
 
 async def test_agent_type_with_schema_keeps_capability_and_note():
     captured = {}
 
-    async def spawn_fn(ctx, *, task, system_prompt=None, actions=None, **kwargs):
-        captured.update(worker_prompt=system_prompt, worker_actions=actions)
+    async def spawn_fn(ctx, *, task, system_prompt=None, scope=None, **kwargs):
+        captured.update(worker_prompt=system_prompt, worker_scope=scope)
         return SimpleNamespace(text="worker")
 
     async def format_structured(*, response_format, **kwargs):
@@ -294,7 +294,7 @@ async def test_agent_type_with_schema_keeps_capability_and_note():
     o = Orchestra.for_ctx(ctx)
     out = await o.agent("review", agent_type="reviewer", schema=_Schema)
     assert out.value == 1
-    assert captured["worker_actions"] == frozenset({ToolAction.READ})
+    assert captured["worker_scope"] == tools.read
     assert "code reviewer" in captured["worker_prompt"]
     assert captured["formatted"] is True
 

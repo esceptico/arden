@@ -18,6 +18,7 @@ from arden.core.spawner import SpawnResult, create_spawn_fn
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.scope import tools
 from arden.tools.executor import ToolExecutor
 
 
@@ -177,7 +178,7 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     # research now hands the spawner a PROFILE (capability + ledger tools + spawn-tool
     # excludes), not a pre-built tool list — the spawner builds the toolset from it.
     assert "tools" not in captured
-    assert captured["actions"] == frozenset({ToolAction.READ})
+    assert captured["scope"] == tools.read
     assert {"background", "workflow"} <= captured["exclude_tools"]
     assert captured["agent_type"] == "research"
     assert captured["wait"] is True
@@ -300,7 +301,7 @@ async def test_research_profile_builds_read_only_child_toolset(monkeypatch):
     assert names >= SCRATCHPAD_TOOL_NAMES
     assert {"research_outline", "research_cover"} <= names
     assert names >= HARNESS_TOOL_NAMES
-    assert "write_tool" not in names  # WRITE filtered by actions={READ}
+    assert "write_tool" not in names  # WRITE filtered by scope=tools.read
     assert "background" not in names  # excluded by the research spawn-tool set
     assert "workflow" not in names
 

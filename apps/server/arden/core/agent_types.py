@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.tools.core.base import Tool
-from arden.tools.core.types import ToolAction
+from arden.tools.core.scope import ToolFilter, tools
 
 # An agent type is a TOOL PROFILE first — what the agent is allowed to touch —
 # with a prompt that rides along. This is the shape the research subagent already
@@ -11,8 +11,9 @@ from arden.tools.core.types import ToolAction
 # workflow agent() combinator and research() now resolve from this one registry
 # instead of each assembling a toolset inline.
 #
-#   actions  capability: a set of allowed ToolActions, or None for all.
-#            {READ} is a read-only analyst; None is a builder that writes/executes.
+#   scope    capability, as a ToolFilter: `tools.read` is a read-only analyst,
+#            None is a builder that writes/executes. Same algebra automations
+#            use, so "read-only" has one spelling in the codebase.
 #   exclude  tool names removed on top of the capability filter.
 #   extra_tools  specialized tools injected for this type (research's ledger).
 #   prompt   static persona prompt; None means the caller supplies it (research's
@@ -22,7 +23,7 @@ from arden.tools.core.types import ToolAction
 # they are set at the spawn site, because they are not part of "what tools this
 # kind of agent has."
 
-_READ = frozenset({ToolAction.READ})
+_READ = tools.read
 
 SPAWN_SURFACE_GUIDANCE = (
     "Choose research for one awaited investigation; background for a detached one-off investigation; "
@@ -34,7 +35,7 @@ SPAWN_SURFACE_GUIDANCE = (
 @dataclass(frozen=True)
 class AgentType:
     name: str
-    actions: frozenset[ToolAction] | None = None
+    scope: ToolFilter | None = None
     exclude: frozenset[str] = frozenset()
     extra_tools: Mapping[str, Tool] = field(default_factory=dict)
     prompt: str | None = None
@@ -69,7 +70,7 @@ def apply_profile(
     caller-supplied system_prompt wins over the persona's; excludes and extra
     tools union. Returns the spawn_fn kwargs the type controls."""
     return {
-        "actions": spec.actions,
+        "scope": spec.scope,
         "system_prompt": system_prompt or spec.prompt,
         "exclude_tools": frozenset(exclude_tools) | spec.exclude,
         "extra_tools": {**dict(spec.extra_tools), **dict(extra_tools or {})},
@@ -104,7 +105,7 @@ _VERIFIER_PROMPT = (
     "unconfirmed. State the inputs/state that trigger the issue, or why it can't."
 )
 # Write-capable persona: full toolset (writes files, runs tools). The capability
-# axis is a set of actions, so a builder is just `actions=None` — read-only is one
+# axis is a ToolFilter, so a builder is just `scope=None` — read-only is one
 # value of the axis, not the axis itself.
 _BUILDER_PROMPT = (
     "You are an implementer. Make the change end to end: read the surrounding code, "
@@ -113,10 +114,10 @@ _BUILDER_PROMPT = (
 )
 
 for _spec in (
-    AgentType("reviewer", actions=_READ, prompt=f"{_REVIEWER_PROMPT} {UNTRUSTED_DATA_RULE}"),
-    AgentType("explorer", actions=_READ, prompt=f"{_EXPLORER_PROMPT} {UNTRUSTED_DATA_RULE}"),
-    AgentType("planner", actions=_READ, prompt=f"{_PLANNER_PROMPT} {UNTRUSTED_DATA_RULE}"),
-    AgentType("verifier", actions=_READ, prompt=f"{_VERIFIER_PROMPT} {UNTRUSTED_DATA_RULE}"),
-    AgentType("builder", actions=None, prompt=f"{_BUILDER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("reviewer", scope=_READ, prompt=f"{_REVIEWER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("explorer", scope=_READ, prompt=f"{_EXPLORER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("planner", scope=_READ, prompt=f"{_PLANNER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("verifier", scope=_READ, prompt=f"{_VERIFIER_PROMPT} {UNTRUSTED_DATA_RULE}"),
+    AgentType("builder", scope=None, prompt=f"{_BUILDER_PROMPT} {UNTRUSTED_DATA_RULE}"),
 ):
     register_agent_type(_spec)

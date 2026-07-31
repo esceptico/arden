@@ -23,6 +23,7 @@ from arden.core.prompts import RESEARCH_PROMPTS, current_date_formatted, env
 from arden.logging import get_logger
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
+from arden.tools.core.scope import tools
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.tools.research_artifacts import (
     append_research_artifact_tool,
@@ -581,7 +582,7 @@ RESEARCH_AGENT_TOOLS = {
 # ledger), and the depth-based self-exclusion of `research` is added at call time.
 RESEARCH_AGENT_TYPE = AgentType(
     name="research",
-    actions=frozenset({ToolAction.READ}),
+    scope=tools.read,
     exclude=frozenset({"background", "cancel_agent", "workflow"}),
     extra_tools=RESEARCH_AGENT_TOOLS,
 )

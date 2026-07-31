@@ -43,13 +43,10 @@ class RunRequest:
     model: str | None = None
     skip_approvals: bool = False
     automation_id: str | None = None
-    # Decouples the toolset from the approval-flow concern. A caller can keep
-    # approvals enabled while granting named additions to the read-only set.
-    extra_tool_names: frozenset[str] = frozenset()
-    # Allowlist patterns ('*', exact, 'slack_*') applied as the hard outer
-    # gate over the registry. For detached runs, None means read-only; an
-    # explicit scope is the only arbitrary write/execute capability grant.
-    tool_scope: ScopeKey | None = None
+    # A key into arden.tools.scopes, resolved to the filter that hard-gates the
+    # registry. Capability selection is independent of approval bypass: a
+    # detached run reads and nothing else unless its caller names a wider scope.
+    tool_scope: ScopeKey = "read_only"
 
 
 @dataclass(frozen=True)
@@ -67,16 +64,7 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
     memory_context = await deps.wiki_context.resident_context() if deps.wiki_context is not None else None
 
     executor = deps.executor
-    # Capability selection is independent from approval bypass. Detached runs
-    # are read-only unless the caller supplies an explicit outer scope.
-    scope = resolve(request.tool_scope) if request.tool_scope is not None else None
-    scope_kw = {"scope": scope} if scope is not None else {}
-    if request.extra_tool_names:
-        tools = executor.get_tools(read_only=True, extra_names=request.extra_tool_names, **scope_kw)
-    elif request.tool_scope is not None:
-        tools = executor.get_tools(scope=scope)
-    else:
-        tools = executor.get_tools(read_only=True)
+    tools = executor.get_tools(scope=resolve(request.tool_scope))
 
     agent_config = deps.config
     if request.model:

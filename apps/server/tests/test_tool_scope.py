@@ -95,7 +95,10 @@ def test_the_settable_lever_is_read_only_versus_everything():
     assert _granted(resolve("all")) == {fact.name for fact in FACTS}
 
 
-def test_registry_scope_is_the_outer_gate_over_extras():
+def test_scope_is_the_only_capability_filter_and_names_cannot_widen_it():
+    """Scope replaced read_only/actions/extra_names outright. `names` (the
+    deferred middleware's visible/deferred split) narrows within a scope and
+    can never reach past it."""
     reg = ToolRegistry()
     reg.register("slack_search", _tool(ToolAction.READ), source="slack")
     reg.register("slack_post_message", _tool(ToolAction.WRITE), source="slack")
@@ -107,18 +110,32 @@ def test_registry_scope_is_the_outer_gate_over_extras():
         "slack_post_message",
     }
 
-    # Scope gates even extra_names — no path widens past the declaration.
+    # A name outside the scope stays outside it.
     assert {
         t["name"]
         for t in reg.get_schemas(
-            read_only=True,
-            extra_names=frozenset({"memory_patch"}),
+            names={"slack_search", "memory_patch"},
             scope=tools.source("slack"),
         )
     } == {"slack_search"}
 
     # None = unrestricted.
     assert len(reg.get_schemas()) == 4
+
+
+def test_read_only_and_named_additions_are_one_expression_now():
+    """What `read_only=True, extra_names={"memory_patch"}` used to mean is a
+    union in the algebra — one axis, so the two cannot disagree."""
+    reg = ToolRegistry()
+    reg.register("read_thing", _tool(ToolAction.READ), source="_system")
+    reg.register("memory_patch", _tool(ToolAction.WRITE), source="_facts")
+    reg.register("bash", _tool(ToolAction.EXECUTE), source="_system")
+
+    assert {t["name"] for t in reg.get_schemas(scope=tools.read)} == {"read_thing"}
+    assert {t["name"] for t in reg.get_schemas(scope=tools.read | tools.named("memory_patch"))} == {
+        "read_thing",
+        "memory_patch",
+    }
 
 
 def test_registry_owns_the_system_versus_service_classification():

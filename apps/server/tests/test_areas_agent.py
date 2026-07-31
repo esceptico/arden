@@ -408,25 +408,8 @@ def test_system_blocks_include_area_block():
     assert "case notes" in joined
 
 
-def test_observe_toolset_is_narrow_even_with_auto_approve(monkeypatch):
-    """auto_approve + extra_tool_names must mean 'skip approvals WITHIN the
-    narrow set' — never the full toolset."""
-
-    class _Exec:
-        def get_tools(self, read_only=False, extra_names=frozenset()):
-            return [{"read_only": read_only, "extra": sorted(extra_names)}]
-
-    class _Req:
-        auto_approve = True
-        extra_tool_names = frozenset({"memory_write"})
-
-    # exercise just the branch logic by mirroring _prepare's tools selection
-    req = _Req()
-    ex = _Exec()
-    if req.extra_tool_names:
-        tools = ex.get_tools(read_only=True, extra_names=req.extra_tool_names)
-    elif req.auto_approve:
-        tools = ex.get_tools()
-    else:
-        tools = ex.get_tools(read_only=True)
-    assert tools[0]["read_only"] is True and tools[0]["extra"] == ["memory_write"]
+# `test_observe_toolset_is_narrow_even_with_auto_approve` lived here. It copied
+# _prepare's branch logic inline rather than calling it, so it asserted against a
+# duplicate of the code and never protected the real path. The claim it meant to
+# make — approval bypass is not a capability grant — is
+# test_prepare_auto_approve_without_scope_stays_read_only, which calls _prepare.

@@ -6,6 +6,7 @@ from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.events.sse import BackgroundTaskEvent
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
+from arden.tools.core.scope import tools as tool_filters
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 BACKGROUND_SYSTEM_PROMPT = (
@@ -43,7 +44,7 @@ async def background(execution: ToolExecution, args: BackgroundInput) -> ToolRes
             recovery_action="Run this from a session with agent spawning enabled.",
         )
 
-    tools = ctx.registry.get_schemas(read_only=True, capabilities=ctx.capabilities)
+    tools = ctx.registry.get_schemas(scope=tool_filters.read, capabilities=ctx.capabilities)
 
     spawn = await ctx.spawn_fn(
         ctx,

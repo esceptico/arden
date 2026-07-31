@@ -9,7 +9,7 @@ from arden.tools.core.context import ToolExecution
 from arden.tools.core.middleware import ToolMiddleware
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.scope import ToolFilter
-from arden.tools.core.types import ToolAction, ToolOverrideDecision
+from arden.tools.core.types import ToolOverrideDecision
 from arden.tools.discover import discover_user_tools
 
 _logger = get_logger(__name__)
@@ -104,18 +104,9 @@ class ToolExecutor:
 
         return await self.registry.execute(tool_name, execution, arguments)
 
-    def get_tools(
-        self,
-        read_only: bool | None = None,
-        actions: frozenset[ToolAction] | None = None,
-        extra_names: frozenset[str] = frozenset(),
-        scope: ToolFilter | None = None,
-    ) -> list[dict]:
+    def get_tools(self, scope: ToolFilter | None = None) -> list[dict]:
         return self.registry.get_schemas(
             capabilities=frozenset(self._get_services()),
-            read_only=read_only,
-            actions=actions,
-            extra_names=extra_names,
             scope=scope,
         )
 

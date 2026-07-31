@@ -24,13 +24,7 @@ def _write_skill(root: Path, name: str, description: str) -> None:
 
 
 class FakeExecutor:
-    def get_tools(
-        self,
-        read_only: bool | None = None,
-        actions: frozenset | None = None,
-        extra_names: frozenset[str] = frozenset(),
-        scope: tuple[str, ...] | None = None,
-    ) -> list[dict]:
+    def get_tools(self, scope=None) -> list[dict]:
         return []
 
 
@@ -41,21 +35,8 @@ class RecordingExecutor:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def get_tools(
-        self,
-        read_only: bool | None = None,
-        actions: frozenset | None = None,
-        extra_names: frozenset[str] = frozenset(),
-        scope: tuple[str, ...] | None = None,
-    ) -> list[dict]:
-        self.calls.append(
-            {
-                "read_only": read_only,
-                "actions": actions,
-                "extra_names": extra_names,
-                "scope": scope,
-            }
-        )
+    def get_tools(self, scope=None) -> list[dict]:
+        self.calls.append(scope)
         return []
 
 
@@ -219,65 +200,9 @@ async def test_prepare_adds_autonomous_guard_for_every_automation_run(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_prepare_auto_approve_ignores_extra_tool_names(monkeypatch):
-    """extra_tool_names takes precedence over auto_approve for the TOOLSET:
-    naming extras always means the narrow read+extras set, with auto_approve
-    deciding only whether approval gates apply within it."""
-    monkeypatch.setattr(runner, "create_agent", lambda **kwargs: object())
-    executor = RecordingExecutor()
-
-    await runner._prepare(
-        _deps(None, executor=executor),
-        RunRequest(
-            prompt="do it",
-            auto_approve=True,
-            source_id="test",
-            extra_tool_names=frozenset({"remember"}),
-        ),
-    )
-
-    assert executor.calls == [
-        {
-            "read_only": True,
-            "actions": None,
-            "extra_names": frozenset({"remember"}),
-            "scope": None,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_prepare_non_auto_approve_threads_extra_tool_names(monkeypatch):
-    """The observe-mode decoupling: non-auto-approve still means read_only,
-    but named extras (e.g. memory-write tools) ride along on top of it —
-    this is the fix for observe-mode area agents being unable to write
-    memory despite their contract promising it."""
-    monkeypatch.setattr(runner, "create_agent", lambda **kwargs: object())
-    executor = RecordingExecutor()
-
-    await runner._prepare(
-        _deps(None, executor=executor),
-        RunRequest(
-            prompt="do it",
-            auto_approve=False,
-            source_id="test",
-            extra_tool_names=frozenset({"remember", "memory_patch"}),
-        ),
-    )
-
-    assert executor.calls == [
-        {
-            "read_only": True,
-            "actions": None,
-            "extra_names": frozenset({"remember", "memory_patch"}),
-            "scope": None,
-        }
-    ]
-
-
-@pytest.mark.asyncio
 async def test_prepare_auto_approve_without_scope_stays_read_only(monkeypatch):
-    """Approval bypass is not a capability grant."""
+    """Approval bypass is not a capability grant: a run with no scope named
+    still resolves to read_only, the same filter every other surface uses."""
     monkeypatch.setattr(runner, "create_agent", lambda **kwargs: object())
     executor = RecordingExecutor()
 
@@ -286,7 +211,7 @@ async def test_prepare_auto_approve_without_scope_stays_read_only(monkeypatch):
         RunRequest(prompt="do it", auto_approve=True, skip_approvals=True, source_id="test"),
     )
 
-    assert executor.calls == [{"read_only": True, "actions": None, "extra_names": frozenset(), "scope": None}]
+    assert executor.calls == [resolve("read_only")]
 
 
 @pytest.mark.asyncio
@@ -306,11 +231,4 @@ async def test_prepare_explicit_scope_selects_writes_without_global_widening(mon
         ),
     )
 
-    assert executor.calls == [
-        {
-            "read_only": None,
-            "actions": None,
-            "extra_names": frozenset(),
-            "scope": resolve("all"),
-        }
-    ]
+    assert executor.calls == [resolve("all")]

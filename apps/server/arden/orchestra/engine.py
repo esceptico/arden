@@ -11,6 +11,7 @@ from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.logging import get_logger
 from arden.observability import observed_trace
 from arden.orchestra.schema import model_from_schema
+from arden.tools.core.scope import ToolFilter
 
 _logger = get_logger(__name__)
 
@@ -160,7 +161,7 @@ class Orchestra:
         # tools the script passes still win over the persona's.
         spec = resolve_agent_type(agent_type) if agent_type else None
         prompt = system_prompt or (spec.prompt if spec else None) or WORKFLOW_AGENT_PROMPT
-        actions = spec.actions if spec else None
+        scope = spec.scope if spec else None
         type_exclude = spec.exclude if spec else frozenset()
         type_extra = dict(spec.extra_tools) if spec else {}
         label = agent_type or active_phase
@@ -173,7 +174,7 @@ class Orchestra:
                 prompt,
                 active_phase,
                 agent_type_label=label,
-                actions=actions,
+                scope=scope,
                 type_exclude=type_exclude,
                 extra_tools=type_extra or None,
             )
@@ -190,7 +191,7 @@ class Orchestra:
             prompt,
             active_phase,
             agent_type_label=label,
-            actions=actions,
+            scope=scope,
             type_exclude=type_exclude,
             extra_tools=type_extra or None,
         )
@@ -297,7 +298,7 @@ class Orchestra:
         system_prompt: str | None,
         phase: str | None,
         agent_type_label: str | None = None,
-        actions: frozenset | None = None,
+        scope: ToolFilter | None = None,
         type_exclude: frozenset[str] = frozenset(),
         extra_tools: dict[str, Any] | None = None,
     ) -> str:
@@ -332,7 +333,7 @@ class Orchestra:
                 lifecycle_id=lifecycle_id,
                 workflow_id=self.workflow_id,
                 phase=phase,
-                actions=actions,
+                scope=scope,
                 exclude_tools=_WORKFLOW_EXCLUDE_TOOLS | type_exclude,
                 extra_tools=extra_tools,
             )

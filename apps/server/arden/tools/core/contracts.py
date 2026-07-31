@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
+from arden.tools.core.scope import ToolFilter
 from arden.tools.core.types import ToolOverrideDecision, ToolPolicy
 
 
@@ -32,7 +33,7 @@ class ToolRegistryContract(Protocol):
     def get_schemas(
         self,
         *,
-        read_only: bool | None = None,
+        scope: ToolFilter | None = None,
         capabilities: frozenset[str] = frozenset(),
     ) -> list[dict]: ...
 
