@@ -133,8 +133,26 @@ export function recordCurrentDestination(): void {
   const now = currentDestination();
   const current = appHistory.current;
   if (current && sameDestination(current, now)) return;
+  if (current && resolves(current, now)) {
+    appHistory.replaceCurrent(now);
+    publishHistory();
+    return;
+  }
   appHistory.push(now);
   publishHistory();
+}
+
+/** Whether `next` is the same arrival as `current`, only now knowing where it
+ *  landed. A route reaches the trail before it has a sub-location: Automations
+ *  selects a default row a tick after mounting, Memory resolves its default
+ *  page once the vault loads. That settling is not a second navigation — left
+ *  as a push it costs the user a wasted press, going back to the room they are
+ *  already standing in. */
+function resolves(current: AppDestination, next: AppDestination): boolean {
+  if (current.kind !== next.kind) return false;
+  if (current.kind === "memory" && next.kind === "memory") return (current.path ?? null) === null;
+  if (current.kind === "automation" && next.kind === "automation") return (current.task_id ?? null) === null;
+  return false;
 }
 
 function step(movement: "back" | "forward"): void {

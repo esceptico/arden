@@ -41,6 +41,13 @@ test("shell controls stay operable above both rails but below blocking overlays"
   expect(app).toContain("{!settingsOpen && <ShellNav />}");
   expect(shellNav).toContain("goBack");
   expect(shellNav).toContain("goForward");
+  // Memory and Automations draw their own rail toggle for their own column.
+  // The shell's lands on the same fixed coordinates, so rendering both leaves
+  // two controls stacked where the user sees one — and clicks reach whichever
+  // painted last. The shell yields the slot, and the ⌘B chord with it.
+  expect(app).toContain("{!routeOwnsRail && (");
+  expect(app).toContain("if (routeOwnsRail) return;");
+  expect(shellOwnership).toContain("workspaceOwnsRail");
   // One name everywhere: the first nav row is "Home" in every rail variant,
   // and both variants render the single shared appNav block.
   expect(sidebar).toContain('label="Home"');

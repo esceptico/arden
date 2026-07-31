@@ -252,9 +252,10 @@ export function App() {
       if (mod && !e.altKey) {
         const k = e.key.toLowerCase();
         if (k === "b" && !e.shiftKey) {
-          // Memory owns this advertised shortcut while its full-window rail is
-          // visible; toggling the covered app shell would leave state hidden.
-          if (memoryOpen) return;
+          // A route that owns the rail owns this shortcut too: it is the only
+          // left column on screen, and toggling the shell's hidden one would
+          // move nothing the user can see.
+          if (routeOwnsRail) return;
           e.preventDefault();
           toggleEffectiveSidebar();
           return;
@@ -393,11 +394,16 @@ export function App() {
       </motion.div>
       {/* App-global sidebar toggle: fixed-viewport chrome (`.sidebar-toggle`),
           rendered once here so it is present on every screen — Chat, Home,
-          and the area rooms — not only where Chat mounts. */}
-      <SidebarToggle
-        hidden={settingsOpen ? !settingsRailOpen : effectiveSidebarHidden}
-        onToggle={toggleEffectiveSidebar}
-      />
+          and the area rooms — not only where Chat mounts.
+          A route that owns the rail renders its own toggle for its own column;
+          both would land on the same fixed coordinates, leaving two controls
+          stacked where the user sees one. */}
+      {!routeOwnsRail && (
+        <SidebarToggle
+          hidden={settingsOpen ? !settingsRailOpen : effectiveSidebarHidden}
+          onToggle={toggleEffectiveSidebar}
+        />
+      )}
       {!settingsOpen && <ShellNav />}
       <ErrorBoundary>
         <main

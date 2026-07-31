@@ -202,3 +202,48 @@ test("an automation selection is an address too", () => {
   expect(currentDestination()).toEqual({ kind: "automation", task_id: "task-b" });
   expect(appHistory.canBack).toBe(true);
 });
+
+test("a route that settles on a default is one arrival, not two", () => {
+  // The bug: opening Automations recorded {task_id: null} on arrival, then
+  // {task_id: "task-a"} a tick later when the workspace selected its default
+  // row. Doing nothing cost two entries, so leaving took two presses — the
+  // first one landed you in the room you were already standing in.
+  getState().setCurrentSession("s1");
+  recordCurrentDestination();
+
+  getState().openAutomations();
+  recordCurrentDestination();
+  getState().setAutomationCurrentId("task-a");
+  recordCurrentDestination();
+
+  goBack();
+  expect(getState().automationsOpen).toBe(false);
+  expect(getState().currentSessionId).toBe("s1");
+});
+
+test("Memory resolving its default page is also one arrival", () => {
+  getState().setCurrentSession("s1");
+  recordCurrentDestination();
+
+  getState().openMemory();
+  recordCurrentDestination();
+  getState().setMemoryCurrentPath("index.md");
+  recordCurrentDestination();
+
+  goBack();
+  expect(getState().memoryOpen).toBe(false);
+  expect(getState().currentSessionId).toBe("s1");
+});
+
+test("a real move between pages still costs its own step", () => {
+  getState().openMemory();
+  getState().setMemoryCurrentPath("index.md");
+  recordCurrentDestination();
+  getState().setMemoryCurrentPath("areas/ops.md");
+  recordCurrentDestination();
+
+  // Only the unresolved landing collapses. Page to page is navigation.
+  goBack();
+  expect(getState().memoryTargetPath).toBe("index.md");
+  expect(getState().memoryOpen).toBe(true);
+});
