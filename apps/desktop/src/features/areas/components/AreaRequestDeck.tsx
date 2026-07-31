@@ -3,6 +3,7 @@ import type { AreaAsk } from "@/api/areas";
 import type { Automation } from "@/api/types";
 import { fetchAreaDetail, resolveAsk } from "@/actions/areas";
 import { runAutomation } from "@/actions/automations";
+import { AskActionPeek } from "@/components/ui/AskActionPeek";
 import { switchSession } from "@/actions/sessions";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
@@ -90,6 +91,7 @@ function AreaRequestCard({
   const automations = useStore((state) => state.automations);
   const pushToast = useStore((state) => state.pushToast);
   const [busy, setBusy] = useState(false);
+  const [actionOpen, setActionOpen] = useState(false);
   const { title, detail } = splitAreaAsk(ask.text);
   const primaryAction = ask.actions[0]?.verb === "open_page"
     ? null
@@ -120,16 +122,34 @@ function AreaRequestCard({
     }
   };
 
-  const primary = ask.kind === "review"
-    ? {
-        label: "Approve",
-        run: () => void settle("done", "approved", "Couldn’t approve"),
-      }
-    : primaryAction
-      ? primaryAction
-      : ask.kind === "question"
-        ? { label: "Review", run: () => onDiscuss(ask) }
-        : { label: "Got it", run: () => void settle("done", "acknowledged", "Couldn’t clear this") };
+  /* The same verbs Home offers for the same ask. The room used to give a review
+   * only Approve and Later, so rejecting one meant leaving the room. */
+  const verbs: Array<{ label: string; variant: "primary" | "quiet"; tone?: "danger"; run: () => void }> = [
+    ask.kind === "review"
+      ? { label: "Approve", variant: "primary", run: () => void settle("done", "approved", "Couldn’t approve") }
+      : primaryAction
+        ? { label: primaryAction.label, variant: "primary", run: primaryAction.run }
+        : ask.kind === "question"
+          ? { label: "Review", variant: "primary", run: () => onDiscuss(ask) }
+          : {
+              label: "Got it",
+              variant: "primary",
+              run: () => void settle("done", "acknowledged", "Couldn’t clear this"),
+            },
+    ...(ask.kind === "review"
+      ? [{
+          label: "Reject",
+          variant: "quiet" as const,
+          tone: "danger" as const,
+          run: () => void settle("dismissed", "rejected", "Couldn’t reject"),
+        }]
+      : []),
+    {
+      label: "Later",
+      variant: "quiet",
+      run: () => void settle("dismissed", "set aside", "Couldn’t set this aside"),
+    },
+  ];
 
   return (
     <article className="board-area-deck__card" aria-label={`${ASK_KIND[ask.kind].label}: ${title}`}>
@@ -150,27 +170,51 @@ function AreaRequestCard({
         </p>
       )}
       {ask.action && (
-        <p className="board-area-deck__action">
+        <button
+          type="button"
+          className="board-area-deck__action"
+          data-ask-action-owner
+          aria-haspopup="dialog"
+          aria-expanded={actionOpen}
+          onClick={() => setActionOpen(true)}
+        >
           <BlurSwap swapKey={`${ask.id}:action`}>
             <span>Approving runs</span>
-            {ask.action}
+            {/* Clamped, not summarised: the task is written for an agent and
+              * runs to thousands of characters, which buried the room's own
+              * controls. The full text is one click away in the peek. */}
+            <em>{ask.action}</em>
           </BlurSwap>
-        </p>
+          <span className="board-area-deck__action-more">Read it</span>
+        </button>
+      )}
+      {ask.action && (
+        <AskActionPeek
+          action={ask.action}
+          title={title}
+          open={actionOpen}
+          busy={busy}
+          onApprove={() => {
+            setActionOpen(false);
+            void settle("done", "approved", "Couldn’t approve");
+          }}
+          onClose={() => setActionOpen(false)}
+        />
       )}
       <div className="board-area-deck__actions">
-        <Button variant="primary" size="md" disabled={busy} onClick={primary.run}>
-          <span className="board-area-deck__verb-key" aria-hidden>1</span>
-          <BlurSwap swapKey={`${ask.id}:primary`}>{primary.label}</BlurSwap>
-        </Button>
-        <Button
-          variant="quiet"
-          size="md"
-          disabled={busy}
-          onClick={() => void settle("dismissed", "set aside", "Couldn’t set this aside")}
-        >
-          <span className="board-area-deck__verb-key" aria-hidden>2</span>
-          <BlurSwap swapKey={`${ask.id}:secondary`}>Later</BlurSwap>
-        </Button>
+        {verbs.map((verb, index) => (
+          <Button
+            key={verb.label}
+            variant={verb.variant}
+            tone={verb.tone}
+            size="md"
+            disabled={busy}
+            onClick={verb.run}
+          >
+            <span className="board-area-deck__verb-key" aria-hidden>{index + 1}</span>
+            <BlurSwap swapKey={`${ask.id}:${verb.label}`}>{verb.label}</BlurSwap>
+          </Button>
+        ))}
       </div>
     </article>
   );

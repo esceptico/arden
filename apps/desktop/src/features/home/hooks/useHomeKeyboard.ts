@@ -1,7 +1,7 @@
 import { useEffect, useRef, type MutableRefObject, type RefObject } from "react";
 import { hasBlockingOverlay } from "@/lib/overlayStack";
 
-export type HomeDeckSlot = 1 | 2 | 3;
+export type HomeDeckSlot = 1 | 2 | 3 | 4;
 
 /** The Home deck owns the concrete mutations; this hook owns only keyboard
  * routing and its global-input boundary. */
@@ -83,7 +83,7 @@ export function dispatchHomeKeyboardShortcut(
 
   if (isTypingTarget(document.activeElement) || meta || event.altKey || !deck) return false;
 
-  if (key === "1" || key === "2" || key === "3") {
+  if (key === "1" || key === "2" || key === "3" || key === "4") {
     deck.activateSlot(Number(key) as HomeDeckSlot);
     return true;
   }

@@ -9,6 +9,7 @@ import { runAutomation } from "@/actions/automations";
 import { switchSession } from "@/actions/sessions";
 import { primaryActionFor } from "@/lib/askActions";
 import type { HomeDeckSlot } from "@/features/home/hooks/useHomeKeyboard";
+import { AskActionPeek } from "@/components/ui/AskActionPeek";
 import {
   TRACE_ROW_ENTER,
   TRACE_ROW_EXIT,
@@ -60,6 +61,7 @@ export function FocusRow({
   const [replyOpen, setReplyOpen] = useState(false);
   const [reply, setReply] = useState("");
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [actionOpen, setActionOpen] = useState(false);
   const replyRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
   const footMode = replyOpen ? "reply" : snoozeOpen ? "snooze" : "actions";
@@ -154,6 +156,48 @@ export function FocusRow({
     return true;
   };
 
+  /* One list, so the number badges and the keyboard cannot disagree. They did:
+   * a review showed Approve, Reject, Review, Later but numbered them 1, 2, —, 3,
+   * because the open-the-area verb was rendered outside the slot scheme. */
+  const verbs: Array<{ label: string; variant: "primary" | "quiet"; tone?: "danger"; run: () => void }> = [
+    ask.kind === "review"
+      ? {
+          label: "Approve",
+          variant: "primary",
+          run: () => {
+            onDeckDirection?.(1);
+            void settle("done", "approved", "Couldn’t approve");
+          },
+        }
+      : ask.kind === "question"
+        ? { label: "Answer", variant: "primary", run: openReply }
+        : {
+            label: "Got it",
+            variant: "primary",
+            run: () => {
+              onDeckDirection?.(1);
+              void settle("done", "acknowledged", "Couldn’t clear this");
+            },
+          },
+    ...(ask.kind === "review"
+      ? [{
+          label: "Reject",
+          variant: "quiet" as const,
+          tone: "danger" as const,
+          run: () => {
+            onDeckDirection?.(-1);
+            void settle("dismissed", "rejected", "Couldn’t reject");
+          },
+        }]
+      : []),
+    {
+      label: primaryAction?.label ?? "Open area",
+      variant: "quiet",
+      run: () => (primaryAction ? primaryAction.run() : openContext()),
+    },
+    { label: "Later", variant: "quiet", run: toggleSnooze },
+  ];
+
   const activateSlot = (slot: HomeDeckSlot) => {
     if (busyRef.current) return;
     if (snoozeOpen) {
@@ -162,30 +206,7 @@ export function FocusRow({
       return;
     }
     if (replyOpen) return;
-    if (slot === 3) {
-      toggleSnooze();
-      return;
-    }
-    if (slot === 2) {
-      if (ask.kind === "review") {
-        onDeckDirection?.(-1);
-        void settle("dismissed", "rejected", "Couldn’t reject");
-      } else if (primaryAction) {
-        primaryAction.run();
-      } else {
-        openContext();
-      }
-      return;
-    }
-    if (ask.kind === "review") {
-      onDeckDirection?.(1);
-      void settle("done", "approved", "Couldn’t approve");
-    } else if (ask.kind === "question") {
-      openReply();
-    } else {
-      onDeckDirection?.(1);
-      void settle("done", "acknowledged", "Couldn’t clear this");
-    }
+    verbs[slot - 1]?.run();
   };
 
   useLayoutEffect(() => {
@@ -242,10 +263,32 @@ export function FocusRow({
       {(ask.why_now || detail) && <p className="mission-control__focus-reason">{ask.why_now ?? detail}</p>}
       {ask.what_next && <p className="mission-control__focus-next">{ask.what_next}</p>}
       {ask.action && (
-        <p className="mission-control__focus-action">
-          <span>Approving runs</span>
-          {ask.action}
-        </p>
+        <>
+          <button
+            type="button"
+            className="mission-control__focus-action"
+            data-ask-action-owner
+            aria-haspopup="dialog"
+            aria-expanded={actionOpen}
+            onClick={() => setActionOpen(true)}
+          >
+            <span>Approving runs</span>
+            <em>{ask.action}</em>
+            <span className="mission-control__focus-action-more">Read it</span>
+          </button>
+          <AskActionPeek
+            action={ask.action}
+            title={title}
+            open={actionOpen}
+            busy={busy}
+            onApprove={() => {
+              setActionOpen(false);
+              onDeckDirection?.(1);
+              void settle("done", "approved", "Couldn’t approve");
+            }}
+            onClose={() => setActionOpen(false)}
+          />
+        </>
       )}
 
       <div className="mission-control__focus-foot">
@@ -255,83 +298,21 @@ export function FocusRow({
           aria-hidden={footMode === "actions" ? undefined : true}
           inert={footMode === "actions" ? undefined : true}
         >
-          {ask.kind === "review" && (
-            <>
-              <button
-                type="button"
-                className="arden-button"
-                data-variant="primary"
-                disabled={busy}
-                onClick={() => activateSlot(1)}
-              >
-                <span className="mission-control__verb-key" aria-hidden>1</span>
-                Approve
-              </button>
-              <button
-                type="button"
-                className="arden-button"
-                data-variant="quiet"
-                data-tone="danger"
-                disabled={busy}
-                onClick={() => activateSlot(2)}
-              >
-                <span className="mission-control__verb-key" aria-hidden>2</span>
-                Reject
-              </button>
-            </>
-          )}
-          {ask.kind === "question" && (
+          {verbs.map((verb, index) => (
             <button
+              key={verb.label}
               type="button"
-              className="arden-button"
-              data-variant="primary"
+              className={verb.label === "Later" ? "mission-control__later arden-button" : "arden-button"}
+              data-variant={verb.variant}
+              data-tone={verb.tone}
               disabled={busy}
-              onClick={() => activateSlot(1)}
+              aria-expanded={verb.label === "Later" ? snoozeOpen : undefined}
+              onClick={() => activateSlot((index + 1) as HomeDeckSlot)}
             >
-              <span className="mission-control__verb-key" aria-hidden>1</span>
-              Answer
+              <span className="mission-control__verb-key" aria-hidden>{index + 1}</span>
+              {verb.label}
             </button>
-          )}
-          {ask.kind === "notify" && (
-            <button
-              type="button"
-              className="arden-button"
-              data-variant="primary"
-              disabled={busy}
-              onClick={() => activateSlot(1)}
-            >
-              <span className="mission-control__verb-key" aria-hidden>1</span>
-              Got it
-            </button>
-          )}
-          <button
-            type="button"
-            className="arden-button"
-            data-variant="quiet"
-            disabled={busy}
-            onClick={() => {
-              if (ask.kind === "review") {
-                if (primaryAction) primaryAction.run();
-                else openContext();
-              } else {
-                activateSlot(2);
-              }
-            }}
-          >
-            {ask.kind !== "review" && <span className="mission-control__verb-key" aria-hidden>2</span>}
-            {primaryAction?.label ?? "Open area"}
-          </button>
-          <button
-            type="button"
-            className="mission-control__later arden-button"
-            data-variant="quiet"
-            disabled={busy}
-            aria-expanded={snoozeOpen}
-            onClick={toggleSnooze}
-          >
-            <span className="mission-control__verb-key" aria-hidden>3</span>
-            Later
-          </button>
+          ))}
         </div>
 
         <form

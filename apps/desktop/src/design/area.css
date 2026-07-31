@@ -135,20 +135,46 @@
 /* Delimited by --line, not a tonal fill: every surface token collapses to a
    0-3/255 delta against --card in light, and --accent-soft is near-black at
    13% so it vanishes on dark. --line is the one token that reads in both. */
+/* The task a review runs is written for an agent, not a reader: a couple of
+ * thousand characters that pushed the room's own controls off-screen. The card
+ * shows the opening lines and hands the rest to a peek. */
 .board-area-deck__action {
-  max-width: 58ch;
+  width: 100%;
   margin: var(--space-2) 0 0;
   padding: var(--space-2) var(--space-2-5);
+  display: grid;
+  gap: var(--space-1);
   border: 1px solid var(--line);
   border-radius: var(--r-house);
   color: var(--ink);
+  background: transparent;
   font: 400 var(--text-sm)/1.55 var(--sans);
+  text-align: left;
   text-wrap: pretty;
+  cursor: pointer;
+  transition: background var(--motion-feedback) var(--ease-out);
+}
+
+.board-area-deck__action:is(:hover, :focus-visible) {
+  background: var(--state-hover-bg);
 }
 
 .board-area-deck__action span {
   display: block;
   color: var(--faint);
+}
+
+.board-area-deck__action em {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-style: normal;
+}
+
+.board-area-deck__action-more {
+  color: var(--accent);
+  font: 500 var(--text-meta)/1 var(--sans);
 }
 
 .board-area-deck__actions {
@@ -622,9 +648,11 @@
 .area-page-peek__foot {
   display: flex;
   justify-content: flex-end;
+  gap: var(--space-2);
   padding: var(--space-2-5) var(--space-3);
   border-top: 1px solid var(--line);
 }
+
 
 .area-settings__consequence {
   max-width: 65ch;

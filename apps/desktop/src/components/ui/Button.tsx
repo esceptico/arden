@@ -28,6 +28,8 @@ type ButtonSize = "sm" | "md";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
+  /** Destructive ink without changing the variant's shape. */
+  tone?: "danger";
   /** sm = h-7 (dense toolbars/rows), md = h-8 (default, forms/modals). */
   size?: ButtonSize;
   leadingIcon?: ArdenIcon;
@@ -42,6 +44,7 @@ const BUTTON_ICON_PX = 16;
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     variant = "secondary",
+    tone,
     size = "md",
     leadingIcon: Leading,
     trailingIcon: Trailing,
@@ -58,6 +61,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       type={type ?? "button"}
       data-variant={variant}
+      data-tone={tone}
       data-size={size}
       data-active={active || undefined}
       data-leading={Leading ? "true" : undefined}

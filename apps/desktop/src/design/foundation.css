@@ -538,6 +538,86 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   .surface-command-palette { top: 2.5rem; max-height: calc(100vh - 5rem); }
 }
 
+/* The peek's own geometry, shared. Every peek had been repeating this block in
+   its feature stylesheet (.notifier-peek, .settings-key-peek, .area-page-peek),
+   which meant a peek used from more than one feature rendered unstyled wherever
+   that feature's CSS was not loaded. */
+.arden-peek {
+  position: fixed;
+  z-index: var(--z-peek);
+  top: 4.5rem;
+  right: var(--floating-edge);
+  width: var(--peek-width);
+  max-width: calc(100vw - var(--space-8));
+  max-height: calc(100vh - 9rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.arden-peek > header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+}
+
+.arden-peek > header > span {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.arden-peek > header b {
+  overflow: hidden;
+  color: var(--ink);
+  font: 600 var(--text-base)/1.3 var(--sans);
+  letter-spacing: -.008em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arden-peek > header small {
+  overflow: hidden;
+  color: var(--faint);
+  font: 500 var(--text-2xs)/1.4 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arden-peek__body {
+  min-height: 0;
+  padding: var(--space-3) var(--space-4) var(--space-5);
+  overflow: clip auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.arden-peek__body::-webkit-scrollbar { display: none; }
+.arden-peek__body > :first-child { margin-top: 0; }
+
+.arden-peek__body :is(p, li, td, th, blockquote) {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+.arden-peek__body :is(h1, h2, h3, h4) {
+  margin-top: var(--space-4);
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.arden-peek__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+}
+
 /* Inset peek delimiter — the automations trigger peek's footer rule made
    canonical: a 1px edge line inset to the content padding instead of a
    full-bleed border. Headers rule below themselves; footers rule above. */
@@ -674,6 +754,16 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
 .arden-button[data-variant="quiet"]:hover { color: var(--ink); }
 .arden-button[data-variant="danger"] { color: var(--danger); background: transparent; box-shadow: none; }
 .arden-button[data-variant="danger"]:hover { background: color-mix(in oklab, var(--danger) 10%, transparent); }
+/* Destructive ink on a variant's own shape. The `danger` VARIANT is a text
+   button — correct in a menu, adrift in a row of pills, where the destructive
+   verb still needs the same body as the verbs beside it. */
+/* Two attributes, not one: `.btn.quiet` in base.css sets the same property at
+   equal specificity from a later file, so a single attribute selector loses. */
+.arden-button[data-tone="danger"][data-variant] { color: var(--danger); }
+.arden-button[data-tone="danger"][data-variant]:hover {
+  color: var(--danger);
+  background: color-mix(in oklab, var(--danger) 12%, var(--surface-2));
+}
 .arden-button[data-active="true"] { color: var(--ink); background: var(--state-selected-bg); }
 .arden-button[aria-busy="true"] { color: var(--muted); }
 .arden-button:disabled,

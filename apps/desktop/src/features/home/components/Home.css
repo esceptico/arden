@@ -304,15 +304,26 @@
 .mission-control__focus-context button {
   min-width: 0;
   overflow: hidden;
+  /* It opens the area, but read as plain metadata: no pointer, no underline,
+     nothing to say the one bold word in the line is a link. */
+  cursor: pointer;
   color: var(--ink-soft);
   font: inherit;
   font-weight: 560;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color var(--motion-feedback) var(--smooth-out);
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    text-decoration-color var(--motion-feedback) var(--smooth-out);
 }
 
-.mission-control__focus-context button:hover { color: var(--accent-ink); }
+.mission-control__focus-context button:is(:hover, :focus-visible) {
+  color: var(--accent-ink);
+  text-decoration-color: currentColor;
+}
 
 .mission-control__focus-context time {
   margin-left: auto;
@@ -344,6 +355,46 @@
   text-wrap: pretty;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.mission-control__focus-action {
+  width: 100%;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-2-5);
+  display: grid;
+  gap: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-house);
+  color: var(--ink);
+  background: transparent;
+  font: 400 var(--text-sm)/1.55 var(--sans);
+  text-align: left;
+  text-wrap: pretty;
+  cursor: pointer;
+  transition: background var(--motion-feedback) var(--ease-out);
+}
+
+.mission-control__focus-action:is(:hover, :focus-visible) {
+  background: var(--state-hover-bg);
+}
+
+.mission-control__focus-action > span:first-child {
+  color: var(--faint);
+}
+
+/* The task is written for an agent and runs to thousands of characters. Show
+   its opening and hand the rest to the peek. */
+.mission-control__focus-action em {
+  display: -webkit-box;
+  overflow: hidden;
+  font-style: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.mission-control__focus-action-more {
+  color: var(--accent);
+  font: 500 var(--text-meta)/1 var(--sans);
 }
 
 .mission-control__focus-next {
