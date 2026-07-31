@@ -210,6 +210,19 @@ async def test_run_history_newest_first_and_limited(automation_store: Automation
     assert runs[0]["started_at"] > runs[1]["started_at"] > runs[2]["started_at"]
 
 
+async def test_run_history_filters_across_automations_since_timestamp(automation_store: AutomationStore):
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    await automation_store.record_run_start("old", base)
+    await automation_store.record_run_start("a", base + timedelta(hours=1))
+    await automation_store.record_run_start("b", base + timedelta(hours=2))
+
+    runs = await automation_store.list_runs_since(base + timedelta(minutes=30), limit=10)
+    assert [run["task_id"] for run in runs] == ["b", "a"]
+
+    filtered = await automation_store.list_runs_since(base, task_id="a", limit=10)
+    assert [run["task_id"] for run in filtered] == ["a"]
+
+
 async def test_recent_run_statuses_newest_first_per_task(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     r1 = await automation_store.record_run_start("A", base)
@@ -1096,7 +1109,11 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
 
 @pytest.mark.asyncio
 async def test_predefined_daily_notes_is_user_owned_and_seeded_only_once(automation_store: AutomationStore) -> None:
-    from arden.automation.predefined import DAILY_NOTES_PROMPT, seed_predefined_user_automations
+    from arden.automation.predefined import (
+        DAILY_NOTES_PROMPT,
+        DAILY_NOTES_PROMPT_V1,
+        seed_predefined_user_automations,
+    )
     from arden.constants import DAILY_NOTES_AUTOMATION_ID
 
     assert await seed_predefined_user_automations(automation_store)
@@ -1112,6 +1129,11 @@ async def test_predefined_daily_notes_is_user_owned_and_seeded_only_once(automat
     assert daily.triggers == [TimeTrigger(at="23:55", days="daily")]
     assert daily.prompt == DAILY_NOTES_PROMPT
     assert "Never copy Active Work" in daily.prompt
+
+    await automation_store.update_metadata(dc_replace(daily, prompt=DAILY_NOTES_PROMPT_V1))
+    assert not await seed_predefined_user_automations(automation_store)
+    upgraded = await automation_store.get(DAILY_NOTES_AUTOMATION_ID)
+    assert upgraded is not None and upgraded.prompt == DAILY_NOTES_PROMPT
 
     await automation_store.delete(DAILY_NOTES_AUTOMATION_ID)
     assert not await seed_predefined_user_automations(automation_store)

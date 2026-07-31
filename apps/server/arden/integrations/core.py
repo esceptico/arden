@@ -27,6 +27,7 @@ from arden.tools.automation import (
     create_loop_tool,
     delete_automation_tool,
     get_automation_result_tool,
+    list_automation_runs_tool,
     list_automations_tool,
     loop_done_tool,
     run_automation_tool,
@@ -71,6 +72,7 @@ from arden.tools.wiki import (
     archive_wiki_page_tool,
     create_wiki_page_tool,
     edit_wiki_page_tool,
+    list_wiki_changes_tool,
     list_wiki_pages_tool,
     move_wiki_page_tool,
     publish_wiki_generated_tool,
@@ -119,6 +121,7 @@ AUTOMATION = Integration(
     tools={
         "create_automation": create_automation_tool,
         "list_automations": list_automations_tool,
+        "list_automation_runs": list_automation_runs_tool,
         "update_automation": update_automation_tool,
         "delete_automation": delete_automation_tool,
         "get_automation_result": get_automation_result_tool,
@@ -229,6 +232,7 @@ WIKI = Integration(
     label="Wiki",
     tools={
         "list_wiki_pages": list_wiki_pages_tool,
+        "list_wiki_changes": list_wiki_changes_tool,
         "read_wiki_page": read_wiki_page_tool,
         "wiki_links": wiki_links_tool,
         "create_wiki_page": create_wiki_page_tool,

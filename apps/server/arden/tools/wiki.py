@@ -2,10 +2,10 @@
 
 import asyncio
 import json
-from datetime import date
+from datetime import UTC, date
 from hashlib import sha256
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolSourceRef
 from arden.constants import DAILY_NOTES_AUTOMATION_ID, OFFLOAD_THRESHOLD
@@ -67,6 +67,14 @@ class ListWikiPagesInput(BaseModel):
         description="Exact wiki directory, such as 'topics'. Empty means the wiki root.",
     )
     offset: int = Field(default=0, ge=0, description="Zero-based entry offset from a prior list result.")
+    limit: int = Field(default=100, ge=1, le=_MAX_LIST_ENTRIES)
+
+
+class ListWikiChangesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    since: AwareDatetime = Field(description="Inclusive ISO timestamp, usually today's local midnight.")
+    offset: int = Field(default=0, ge=0, le=10_000)
     limit: int = Field(default=100, ge=1, le=_MAX_LIST_ENTRIES)
 
 
@@ -507,6 +515,59 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
             "total": len(entries),
             "has_more": has_more,
             "next_offset": next_offset if has_more and visible else None,
+        },
+    )
+
+
+async def list_wiki_changes(execution: ToolExecution, args: ListWikiChangesInput) -> ToolResult:
+    wiki = _wiki(execution)
+    if isinstance(wiki, ToolResult):
+        return wiki
+    since = args.since.astimezone(UTC)
+    commits = await asyncio.to_thread(wiki.repository.history, limit=args.offset + args.limit + 1)
+    recent = [commit for commit in commits if commit.timestamp >= since]
+    visible = recent[args.offset : args.offset + args.limit]
+    has_more = len(recent) > args.offset + len(visible)
+    entries: list[dict[str, object]] = []
+    lines: list[str] = []
+    for commit in visible:
+        changes = []
+        for change in commit.changes:
+            before_path = change.before.path if change.before is not None else None
+            after_path = change.after.path if change.after is not None else None
+            changes.append(
+                {
+                    "action": change.action,
+                    "path": after_path or before_path,
+                    "before_path": before_path,
+                    "after_path": after_path,
+                }
+            )
+        entries.append(
+            {
+                "timestamp": commit.timestamp.isoformat(),
+                "actor": commit.actor,
+                "origin": commit.origin,
+                "reason": commit.reason,
+                "changes": changes,
+            }
+        )
+        paths = ", ".join(str(change["path"]) for change in changes)
+        lines.append(f"- {commit.timestamp.isoformat()} - {paths} - {commit.reason}")
+    if not lines:
+        lines.append("No wiki changes in this time window.")
+    next_offset = args.offset + len(visible)
+    if has_more:
+        lines.append(f"More changes exist; retry with offset={next_offset}.")
+    return ToolResult(
+        content="Wiki changes\n" + "\n".join(lines),
+        preview=f"{len(visible)} wiki changes" + (" (capped)" if has_more else ""),
+        data={
+            "since": since.isoformat(),
+            "offset": args.offset,
+            "entries": entries,
+            "has_more": has_more,
+            "next_offset": next_offset if has_more else None,
         },
     )
 
@@ -1181,6 +1242,23 @@ list_wiki_pages_tool = tool(
         max_result_chars=_MAX_LIST_DATA_BYTES,
     ),
     execute=list_wiki_pages,
+)
+
+list_wiki_changes_tool = tool(
+    display_name="ListWikiChanges",
+    display_description="List managed wiki files changed since a timestamp.",
+    description=(
+        "List managed wiki commits since an inclusive timestamp, including changed paths, time, actor, and reason. "
+        "Use this to understand recent wiki activity without inspecting internal revision identifiers."
+    ),
+    input_model=ListWikiChangesInput,
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        permissions=_WIKI_PERMISSION,
+        max_result_chars=_MAX_LIST_DATA_BYTES,
+    ),
+    execute=list_wiki_changes,
 )
 
 create_wiki_page_tool = tool(

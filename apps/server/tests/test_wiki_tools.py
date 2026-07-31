@@ -1,6 +1,6 @@
 import json
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,6 +25,7 @@ from arden.tools.wiki import (
     archive_wiki_page_tool,
     create_wiki_page_tool,
     edit_wiki_page_tool,
+    list_wiki_changes_tool,
     list_wiki_pages_tool,
     move_wiki_page_tool,
     publish_wiki_generated_tool,
@@ -171,6 +172,26 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
     assert missing.is_error
     assert missing.outcome is not None and missing.outcome.error is not None
     assert missing.outcome.error.code == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_list_wiki_changes_reports_paths_and_reasons_without_revision_ids(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    result = await list_wiki_changes_tool.execute(
+        _execution(wiki),
+        since=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    paths = {change["path"] for entry in result.data["entries"] for change in entry["changes"]}
+    assert {"topics/interaction-lab.md", "topics/peer.md"} <= paths
+    assert all(entry["reason"] == "seed" for entry in result.data["entries"])
+    assert "commit_id" not in json.dumps(result.serialized_payload())
+
+    empty = await list_wiki_changes_tool.execute(
+        _execution(wiki),
+        since=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    assert empty.data["entries"] == []
 
 
 @pytest.mark.asyncio
@@ -1065,6 +1086,7 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert WIKI in CORE_INTEGRATIONS
     assert set(WIKI.tools) == {
         "list_wiki_pages",
+        "list_wiki_changes",
         "read_wiki_page",
         "wiki_links",
         "create_wiki_page",
@@ -1074,9 +1096,10 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
         "publish_wiki_generated",
     }
     assert {tool.policy.action.value for tool in WIKI.tools.values()} == {"read", "write"}
-    assert {WIKI.tools[name].policy.permissions for name in ("list_wiki_pages", "read_wiki_page", "wiki_links")} == {
-        frozenset({"wiki"})
-    }
+    assert {
+        WIKI.tools[name].policy.permissions
+        for name in ("list_wiki_pages", "list_wiki_changes", "read_wiki_page", "wiki_links")
+    } == {frozenset({"wiki"})}
     assert {
         WIKI.tools[name].policy.permissions
         for name in (

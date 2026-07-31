@@ -1815,6 +1815,36 @@ class AutomationStore:
             for row in rows
         ]
 
+    async def list_runs_since(
+        self,
+        since: datetime,
+        *,
+        task_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        if since.tzinfo is None or since.utcoffset() is None:
+            raise ValueError("since must be timezone-aware")
+        if limit < 1 or offset < 0:
+            raise ValueError("limit must be positive and offset must be non-negative")
+        where = "started_at >= ?"
+        params: list[object] = [since.astimezone(UTC).isoformat()]
+        if task_id is not None:
+            where += " AND task_id = ?"
+            params.append(task_id)
+        params.extend((limit, offset))
+        rows = await self.conn.execute_fetchall(
+            f"""
+            SELECT id, task_id, chat_run_id, chat_session_id, started_at, ended_at, status, result, error
+            FROM automation_runs
+            WHERE {where}
+            ORDER BY started_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params),
+        )
+        return [dict(row) for row in rows]
+
     async def delete(self, task_id: str) -> bool:
         async with self._idempotency_lock:
             await self.conn.execute("BEGIN")

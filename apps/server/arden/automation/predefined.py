@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from arden.automation.models import Automation
@@ -7,7 +8,7 @@ from arden.constants import DAILY_NOTES_AUTOMATION_ID
 
 DAILY_NOTES_SEED = "predefined-user-automation:daily-notes:v1"
 DAILY_NOTES_AT = "23:55"
-DAILY_NOTES_PROMPT = """Maintain today's daily wiki note.
+DAILY_NOTES_PROMPT_V1 = """Maintain today's daily wiki note.
 
 1. Call current_time to get the local calendar date.
 2. Read daily/README.md when it exists.
@@ -20,11 +21,26 @@ DAILY_NOTES_PROMPT = """Maintain today's daily wiki note.
 
 Return a short description of what changed, or say that the day had no meaningful note."""
 
+DAILY_NOTES_PROMPT = """Maintain today's daily wiki note.
+
+1. Call current_time to get the local calendar date and today's local-midnight ISO timestamp.
+2. Read daily/README.md when it exists.
+3. Call list_wiki_changes from local midnight. Read only changed pages relevant to today's note.
+4. Call list_automation_runs from local midnight. Read relevant returned channels to understand why automations ran and what they changed. Ignore this automation's own channel and routine maintenance with no user-facing consequence.
+5. List sessions active within the last day and read relevant conversations.
+6. Read daily/YYYY-MM-DD.md when it exists.
+7. Record only meaningful events, observations, decisions, and context that belong to that local date. Preserve useful existing notes and remove repetition.
+8. Never copy Active Work, a task backlog, or general current facts merely because they remain active.
+9. If there is no meaningful dated content, do not create or edit a page.
+10. Otherwise create or edit only daily/YYYY-MM-DD.md with title YYYY-MM-DD.
+
+Return a short description of what changed, or say that the day had no meaningful note."""
+
 
 async def seed_predefined_user_automations(store: AutomationStore) -> bool:
     now = datetime.now(UTC)
     trigger = TimeTrigger(at=DAILY_NOTES_AT, days="daily")
-    return await store.seed_predefined(
+    seeded = await store.seed_predefined(
         DAILY_NOTES_SEED,
         Automation(
             task_id=DAILY_NOTES_AUTOMATION_ID,
@@ -45,3 +61,7 @@ async def seed_predefined_user_automations(store: AutomationStore) -> bool:
             tool_scope="daily_notes",
         ),
     )
+    existing = await store.get(DAILY_NOTES_AUTOMATION_ID)
+    if existing is not None and existing.prompt == DAILY_NOTES_PROMPT_V1:
+        await store.update_metadata(replace(existing, prompt=DAILY_NOTES_PROMPT))
+    return seeded

@@ -21,6 +21,7 @@ from arden.tools.automation import (
     approve_create_loop,
     create_automation,
     create_loop,
+    list_automation_runs_tool,
     loop_done,
     schedule_wakeup,
 )
@@ -118,12 +119,51 @@ async def test_schedule_wakeup_updates_next_run(store_and_svc):
     before = datetime.now(UTC)
     result = await schedule_wakeup(execution, ScheduleWakeupInput(delay_seconds=300))
     assert not result.is_error
-
     loop = await store.get("loop-1")
     assert loop.next_run_at is not None
     # next_run_at should be ~now + 300s
     delta = (loop.next_run_at - before).total_seconds()
     assert 295 <= delta <= 305
+
+
+@pytest.mark.asyncio
+async def test_list_automation_runs_exposes_trigger_result_and_channel(store_and_svc):
+    store, svc = store_and_svc
+    started = datetime.now(UTC)
+    run_id = await store.record_run_start("loop-1", started)
+    await store.settle_run(
+        task_id="loop-1",
+        run_id=run_id,
+        status="completed",
+        result="checked CI",
+        error=None,
+        ended_at=started + timedelta(seconds=1),
+        next_run=None,
+        expected_next_run=None,
+        preserve_external_reschedule=False,
+        preserve_result=False,
+        disable_one_shot=False,
+    )
+
+    result = await list_automation_runs_tool.execute(
+        _execution(svc, loop_task_id=None),
+        since=started - timedelta(minutes=1),
+    )
+
+    assert not result.is_error
+    assert result.data["entries"] == [
+        {
+            "task_id": "loop-1",
+            "name": "x",
+            "started_at": started.isoformat(),
+            "ended_at": (started + timedelta(seconds=1)).isoformat(),
+            "status": "completed",
+            "configured_trigger": "every 5m",
+            "result": "checked CI",
+            "error": None,
+            "channel": "sess-1",
+        }
+    ]
 
 
 @pytest.mark.asyncio

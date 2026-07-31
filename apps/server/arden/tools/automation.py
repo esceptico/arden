@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from arden.automation.models import Automation
 from arden.automation.triggers import build_trigger
@@ -40,6 +40,11 @@ CREATE_AUTOMATION_DESCRIPTION = (
 )
 
 LIST_AUTOMATIONS_DESCRIPTION = "List all automations by stable ID with their trigger, status, and next run."
+
+LIST_AUTOMATION_RUNS_DESCRIPTION = (
+    "List automation runs since an inclusive timestamp. Returns the configured trigger, status, result, and channel "
+    "for understanding what ran and why. Read a returned channel when its run needs more context."
+)
 
 UPDATE_AUTOMATION_DESCRIPTION = (
     "Update an existing automation. Only provide the fields you want to change. "
@@ -84,6 +89,15 @@ def _automation_unavailable() -> ToolResult:
         preview="Unavailable",
         recovery_action="Enable the automation service before retrying.",
     )
+
+
+class ListAutomationRunsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    since: AwareDatetime = Field(description="Inclusive ISO timestamp, usually today's local midnight.")
+    task_id: str | None = Field(default=None, min_length=1, max_length=200)
+    offset: int = Field(default=0, ge=0, le=10_000)
+    limit: int = Field(default=100, ge=1, le=200)
 
 
 async def _resolve_parent_context(
@@ -480,6 +494,64 @@ async def list_automations(execution: ToolExecution, args: EmptyInput) -> ToolRe
     return ToolResult(content=content, preview=f"{len(automations)} automations")
 
 
+async def list_automation_runs(execution: ToolExecution, args: ListAutomationRunsInput) -> ToolResult:
+    service = execution.ctx.services.get("automation")
+    if service is None:
+        return _automation_unavailable()
+    automations = {automation.task_id: automation for automation in await service.list_all()}
+    if args.task_id is not None and args.task_id not in automations:
+        return _automation_not_found(args.task_id)
+    rows = await service.store.list_runs_since(
+        args.since,
+        task_id=args.task_id,
+        limit=args.limit + 1,
+        offset=args.offset,
+    )
+    has_more = len(rows) > args.limit
+    visible = rows[: args.limit]
+    entries = []
+    lines = []
+    for row in visible:
+        automation = automations.get(row["task_id"])
+        name = _automation_label(automation) if automation is not None else row["task_id"]
+        trigger = _triggers_label(automation.triggers) if automation is not None else "unknown"
+        channel = row.get("chat_session_id") or (automation.thread_id if automation is not None else None)
+        summary = row.get("error") or row.get("result") or ""
+        entries.append(
+            {
+                "task_id": row["task_id"],
+                "name": name,
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+                "status": row["status"],
+                "configured_trigger": trigger,
+                "result": row["result"],
+                "error": row["error"],
+                "channel": channel,
+            }
+        )
+        suffix = f" - {summary[:300]}" if summary else ""
+        channel_text = f" - channel: {channel}" if channel else ""
+        lines.append(f"- {row['started_at']} - {name} - {row['status']} - trigger: {trigger}{channel_text}{suffix}")
+    if not lines:
+        lines.append("No automation runs in this time window.")
+    next_offset = args.offset + len(visible)
+    if has_more:
+        lines.append(f"More runs exist; retry with offset={next_offset}.")
+    return ToolResult(
+        content="Automation runs\n" + "\n".join(lines),
+        preview=f"{len(visible)} automation runs" + (" (capped)" if has_more else ""),
+        data={
+            "since": args.since.isoformat(),
+            "task_id": args.task_id,
+            "offset": args.offset,
+            "entries": entries,
+            "has_more": has_more,
+            "next_offset": next_offset if has_more else None,
+        },
+    )
+
+
 async def approve_update_automation(execution: ToolExecution, args: UpdateAutomationInput) -> ApprovalInfo | None:
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
@@ -677,6 +749,15 @@ list_automations_tool = tool(
     description=LIST_AUTOMATIONS_DESCRIPTION,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
     execute=list_automations,
+)
+
+list_automation_runs_tool = tool(
+    display_name="ListAutomationRuns",
+    display_description="List recent automation executions.",
+    description=LIST_AUTOMATION_RUNS_DESCRIPTION,
+    input_model=ListAutomationRunsInput,
+    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
+    execute=list_automation_runs,
 )
 
 update_automation_tool = tool(

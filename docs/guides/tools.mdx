@@ -107,6 +107,7 @@ This group is deferred: load it with `load_tools(group="wiki")`.
 | Tool | Description | Approval |
 |------|-------------|----------|
 | `list_wiki_pages` | List active pages and direct child directories in one managed directory. | – |
+| `list_wiki_changes` | List pages changed since a timestamp, with actor and reason. | – |
 | `read_wiki_page` | Read one active page by exact managed path. | – |
 | `wiki_links` | Read a page's outgoing links and backlinks. | – |
 | `create_wiki_page` | Create one common page from its path, title, and body. | 🔒 |
@@ -155,6 +156,7 @@ Deferred group: `automations`.
 | `schedule_wakeup` | Schedule a one-off wakeup into the current session | 🔒 |
 | `loop_done` | Stop the current loop after its completion condition is met | 🔒 |
 | `list_automations` | List all automations | – |
+| `list_automation_runs` | List automation executions since a timestamp | – |
 | `update_automation` | Modify an automation | 🔒 |
 | `delete_automation` | Remove an automation | 🔒 |
 | `run_automation` | Trigger immediate run | 🔒 |
