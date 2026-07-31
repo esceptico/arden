@@ -33,6 +33,6 @@ test("Area peer rows retain the mock's vertical text rail", () => {
   // them explicitly, which visibly lifts peer-row labels.
   expect(row).toContain("padding-block: 1px;");
   expect(title).toContain("font-size: var(--text-sm);");
-  expect(title).toContain("font-weight: 560;");
+  expect(title).toContain("font-weight: var(--weight-semibold);");
   expect(title).not.toContain("line-height:");
 });

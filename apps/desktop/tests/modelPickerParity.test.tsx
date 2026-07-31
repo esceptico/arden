@@ -86,7 +86,7 @@ test("configured models stand in for a catalog that never loaded", () => {
 });
 
 test("reasoning labels preserve wire values without exposing implementation spelling", () => {
-  expect(reasoningEffortLabel(null)).toBe("Default");
+  expect(reasoningEffortLabel(null)).toBe("Model default");
   expect(reasoningEffortLabel("none")).toBe("Off");
   expect(reasoningEffortLabel("xhigh")).toBe("Extra high");
   expect(reasoningEffortLabel("ultra")).toBe("Ultra");
@@ -133,7 +133,7 @@ test("Settings field picker keeps the searchable model catalog and separate effo
       '[role="menu"][aria-label="Reasoning effort"]',
     )!;
     expect(effortMenu.classList.contains("model-picker__effort-menu")).toBe(true);
-    expect(effortMenu.textContent).toContain("Default");
+    expect(effortMenu.textContent).toContain("Model default");
     expect(effortMenu.textContent).toContain("High");
     expect(models).toEqual([]);
     expect(efforts).toEqual([]);
@@ -214,7 +214,17 @@ test("all picker variants use the mock geometry, material, and side-aware motion
   const automation = read("../src/features/automations/components/AutomationDetail.tsx");
   const chat = read("../src/design/chat.css");
 
-  expect(css).toMatch(/\.model-picker--field\s*\{[^}]*width:\s*276px;[^}]*grid-template-columns:\s*180px 88px;/s);
+  expect(css).toMatch(/\.model-picker--field\s*\{[^}]*width:\s*276px;[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/s);
+  // Triggers read as UI text; mono is reserved for the menu, where full ids
+  // stack in a column and alignment does real work.
+  expect(css).toMatch(
+    /\.model-picker__trigger\s*\{[^}]*font:[^;]*var\(--sans\);/s,
+  );
+  expect(css).toMatch(/\.model-picker__model-option\s*\{[^}]*var\(--mono\);/s);
+  // The effort sits a tier below the model it qualifies.
+  expect(css).toMatch(
+    /\.model-picker--field \.model-picker__effort-trigger\s*\{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s,
+  );
   expect(css).toMatch(/:is\(\.model-picker--field, \.model-picker--embedding\) \.model-picker__trigger\s*\{[^}]*height:\s*32px;[^}]*background:\s*var\(--paper\);[^}]*box-shadow:\s*var\(--shadow-2\);/s);
   // 260px is still the design cap, but it yields to the room actually available
   // so a long catalog cannot run off the bottom of the window.
@@ -247,4 +257,130 @@ test("all picker variants use the mock geometry, material, and side-aware motion
     expect(chat).not.toContain(retired);
   }
   expect(pickers).not.toContain("ComposerModelConfigPicker");
+});
+
+test("one scroll gesture moves reasoning effort exactly one position", async () => {
+  const committed: Array<string | null> = [];
+  const { el, root, restore } = mount();
+
+  const wheel = (node: HTMLElement, deltaY: number) => {
+    const event = new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
+    node.dispatchEvent(event);
+    return event;
+  };
+  const label = () =>
+    el.querySelector('[aria-label^="Reasoning effort:"]')?.getAttribute("aria-label");
+  const settle = async (ms: number) => {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+  };
+
+  try {
+    // Controlled, as in the app: a commit round-trips through the server and
+    // returns as a prop.
+    let value: string | null = null;
+    const draw = async () => {
+      await act(async () => {
+        root.render(
+          <ModelReasoningPicker
+            currentModel="openai-codex/gpt-sol"
+            currentEffort={value}
+            efforts={["low", "medium", "high"]}
+            groups={GROUPS}
+            onSelectModel={() => {}}
+            onSelectEffort={(effort) => { committed.push(effort); value = effort; void draw(); }}
+          />,
+        );
+      });
+    };
+    await draw();
+
+    const trigger = el.querySelector<HTMLElement>(
+      '[aria-label="Reasoning effort: Model default"]',
+    )!;
+    expect(trigger).not.toBeNull();
+
+    // Drift below the threshold stays the page's gesture, not ours.
+    expect(wheel(trigger, 3).defaultPrevented).toBe(false);
+    expect(label()).toBe("Reasoning effort: Model default");
+
+    // One flick — momentum and all — moves exactly one position.
+    await act(async () => {
+      for (let i = 0; i < 20; i += 1) wheel(trigger, 30);
+    });
+    expect(label()).toBe("Reasoning effort: Low");
+
+    // Momentum after the step is swallowed rather than passed to the page.
+    expect(wheel(trigger, 30).defaultPrevented).toBe(true);
+    expect(label()).toBe("Reasoning effort: Low");
+
+    // One write per gesture, not one per event.
+    await settle(700);
+    expect(committed).toEqual(["low"]);
+
+    // A second deliberate gesture, after the wheel goes quiet, steps again.
+    await act(async () => { wheel(trigger, 30); });
+    expect(label()).toBe("Reasoning effort: Medium");
+    await settle(700);
+    expect(committed).toEqual(["low", "medium"]);
+
+    // The scale clamps at its end instead of wrapping round to the opt-out.
+    for (const _ of [0, 1, 2]) {
+      await settle(700);
+      await act(async () => { wheel(trigger, 30); });
+    }
+    await settle(700);
+    expect(label()).toBe("Reasoning effort: High");
+    expect(committed.at(-1)).toBe("high");
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
+});
+
+test("a flick's momentum tail cannot step a second time", async () => {
+  const committed: Array<string | null> = [];
+  const { el, root, restore } = mount();
+  const wheel = (node: HTMLElement, deltaY: number) =>
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true }));
+  const label = () =>
+    el.querySelector('[aria-label^="Reasoning effort:"]')?.getAttribute("aria-label");
+
+  try {
+    let value: string | null = null;
+    const draw = async () => {
+      await act(async () => {
+        root.render(
+          <ModelReasoningPicker
+            currentModel="openai-codex/gpt-sol"
+            currentEffort={value}
+            efforts={["low", "medium", "high"]}
+            groups={GROUPS}
+            onSelectModel={() => {}}
+            onSelectEffort={(effort) => { committed.push(effort); value = effort; void draw(); }}
+          />,
+        );
+      });
+    };
+    await draw();
+    const trigger = el.querySelector<HTMLElement>(
+      '[aria-label="Reasoning effort: Model default"]',
+    )!;
+
+    // One physical swipe: a fast burst, then a decaying tail whose events thin
+    // out to ~120ms apart. All of it is one gesture and moves one position.
+    await act(async () => { for (let i = 0; i < 12; i += 1) wheel(trigger, 40); });
+    expect(label()).toBe("Reasoning effort: Low");
+
+    for (const delta of [18, 9, 4, 2, 1]) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 120)); });
+      await act(async () => { wheel(trigger, delta); });
+    }
+    expect(label()).toBe("Reasoning effort: Low");
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    expect(committed).toEqual(["low"]);
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+  }
 });

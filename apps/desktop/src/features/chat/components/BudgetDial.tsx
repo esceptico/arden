@@ -86,7 +86,7 @@ export function BudgetDial() {
             }
             className={clsx(
               "budget-trigger composer-toolbar-control inline-flex items-center gap-1.5 h-7 px-2 rounded-[var(--r-control)]",
-              "text-xs text-muted transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
+              "text-[length:var(--text-label)] text-muted transition-[background-color,color,scale] duration-check ease-out active:scale-[0.97]",
               open && "text-ink",
             )}
           >

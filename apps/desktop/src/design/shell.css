@@ -136,7 +136,7 @@
   margin: .875rem var(--space-2) 1.5rem;
   overflow: hidden;
   color: var(--ink);
-  font: 620 var(--text-body)/1.2 var(--sans);
+  font: var(--weight-semibold) var(--text-body)/1.2 var(--sans);
   letter-spacing: -.006em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -186,7 +186,7 @@
 
 .home-area-list__row small {
   color: var(--faint);
-  font: 520 var(--text-2xs)/1 var(--sans);
+  font: var(--weight-medium) var(--text-2xs)/1 var(--sans);
   white-space: nowrap;
 }
 
@@ -206,7 +206,7 @@
 .workspace-rail__section-title {
   margin: 0;
   color: var(--muted);
-  font: 590 var(--text-xs)/1 var(--sans);
+  font: var(--weight-semibold) var(--text-xs)/1 var(--sans);
 }
 
 .workspace-rail__section-actions {
@@ -254,7 +254,7 @@
   font-size: var(--text-base);
   /* Headers separate from session rows by WEIGHT at full size (the mock's
      source-group-title precedent) — never by shrinking the font. */
-  font-weight: 570;
+  font-weight: var(--weight-semibold);
   line-height: 1;
   text-align: left;
 }
@@ -424,7 +424,7 @@
 .workspace-rail__status {
   min-width: 0;
   color: var(--faint);
-  font: 520 var(--text-2xs)/1 var(--sans);
+  font: var(--weight-medium) var(--text-2xs)/1 var(--sans);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;

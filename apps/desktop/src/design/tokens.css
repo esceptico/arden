@@ -25,11 +25,11 @@
   /* Mirrors base.css's --text-* calc expressions: inline @theme values get
    * baked into each generated utility, so both consumers must carry them. */
   --text-2xs: calc(var(--ui-font-size) - 3px);
-  --text-xs: calc(var(--ui-font-size) - 1.5px);
+  --text-xs: calc(var(--ui-font-size) - 1px);       /* merged into sm */
   --text-sm: calc(var(--ui-font-size) - 1px);
   --text-base: var(--ui-font-size);
   --text-md: calc(var(--ui-font-size) + 1px);
-  --text-lg: calc(var(--ui-font-size) + 2.5px);
+  --text-lg: calc(var(--ui-font-size) + 4px);       /* merged into xl */
   --text-xl: calc(var(--ui-font-size) + 4px);
   --text-2xl: calc(var(--ui-font-size) + 6px);
   --text-3xl: calc(var(--ui-font-size) + 14px);
@@ -236,20 +236,24 @@
   --font-sans: var(--sans);
   --font-mono: var(--mono);
   --text-2xs: 11px;
-  --text-xs: 12.5px;
+  --text-xs: var(--text-sm);                        /* merged */
   --text-sm: 13px;
   --text-base: 14px;
   --text-md: 15px;
-  --text-lg: 16.5px;
+  --text-lg: var(--text-xl);                        /* merged */
   --text-xl: 18px;
   --text-2xl: 20px;
   --text-3xl: 28px;
   --text-display: 24px;
-  --text-section: var(--text-xl);
-  --text-reading: var(--text-md);
-  --text-body: var(--text-sm);
-  --text-control: 12px;
-  --text-meta: 10.5px;
+
+  /* Roles — mirrors base.css. Reach for these; the ladder above is Tailwind's. */
+  --text-metadata: var(--text-2xs);
+  --text-label: var(--text-sm);
+  --text-body: var(--text-base);
+  --text-lede: var(--text-md);
+  --text-subsection: var(--text-xl);
+  --text-section: var(--text-2xl);
+  --text-title: var(--text-display);
   --leading-reading: 1.65;
   --leading-body: 1.55;
   --leading-meta: 1.4;

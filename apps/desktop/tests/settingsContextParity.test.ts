@@ -15,7 +15,7 @@ test("shared buttons retain mockup typography on button and status elements", as
     new URL("../src/design/foundation.css", import.meta.url),
   ).text();
 
-  expect(css).toMatch(/\.arden-button\s*\{[^}]*font-weight:\s*520;/s);
+  expect(css).toMatch(/\.arden-button\s*\{[^}]*font-weight:\s*var\(--weight-medium\);/s);
   expect(css).not.toContain(":where(.arden-button)");
 });
 

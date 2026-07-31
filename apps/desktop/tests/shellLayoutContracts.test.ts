@@ -113,7 +113,7 @@ test("shared rail geometry keeps app rows and Chat hierarchy on their mock heigh
   expect(shell).not.toContain("--workspace-chat-row-height");
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__nav-row\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
   expect(shell).toMatch(/\.home-area-list__row\s*\{[\s\S]*?min-height:\s*var\(--workspace-rail-row-height\);[\s\S]*?padding-inline:\s*var\(--interactive-row-inline-padding\);/);
-  expect(shell).toMatch(/\.home-area-list__row small\s*\{[\s\S]*?font:\s*520 var\(--text-2xs\)\/1 var\(--sans\);/);
+  expect(shell).toMatch(/\.home-area-list__row small\s*\{[\s\S]*?font:\s*var\(--weight-medium\) var\(--text-2xs\)\/1 var\(--sans\);/);
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?grid-template-columns:\s*var\(--icon-size\) minmax\(0, 1fr\) \.75rem;/);
   expect(shell).toMatch(/\.workspace-rail \.workspace-rail__session\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);

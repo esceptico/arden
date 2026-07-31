@@ -34,7 +34,7 @@
 .board-area-header h1 {
   margin: 0;
   color: var(--ink);
-  font: 620 var(--text-3xl)/1.2 var(--sans);
+  font: var(--weight-semibold) var(--text-3xl)/1.2 var(--sans);
   letter-spacing: -.021em;
   text-wrap: balance;
 }
@@ -43,13 +43,13 @@
   max-width: 64ch;
   margin: var(--space-2) 0 0;
   color: var(--muted);
-  font: 460 var(--text-sm)/1.5 var(--sans);
+  font: var(--weight-heading) var(--text-sm)/1.5 var(--sans);
   font-variant-numeric: tabular-nums;
 }
 
 .board-area-header p b {
   color: var(--ink-soft);
-  font-weight: 560;
+  font-weight: var(--weight-semibold);
 }
 
 .board-area-stale {
@@ -91,7 +91,7 @@
   align-items: baseline;
   gap: var(--space-1-5);
   color: var(--faint);
-  font: 500 var(--text-xs)/1.25 var(--sans);
+  font: var(--weight-medium) var(--text-xs)/1.25 var(--sans);
 }
 
 .board-area-deck__eyebrow > span {
@@ -117,7 +117,7 @@
   margin: .5625rem 0 0;
   overflow-wrap: anywhere;
   color: var(--ink);
-  font: 620 var(--text-2xl)/1.3 var(--sans);
+  font: var(--weight-semibold) var(--text-2xl)/1.3 var(--sans);
   letter-spacing: -.018em;
   text-wrap: balance;
 }
@@ -126,7 +126,7 @@
   max-width: 58ch;
   margin: .4375rem 0 0;
   color: var(--muted);
-  font: 400 var(--text-sm)/1.5 var(--sans);
+  font: var(--weight-regular) var(--text-sm)/1.5 var(--sans);
   text-wrap: pretty;
 }
 
@@ -148,7 +148,7 @@
   border-radius: var(--r-house);
   color: var(--ink);
   background: transparent;
-  font: 400 var(--text-sm)/1.55 var(--sans);
+  font: var(--weight-regular) var(--text-sm)/1.55 var(--sans);
   text-align: left;
   text-wrap: pretty;
   cursor: pointer;
@@ -174,7 +174,7 @@
 
 .board-area-deck__action-more {
   color: var(--accent);
-  font: 500 var(--text-meta)/1 var(--sans);
+  font: var(--weight-medium) var(--text-metadata)/1 var(--sans);
 }
 
 .board-area-deck__actions {
@@ -193,7 +193,7 @@
 .board-area-deck__verb-key {
   margin-right: 7px;
   opacity: .5;
-  font: 560 var(--text-xs)/1 var(--mono);
+  font: var(--weight-semibold) var(--text-xs)/1 var(--mono);
 }
 
 .board-area-deck__chrome {
@@ -211,7 +211,7 @@
 
 .board-area-deck__chrome > span {
   color: var(--faint);
-  font: 500 var(--text-meta)/1 var(--mono);
+  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -243,7 +243,7 @@
   overflow: hidden;
   color: var(--ink-soft);
   font-size: var(--text-sm);
-  font-weight: 560;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -255,7 +255,7 @@
   display: flex;
   align-items: center;
   color: var(--muted);
-  font: 560 var(--text-sm)/1.4 var(--sans);
+  font: var(--weight-semibold) var(--text-sm)/1.4 var(--sans);
 }
 
 /* The only scrolling body in the room. ---------------------------------- */
@@ -295,13 +295,13 @@
 .board-area-outcomes > header h2 {
   margin: 0;
   color: var(--ink-soft);
-  font: 590 var(--text-sm)/1.2 var(--sans);
+  font: var(--weight-semibold) var(--text-sm)/1.2 var(--sans);
 }
 
 .board-area-outcomes > header span {
   margin-left: auto;
   color: var(--faint);
-  font: 500 var(--text-2xs)/1 var(--mono);
+  font: var(--weight-medium) var(--text-2xs)/1 var(--mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -323,21 +323,21 @@
 .board-area-outcomes h3 {
   margin: 0;
   color: var(--ink-soft);
-  font: 580 var(--text-base)/1.4 var(--sans);
+  font: var(--weight-semibold) var(--text-base)/1.4 var(--sans);
 }
 
 .board-area-outcomes p {
   max-width: 65ch;
   margin: 0;
   color: var(--muted);
-  font: 460 var(--text-sm)/1.45 var(--sans);
+  font: var(--weight-heading) var(--text-sm)/1.45 var(--sans);
   text-wrap: pretty;
 }
 
 /* Status is a word in status ink — never a dot or a coloured rail. */
 .board-area-outcomes li > span {
   color: var(--faint);
-  font: 500 var(--text-xs)/1 var(--sans);
+  font: var(--weight-medium) var(--text-xs)/1 var(--sans);
 }
 
 .board-area-outcomes li[data-status="completed"] > span { color: var(--muted); }
@@ -463,7 +463,7 @@
   align-items: center;
   margin: 0;
   color: var(--ink-soft);
-  font: 590 var(--text-sm)/1.2 var(--sans);
+  font: var(--weight-semibold) var(--text-sm)/1.2 var(--sans);
 }
 
 .area-settings__section {
@@ -493,7 +493,7 @@
   color: var(--ink);
 }
 
-.area-settings__row-label b { display: block; font-weight: 500; }
+.area-settings__row-label b { display: block; font-weight: var(--weight-medium); }
 
 .area-settings__row-label small {
   display: block;
@@ -518,7 +518,7 @@
   border-radius: var(--r-pill);
   color: var(--ink-soft);
   background: var(--surface-2);
-  font: 500 var(--text-xs)/1 var(--mono);
+  font: var(--weight-medium) var(--text-xs)/1 var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
   transition:
@@ -553,7 +553,7 @@
   min-width: 0;
   flex: 1;
   color: var(--muted);
-  font: 460 var(--text-sm)/1.4 var(--sans);
+  font: var(--weight-heading) var(--text-sm)/1.4 var(--sans);
   text-wrap: pretty;
 }
 
@@ -597,7 +597,7 @@
 .area-page-peek__head b {
   overflow: hidden;
   color: var(--ink);
-  font: 600 var(--text-base)/1.3 var(--sans);
+  font: var(--weight-semibold) var(--text-base)/1.3 var(--sans);
   letter-spacing: -.008em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -606,7 +606,7 @@
 .area-page-peek__head small {
   overflow: hidden;
   color: var(--faint);
-  font: 500 var(--text-2xs)/1.4 var(--mono);
+  font: var(--weight-medium) var(--text-2xs)/1.4 var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -630,7 +630,7 @@
   margin-top: var(--space-4);
   color: var(--ink);
   font-size: var(--text-base);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.35;
 }
 
@@ -641,7 +641,7 @@
 .area-page-peek__state {
   margin: 0;
   color: var(--muted);
-  font: 460 var(--text-sm)/1.5 var(--sans);
+  font: var(--weight-heading) var(--text-sm)/1.5 var(--sans);
   text-wrap: pretty;
 }
 

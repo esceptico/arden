@@ -51,7 +51,7 @@
   overflow: hidden;
   color: var(--ink);
   font-size: var(--text-base);
-  font-weight: 620;
+  font-weight: var(--weight-semibold);
   letter-spacing: -.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -416,7 +416,7 @@
 }
 
 .board-composer__strip-label b {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -568,7 +568,7 @@
   flex: 1;
   overflow: hidden;
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   letter-spacing: -.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -595,7 +595,7 @@
 }
 
 .board-queue-stack__thumbnails > span {
-  font: 500 11px/1 var(--sans);
+  font: var(--weight-medium) 11px/1 var(--sans);
   font-variant-numeric: tabular-nums;
 }
 
@@ -815,7 +815,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
 
 .board-inspector__hub-provenance dt {
   color: var(--faint);
-  font: 500 var(--text-2xs)/1 var(--mono);
+  font: var(--weight-medium) var(--text-2xs)/1 var(--mono);
 }
 
 .board-inspector__hub-provenance dd {
@@ -823,7 +823,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   margin: 0;
   overflow: hidden;
   color: var(--muted);
-  font: 460 var(--text-xs)/1.35 var(--sans);
+  font: var(--weight-heading) var(--text-xs)/1.35 var(--sans);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -851,7 +851,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   margin: 0;
   overflow: hidden;
   color: var(--ink);
-  font: 600 var(--text-sm)/var(--leading-meta) var(--sans);
+  font: var(--weight-semibold) var(--text-sm)/var(--leading-meta) var(--sans);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -860,7 +860,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   margin-left: auto;
   flex: none;
   color: var(--warning);
-  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
   white-space: nowrap;
 }
 
@@ -869,7 +869,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   margin: 0;
   overflow: hidden;
   color: var(--muted);
-  font: 450 var(--text-sm)/var(--leading-body) var(--sans);
+  font: var(--weight-heading) var(--text-sm)/var(--leading-body) var(--sans);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -908,7 +908,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
 
 .board-inspector__hub-row-copy strong {
   overflow: hidden;
-  font: 550 var(--text-sm)/var(--leading-meta) var(--sans);
+  font: var(--weight-medium) var(--text-sm)/var(--leading-meta) var(--sans);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -917,7 +917,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   display: -webkit-box;
   overflow: hidden;
   color: var(--muted);
-  font: 450 var(--text-control)/var(--leading-meta) var(--sans);
+  font: var(--weight-heading) var(--text-label)/var(--leading-meta) var(--sans);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -925,7 +925,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
 .board-inspector__hub-row-status {
   flex: none;
   color: var(--faint);
-  font: 500 var(--text-meta)/var(--leading-meta) var(--mono);
+  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
   text-transform: capitalize;
 }
 
@@ -949,14 +949,14 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   justify-content: space-between;
   color: var(--ink-soft);
   font-size: var(--text-sm);
-  font-weight: 620;
+  font-weight: var(--weight-semibold);
 }
 
 .board-inspector__sources .dp-peek-section-head span {
   margin-left: auto;
   color: var(--faint);
   font-size: var(--text-2xs);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
 
@@ -968,7 +968,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
-  font-weight: 570;
+  font-weight: var(--weight-semibold);
 }
 
 .board-inspector__sources .source-group-title > span:first-child {
@@ -985,7 +985,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .r
 .board-inspector__sources .phase-count {
   color: var(--faint);
   font-size: var(--text-2xs);
-  font-weight: 450;
+  font-weight: var(--weight-heading);
 }
 
 .board-inspector__sources .source-call {

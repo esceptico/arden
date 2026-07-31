@@ -17,8 +17,8 @@ interface ChipProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "child
 }
 
 const sizeClass: Record<ChipSize, string> = {
-  sm: "h-7 px-2.5 text-xs gap-1.5 rounded-[var(--r-control)]",
-  md: "h-8 px-2.5 text-sm gap-1.5 rounded-[var(--r-control)]",
+  sm: "h-7 px-2.5 text-[length:var(--text-label)] gap-1.5 rounded-[var(--r-control)]",
+  md: "h-8 px-2.5 text-[length:var(--text-label)] gap-1.5 rounded-[var(--r-control)]",
 };
 
 function styleFor(variant: ChipVariant, tone: ChipTone, active: boolean): string {
@@ -59,7 +59,7 @@ export function Chip({
       aria-pressed={ariaPressed}
       {...rest}
       className={clsx(
-        "inline-flex items-center font-medium tracking-[-0.005em] transition-[background-color,border-color,box-shadow,color,transform,scale] duration-check ease-out select-none active:scale-[0.97]",
+        "inline-flex items-center tracking-[-0.005em] transition-[background-color,border-color,box-shadow,color,transform,scale] duration-check ease-out select-none active:scale-[0.97]",
         sizeClass[size],
         styleFor(variant, tone, active),
         disabled && "opacity-[0.45] cursor-not-allowed pointer-events-none active:scale-100",

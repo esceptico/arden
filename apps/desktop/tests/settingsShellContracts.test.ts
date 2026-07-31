@@ -250,7 +250,7 @@ test("setup assistant keeps the mock's fixed sheet contract", () => {
   expect(styles).toMatch(/\.setup-sheet \.dp-sheet-footer\s*\{[\s\S]*?min-height:\s*3\.75rem;[\s\S]*?padding:\s*\.5rem \.75rem \.75rem;/);
   expect(styles).toMatch(/\.setup-sheet \.sheet-step\s*\{\s*margin-top:\s*24px;/);
   expect(styles).toMatch(/\.setup-sheet \.step-num\s*\{[\s\S]*?width:\s*20px;[\s\S]*?height:\s*20px;[\s\S]*?background:\s*var\(--panel-soft\);/);
-  expect(styles).toMatch(/\.setup-sheet \.sheet-field label\s*\{[\s\S]*?margin-bottom:\s*7px;[\s\S]*?font-size:\s*var\(--text-control\);/);
+  expect(styles).toMatch(/\.setup-sheet \.sheet-field label\s*\{[\s\S]*?margin-bottom:\s*7px;[\s\S]*?font-size:\s*var\(--text-label\);/);
   expect(styles).toMatch(/\.setup-sheet \.sheet-field \.dp-field\s*\{\s*height:\s*38px;/);
   expect(styles).toMatch(/\.setup-sheet \.scope-list\s*\{[\s\S]*?padding:\s*11px 12px;[\s\S]*?background:\s*var\(--surface-7\);[\s\S]*?line-height:\s*1\.7;/);
   expect(styles).toMatch(/@media \(max-width: 46\.25rem\)[\s\S]*?\.setup-sheet\s*\{[\s\S]*?left:\s*var\(--floating-edge\);[\s\S]*?width:\s*auto;/);

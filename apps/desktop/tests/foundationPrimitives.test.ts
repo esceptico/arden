@@ -26,7 +26,12 @@ test("shared primitives own the exact mock control and overlay contracts", () =>
   for (const value of [
     "--interactive-row-height: 1.6875rem;",
     "--border-width: 1px;",
-    "--text-section: var(--text-xl);",
+    // Roles, not t-shirt sizes: what this app called "section" was Vercel's
+    // subsection. Section is the tier above it.
+    "--text-section: var(--text-2xl);",
+    "--text-subsection: var(--text-xl);",
+    "--text-label: var(--text-sm);",
+    "--text-metadata: var(--text-2xs);",
     "--swatch-shadow: inset 0 0 0 1px rgb(0 0 0 / 12%);",
     "--floating-edge: 1rem;",
     "--icon-swap-start-scale: .25;",
@@ -67,7 +72,7 @@ test("shared primitives own the exact mock control and overlay contracts", () =>
   expect(approvalReview).toContain("<CodeWell");
   expect(approvalReview).not.toContain("rounded-[var(--r-row)]");
   expect(foundation).toMatch(/\.command-palette__search\s*\{[\s\S]*?padding:\s*\.625rem var\(--space-4\) \.25rem;/);
-  expect(foundation).toContain("font: 450 var(--text-md) / 1.2 var(--sans);");
+  expect(foundation).toContain("font: var(--weight-heading) var(--text-md) / 1.2 var(--sans);");
   expect(palette).toContain('className="command-palette__search"');
   expect(palette).toContain('className="command-palette__input"');
   expect(palette).not.toContain("AnimatePresence");

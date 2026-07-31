@@ -33,14 +33,14 @@
   margin-block-end: 0;
   color: var(--ink);
   font-family: var(--typeset-font-heading);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .md.typeset :where(h1) { margin-block-start: var(--typeset-flow); font-size: 1.75em; line-height: 1.3; }
 .md.typeset :where(h2) { margin-block-start: calc(var(--typeset-flow) * 1.4); font-size: 1.25em; line-height: 1.4; }
 .md.typeset :where(h3) { margin-block-start: var(--typeset-flow); font-size: 1.125em; line-height: 1.45; }
 .md.typeset :where(h4) { margin-block-start: var(--typeset-flow); font-size: 1em; line-height: 1.5; }
-.md.typeset :where(h5) { margin-block-start: calc(var(--typeset-flow) / .875); color: var(--typeset-muted); font-size: .875em; font-weight: 500; line-height: 1.5; }
-.md.typeset :where(h6) { margin-block-start: calc(var(--typeset-flow) / .8125); color: var(--typeset-muted); font-size: .8125em; font-weight: 500; line-height: 1.5; letter-spacing: .08em; text-transform: uppercase; }
+.md.typeset :where(h5) { margin-block-start: calc(var(--typeset-flow) / .875); color: var(--typeset-muted); font-size: .875em; font-weight: var(--weight-medium); line-height: 1.5; }
+.md.typeset :where(h6) { margin-block-start: calc(var(--typeset-flow) / .8125); color: var(--typeset-muted); font-size: .8125em; font-weight: var(--weight-medium); line-height: 1.5; letter-spacing: .08em; text-transform: uppercase; }
 .md.typeset :where([id]) { scroll-margin-block-start: var(--typeset-flow); }
 .md.typeset :where(h1 + *, h2 + *, h3 + *, h4 + *, h5 + *, h6 + *) { margin-block-start: 1em; }
 .md.typeset :where(:is(h1, h2, h3, h4) code) { font-size: .9em; }
@@ -60,8 +60,8 @@
 .md.typeset :where(ul.contains-task-list) { padding-inline-start: .25em; list-style-type: none; }
 .md.typeset :where(li.task-list-item > input[type="checkbox"]) { margin-inline-end: .5em; vertical-align: -.1em; accent-color: var(--accent); }
 
-.md.typeset :where(strong, b) { color: inherit; font-weight: 600; }
-.md.typeset :where(a) { color: inherit; font-weight: 500; text-decoration-line: underline; text-decoration-color: color-mix(in oklab, currentColor 30%, transparent); }
+.md.typeset :where(strong, b) { color: inherit; font-weight: var(--weight-semibold); }
+.md.typeset :where(a) { color: inherit; font-weight: var(--weight-medium); text-decoration-line: underline; text-decoration-color: color-mix(in oklab, currentColor 30%, transparent); }
 .md.typeset :where(a):hover { text-decoration-color: currentColor; }
 .md.typeset :where(a):focus-visible { border-radius: .125em; outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Scoped to `.md`, not `.md.typeset`: the markup is emitted by the shared
@@ -79,13 +79,13 @@
 .md.typeset :where(sup, sub) { position: relative; font-size: .75em; line-height: 0; vertical-align: baseline; }
 .md.typeset :where(sup) { top: -.5em; }
 .md.typeset :where(sub) { bottom: -.25em; }
-.md.typeset :where(sup a) { font-weight: 500; text-decoration-line: none; }
+.md.typeset :where(sup a) { font-weight: var(--weight-medium); text-decoration-line: none; }
 .md.typeset :where(details) { margin-block: var(--typeset-flow) 0; }
-.md.typeset :where(summary) { cursor: pointer; font-weight: 500; }
+.md.typeset :where(summary) { cursor: pointer; font-weight: var(--weight-medium); }
 .md.typeset :where(summary)::marker { color: var(--typeset-muted); }
-.md.typeset :where(kbd) { padding: .0625em .35em; border: 1px solid var(--typeset-rule); border-block-end-width: 2px; border-radius: min(calc(var(--radius, .5em) * .6), .35em); font-family: inherit; font-size: .85em; font-weight: 500; }
+.md.typeset :where(kbd) { padding: .0625em .35em; border: 1px solid var(--typeset-rule); border-block-end-width: 2px; border-radius: min(calc(var(--radius, .5em) * .6), .35em); font-family: inherit; font-size: .85em; font-weight: var(--weight-medium); }
 .md.typeset :where(dl) { margin-block: var(--typeset-flow) 0; }
-.md.typeset :where(dt) { margin-block-start: 1em; font-weight: 500; }
+.md.typeset :where(dt) { margin-block-start: 1em; font-weight: var(--weight-medium); }
 .md.typeset :where(dt + dt) { margin-block-start: .25em; }
 .md.typeset :where(dd) { margin-block-start: .25em; margin-inline-start: 0; padding-inline-start: 1em; color: var(--typeset-muted); }
 .md.typeset :where(:not(pre) > code) { padding: .125em .3em; border-radius: min(calc(var(--radius, .5em) * .6), .35em); color: inherit; background-color: color-mix(in oklab, currentColor 8%, transparent); font-family: var(--typeset-font-mono); font-size: .85em; }
@@ -113,9 +113,9 @@
 .md.typeset :where(.typeset-scroll) { margin-block-start: var(--typeset-flow); overflow-x: auto; }
 .md.typeset :where(.typeset-scroll > *) { margin-block-start: 0; }
 .md.typeset :where(.typeset-scroll table) { width: max-content; max-width: none; }
-.md.typeset :where(thead th) { padding: .65em 1em; border: 0; background: transparent; font-weight: 500; text-align: start; white-space: nowrap; }
+.md.typeset :where(thead th) { padding: .65em 1em; border: 0; background: transparent; font-weight: var(--weight-medium); text-align: start; white-space: nowrap; }
 .md.typeset :where(:is(tbody, tfoot) :is(td, th)) { padding: .75em 1em; border: 0; border-block-start: 1px solid var(--typeset-rule); text-align: start; vertical-align: top; }
-.md.typeset :where(tbody th, tfoot th) { font-weight: 500; }
+.md.typeset :where(tbody th, tfoot th) { font-weight: var(--weight-medium); }
 .md.typeset :where(th:first-child, td:first-child) { padding-inline-start: 0; }
 .md.typeset :where(th[align="center"], td[align="center"]) { text-align: center; }
 .md.typeset :where(th[align="right"], td[align="right"]) { text-align: end; }

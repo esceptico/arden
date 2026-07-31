@@ -7,15 +7,15 @@ test("Home keeps the mock's compact-height attention spacing", () => {
   const css = read("../src/features/home/components/Home.css");
 
   expect(css).toMatch(/\.mission-control__answer\s*\{[\s\S]*?padding:\s*\.375rem var\(--space-0-5\) 0;/);
-  expect(css).toMatch(/\.mission-control__capture input\s*\{[\s\S]*?font:\s*460 var\(--text-md\)\/normal var\(--sans\);/);
+  expect(css).toMatch(/\.mission-control__capture input\s*\{[\s\S]*?font:\s*var\(--weight-heading\) var\(--text-md\)\/normal var\(--sans\);/);
   // Both hint states share one grid cell — the slot holds the wider state's
   // width so the ⌘K ⇄ ⌘↩ swap never reflows the input row.
   expect(css).toMatch(/\.mission-control__capture-shortcut\s*\{[\s\S]*?display:\s*inline-grid;[\s\S]*?justify-items:\s*end;/);
   expect(css).toMatch(/__capture-shortcut > \.mission-control__capture-hint\s*\{\s*grid-area:\s*1 \/ 1;/);
   expect(css).toMatch(/\.mission-control__focus h2\s*\{[\s\S]*?display:\s*-webkit-box;[\s\S]*?-webkit-line-clamp:\s*2;/);
   expect(css).not.toMatch(/\.mission-control__focus h2\s*\{[^}]*max-width:/);
-  expect(css).toMatch(/\.mission-control__focus-reason\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);[\s\S]*?-webkit-line-clamp:\s*2;/);
-  expect(css).toMatch(/\.mission-control__focus-next\s*\{[\s\S]*?font:\s*400 var\(--text-sm\)\/1\.5 var\(--sans\);/);
+  expect(css).toMatch(/\.mission-control__focus-reason\s*\{[\s\S]*?font:\s*var\(--weight-regular\) var\(--text-sm\)\/1\.5 var\(--sans\);[\s\S]*?-webkit-line-clamp:\s*2;/);
+  expect(css).toMatch(/\.mission-control__focus-next\s*\{[\s\S]*?font:\s*var\(--weight-regular\) var\(--text-sm\)\/1\.5 var\(--sans\);/);
   expect(css).toMatch(/@media \(max-height: 53rem\)\s*\{[\s\S]*?\.mission-control__room\s*\{\s*padding-top:\s*2\.875rem;\s*padding-bottom:\s*var\(--space-2-5\);/);
   // Optical center at every height: zero-basis 2:3 spacers split the FREE
   // space above/below the intact block, vanish when a full deck needs the
@@ -96,11 +96,11 @@ test("Area room matches the mock's 720px typography and pressure hierarchy", () 
   const title = css.match(/\.board-area-deck__card h2\s*\{([^}]*)\}/)?.[1] ?? "";
   const reason = css.match(/\.board-area-deck__reason\s*\{([^}]*)\}/)?.[1] ?? "";
 
-  expect(answer).toContain("font: 620 var(--text-3xl)/1.2 var(--sans);");
-  expect(subtitle).toContain("font: 460 var(--text-sm)/1.5 var(--sans);");
-  expect(title).toContain("font: 620 var(--text-2xl)/1.3 var(--sans);");
+  expect(answer).toContain("font: var(--weight-semibold) var(--text-3xl)/1.2 var(--sans);");
+  expect(subtitle).toContain("font: var(--weight-heading) var(--text-sm)/1.5 var(--sans);");
+  expect(title).toContain("font: var(--weight-semibold) var(--text-2xl)/1.3 var(--sans);");
   expect(title).not.toContain("max-width:");
-  expect(reason).toContain("font: 400 var(--text-sm)/1.5 var(--sans);");
+  expect(reason).toContain("font: var(--weight-regular) var(--text-sm)/1.5 var(--sans);");
   expect(compact).toContain(".board-area-header h1 { font-size: var(--text-2xl); }");
   expect(compact).toContain(".board-area-header p { margin-top: .3125rem; }");
   expect(compact).toContain(".board-area-deck__card h2 { margin-top: .5rem; font-size: var(--text-xl); }");
@@ -185,10 +185,10 @@ test("Settings navigation uses the mock sidebar geometry and moving highlight", 
   expect(settings).toContain('variant="sidebar"');
   expect(settings).toContain('indicatorClassName="settings-nav-highlight"');
   expect(css).toMatch(/\.settings-nav-group \+ \.settings-nav-group\s*\{\s*margin-top:\s*var\(--space-2\);/);
-  expect(css).toMatch(/\.settings-nav-group-label\s*\{[\s\S]*?height:\s*1\.75rem;[\s\S]*?font-size:\s*var\(--text-xs\);[\s\S]*?font-weight:\s*580;/);
+  expect(css).toMatch(/\.settings-nav-group-label\s*\{[\s\S]*?height:\s*1\.75rem;[\s\S]*?font-size:\s*var\(--text-xs\);[\s\S]*?font-weight:\s*var\(--weight-semibold\);/);
   expect(css).toMatch(/\.settings-nav-highlight\s*\{[\s\S]*?background:\s*var\(--state-selected-bg\);[\s\S]*?box-shadow:\s*inset 0 0 0 1px/);
-  expect(css).toMatch(/\.board-settings \.settings-nav-row\s*\{[\s\S]*?height:\s*1\.875rem;[\s\S]*?font-weight:\s*400;/);
-  expect(css).toMatch(/\.board-settings \.settings-nav-row\[data-active="true"\]\s*\{[\s\S]*?font-weight:\s*550;[\s\S]*?background:\s*transparent;/);
+  expect(css).toMatch(/\.board-settings \.settings-nav-row\s*\{[\s\S]*?height:\s*1\.875rem;[\s\S]*?font-weight:\s*var\(--weight-regular\);/);
+  expect(css).toMatch(/\.board-settings \.settings-nav-row\[data-active="true"\]\s*\{[\s\S]*?font-weight:\s*var\(--weight-medium\);[\s\S]*?background:\s*transparent;/);
 });
 
 test("Home, Chat, and Area use the mock's exact visible icon variants", () => {

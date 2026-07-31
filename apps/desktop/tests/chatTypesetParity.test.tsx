@@ -148,7 +148,9 @@ test("Chat keeps the compact budget control and shared model picker classes", ()
     ".chat-head-inner { padding-left: calc(var(--chrome-chat-title-inset) - .125rem); }",
   );
   expect(chat).toContain(".board-composer .budget-trigger {\n    width: var(--icon-button-size);");
-  expect(modelPickers).toContain(".board-composer .model-picker--field {");
+  // A declared variant, not the shared sheet keying off a feature class.
+  expect(modelPickers).toContain(".model-picker--inline {");
+  expect(modelPickers).not.toContain(".board-composer .model-picker");
 });
 
 test("Chat composer keeps the mock's 66px input and 42px toolbar geometry", () => {
@@ -207,13 +209,11 @@ test("the composer toolbar keeps one gap across the whole row", () => {
   const pickerCss = readFileSync(new URL("../src/design/model-pickers.css", import.meta.url), "utf8");
   const toolbar = readFileSync(new URL("../src/features/chat/components/ComposerToolbar.tsx", import.meta.url), "utf8");
 
-  // The row's gap is the toolbar's gap-1.5. The picker carries the Settings
-  // field's wider --space-2 between its two controls, which put an 8px gap
-  // between model and effort against 6px everywhere else in the same row.
+  // The row's gap is the toolbar's gap-1.5. The picker's `inline` variant
+  // matches it; the `field` default carries Settings' wider --space-2, which
+  // otherwise put 8px between model and effort against 6px across the row.
   expect(toolbar).toContain('className="board-composer__toolbar flex items-center gap-1.5');
-  expect(pickerCss).toMatch(
-    /\.board-composer \.model-picker--field \{[^}]*width: auto;[^}]*gap: var\(--space-1-5\);/,
-  );
-  // Settings keeps its own geometry; only the composer narrows.
+  expect(pickerCss).toMatch(/\.model-picker--inline \{[^}]*width: auto;[^}]*gap: var\(--space-1-5\);/);
+  // Settings keeps the default geometry; only the inline variant narrows.
   expect(pickerCss).toMatch(/\.model-picker--field \{[^}]*width: 276px;[^}]*gap: var\(--space-2\);/);
 });

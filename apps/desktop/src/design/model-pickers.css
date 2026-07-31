@@ -47,7 +47,10 @@
   width: 276px;
   min-width: 0;
   display: grid;
-  grid-template-columns: 180px 88px;
+  /* The effort is one word — "Low" through "Extra high" — so its column sizes
+     to the word rather than reserving the longest one's width and stranding
+     the short ones in dead space. */
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
 }
@@ -58,12 +61,11 @@
   min-width: 0;
 }
 
-/* In the composer the picker's two controls are just two more items in the
-   toolbar's row, so the space between them is the toolbar's own gap — not the
-   wider one the Settings field uses. Width follows from the columns rather
-   than staying pinned at 276px, which would leave the 2px difference as
-   trailing slack and hand it straight back to the send button. */
-.board-composer .model-picker--field {
+/* Inline: the picker's two controls are just two more items in a toolbar row,
+   so the space between them is the toolbar's own gap and the width follows from
+   the content. A variant the caller asks for, not the shared sheet reaching for
+   a feature's class name. */
+.model-picker--inline {
   width: auto;
   gap: var(--space-1-5);
 }
@@ -84,7 +86,10 @@
   background: var(--paper);
   box-shadow: var(--shadow-2);
   outline: 0;
-  font: 500 var(--text-control)/1 var(--mono);
+  /* Sans. The trigger shows a shortened nickname (shortModelLabel drops the
+     provider prefix), read once for recognition — mono is for the menu, where
+     full ids stack and alignment does real work. */
+  font: var(--weight-regular) var(--text-label)/1 var(--sans);
   text-align: left;
   transition:
     background var(--motion-feedback) var(--ease-out),
@@ -106,8 +111,17 @@
     0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
 }
 
+/* The effort qualifies the model rather than standing beside it, so it sits a
+   tier down: no lift of its own, and it only takes a surface on hover. */
 .model-picker--field .model-picker__effort-trigger {
+  min-width: 4.25rem;
   color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.model-picker--field .model-picker__effort-trigger:hover {
+  background: var(--surface-2);
 }
 
 .model-picker__current-model,
@@ -128,6 +142,35 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Nothing was chosen here. A picked level and an untouched control read the
+   same otherwise, and the difference matters: the default can resolve to any
+   level the provider likes, including a high one. */
+/* --faint is 4/255 from --muted, so it cannot carry this on its own. */
+.model-picker__current-effort[data-unset] {
+  color: color-mix(in oklab, var(--muted) 62%, transparent);
+}
+
+/* Off/Low/High is an ordered scale. The default is not a point on it — it is
+   the absence of a choice, and it can resolve anywhere — so it is ruled off
+   above the scale rather than listed as its first step. */
+/* The rule rides on the row BELOW, not on the default itself: padding the
+   default row stretches its own selected pill, which reads as a taller, odder
+   row rather than a separated one. */
+.model-picker__effort-option[data-default-choice] + .model-picker__effort-option {
+  position: relative;
+  margin-top: var(--space-2-5);
+}
+
+.model-picker__effort-option[data-default-choice] + .model-picker__effort-option::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--space-1-5) * -1);
+  right: 4px;
+  left: 4px;
+  height: 1px;
+  background: var(--edge);
 }
 
 .model-picker__chevron {
@@ -206,7 +249,7 @@
   color: var(--ink);
   background: transparent;
   outline: 0;
-  font-size: var(--text-control);
+  font-size: var(--text-label);
 }
 
 .model-picker__search input::placeholder { color: var(--faint); }
@@ -228,7 +271,7 @@
 .model-picker__menu-label {
   padding: 8px 10px 4px;
   color: var(--faint);
-  font: 570 var(--text-meta)/1 var(--sans);
+  font: var(--weight-semibold) var(--text-metadata)/1 var(--sans);
   letter-spacing: .07em;
   text-transform: uppercase;
   user-select: none;
@@ -260,13 +303,13 @@
 }
 
 .model-picker__model-option {
-  font: 500 var(--text-control)/1.25 var(--mono);
+  font: var(--weight-regular) var(--text-label)/1.25 var(--mono);
 }
 
 .model-picker__effort-option,
 .model-picker__quick-option {
   justify-content: space-between;
-  font: 500 var(--text-control)/1.25 var(--sans);
+  font: var(--weight-regular) var(--text-label)/1.25 var(--sans);
 }
 
 .model-picker__option > span:first-child {
@@ -287,21 +330,20 @@
 .model-picker__empty {
   padding: 12px 10px;
   color: var(--muted);
-  font-size: var(--text-control);
+  font-size: var(--text-label);
   font-style: italic;
 }
 
 .model-picker__empty:empty { display: none; }
 
 /* Chat uses the same searchable model combobox and adjacent effort menu. */
-.board-composer .model-picker--field {
+.model-picker--inline {
   flex: none;
 }
 
 @media (max-width: 31rem) {
   .model-picker--field {
     width: 100%;
-    grid-template-columns: minmax(0, 1fr) 88px;
   }
 
   .model-picker--embedding { width: 100%; }

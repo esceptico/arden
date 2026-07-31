@@ -1,6 +1,9 @@
 import {
+  useEffect,
   useMemo,
+  useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -25,6 +28,16 @@ const PICKER_POSITIONING = {
 const PICKER_POPUP_MOTION = "model-picker__popup-motion";
 
 const DEFAULT_EFFORT_VALUE = "__provider_default__";
+
+/** Low enough that a light swipe registers; high enough that drift does not. */
+const STEP_WHEEL_THRESHOLD = 8;
+/** A gesture is over once the wheel goes quiet this long. It has to outlast a
+ *  trackpad's momentum tail, where events thin out to tens of milliseconds
+ *  apart before stopping — a shorter window unlocks inside one flick and lets
+ *  its own tail step a second time. */
+const STEP_GESTURE_END_MS = 420;
+/** Long enough to swallow a flick's tail, short enough to feel immediate. */
+const STEP_COMMIT_DELAY_MS = 260;
 
 const REASONING_EFFORT_LABELS: Record<string, string> = {
   none: "Off",
@@ -66,7 +79,7 @@ export function shortModelLabel(model: string): string {
  * expose a literal `none` effort, which is the actual off state.
  */
 export function reasoningEffortLabel(effort: string | null): string {
-  if (effort === null) return "Default";
+  if (effort === null) return "Model default";
   return REASONING_EFFORT_LABELS[effort]
     ?? `${effort.slice(0, 1).toUpperCase()}${effort.slice(1)}`;
 }
@@ -104,9 +117,11 @@ function effortFromValue(value: string): string | null {
   return value === DEFAULT_EFFORT_VALUE ? null : value;
 }
 
-function reasoningChoices(efforts: string[]): Array<{ value: string; label: string }> {
+function reasoningChoices(
+  efforts: string[],
+): Array<{ value: string; label: string; isDefault?: boolean }> {
   return [
-    { value: DEFAULT_EFFORT_VALUE, label: reasoningEffortLabel(null) },
+    { value: DEFAULT_EFFORT_VALUE, label: reasoningEffortLabel(null), isDefault: true },
     ...efforts.map((effort) => ({ value: effort, label: reasoningEffortLabel(effort) })),
   ];
 }
@@ -118,6 +133,7 @@ export function ModelReasoningPicker({
   efforts,
   groups,
   disabled = false,
+  layout = "field",
   anchored = false,
   onSelectModel,
   onSelectEffort,
@@ -128,6 +144,10 @@ export function ModelReasoningPicker({
   efforts: string[];
   groups: ModelGroup[];
   disabled?: boolean;
+  /** `field` is the fixed-width Settings/automations control; `inline` sizes to
+   *  its content for a toolbar row. A variant the caller picks, so no feature
+   *  has to reach into this component's stylesheet to resize it. */
+  layout?: "field" | "inline";
   /** Keep both menus under their triggers instead of flipping above. Chat wants
    *  the flip (its composer sits on the bottom edge); a row inside a settings
    *  panel does not — flipping there covers the fields above it. */
@@ -151,7 +171,7 @@ export function ModelReasoningPicker({
   );
 
   return (
-    <div className="model-picker model-picker--field">
+    <div className={clsx("model-picker model-picker--field", layout === "inline" && "model-picker--inline")}>
       <Combobox.Root
         items={groupedModels}
         value={currentModel}
@@ -256,6 +276,109 @@ export function ModelReasoningPicker({
   );
 }
 
+/** Wheel and arrow keys step an ordered list without opening its menu.
+ *
+ * Three things this has to survive. A trackpad flick emits dozens of wheel
+ * events, so deltas accumulate to a threshold rather than stepping per event.
+ * Incidental page scrolling passes over the control constantly, so it only
+ * consumes an event once that threshold is crossed. And every step would
+ * otherwise be its own server write, so the commit is deferred until the
+ * gesture settles — one flick, one write.
+ */
+function useSteppableChoice<T>(
+  values: readonly T[],
+  current: T,
+  onCommit: (next: T) => void,
+  enabled: boolean,
+): {
+  pending: T | null;
+  ref: (element: HTMLElement | null) => void;
+  onKeyDown: (event: ReactKeyboardEvent) => void;
+} {
+  const [pending, setPending] = useState<T | null>(null);
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const acc = useRef(0);
+  // One gesture moves one position. Momentum keeps a trackpad emitting long
+  // after the fingers lift, and stepping per threshold made the value run away
+  // from whoever was aiming at it.
+  const locked = useRef(false);
+  const gestureEnd = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef(current);
+  latest.current = pending ?? current;
+  const handlers = useRef<{ wheel: (event: WheelEvent) => void }>({ wheel: () => {} });
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (gestureEnd.current) clearTimeout(gestureEnd.current);
+  }, []);
+
+  // The control is controlled: the commit goes to the server and comes back as
+  // a prop. Holding the stepped value until then keeps the label from snapping
+  // back to the old one for the width of that round trip.
+  useEffect(() => {
+    if (pending !== null && current === pending) setPending(null);
+  }, [current, pending]);
+
+  // React registers `wheel` passively at the root, so an onWheel handler cannot
+  // preventDefault — the page would scroll as well as the value stepping.
+  useEffect(() => {
+    if (!element) return;
+    const listener = (event: WheelEvent) => handlers.current.wheel(event);
+    element.addEventListener("wheel", listener, { passive: false });
+    return () => element.removeEventListener("wheel", listener);
+  }, [element]);
+
+  const step = (direction: 1 | -1) => {
+    const index = values.indexOf(latest.current);
+    const next = values[Math.min(values.length - 1, Math.max(0, index + direction))];
+    if (next === undefined || next === latest.current) return;
+    latest.current = next;
+    setPending(next);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => onCommit(next), STEP_COMMIT_DELAY_MS);
+  };
+
+  handlers.current.wheel = (event) => {
+    if (!enabled) return;
+
+    // Any wheel activity restarts the idle clock that defines "one gesture".
+    if (gestureEnd.current) clearTimeout(gestureEnd.current);
+    gestureEnd.current = setTimeout(() => {
+      locked.current = false;
+      acc.current = 0;
+    }, STEP_GESTURE_END_MS);
+
+    // Already stepped this gesture: swallow the momentum so it cannot run on.
+    if (locked.current) {
+      event.preventDefault();
+      return;
+    }
+
+    acc.current += event.deltaY;
+    if (Math.abs(acc.current) < STEP_WHEEL_THRESHOLD) return;
+    // Only now is this gesture ours; anything short of the threshold stays the
+    // page's, so scrolling past the control never changes it.
+    event.preventDefault();
+    // Down the menu, as the menu reads: the opt-out, then the scale ascending.
+    step(acc.current > 0 ? 1 : -1);
+    acc.current = 0;
+    locked.current = true;
+  };
+
+  return {
+    pending,
+    ref: setElement,
+    onKeyDown: (event) => {
+      if (!enabled) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      event.stopPropagation();
+      step(event.key === "ArrowDown" ? 1 : -1);
+    },
+  };
+}
+
 function ReasoningMenu({
   currentEffort,
   efforts,
@@ -272,7 +395,17 @@ function ReasoningMenu({
   const [open, setOpen] = useState(false);
   const { popupRef } = usePickerOverlay(open, () => setOpen(false));
   const choices = reasoningChoices(efforts);
-  const currentLabel = efforts.length > 0 ? reasoningEffortLabel(currentEffort) : "—";
+  // The menu's own order: the opt-out, then the scale. Stepping walks exactly
+  // what the menu shows, so the two never disagree about what comes next.
+  const ordered = useMemo<Array<string | null>>(() => [null, ...efforts], [efforts]);
+  const stepper = useSteppableChoice(
+    ordered,
+    currentEffort,
+    onSelect,
+    !disabled && !open && efforts.length > 0,
+  );
+  const shownEffort = stepper.pending !== null ? stepper.pending : currentEffort;
+  const currentLabel = efforts.length > 0 ? reasoningEffortLabel(shownEffort) : "—";
 
   return (
     <Menu.Root disabled={disabled} open={open} onOpenChange={setOpen}>
@@ -288,8 +421,14 @@ function ReasoningMenu({
             : "This model does not expose reasoning effort"
         }
         className="model-picker__trigger model-picker__effort-trigger group"
+        ref={stepper.ref}
+        onKeyDown={stepper.onKeyDown}
       >
-        <BlurSwap swapKey={currentLabel} className="model-picker__current-effort">
+        <BlurSwap
+          swapKey={currentLabel}
+          className="model-picker__current-effort"
+          data-unset={shownEffort === null ? "" : undefined}
+        >
           {currentLabel}
         </BlurSwap>
         <ChevronDown
@@ -326,6 +465,10 @@ function ReasoningMenu({
                 <Menu.RadioItem
                   key={choice.value}
                   value={choice.value}
+                  /* Off/Low/High are an ordered scale; the default is an
+                     abstention that can resolve anywhere on it, so it is ruled
+                     off rather than listed as the scale's first step. */
+                  data-default-choice={choice.isDefault ? "" : undefined}
                   className="model-picker__option model-picker__effort-option"
                 >
                   <span>{choice.label}</span>
@@ -502,6 +645,7 @@ export function ModelReasoningChip() {
 
   return (
     <ModelReasoningPicker
+      layout="inline"
       buttonLabel={shortModelLabel(currentModel)}
       currentModel={currentModel}
       currentEffort={currentEffort}
