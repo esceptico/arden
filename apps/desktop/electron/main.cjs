@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeTheme, safeStorage, screen, session, shell } = require("electron");
+const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeTheme, net, safeStorage, screen, session, shell } = require("electron");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
@@ -6,10 +6,12 @@ const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const { parseApiResponseBody } = require("./api-response.cjs");
+const { createMainProcessFetch } = require("./main-process-fetch.cjs");
 // The parser is an ESM module (shared with the Vite renderer, which can't
 // import CommonJS source). Kick off the import at load; await the cached
 // promise where it's used. CJS can't `require` ESM or top-level await.
 const sseFrameParserModule = import("./sse-frame-parser.js");
+const mainProcessFetch = createMainProcessFetch(net);
 
 const devServerUrl = process.env.ARDEN_DESKTOP_DEV_SERVER_URL;
 const isDev = Boolean(devServerUrl);
@@ -198,7 +200,7 @@ async function apiRequest(configInput, requestInput, signal) {
   if (signal) signals.push(signal);
 
   try {
-    const response = await fetch(new URL(request.path, config.serverUrl), {
+    const response = await mainProcessFetch(new URL(request.path, config.serverUrl), {
       method: request.method,
       headers: apiHeaders(config, request.body),
       body: request.body,
@@ -234,7 +236,7 @@ async function streamEvents(connectionId, webContents, configInput, sessionId, a
   const config = normalizeConfig(configInput);
   let terminalSent = false;
   try {
-    const response = await fetch(eventStreamUrl(config, sessionId, afterSeq), {
+    const response = await mainProcessFetch(eventStreamUrl(config, sessionId, afterSeq), {
       headers: apiHeaders(config),
       signal,
     });
