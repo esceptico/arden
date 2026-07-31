@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { MotionConfig, motion } from "motion/react";
 import {
   DURATION_RIGHT_PANEL_HIDE,
   DISTANCE_RAIL_HIDE,
@@ -16,7 +16,7 @@ import { MarkdownViewer } from "@/components/ui/MarkdownViewer";
 import { ApprovalReviewModal } from "@/features/chat/components/ApprovalReviewModal";
 import { SidebarResizeHandle } from "@/components/workspace/SidebarResizeHandle";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
-import { ShellBackButton } from "@/components/workspace/ShellBackButton";
+import { ShellNav } from "@/components/workspace/ShellNav";
 import { WorkspaceRouteHost } from "@/components/workspace/WorkspaceRouteHost";
 import { WorkspaceStage } from "@/components/workspace/WorkspaceStage";
 import { AgentRightSidebar } from "@/features/background-agents/components/AgentRightSidebar";
@@ -26,6 +26,7 @@ import { Toaster } from "@/components/ui/Toaster";
 import { ModalScrim } from "@/components/ui/ModalScrim";
 import { Inspect } from "@/features/inspect/components/Inspect";
 import { useStore } from "@/stores";
+import { hasBlockingOverlay } from "@/lib/overlayStack";
 import { useEvents } from "@/hooks/useEvents";
 import { useActiveRuns } from "@/features/background-agents/hooks/useActiveRuns";
 import { useAutomationEvents } from "@/features/automations/hooks/useAutomationEvents";
@@ -36,11 +37,12 @@ import { useTypographyEffect } from "@/lib/typography";
 import {
   COMPACT_SHELL_QUERY,
   resolveEffectiveSidebarHidden,
+  workspaceOwnsRail,
   type ShellLayout,
 } from "@/lib/shellOwnership";
 import { bootstrap, startServerConnectionPolling } from "@/actions/bootstrap";
-import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
-import { goHome } from "@/actions/navigation";
+import { createSession, switchSession } from "@/actions/sessions";
+import { goBack, goForward, goHome, recordCurrentDestination } from "@/actions/navigation";
 import { sendMessage } from "@/actions/messages";
 
 // The five "open from chrome" modals only mount when the user actually
@@ -153,12 +155,24 @@ export function App() {
   const memoryOpen = useStore((s) => s.memoryOpen);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const automationsOpen = useStore((s) => s.automationsOpen);
-  const workspaceKind: ShellLayout["workspace"] = openAreaKey
-    ? "area"
-    : showHome
-      ? "home"
-      : "chat";
-  const workspaceRouteKey = openAreaKey ? `area:${openAreaKey}` : workspaceKind;
+  const automationTargetId = useStore((s) => s.automationTargetId);
+  // Memory and Automations are routes, not dialogs: each brings its own rail
+  // and its own internal navigation, so they replace the stage rather than
+  // covering it. Settings stays a Takeover — you enter, change one thing,
+  // leave. Route order here is precedence, not nesting.
+  const workspaceKind: ShellLayout["workspace"] = memoryOpen
+    ? "memory"
+    : automationsOpen
+      ? "automations"
+      : openAreaKey
+        ? "area"
+        : showHome
+          ? "home"
+          : "chat";
+  const workspaceRouteKey = openAreaKey && workspaceKind === "area"
+    ? `area:${openAreaKey}`
+    : workspaceKind;
+  const routeOwnsRail = workspaceOwnsRail(workspaceKind);
   const compactShell = useMediaQuery(COMPACT_SHELL_QUERY);
   const [compactSidebarOpen, setCompactSidebarOpen] = useState(false);
   const [settingsRailOpen, setSettingsRailOpen] = useState(() => !compactShell);
@@ -189,6 +203,14 @@ export function App() {
       workspace: workspaceKind,
     });
   }, [compactShell, setShellLayout, workspaceKind]);
+
+  // History records the route the shell landed on, not the call that got it
+  // there. Sidebar clicks, ⌘N, area cards, agent destinations and toasts all
+  // reach the store by different paths; watching the outcome catches every
+  // one, including whichever is added next.
+  useEffect(() => {
+    recordCurrentDestination();
+  }, [workspaceRouteKey, currentSessionId, automationTargetId]);
   // Session identity dismisses the compact rail, but does not own the
   // workspace route: switching chats must not replay the full page entrance.
   useEffect(() => {
@@ -248,6 +270,27 @@ export function App() {
           openSettings();
           return;
         }
+        // Route history. Memory registers the same chord for its own page
+        // trail and calls preventDefault, so while the vault is open it wins
+        // — the innermost history owns the key, as in a browser.
+        if (e.key === "[" || e.key === "]") {
+          if (memoryOpen || hasBlockingOverlay()) return;
+          e.preventDefault();
+          if (e.key === "[") goBack();
+          else goForward();
+          return;
+        }
+        return;
+      }
+
+      // Memory and Automations used to be dialogs, and Escape-to-leave is
+      // muscle memory from that. Preserve it for exactly those two routes —
+      // Escape in a chat or an area room navigates nowhere, same as a browser.
+      // Overlays layered above (dialogs, peeks, menus) consume Escape first
+      // via the overlay stack.
+      if (e.key === "Escape" && routeOwnsRail && !hasBlockingOverlay()) {
+        e.preventDefault();
+        goBack();
         return;
       }
 
@@ -351,11 +394,7 @@ export function App() {
         hidden={settingsOpen ? !settingsRailOpen : effectiveSidebarHidden}
         onToggle={toggleEffectiveSidebar}
       />
-      <AnimatePresence initial={false}>
-        {openAreaKey && !settingsOpen && !memoryOpen && !automationsOpen && (
-          <ShellBackButton key="area-back" onClick={goToNewSessionHome} />
-        )}
-      </AnimatePresence>
+      {!settingsOpen && <ShellNav />}
       <ErrorBoundary>
         <main
           data-workspace={workspaceKind}
@@ -367,7 +406,15 @@ export function App() {
             geometryKey={`${effectiveSidebarHidden}:${workspaceKind}:${workspaceRightDocked}:${rightPanelDocked}`}
           >
             <WorkspaceRouteHost routeKey={workspaceRouteKey}>
-              {workspaceKind === "area" && openAreaKey ? (
+              {workspaceKind === "memory" ? (
+                <Suspense fallback={null}>
+                  <MemorySurface />
+                </Suspense>
+              ) : workspaceKind === "automations" ? (
+                <Suspense fallback={null}>
+                  <AutomationsModal />
+                </Suspense>
+              ) : workspaceKind === "area" && openAreaKey ? (
                 <AreaRoom areaKey={openAreaKey} />
               ) : workspaceKind === "home" ? (
                 <Home />
@@ -387,18 +434,11 @@ export function App() {
           compact={compactShell}
         />
       )}
-      {/* Memory is a full-window takeover (Obsidian-style vault view): ONE
-          left column — its own rail — layered over the app shell and its
-          fixed sidebar toggles, so no chrome doubles up or overlaps. */}
-      <AnimatePresence>
-        {memoryOpen && (
-          <Suspense key="memory" fallback={null}>
-            <MemorySurface />
-          </Suspense>
-        )}
-      </AnimatePresence>
       <ErrorBoundary>
         <Suspense fallback={null}>
+          {/* Settings stays a Takeover: you enter, change one thing, and
+              leave. No internal navigation, so it is a dialog over the
+              stage rather than a route that replaces it. */}
           <SettingsModal
             railOpen={settingsRailOpen}
             compact={compactShell}
@@ -407,7 +447,6 @@ export function App() {
               if (compactShell) setSettingsRailOpen(false);
             }}
           />
-          <AutomationsModal />
           <ToolViewer />
         </Suspense>
       </ErrorBoundary>

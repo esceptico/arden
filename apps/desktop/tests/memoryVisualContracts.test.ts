@@ -283,13 +283,19 @@ test("memory never transitions layout properties", () => {
   }
 });
 
-test("Memory uses the shared shell controls and Back to Home handoff", () => {
+test("Memory is a route with its own rail, not a dialog", () => {
   const surface = read("../src/features/memory/components/MemorySurface.tsx");
   const view = read("../src/features/memory/components/ArtifactMemoryView.tsx");
 
-  expect(surface).toContain("<ShellBackButton");
-  expect(surface).toContain("goToNewSessionHome()");
-  expect(surface).toContain("close();");
+  // The vault has internal navigation and its own left column, so it replaces
+  // the stage rather than covering it. Leaving walks history back to wherever
+  // it was opened from — it never evicts the user to Home.
+  expect(surface).not.toContain('role="dialog"');
+  expect(surface).not.toContain("aria-modal");
+  expect(surface).not.toContain("useFocusTrap");
+  expect(surface).not.toContain("useOverlayLayer");
+  expect(surface).not.toContain("ShellBackButton");
+  expect(surface).not.toContain("goToNewSessionHome");
   expect(view).toContain("<SidebarToggle");
   expect(view).toContain("hidden={railHidden}");
   expect(view).toContain("onToggle={() => setRailHidden((hidden) => !hidden)}");

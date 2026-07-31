@@ -35,7 +35,11 @@ test("settings takeover keeps the shared rail geometry and entrance targets", ()
   expect(modal).toContain("autoFocus");
   expect(modal).toContain("<SidebarResizeHandle />");
   expect(modal).toContain("<SidebarToggle hidden={!railOpen} onToggle={onToggleRail} />");
-  expect(modal).toContain("<ShellBackButton onClick={close} disabled={saving} />");
+  // Settings is the one surface that stays a Takeover: no internal
+  // navigation, so it is a dialog over the stage rather than a route in the
+  // history trail. An X, not a back arrow — closing it returns you to what
+  // you were already doing, it does not step backwards through history.
+  expect(modal).toContain('<ShellDismiss onClick={close} disabled={saving} label="Close settings" />');
   expect(modal).not.toContain("settings-mobile-nav");
   expect(styles).toMatch(/@media \(max-width: 46\.25rem\)[\s\S]*?\.board-settings \.settings-sidebar-card\s*\{[\s\S]*?position:\s*absolute;/);
   expect(styles).not.toMatch(/@media \(max-width: 46\.25rem\)[\s\S]*?\.settings-sidebar-card\s*\{\s*display:\s*none;/);

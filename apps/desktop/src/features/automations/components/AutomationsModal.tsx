@@ -2,7 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowLeft02, CalendarClock, Plus, Search, Settings, X } from "@/components/icons";
 import { useStore } from "@/stores";
 import { duplicateAutomation, fetchAutomations, runAutomation, toggleAutomation } from "@/actions/automations";
-import { goToNewSessionHome, switchSession } from "@/actions/sessions";
+import { goBack } from "@/actions/navigation";
+import { setNavigationGuard } from "@/lib/navigationGuard";
+import { switchSession } from "@/actions/sessions";
 import type { Automation, AutomationRun, CreateAutomationPayload } from "@/api/types";
 import { isIterationLoop } from "@/lib/automationFilters";
 import { AutomationRail, groupAutomations } from "@/features/automations/components/AutomationRail";
@@ -14,11 +16,9 @@ import { Markdown } from "@/components/ui/Markdown";
 import { TabPanels } from "@/components/ui/TabPanels";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
-import { Takeover } from "@/components/workspace/Takeover";
 import { DialogLayer } from "@/components/workspace/DialogLayer";
 import { PaneResizeHandle } from "@/components/workspace/PaneResizeHandle";
 import { PeekSurface } from "@/components/workspace/PeekSurface";
-import { ShellBackButton } from "@/components/workspace/ShellBackButton";
 import { ICON } from "@/lib/icons";
 import "./automations-workspace.css";
 
@@ -34,9 +34,11 @@ type Intent =
   | { kind: "channel"; sessionId: string }
   | { kind: "close" }
   | { kind: "discard-draft" }
-  | { kind: "home" }
   | { kind: "new"; preset: CreateAutomationPayload | null }
-  | { kind: "select"; taskId: string };
+  | { kind: "select"; taskId: string }
+  // Navigation that started outside this route (⌘[, Escape, the shell's back
+  // control) and was held by the unsaved-draft guard. Confirming replays it.
+  | { kind: "leave"; resume: () => void };
 
 type RunPeek = { run: AutomationRun; runTitle: string };
 
@@ -119,11 +121,10 @@ function AutomationRunPeek({ view, onClose }: { view: RunPeek | null; onClose: (
   );
 }
 
-/** A full-window master-detail workspace. Its open/close store actions stay
- * stable while the old PageModal chrome disappears, so callers do not need a
- * parallel navigation API during the shell migration. */
+/** The Automations route: a master-detail workspace whose list is the shell's
+ * left rail (see workspaceOwnsRail). Mounted only while the route is active,
+ * so its workspace state is born and dies with the visit. */
 export function AutomationsModal() {
-  const open = useStore((state) => state.automationsOpen);
   const close = useStore((state) => state.closeAutomations);
   const allAutomations = useStore((state) => state.automations);
   const targetId = useStore((state) => state.automationTargetId);
@@ -143,6 +144,10 @@ export function AutomationsModal() {
   const [query, setQuery] = useState("");
   const [compactDetail, setCompactDetail] = useState(false);
   const [detailDirty, setDetailDirty] = useState(false);
+  // The guard is registered once on mount and reads dirtiness through a ref:
+  // re-registering on every keystroke would churn the module-level slot.
+  const detailDirtyRef = useRef(detailDirty);
+  detailDirtyRef.current = detailDirty;
   const [pendingIntent, setPendingIntent] = useState<Intent | null>(null);
   const [runPeek, setRunPeek] = useState<RunPeek | null>(null);
   /* One-shot deep-link intent: opened-from-activity rows land on the
@@ -198,17 +203,18 @@ export function AutomationsModal() {
       return;
     }
     if (intent.kind === "close") {
-      close();
+      // Leaving is a route change now, so it goes through history: you land
+      // back where you opened Automations from, not on Home.
+      goBack();
       return;
     }
-    if (intent.kind === "home") {
-      close();
-      goToNewSessionHome();
+    if (intent.kind === "leave") {
+      intent.resume();
       return;
     }
     if (intent.kind === "channel") {
-      void switchSession(intent.sessionId);
       close();
+      void switchSession(intent.sessionId);
       return;
     }
     if (intent.kind === "discard-draft") {
@@ -248,21 +254,22 @@ export function AutomationsModal() {
     executeIntent(intent);
   }, [detailDirty, executeIntent]);
 
-  const requestDismiss = useCallback(() => {
-    if (runPeek) {
-      setRunPeek(null);
-      return;
-    }
-    if (pendingIntent) {
-      setPendingIntent(null);
-      return;
-    }
-    if (newOpen) {
-      setNewOpen(false);
-      return;
-    }
-    requestIntent({ kind: "close" });
-  }, [newOpen, pendingIntent, requestIntent, runPeek]);
+  // An unsaved draft blocks leaving the route, wherever the navigation came
+  // from — the shell's back control, ⌘[, or Escape. The guard hands us the
+  // interrupted navigation; the discard dialog replays it on confirm.
+  useEffect(() => {
+    setNavigationGuard((resume) => {
+      if (!detailDirtyRef.current) return true;
+      setPendingIntent({ kind: "leave", resume });
+      return false;
+    });
+    return () => setNavigationGuard(null);
+  }, []);
+
+  // The run peek, the discard dialog and the template menu each register
+  // their own overlay layer, so Escape unwinds them innermost-first without
+  // this route arbitrating. Only once nothing is layered does Escape reach
+  // the shell and mean "leave the route".
 
   const runRailAutomation = useCallback(async (automation: Automation) => {
     try {
@@ -293,12 +300,10 @@ export function AutomationsModal() {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
     void fetchAutomations();
-  }, [open]);
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
@@ -307,10 +312,10 @@ export function AutomationsModal() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, []);
 
   useEffect(() => {
-    if (!open || !targetId || !automations?.some((automation) => automation.task_id === targetId)) return;
+    if (!targetId || !automations?.some((automation) => automation.task_id === targetId)) return;
     setDraft(null);
     setDetailAxis("y");
     setDetailDirection(1);
@@ -318,7 +323,7 @@ export function AutomationsModal() {
     setCompactDetail(true);
     setOpenLatestRun(targetRun === "latest");
     clearTarget();
-  }, [automations, clearTarget, open, targetId, targetRun]);
+  }, [automations, clearTarget, targetId, targetRun]);
 
   // Default to a user automation, then area/system. If the selection was
   // deleted, this also lands the workspace on a valid remaining row.
@@ -328,31 +333,18 @@ export function AutomationsModal() {
   // LAYOUT effect: a passive one lands after paint, so deleting an automation
   // flashed the unselected pane for a frame before the successor arrived.
   useLayoutEffect(() => {
-    if (!open || draft || !automations || selected) return;
+    if (draft || !automations || selected) return;
     if (targetId && automations.some((automation) => automation.task_id === targetId)) return;
     const groups = groupAutomations(automations);
     const first = groups.user[0] ?? groups.area[0] ?? groups.system[0];
     if (first) setSelectedId(first.task_id);
-  }, [automations, draft, open, selected, targetId]);
+  }, [automations, draft, selected, targetId]);
 
-  useEffect(() => {
-    if (open) return;
-    setSelectedId(null);
-    setDraft(null);
-    setNewOpen(false);
-    setQuery("");
-    setCompactDetail(false);
-    setDetailDirty(false);
-    setPendingIntent(null);
-    setRunPeek(null);
-    setRailHidden(false);
-    setDetailAxis("y");
-    setDetailDirection(1);
-  }, [open]);
+  // Leaving the route unmounts this component, so the old reset-on-close
+  // effect is gone: every piece of workspace state above dies with it.
 
-  // Restore the persisted rail width when the rail attaches — it remounts
-  // with the Takeover (after `open` flips), so an open-keyed effect would
-  // fire before the node exists.
+  // Restore the persisted rail width when the rail attaches — the node
+  // arrives with the route, so a mount effect would fire before it exists.
   const attachRail = useCallback((node: HTMLElement | null) => {
     railRef.current = node;
     if (!node) return;
@@ -366,11 +358,9 @@ export function AutomationsModal() {
   }, []);
 
   return (
-    <Takeover
-      open={open}
-      onClose={requestDismiss}
-      ariaLabel="Automations"
-      className={`automation-workspace${compactDetail ? " automation-workspace--detail" : ""}${railHidden ? " automation-workspace--rail-hidden" : ""}`}
+    <section
+      aria-label="Automations"
+      className={`automation-workspace absolute inset-0 overflow-hidden${compactDetail ? " automation-workspace--detail" : ""}${railHidden ? " automation-workspace--rail-hidden" : ""}`}
     >
       <SidebarToggle
         hidden={railHidden}
@@ -381,7 +371,6 @@ export function AutomationsModal() {
           shortcut: false,
         }}
       />
-      <ShellBackButton onClick={() => requestIntent({ kind: "home" })} />
       <aside
         ref={attachRail}
         className="automation-workspace__rail"
@@ -541,6 +530,6 @@ export function AutomationsModal() {
           </footer>
         </div>
       </DialogLayer>
-    </Takeover>
+    </section>
   );
 }

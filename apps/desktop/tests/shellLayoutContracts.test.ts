@@ -14,7 +14,7 @@ const chatRail = read("../src/features/chat/components/ChatRail.tsx");
 const home = read("../src/features/home/components/WorkBrief.tsx");
 const homeStyles = read("../src/features/home/components/Home.css");
 const inspector = read("../src/features/background-agents/components/AgentRightSidebar.tsx");
-const shellBack = read("../src/components/workspace/ShellBackButton.tsx");
+const shellNav = read("../src/components/workspace/ShellNav.tsx");
 const sidebar = read("../src/features/sessions/components/Sidebar.tsx");
 const sessionList = read("../src/features/sessions/components/SessionList.tsx");
 
@@ -32,10 +32,15 @@ test("shell controls stay operable above both rails but below blocking overlays"
   expect(styles).toMatch(/\.sidebar-toggle,[\s\S]*?z-index:\s*var\(--z-shell-toggle\);/);
   expect(app).toContain("z-[var(--z-shell)]");
   expect(inspector).toContain("z-[var(--z-peek)]");
-  expect(shellBack).toContain("ArrowLeft02");
+  expect(shellNav).toContain("ArrowLeft02");
+  expect(shellNav).toContain("ArrowRight02");
   expect(app).not.toContain("z-30");
   expect(inspector).not.toContain("z-40");
-  expect(app).toContain('<ShellBackButton key="area-back" onClick={goToNewSessionHome} />');
+  // Route history is shell chrome, present on every route. It hides only
+  // under Settings, which is a Takeover and brings its own dismiss control.
+  expect(app).toContain("{!settingsOpen && <ShellNav />}");
+  expect(shellNav).toContain("goBack");
+  expect(shellNav).toContain("goForward");
   // One name everywhere: the first nav row is "Home" in every rail variant,
   // and both variants render the single shared appNav block.
   expect(sidebar).toContain('label="Home"');
@@ -104,7 +109,7 @@ test("hidden-sidebar Chat reserves the native chrome lane for its title", () => 
     /html\[data-desktop="true"\]:not\(\[data-fullscreen="true"\]\)\s*\{\s*--chrome-sidebar-toggle-resolved-left:\s*var\(--chrome-sidebar-toggle-left\);/,
   );
   expect(styles).toContain(".sidebar-toggle { left: var(--chrome-sidebar-toggle-resolved-left); }");
-  expect(styles).toContain(".shell-back { left: var(--chrome-back-control-resolved-left); }");
+  expect(styles).toContain(".shell-nav { left: var(--chrome-back-control-resolved-left); }");
 });
 
 test("shared rail geometry keeps app rows and Chat hierarchy on their mock heights", () => {
@@ -144,7 +149,7 @@ test("chat peek, chat dock, and area hub have distinct geometry and state", () =
   expect(shell).not.toContain('data-workspace="area"][data-right-open="true"]');
   expect(chatStyles).toMatch(/\.board-inspector\[data-mode="hub"\]\s*\{[^}]*border-radius:\s*var\(--r-shell\);/s);
   expect(chatStyles).not.toContain("backdrop-filter: blur(var(--surface-blur)) saturate(1.08)");
-  expect(chatStyles).toMatch(/body:has\(\.board-inspector\[data-mode="hub"\]\) :is\(\.sidebar-toggle, \.shell-back, \.right-sidebar-toggle\)\s*\{[^}]*z-index:\s*var\(--z-shell\);/s);
+  expect(chatStyles).toMatch(/body:has\(\.board-inspector\[data-mode="hub"\]\) :is\(\.sidebar-toggle, \.shell-nav, \.right-sidebar-toggle\)\s*\{[^}]*z-index:\s*var\(--z-shell\);/s);
   expect(chatStyles).toMatch(/\.board-inspector\[data-mode="peek"\]\s*\{[^}]*top:\s*3\.875rem;[^}]*right:\s*var\(--floating-edge, 1rem\);[^}]*bottom:\s*auto;/s);
   expect(chatStyles).toMatch(/@media \(max-width: 55rem\)[\s\S]*?\.board-inspector\[data-mode="peek"\]\s*\{[^}]*top:\s*3\.25rem;[^}]*bottom:\s*auto;[^}]*max-height:\s*calc\(100vh - 3\.875rem\);/s);
   expect(inspector).toContain('className="board-inspector__action board-inspector__dock-action"');

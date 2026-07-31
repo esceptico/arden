@@ -146,12 +146,20 @@ body.quick-capture-mode .quick-capture-card {
    `trafficLightPosition: { x: 18, y: 18 }`, light diameter = 14px, so
    light center y = 25. Button h=22, icon centered → button top = 14. */
 .sidebar-toggle,
-.shell-back,
+.shell-nav,
 .right-sidebar-toggle {
   position: fixed;
   top: 14px;
   z-index: var(--z-shell-toggle);
   -webkit-app-region: no-drag;
+}
+/* Back and forward share one slot as a pair. Both stay mounted and disable
+   at the ends, so the row's width never changes and the chrome beside it
+   cannot shift while navigating. */
+.shell-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 /* Browser/fullscreen chrome starts on the sidebar icon column. Native macOS
    resolves the same shared geometry against its traffic-light cluster, so
@@ -160,7 +168,7 @@ html[data-desktop="true"]:not([data-fullscreen="true"]) {
   --chrome-sidebar-toggle-resolved-left: var(--chrome-sidebar-toggle-left);
 }
 .sidebar-toggle { left: var(--chrome-sidebar-toggle-resolved-left); }
-.shell-back { left: var(--chrome-back-control-resolved-left); }
+.shell-nav { left: var(--chrome-back-control-resolved-left); }
 .right-sidebar-toggle { right: 14px; }
 .right-sidebar-toggle[data-open="true"] {
   opacity: 0;
@@ -168,7 +176,7 @@ html[data-desktop="true"]:not([data-fullscreen="true"]) {
   pointer-events: none;
 }
 .sidebar-toggle *,
-.shell-back *,
+.shell-nav *,
 .right-sidebar-toggle * { -webkit-app-region: no-drag; }
 
 

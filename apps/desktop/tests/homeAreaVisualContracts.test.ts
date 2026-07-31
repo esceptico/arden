@@ -167,7 +167,7 @@ test("Home, Chat, and Area surfaces use named depth and canonical materials", ()
   expect(chat).not.toContain("color-mix(in oklab, var(--surface-3) 88%, transparent)");
   expect(chat).not.toContain("backdrop-filter: blur(18px) saturate(1.08)");
   expect(chat).toMatch(/\.board-inspector\[data-mode="hub"\]\s*\{[\s\S]*?border-radius:\s*var\(--r-shell\);/);
-  expect(chat).toMatch(/body:has\(\.board-inspector\[data-mode="hub"\]\) :is\(\.sidebar-toggle, \.shell-back, \.right-sidebar-toggle\)\s*\{[\s\S]*?z-index:\s*var\(--z-shell\);/);
+  expect(chat).toMatch(/body:has\(\.board-inspector\[data-mode="hub"\]\) :is\(\.sidebar-toggle, \.shell-nav, \.right-sidebar-toggle\)\s*\{[\s\S]*?z-index:\s*var\(--z-shell\);/);
   expect(chat).toMatch(/\.board-inspector\[data-mode="peek"\]\s*\{[\s\S]*?border-radius:\s*var\(--r-panel\);/);
   expect(chat).toMatch(/\.board-inspector__header\s*\{[\s\S]*?padding:\s*0 8px 0 14px;[\s\S]*?background:\s*transparent;/);
   expect(chat).toMatch(/\.board-inspector__content\s*\{[\s\S]*?padding:\s*14px 14px 28px;/);

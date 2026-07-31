@@ -190,9 +190,14 @@ test("Automations owns the mock shell controls and hands a hidden rail's full wi
   expect(workspace).toContain('hide: "Hide automation list"');
   expect(workspace).toContain('show: "Show automation list"');
   expect(workspace).toContain("shortcut: false");
-  expect(workspace).toContain('<ShellBackButton onClick={() => requestIntent({ kind: "home" })} />');
-  expect(workspace).toContain('kind: "home"');
-  expect(workspace).toContain("goToNewSessionHome()");
+  // Automations is a route, so leaving it walks history back to wherever it
+  // was opened from. It no longer evicts the user to Home, and the shell owns
+  // the back control rather than each surface drawing its own.
+  expect(workspace).not.toContain("ShellBackButton");
+  expect(workspace).not.toContain('kind: "home"');
+  expect(workspace).not.toContain("goToNewSessionHome");
+  expect(workspace).not.toContain("<Takeover");
+  expect(workspace).toContain("goBack();");
   expect(workspace).toContain("aria-hidden={railHidden}");
   // The rail "New" button is the unmarked secondary default (fill policy).
   expect(workspace).not.toContain('variant="primary"\n            size="md"\n            leadingIcon={Plus}');
@@ -246,7 +251,7 @@ test("the zero-automations pane only stands in for an actually empty workspace",
 
   // And the open-time fallback lands before paint, so that gap never shows either.
   expect(workspace).toMatch(
-    /useLayoutEffect\(\(\) => \{\s*if \(!open \|\| draft \|\| !automations \|\| selected\) return;/,
+    /useLayoutEffect\(\(\) => \{\s*if \(draft \|\| !automations \|\| selected\) return;/,
   );
   expect(workspace).toContain("const first = groups.user[0] ?? groups.area[0] ?? groups.system[0];");
 });

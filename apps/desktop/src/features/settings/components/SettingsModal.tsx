@@ -32,7 +32,7 @@ import { SettingsPage } from "@/features/settings/components/SettingsPage";
 import { Takeover } from "@/components/workspace/Takeover";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { SidebarResizeHandle } from "@/components/workspace/SidebarResizeHandle";
-import { ShellBackButton } from "@/components/workspace/ShellBackButton";
+import { ShellDismiss } from "@/components/workspace/ShellDismiss";
 import { ICON } from "@/lib/icons";
 import { ScrollArea } from "@/components/ui/ScrollArea";
 import { Tab as TabItem, Tabs } from "@/components/ui/Tabs";
@@ -282,7 +282,7 @@ export function SettingsModal({
       className={`board-settings ${railOpen ? "settings-rail-open" : "settings-rail-hidden"}`}
     >
       <SidebarToggle hidden={!railOpen} onToggle={onToggleRail} />
-      <ShellBackButton onClick={close} disabled={saving} />
+      <ShellDismiss onClick={close} disabled={saving} label="Close settings" />
       <motion.aside
         data-page-enter-item="chrome"
         className="settings-sidebar-card flex min-h-0 flex-col overflow-hidden"

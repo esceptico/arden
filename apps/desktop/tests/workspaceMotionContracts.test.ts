@@ -128,17 +128,23 @@ test("conversation rail indexes explicit production anchors and restores the moc
   expect(user).toContain("data-chat-rail-label={railLabel || undefined}");
 });
 
-test("full-page takeovers use the shared staged entrance", () => {
+test("takeovers and routes each get the staged entrance exactly once", () => {
   const takeover = read("../src/components/workspace/Takeover.tsx");
+  const routeHost = read("../src/components/workspace/WorkspaceRouteHost.tsx");
   const automations = read("../src/features/automations/components/AutomationsModal.tsx");
   const memory = read("../src/features/memory/components/MemorySurface.tsx");
 
   expect(takeover).toContain("<PageEntrance");
   expect((takeover.match(/<PageEntrance\b/g) ?? [])).toHaveLength(1);
+  expect(routeHost).toContain("<PageEntrance");
+  expect((routeHost.match(/<PageEntrance\b/g) ?? [])).toHaveLength(1);
   expect(automations).toContain('data-page-enter-item="chrome"');
-  expect(memory).toContain("<PageEntrance");
-  expect(memory).toContain("useReducedMotion");
-  expect(memory).toContain("reducedMotion ? { duration: MOTION.reduced } : SHEET_ENTER_TRANSITION");
+
+  // Memory and Automations are routes: the host owns their entrance and exit.
+  // Staging it a second time inside the room would double-animate the swap.
+  expect(memory).not.toContain("<PageEntrance");
+  expect(memory).not.toContain("SHEET_ENTER_TRANSITION");
+  expect(automations).not.toContain("<PageEntrance");
 });
 
 test("reduced motion lets every CSS animation settle once", () => {

@@ -768,7 +768,7 @@
 
 /* The compact hub occupies the full shell. Keep chrome at its native L2
    underneath the L4 hub, exactly like the mock's z-shell/z-peek ordering. */
-body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-back, .right-sidebar-toggle) {
+body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-nav, .right-sidebar-toggle) {
   z-index: var(--z-shell);
 }
 
