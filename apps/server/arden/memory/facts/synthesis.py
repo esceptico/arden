@@ -2,12 +2,10 @@
 
 import asyncio
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
 from hashlib import sha256
 from typing import Protocol
-from zoneinfo import ZoneInfo
 
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
@@ -73,16 +71,11 @@ class FactSynthesis:
         consumers: FactConsumerStore,
         wiki: WikiService,
         renderer: FactSynthesisRenderer,
-        *,
-        timezone_name: str = "UTC",
-        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._ledger = ledger
         self._consumers = consumers
         self._wiki = wiki
         self._renderer = renderer
-        self._timezone = ZoneInfo(timezone_name)
-        self._clock = clock or _utc_now
 
     async def run(self) -> FactSynthesisResult:
         watermark = await self._consumers.get(CONSUMER_ID)
@@ -90,8 +83,7 @@ class FactSynthesis:
         if feed.through_revision is None:
             return FactSynthesisResult(feed.through_revision, empty=True)
 
-        today = self._today()
-        reason = _reason(feed) if feed.events else _daily_reason(feed.through_revision, today)
+        reason = _reason(feed)
         if feed.events and await asyncio.to_thread(self._has_trusted_publication, feed, reason):
             await self._consumers.advance(CONSUMER_ID, feed=feed, ledger=self._ledger)
             return FactSynthesisResult(feed.through_revision, advanced=True, replayed=True)
@@ -103,7 +95,6 @@ class FactSynthesis:
             feed,
             facts,
             prior_facts,
-            today,
         )
         if not targets:
             if feed.events:
@@ -142,18 +133,11 @@ class FactSynthesis:
             empty=not feed.events and commit is None,
         )
 
-    def _today(self) -> date:
-        now = self._clock()
-        if now.tzinfo is None:
-            raise FactSynthesisError("synthesis clock must return a timezone-aware datetime")
-        return now.astimezone(self._timezone).date()
-
     def _targets(
         self,
         feed: FactChangeFeed,
         facts: Mapping[str, Fact],
         prior_facts: Mapping[str, Fact] | None = None,
-        today: date | None = None,
     ) -> tuple[tuple[_Route, ...], int, int, str | None]:
         snapshot = self._wiki.snapshot()
         pages = snapshot.pages
@@ -172,15 +156,10 @@ class FactSynthesis:
         all_keys = {_route_from_tuple(item) for item in feed.affected_routes}
         if feed.events:
             all_keys.add(("active-work", ""))  # lifecycle is outside affected_routes
-        if today is not None and (
-            feed.events or not any(record.resource.path == f"daily/{today.isoformat()}.md" for record in active)
-        ):
-            all_keys.add(("daily", today.isoformat()))
         for key in sorted(all_keys):
-            assigned = grouped.get(("active-work", ""), ()) if key[0] == "daily" else grouped.get(key, ())
             route, why = self._resolve_route(
                 key,
-                assigned,
+                grouped.get(key, ()),
                 active,
                 pages,
                 archived,
@@ -188,7 +167,7 @@ class FactSynthesis:
                 fallback.get(key),
             )
             if route is not None:
-                routes[key] = route if key[0] == "daily" else _at_key(route, key)
+                routes[key] = _at_key(route, key)
             elif why == "archived":
                 skipped_archived += 1
             elif why == "threshold":
@@ -247,43 +226,6 @@ class FactSynthesis:
             if record:
                 return _at_key(_existing_route(record), key), None
             candidate = _fixed("active-work", "active-work.md", "Active Work")
-            if _archived_match(archived, candidate):
-                return None, "archived"
-            return candidate, None
-        if kind == "daily":
-            path = f"daily/{value}.md"
-            record = next((item for item in active if item.resource.path == path), None)
-            if record is None and not facts:
-                return None, None
-            if record is not None:
-                metadata = {
-                    name: item
-                    for name, item in record.page.metadata.items()
-                    if name not in {"generated_from_revision", "fact_citations"}
-                }
-                metadata.update({"date": value, "timezone": self._timezone.key})
-                return (
-                    _Route(
-                        "daily",
-                        value,
-                        record.page.title,
-                        record.page.page_id,
-                        path,
-                        metadata,
-                        record.page.aliases,
-                        (("active-work", ""),),
-                    ),
-                    None,
-                )
-            candidate = _Route(
-                "daily",
-                value,
-                value,
-                f"daily-{value}",
-                path,
-                {"date": value, "timezone": self._timezone.key},
-                keys=(("active-work", ""),),
-            )
             if _archived_match(archived, candidate):
                 return None, "archived"
             return candidate, None
@@ -503,10 +445,6 @@ class FactSynthesis:
 
 def _eligible(fact: Fact) -> bool:
     return fact.status == "active" and fact.certainty == "confirmed"
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _route_for(fact: Fact) -> tuple[str, str]:
@@ -803,7 +741,3 @@ def _citation_entries(record: WikiPageRecord) -> tuple[tuple[str, str], ...]:
 
 def _reason(feed: FactChangeFeed) -> str:
     return f"synthesize facts {feed.from_revision or 'start'}..{feed.through_revision}"
-
-
-def _daily_reason(revision: str, day: date) -> str:
-    return f"synthesize daily {day.isoformat()} at {revision}"

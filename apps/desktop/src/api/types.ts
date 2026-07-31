@@ -206,6 +206,7 @@ export type ToolScope =
   | "area_action"
   | "fact_maintenance"
   | "fact_retention"
+  | "daily_notes"
   | "wiki_maintenance"
   | "wiki_producer";
 

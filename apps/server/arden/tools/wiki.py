@@ -2,12 +2,13 @@
 
 import asyncio
 import json
+from datetime import date
 from hashlib import sha256
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolSourceRef
-from arden.constants import OFFLOAD_THRESHOLD
+from arden.constants import DAILY_NOTES_AUTOMATION_ID, OFFLOAD_THRESHOLD
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceState, ResourceVersion
 from arden.services.session import SessionService
@@ -82,7 +83,10 @@ class CreateWikiPageInput(BaseModel):
     path: str = Field(
         min_length=4,
         max_length=4096,
-        description="Relative POSIX .md path. Scheduled automations may create only under automations/.",
+        description=(
+            "Relative POSIX .md path. Scheduled automations normally create only under automations/; "
+            "the predefined Daily Notes automation writes dated pages under daily/."
+        ),
     )
     title: str = Field(min_length=1, max_length=4096)
     aliases: list[str] = Field(default_factory=list, max_length=100)
@@ -199,8 +203,32 @@ def _write_identity(execution: ToolExecution) -> tuple[str, str]:
     return "Agent", "wiki.agent"
 
 
+def _is_daily_note_path(path: str) -> bool:
+    prefix = "daily/"
+    suffix = ".md"
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return False
+    value = path[len(prefix) : -len(suffix)]
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
 def _automation_path_error(execution: ToolExecution, path: str) -> ToolResult | None:
-    if execution.ctx.run.automation_id is None or path.startswith(AUTOMATIONS_PATH_PREFIX):
+    automation_id = execution.ctx.run.automation_id
+    if automation_id is None:
+        return None
+    if automation_id == DAILY_NOTES_AUTOMATION_ID:
+        if _is_daily_note_path(path):
+            return None
+        return ToolResult.failure(
+            code="automation_path_denied",
+            message="Daily Notes may write only dated daily/YYYY-MM-DD.md pages.",
+            preview="Wiki path outside daily notes",
+            recovery_action="Use today's dated daily/YYYY-MM-DD.md path and retry.",
+        )
+    if path.startswith(AUTOMATIONS_PATH_PREFIX):
         return None
     return ToolResult.failure(
         code="automation_path_denied",

@@ -693,7 +693,6 @@ class Runtime:
                 model,
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
             ),
-            timezone_name=self.config.memory_timezone,
         )
 
     def _get_fact_dream(self) -> FactDream | None:

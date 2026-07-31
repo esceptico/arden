@@ -80,7 +80,6 @@ async def _service(tmp_path: Path, renderer: _Renderer | None = None):
             consumers,
             wiki,
             renderer or _Renderer(),
-            clock=lambda: NOW,
         ),
     )
 
@@ -153,19 +152,17 @@ async def test_empty_feed_does_not_write_or_advance(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_daily_projection_rolls_over_in_configured_timezone_without_new_fact_events(tmp_path: Path) -> None:
+async def test_synthesis_never_creates_or_changes_daily_pages(tmp_path: Path) -> None:
     ledger = FactLedger(tmp_path / "facts", clock=lambda: NOW)
     consumers = await FactConsumerStore.open(tmp_path / "state.sqlite")
     wiki = WikiService(ManagedFileRepository(tmp_path / "wiki"))
-    current = [datetime(2026, 7, 28, 19, 30, tzinfo=UTC)]
     renderer = _Renderer()
-    synthesis = FactSynthesis(
-        ledger,
-        consumers,
-        wiki,
-        renderer,
-        timezone_name="Asia/Yerevan",
-        clock=lambda: current[0],
+    synthesis = FactSynthesis(ledger, consumers, wiki, renderer)
+    authored = wiki.create_page(
+        page_id="daily-2026-07-28",
+        path="daily/2026-07-28.md",
+        title="2026-07-28",
+        body=b"## Notes\nA real dated note.\n",
     )
     try:
         ledger.commit(
@@ -179,21 +176,13 @@ async def test_daily_projection_rolls_over_in_configured_timezone_without_new_fa
         first = await synthesis.run()
         watermark = await consumers.get("memory.synthesis")
         assert first.advanced
-        assert wiki.read_page("daily-2026-07-28").resource.path == "daily/2026-07-28.md"
+        assert wiki.read_page("daily-2026-07-28") == authored
+        assert wiki.read_page("active-work").page.metadata["fact_citations"][0]["fact_id"] == "temporary"
 
-        same_day = await synthesis.run()
-        assert same_day.empty and not same_day.advanced
-        assert len(renderer.calls) == 2
-        assert await consumers.get("memory.synthesis") == watermark
-
-        current[0] = datetime(2026, 7, 28, 20, 30, tzinfo=UTC)
-        rollover = await synthesis.run()
-
-        assert not rollover.empty and not rollover.advanced
-        next_day = wiki.read_page("daily-2026-07-29")
-        assert next_day.resource.path == "daily/2026-07-29.md"
-        assert next_day.page.metadata["timezone"] == "Asia/Yerevan"
-        assert next_day.page.metadata["fact_citations"][0]["fact_id"] == "temporary"
+        unchanged = await synthesis.run()
+        assert unchanged.empty and not unchanged.advanced
+        assert wiki.read_page("daily-2026-07-28") == authored
+        assert not any(page.resource.path == "daily/2026-07-29.md" for page in wiki.list_pages())
         assert await consumers.get("memory.synthesis") == watermark
     finally:
         await consumers.close()
@@ -225,11 +214,7 @@ async def test_routes_temporary_me_project_and_existing_alias(tmp_path: Path) ->
         result = await synthesis.run()
         assert result.advanced
         assert wiki.read_page("active-work").page.title == "Active Work"
-        daily = wiki.read_page("daily-2026-07-28")
-        assert daily.resource.path == "daily/2026-07-28.md"
-        assert daily.page.metadata["date"] == "2026-07-28"
-        assert daily.page.metadata["timezone"] == "UTC"
-        assert daily.page.metadata["fact_citations"][0]["fact_id"] == "temporary"
+        assert not any(page.resource.path.startswith("daily/") for page in wiki.list_pages())
         assert wiki.read_page("me").page.title == "Me"
         assert wiki.read_page("custom").page.metadata["fact_citations"][0]["fact_id"] == "alias"
         projects = [
@@ -606,9 +591,7 @@ async def test_archived_fixed_page_identities_are_never_recreated(tmp_path: Path
         )
         result = await synthesis.run()
         assert result.skipped_archived == 2
-        assert [page.resource.path for page in wiki.list_pages() if not page.resource.path.endswith("/README.md")] == [
-            "daily/2026-07-28.md"
-        ]
+        assert not [page for page in wiki.list_pages() if not page.resource.path.endswith("/README.md")]
     finally:
         await consumers.close()
 

@@ -78,9 +78,9 @@ _DIRECTORY_README_CONTRACTS = {
     ),
     "daily": (
         "Dated observations, summaries, and context that belonged to a specific day.",
-        "Synthesis and authorized agents write information under the date it describes and preserve its source context.",
+        "Users and authorized agents write information under the date it describes and preserve its source context.",
         "Read only the dates relevant to the task. Curate durable information into topics or facts explicitly instead of treating a daily note as timeless truth.",
-        "Preserve chronology, uncertainty, and provenance; do not rewrite an old note merely because the current state changed.",
+        "Preserve chronology, uncertainty, and provenance. Never mirror Active Work into daily notes or create empty rollover pages.",
         "Keep daily notes until the user explicitly archives them.",
     ),
     "automations": (

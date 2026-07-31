@@ -30,6 +30,7 @@ ScopeKey = (
         "area_action",
         "fact_maintenance",
         "fact_retention",
+        "daily_notes",
         "wiki_maintenance",
         "wiki_producer",
     ]
@@ -76,6 +77,7 @@ SCOPES: dict[ScopeKey, ToolFilter] = {
         | tools.named("plan_fact_changes")
         | tools.named("commit_fact_changes")
     ),
+    "daily_notes": tools.read | tools.named("create_wiki_page") | tools.named("edit_wiki_page"),
     # Publishes its own generated wiki region; completion is proof-checked in
     # AutomationRuntime._validate_completed_run.
     "wiki_producer": tools.read | tools.named(PUBLISH_WIKI_GENERATED_TOOL_NAME),

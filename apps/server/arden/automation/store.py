@@ -116,6 +116,39 @@ def _serialize_triggers(triggers: list) -> str:
     return json.dumps([{"type": t.type, **t.params()} for t in triggers])
 
 
+def _automation_values(automation: Automation) -> tuple[object, ...]:
+    return (
+        automation.task_id,
+        automation.name,
+        automation.description,
+        automation.description_source,
+        automation.prompt,
+        automation.model,
+        _serialize_triggers(automation.triggers),
+        int(automation.enabled),
+        automation.created_at.isoformat(),
+        automation.last_run_at.isoformat() if automation.last_run_at else None,
+        automation.next_run_at.isoformat() if automation.next_run_at else None,
+        automation.last_result,
+        automation.running_since.isoformat() if automation.running_since else None,
+        int(automation.auto_approve),
+        automation.handler,
+        int(automation.builtin),
+        automation.cooldown_minutes,
+        automation.kind,
+        automation.max_iterations,
+        int(automation.iteration_count),
+        automation.stop_when,
+        automation.max_age_days,
+        automation.thread_id,
+        int(automation.read_history),
+        automation.parent_automation_id,
+        automation.idempotency_key,
+        automation.idempotency_scope,
+        automation.tool_scope,
+    )
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     task_id TEXT PRIMARY KEY,
@@ -1308,40 +1341,31 @@ class AutomationStore:
         await self.conn.commit()
 
     async def save(self, automation: Automation) -> None:
-        await self.conn.execute(
-            _SQL_SAVE,
-            (
-                automation.task_id,
-                automation.name,
-                automation.description,
-                automation.description_source,
-                automation.prompt,
-                automation.model,
-                _serialize_triggers(automation.triggers),
-                int(automation.enabled),
-                automation.created_at.isoformat(),
-                automation.last_run_at.isoformat() if automation.last_run_at else None,
-                automation.next_run_at.isoformat() if automation.next_run_at else None,
-                automation.last_result,
-                automation.running_since.isoformat() if automation.running_since else None,
-                int(automation.auto_approve),
-                automation.handler,
-                int(automation.builtin),
-                automation.cooldown_minutes,
-                automation.kind,
-                automation.max_iterations,
-                int(automation.iteration_count),
-                automation.stop_when,
-                automation.max_age_days,
-                automation.thread_id,
-                int(automation.read_history),
-                automation.parent_automation_id,
-                automation.idempotency_key,
-                automation.idempotency_scope,
-                automation.tool_scope,
-            ),
-        )
+        await self.conn.execute(_SQL_SAVE, _automation_values(automation))
         await self.conn.commit()
+
+    async def seed_predefined(self, seed: str, automation: Automation) -> bool:
+        """Insert one user-owned default once; deletion remains deletion."""
+
+        marker = f"predefined_seed:{seed}"
+        async with self._idempotency_lock:
+            await self.conn.execute("BEGIN")
+            try:
+                claimed = await self.conn.execute(
+                    "INSERT OR IGNORE INTO automation_meta (key, value) VALUES (?, '1')",
+                    (marker,),
+                )
+                if claimed.rowcount == 0:
+                    await self.conn.rollback()
+                    return False
+                existing = await self.conn.execute_fetchall(_SQL_GET_BY_ID, (automation.task_id,))
+                if not existing:
+                    await self.conn.execute(_SQL_INSERT, _automation_values(automation))
+                await self.conn.commit()
+                return True
+            except BaseException:
+                await self.conn.rollback()
+                raise
 
     async def get(self, task_id: str) -> Automation | None:
         rows = await self.conn.execute_fetchall(_SQL_GET_BY_ID, (task_id,))
@@ -2082,39 +2106,7 @@ class AutomationStore:
                     if cursor.rowcount == 0:
                         await self.conn.rollback()
                         return False
-                await self.conn.execute(
-                    _SQL_INSERT,
-                    (
-                        automation.task_id,
-                        automation.name,
-                        automation.description,
-                        automation.description_source,
-                        automation.prompt,
-                        automation.model,
-                        _serialize_triggers(automation.triggers),
-                        int(automation.enabled),
-                        automation.created_at.isoformat(),
-                        automation.last_run_at.isoformat() if automation.last_run_at else None,
-                        automation.next_run_at.isoformat() if automation.next_run_at else None,
-                        automation.last_result,
-                        automation.running_since.isoformat() if automation.running_since else None,
-                        int(automation.auto_approve),
-                        automation.handler,
-                        int(automation.builtin),
-                        automation.cooldown_minutes,
-                        automation.kind,
-                        automation.max_iterations,
-                        int(automation.iteration_count),
-                        automation.stop_when,
-                        automation.max_age_days,
-                        automation.thread_id,
-                        int(automation.read_history),
-                        automation.parent_automation_id,
-                        automation.idempotency_key,
-                        automation.idempotency_scope,
-                        automation.tool_scope,
-                    ),
-                )
+                await self.conn.execute(_SQL_INSERT, _automation_values(automation))
                 await self.conn.commit()
                 return True
             except BaseException:

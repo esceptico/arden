@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 import arden.tools.wiki as wiki_tools
+from arden.constants import DAILY_NOTES_AUTOMATION_ID
 from arden.context.models import SessionState
 from arden.integrations.core import CORE_INTEGRATIONS, WIKI
 from arden.revisions import ManagedFileRepository
@@ -739,6 +740,45 @@ async def test_scheduled_automation_writes_stay_in_automation_workspace(tmp_path
         reason="replace rolling result",
     )
     assert not archived.is_error
+
+
+@pytest.mark.asyncio
+async def test_daily_notes_automation_writes_only_dated_daily_pages(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    automation = _execution(wiki, automation_id=DAILY_NOTES_AUTOMATION_ID)
+
+    created = await create_wiki_page_tool.execute(
+        automation,
+        path="daily/2026-07-31.md",
+        title="2026-07-31",
+        body="A dated note.\n",
+    )
+    assert not created.is_error
+
+    await read_wiki_page_tool.execute(automation, path="daily/2026-07-31.md")
+    edited = await edit_wiki_page_tool.execute(
+        automation,
+        path="daily/2026-07-31.md",
+        body="An updated dated note.\n",
+    )
+    assert not edited.is_error
+
+    for path in (
+        "daily/README.md",
+        "daily/today.md",
+        "daily/2026-99-99.md",
+        "daily/2026-7-1.md",
+        "active-work.md",
+        "automations/daily-notes.md",
+    ):
+        denied = await create_wiki_page_tool.execute(
+            automation,
+            path=path,
+            title="Denied",
+            body="No.\n",
+        )
+        assert denied.is_error
+        assert denied.outcome.error.code == "automation_path_denied"
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from arden.constants import (
     BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
+    DAILY_NOTES_AUTOMATION_ID,
 )
 from arden.events.internal import RunCompleted
 from arden.memory.facts.consumer_store import FactConsumerStore
@@ -1003,6 +1004,11 @@ async def test_scheduler_without_memory_model_seeds_non_llm_history_collection(t
         assert storage.model is None
         assert storage.handler == "managed_history_collection"
         assert storage.triggers == [TimeTrigger(every="7d")]
+        daily = await runtime.stores.automations.get(DAILY_NOTES_AUTOMATION_ID)
+        assert daily is not None
+        assert daily.builtin is False
+        assert daily.thread_id is not None
+        assert daily.read_history is True
         status = await runtime.automation.scheduler.get_status()
         assert "managed_history_collection" in status["registered_handlers"]
     finally:

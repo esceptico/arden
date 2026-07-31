@@ -14,6 +14,7 @@ from arden.automation.builtins import (
 )
 from arden.automation.descriptions import AutomationDescriptionGenerator
 from arden.automation.models import Automation
+from arden.automation.predefined import seed_predefined_user_automations
 from arden.automation.scheduler import CompletedAgentRun, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.triggers import TimeTrigger
@@ -396,6 +397,7 @@ class AutomationRuntime:
             memory_model=memory_model,
             include_managed_history_collection=self.collect_managed_history is not None,
         )
+        await seed_predefined_user_automations(self.stores.automations)
         await self._seed_area_automations()
         await compile_schedules_to_automations(".", self.stores.automations)
         await self.automation_service.backfill_channels()

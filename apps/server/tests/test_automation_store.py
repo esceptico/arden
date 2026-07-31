@@ -1095,6 +1095,30 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
 
 
 @pytest.mark.asyncio
+async def test_predefined_daily_notes_is_user_owned_and_seeded_only_once(automation_store: AutomationStore) -> None:
+    from arden.automation.predefined import DAILY_NOTES_PROMPT, seed_predefined_user_automations
+    from arden.constants import DAILY_NOTES_AUTOMATION_ID
+
+    assert await seed_predefined_user_automations(automation_store)
+    assert not await seed_predefined_user_automations(automation_store)
+
+    daily = await automation_store.get(DAILY_NOTES_AUTOMATION_ID)
+    assert daily is not None
+    assert daily.name == "Daily Notes"
+    assert daily.builtin is False
+    assert daily.enabled is True
+    assert daily.auto_approve is True
+    assert daily.tool_scope == "daily_notes"
+    assert daily.triggers == [TimeTrigger(at="23:55", days="daily")]
+    assert daily.prompt == DAILY_NOTES_PROMPT
+    assert "Never copy Active Work" in daily.prompt
+
+    await automation_store.delete(DAILY_NOTES_AUTOMATION_ID)
+    assert not await seed_predefined_user_automations(automation_store)
+    assert await automation_store.get(DAILY_NOTES_AUTOMATION_ID) is None
+
+
+@pytest.mark.asyncio
 async def test_seed_builtins_skips_storage_maintenance_without_canonical_memory(
     automation_store: AutomationStore,
 ) -> None:
