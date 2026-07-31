@@ -5,7 +5,6 @@ import {
   Folder,
   Maximize2,
   Minimize2,
-  PanelRightClose,
   X,
   type ArdenIcon,
 } from "@/components/icons";
@@ -23,6 +22,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Tab, Tabs } from "@/components/ui/Tabs";
 import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { Collapse } from "@/components/ui/Collapse";
+import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { PeekSurface } from "@/components/workspace/PeekSurface";
 import {
   latestTodoListFromMessages,
@@ -395,20 +395,26 @@ export function AgentRightSidebar({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={toggleCollapsed}
-        title={effectiveCollapsed ? "Show inspector" : "Hide inspector"}
-        aria-label={effectiveCollapsed ? `Show inspector${totalCount > 0 ? ` (${totalCount})` : ""}` : "Hide inspector"}
-        data-open={effectiveCollapsed ? "false" : "true"}
+      {/* The inspector is a rail like any other, so it uses the shared control
+          rather than a hand-rolled button: same geometry, same swap. Its glyph
+          used to be the closing one in both states — telling the user to close
+          a panel that was already closed. */}
+      <SidebarToggle
+        side="right"
+        hidden={effectiveCollapsed}
+        onToggle={toggleCollapsed}
+        labels={{
+          hide: "Hide inspector",
+          show: totalCount > 0 ? `Show inspector (${totalCount})` : "Show inspector",
+          shortcut: false,
+        }}
+        className="board-inspector-toggle"
         data-inspector-trigger
-        className="board-inspector-toggle right-sidebar-toggle shell-control inline-flex items-center gap-1.5 h-[22px] px-1 rounded-[var(--r-control)] text-muted hover:bg-surface-soft hover:text-ink transition-[background-color,color,opacity,scale] duration-row ease-out active:scale-[0.96]"
       >
         {effectiveCollapsed && activeCount > 0 && (
           <span className="arden-status" aria-hidden>{activeCount} active</span>
         )}
-        <PanelRightClose size={ICON.MD} />
-      </button>
+      </SidebarToggle>
 
       <PeekSurface
         open={!effectiveCollapsed}

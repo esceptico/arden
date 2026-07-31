@@ -47,7 +47,35 @@ test("shell controls stay operable above both rails but below blocking overlays"
   // painted last. The shell yields the slot, and the ⌘B chord with it.
   expect(app).toContain("{!routeOwnsRail && (");
   expect(app).toContain("if (routeOwnsRail) return;");
+  // The inspector shows a chat's agents, approvals and sources. Memory and
+  // Automations have none, so its trigger must not sit on those pages —
+  // as takeovers they covered it, as routes they would sit beside it.
+  expect(app).toContain("{!routeOwnsRail && (openAreaKey || !showHome) && (");
   expect(shellOwnership).toContain("workspaceOwnsRail");
+});
+
+test("every collapsible rail shares one control and one icon vocabulary", () => {
+  const toggle = read("../src/components/ui/SidebarToggle.tsx");
+  const inspector = read("../src/features/background-agents/components/AgentRightSidebar.tsx");
+  const memory = read("../src/features/memory/components/ArtifactMemoryView.tsx");
+  const automations = read("../src/features/automations/components/AutomationsModal.tsx");
+  const settings = read("../src/features/settings/components/SettingsModal.tsx");
+
+  // The glyph points at the panel's edge and always swaps with state. The
+  // inspector used to hand-roll a button that rendered PanelRightClose in
+  // BOTH states — it said "close" while the panel was already closed.
+  expect(toggle).toContain("PanelLeftClose");
+  expect(toggle).toContain("PanelLeftOpen");
+  expect(toggle).toContain("PanelRightClose");
+  expect(toggle).toContain("PanelRightOpen");
+  expect(toggle).toContain("<IconSwap");
+
+  // No surface draws its own. One primitive, or it drifts.
+  for (const surface of [inspector, memory, automations, settings]) {
+    expect(surface).toContain("<SidebarToggle");
+    expect(surface).not.toContain("PanelLeftClose");
+    expect(surface).not.toContain("PanelRightClose");
+  }
   // One name everywhere: the first nav row is "Home" in every rail variant,
   // and both variants render the single shared appNav block.
   expect(sidebar).toContain('label="Home"');

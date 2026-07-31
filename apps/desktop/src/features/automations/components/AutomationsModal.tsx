@@ -315,9 +315,16 @@ export function AutomationsModal() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() === "f") {
         event.preventDefault();
         searchRef.current?.focus();
+      }
+      // ⌘B collapses the left rail on every screen. The shell hands the chord
+      // to whichever route owns that column, so this route binds it itself.
+      if (event.key.toLowerCase() === "b" && !event.shiftKey) {
+        event.preventDefault();
+        setRailHidden((hidden) => !hidden);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -375,11 +382,7 @@ export function AutomationsModal() {
       <SidebarToggle
         hidden={railHidden}
         onToggle={() => setRailHidden((hidden) => !hidden)}
-        labels={{
-          hide: "Hide automation list",
-          show: "Show automation list",
-          shortcut: false,
-        }}
+        labels={{ hide: "Hide automation list", show: "Show automation list" }}
       />
       <aside
         ref={attachRail}

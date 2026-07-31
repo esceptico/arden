@@ -431,7 +431,11 @@ export function App() {
           </WorkspaceStage>
         </main>
       </ErrorBoundary>
-      {(openAreaKey || !showHome) && (
+      {/* The inspector belongs to a chat or an area room — it shows that
+          session's agents, approvals and sources. Memory and Automations have
+          none of it, and as takeovers they simply covered it; as routes they
+          sit beside it, leaving its trigger on a page it cannot open. */}
+      {!routeOwnsRail && (openAreaKey || !showHome) && (
         <AgentRightSidebar
           mode={openAreaKey ? "hub" : rightPanelDocked ? "docked" : "peek"}
           allowDocking={!openAreaKey}

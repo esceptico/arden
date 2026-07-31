@@ -189,7 +189,10 @@ test("Automations owns the mock shell controls and hands a hidden rail's full wi
   expect(workspace).toContain("<SidebarToggle");
   expect(workspace).toContain('hide: "Hide automation list"');
   expect(workspace).toContain('show: "Show automation list"');
-  expect(workspace).toContain("shortcut: false");
+  // The rail is this screen's left column, so it carries the same ⌘B as every
+  // other rail. It was the one surface that opted out of the chord.
+  expect(workspace).not.toContain("shortcut: false");
+  expect(workspace).toContain('event.key.toLowerCase() === "b"');
   // Automations is a route, so leaving it walks history back to wherever it
   // was opened from. It no longer evicts the user to Home, and the shell owns
   // the back control rather than each surface drawing its own.
@@ -217,7 +220,7 @@ test("Automations owns the mock shell controls and hands a hidden rail's full wi
   expect(css).toMatch(/\.automation-workspace__main\s*\{[\s\S]*?padding-left: calc\(var\(--sidebar-width\) \+ var\(--sidebar-gap\)\);/);
   expect(css).toContain(".automation-workspace--rail-hidden .automation-workspace__main { padding-left: 0; }");
   expect(css).toContain(".automation-workspace .sidebar-toggle { display: none; }");
-  expect(toggle).toContain("aria-expanded={!sidebarHidden}");
+  expect(toggle).toContain("aria-expanded={!panelHidden}");
 });
 
 test("New automation menu keeps the template popover contract", () => {

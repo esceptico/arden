@@ -210,7 +210,10 @@ test("Home, Chat, and Area use the mock's exact visible icon variants", () => {
   for (const variant of ["Globe02", "File01", "PencilEdit02", "LeftToRightListBullet", "AiChat02", "Stop"]) {
     expect(trace).toContain(variant);
   }
-  expect(inspector).toContain("PanelRightClose");
+  // The inspector's glyph now lives in the shared SidebarToggle, which swaps
+  // it with state instead of showing the closing icon while already closed.
+  expect(inspector).toContain("<SidebarToggle");
+  expect(inspector).toContain('side="right"');
   expect(sidebar).not.toContain("strokeWidth");
   expect(chat).not.toContain("strokeWidth");
   expect(reasoning).not.toContain("strokeWidth");
