@@ -95,7 +95,7 @@ function Version({
         {side === "before" ? "Before" : "After"}
       </h2>
       <ChangeSummary side={side} pairs={pairs} />
-      <Markdown content={proseContent(file.content)} className="text-sm leading-relaxed text-ink-soft" />
+      <Markdown content={proseContent(file.content)} className="typeset-compact text-ink-soft" />
     </section>
   );
 }

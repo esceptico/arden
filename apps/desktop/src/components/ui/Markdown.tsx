@@ -107,15 +107,17 @@ export function Markdown({
   content,
   className,
   streaming = false,
-  typeset = false,
+  codeChrome = true,
   provenance = false,
   externalLinkFavicons = false,
 }: {
   content: string;
   className?: string;
   streaming?: boolean;
-  /** Use the Board rich-text contract instead of the legacy fenced-code chrome. */
-  typeset?: boolean;
+  /** Wrap fenced code in the utility chrome — language strip, registration
+   *  ticks, copy control. Reading surfaces that want bare code opt out.
+   *  Prose itself is not optional: every Markdown surface is `.md.typeset`. */
+  codeChrome?: boolean;
   /** Render memory-synthesizer source tags — `(from chat)`, `(inferred)` — as
    *  inline chips. Only the memory wiki view opts in; chat prose stays literal. */
   provenance?: boolean;
@@ -127,13 +129,13 @@ export function Markdown({
     // The Chat mock uses the Board typeset pre directly: it has no language
     // strip, registration ticks, or copy control. Other Markdown surfaces
     // retain that richer utility chrome.
-    ...(streaming ? { pre: StreamingPreBlock } : typeset ? { pre: TypesetPreBlock } : { pre: PreBlock }),
+    ...(streaming ? { pre: StreamingPreBlock } : codeChrome ? { pre: PreBlock } : { pre: TypesetPreBlock }),
     a: Anchor,
     code: InlineCode,
     td: TableCell,
   };
   return (
-    <div className={clsx("md", typeset && "typeset typeset-notes", className)}>
+    <div className={clsx("md typeset typeset-notes", className)}>
       <ExternalLinkFaviconContext.Provider value={externalLinkFavicons && !streaming}>
         <ReactMarkdown
         // Single-dollar math is disabled because ordinary prose commonly

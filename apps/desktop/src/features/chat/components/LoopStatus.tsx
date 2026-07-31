@@ -170,7 +170,7 @@ function LoopDetailModal({ loop, onClose }: { loop: ServerLoop | null; onClose: 
           </IconButton>
         </div>
         <div className="scroll-thin scroll-fade overflow-y-auto px-5 py-4">
-          <Markdown content={loop.prompt} className="text-sm text-ink-soft" />
+          <Markdown content={loop.prompt} className="typeset-compact text-ink-soft" />
         </div>
         <div className="px-5 py-2 border-t border-line text-xs text-muted flex flex-wrap gap-x-3 gap-y-1">
           {loop.max_iterations ? <span>iter {loop.iteration_count}/{loop.max_iterations}</span> : loop.iteration_count > 0 ? <span>iter {loop.iteration_count}</span> : null}

@@ -90,7 +90,7 @@ export function AreaPagePeek({
         ) : phase.kind === "error" ? (
           <p className="area-page-peek__state">{phase.message}</p>
         ) : phase.content.trim() ? (
-          <Markdown content={phase.content} typeset />
+          <Markdown content={phase.content} codeChrome={false} />
         ) : (
           <p className="area-page-peek__state">
             The page exists but is still empty. The custodian fills it as it learns.

@@ -372,35 +372,10 @@ button.app-row:not(:disabled):active,
 }
 
 
-/* ─── Markdown content ─────────────────────────────────────── */
-.md > *:first-child { margin-top: 0; }
-.md > *:last-child { margin-bottom: 0; }
-.md p { margin: 0 0 0.55em; }
-.md ul, .md ol { margin: 0.25em 0 0.5em; padding-left: 1.3em; }
-.md ul { list-style: disc outside; }
-.md ol { list-style: decimal outside; }
-.md li { margin: 0.1em 0; }
-.md li > p { margin: 0; }
-.md li::marker { color: var(--color-faint); }
-.md code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  padding: 0.12em 0.4em;
-  border-radius: 4px;
-  background: var(--color-code-bg);
-  color: var(--color-ink);
-}
-.md pre {
-  margin: 0.6em 0;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--color-code-bg);
-  border: 1px solid var(--color-line-soft);
-  overflow-x: auto;
-  max-width: 100%;
-  font-size: var(--text-sm);
-  line-height: 1.55;
-}
+/* ─── Markdown chrome ──────────────────────────────────────────
+   Prose (flow, headings, lists, tables, quotes) belongs to
+   design/typeset.css. Only chrome typeset does not own lives here:
+   fenced-code utility furniture, wikilinks, provenance chips. */
 
 /* Wrapped code block with language label + copy button. */
 .md .code-block {
@@ -487,7 +462,6 @@ button.app-row:not(:disabled):active,
   border: 0;
   border-radius: 0;
 }
-.md pre code { background: transparent; padding: 0; border-radius: 0; font-size: inherit; color: var(--color-ink); }
 
 /* ─── Syntax highlighting (highlight.js classes) ───────────── */
 .hljs { color: var(--color-ink); background: transparent; }
@@ -501,15 +475,6 @@ button.app-row:not(:disabled):active,
 .hljs-title, .hljs-title.function_, .hljs-function .hljs-title { color: var(--hl-title); font-weight: var(--weight-medium); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: var(--weight-semibold); }
-.md strong { font-weight: var(--weight-semibold); color: var(--color-ink); }
-.md em { font-style: italic; }
-.md a {
-  color: var(--color-info);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  text-decoration-color: rgba(61, 110, 156, 0.4);
-}
-.md a:hover { text-decoration-color: var(--color-info); }
 
 /* Internal-link geometry belongs to the consuming surface. Shared Markdown
    supplies only semantic color and cursor behavior. */
@@ -548,63 +513,6 @@ button.app-row:not(:disabled):active,
   letter-spacing: 0.01em;
   user-select: none;
 }
-.md h1, .md h2, .md h3, .md h4 {
-  margin: 0.5em 0 0.22em;
-  font-weight: var(--weight-semibold);
-  letter-spacing: -0.012em;
-  line-height: 1.3;
-  color: var(--color-ink);
-}
-.md h1 { font-size: 1.32em; }
-.md h2 { font-size: 1.18em; }
-.md h3 { font-size: 1.05em; }
-.md h4 { font-size: 1em; }
-.md blockquote {
-  position: relative;
-  margin: 0.35em 0;
-  padding: 0 0 0 10px;
-  border-left: 2px solid var(--color-line-strong);
-  color: var(--color-muted);
-  /* Hang the opening quotation mark into the gutter — only the punctuation
-     uses Georgia, body text keeps the system sans-serif. */
-  text-indent: -0.4em;
-  quotes: "\201C" "\201D" "\2018" "\2019";
-}
-.md blockquote::before {
-  content: open-quote;
-  font-family: Georgia, "Times New Roman", serif;
-  font-style: italic;
-  font-size: 1.15em;
-  line-height: 0;
-  vertical-align: -0.18em;
-  margin-right: 0.05em;
-  color: var(--color-line-strong);
-}
-.md blockquote > *:last-child::after {
-  content: close-quote;
-  font-family: Georgia, "Times New Roman", serif;
-  font-style: italic;
-  font-size: 1.15em;
-  line-height: 0;
-  vertical-align: -0.18em;
-  margin-left: 0.05em;
-  color: var(--color-line-strong);
-}
-.md hr { border: 0; border-top: 1px solid var(--color-line); margin: 0.7em 0; }
-.md table {
-  border-collapse: collapse;
-  margin: 0.5em 0;
-  font-size: var(--text-sm);
-  display: block;
-  overflow-x: auto;
-  max-width: 100%;
-}
-.md th, .md td {
-  padding: 4px 10px;
-  border: 1px solid var(--color-line);
-  text-align: left;
-}
-.md th { background: var(--color-surface-soft); font-weight: var(--weight-semibold); }
 
 /* Memory notes render document tables as hairline-row instruments — no cell
    boxes, no header fill (tone over lines; the chat grid style stays as-is). */

@@ -2,6 +2,7 @@ import { memo, useMemo } from "react";
 import { Box, Target } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
+import { Markdown } from "@/components/ui/Markdown";
 import type { SkillDescriptor } from "@/api/types";
 import { viewSkill } from "@/actions/skills";
 import { ICON } from "@/lib/icons";
@@ -135,13 +136,18 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
             <GoalMessageBubble objective={goalMatch} />
           ) : showBubble && (
             <div className="board-user__bubble surface-panel text-left text-ink break-words">
+              {/* The token used to sit inline with the prompt. Prose is a block
+                  now, so it takes its own line and needs the gap explicitly. */}
               {skillMatch && (
-                <>
+                <div className={visibleText.trim().length > 0 ? "mb-1" : undefined}>
                   <SkillInlineToken skill={skillMatch.skill} />
-                  {visibleText.trim().length > 0 ? " " : null}
-                </>
+                </div>
               )}
-              <span className="whitespace-pre-wrap">{visibleText}</span>
+              <Markdown
+                content={visibleText}
+                codeChrome={false}
+                className="typeset-verbatim"
+              />
             </div>
           )}
         </div>

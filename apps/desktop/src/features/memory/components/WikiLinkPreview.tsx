@@ -186,7 +186,7 @@ export function WikiLinkPreview({
                 <Markdown
                   content={previewMarkdownBlock(preview.detail?.content ?? "")}
                   className="memory-link-preview-markdown"
-                  typeset
+                  codeChrome={false}
                 />
               )}
         </div>

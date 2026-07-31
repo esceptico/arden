@@ -53,7 +53,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         content={smoothContent}
         streaming={isStreaming}
         externalLinkFavicons
-        typeset
+        codeChrome={false}
         className="board-assistant__prose text-base leading-[1.5] text-ink break-words"
       />
       {isFinal && sourceTurnId && sourceCount > 0 && (

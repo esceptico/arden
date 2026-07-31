@@ -57,7 +57,7 @@ export function AskActionPeek({
       <div className="arden-peek__body scroll-fade" tabIndex={0}>
         {/* Custodians write these with backticked paths and numbered steps, so
           * they read as Markdown like every other peek in the app. */}
-        <Markdown content={action} typeset />
+        <Markdown content={action} codeChrome={false} />
       </div>
 
       <footer className="arden-peek__foot arden-peek-rule-above">

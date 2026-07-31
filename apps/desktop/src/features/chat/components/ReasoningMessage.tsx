@@ -58,7 +58,7 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
           <Reveal key="body" className="min-w-0">
             <Markdown
               content={smoothContent}
-              className="board-reasoning__body mt-2 text-xs leading-[1.45] text-muted italic break-words"
+              className="board-reasoning__body typeset-compact mt-2 text-muted italic break-words"
             />
           </Reveal>
         )}

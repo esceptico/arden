@@ -22,7 +22,7 @@ export function MarkdownViewer() {
         <>
           <article className="mx-auto max-w-[46rem]">
             {view.subtitle && <p className="mb-4 text-xs font-mono text-faint">{view.subtitle}</p>}
-            <Markdown content={view.content} typeset />
+            <Markdown content={view.content} codeChrome={false} />
           </article>
         </>
       )}

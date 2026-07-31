@@ -120,8 +120,6 @@
   border-radius: var(--r-shell);
   background: var(--surface-3);
   box-shadow: var(--shadow-3);
-  font-size: var(--text-md);
-  line-height: 1.48;
   text-wrap: pretty;
 }
 
@@ -147,10 +145,13 @@
   border-color: color-mix(in oklab, var(--line-strong) 72%, var(--accent));
 }
 
-.board-assistant .board-assistant__prose :where(h2) { max-inline-size: 40.625rem; margin: 0 0 8px; letter-spacing: -.012em; }
+/* Chat constrains the measure and softens the ink. It does NOT set flow:
+   this sheet loads after typeset.css at equal specificity, so a margin here
+   silently wins over the whole scale — which is how chat ended up with a
+   heading glued to the block above it and no gap at all after a list. */
+.board-assistant .board-assistant__prose :where(h2) { max-inline-size: 40.625rem; letter-spacing: -.012em; }
 
-.board-assistant .board-assistant__prose :where(p) { max-inline-size: 40.625rem; margin: 0; color: var(--ink-soft); text-wrap: pretty; }
-.board-assistant .board-assistant__prose :where(p + p) { margin-top: 13px; }
+.board-assistant .board-assistant__prose :where(p) { max-inline-size: 40.625rem; color: var(--ink-soft); text-wrap: pretty; }
 
 .board-assistant__sources {
   min-height: 1.75rem;
