@@ -14,8 +14,9 @@ import {
   X,
 } from "@/components/icons";
 import clsx from "clsx";
+import { fetchServerConfig, updateServerConfig } from "@/actions/server";
 import { useStore } from "@/stores";
-import type { Automation, AutomationRun, CreateAutomationPayload } from "@/api/types";
+import type { Automation, AutomationRun, CreateAutomationPayload, ModelGroup } from "@/api/types";
 import { listAutomationRunsApi } from "@/api/automations";
 import {
   createAutomation,
@@ -38,7 +39,7 @@ import {
   type Schedule,
 } from "@/features/automations/lib/schedule";
 import {
-  ModelMenuPicker,
+  ModelReasoningPicker,
   availableModelChoices,
   configuredModelChoices,
   shortModelLabel,
@@ -861,6 +862,10 @@ export function AutomationDetail({
 
 const DEFAULT_MODEL_LABEL = "session default";
 
+/** The same pair Chat uses — searchable model combobox plus its reasoning
+ *  effort. Effort is stored per model on the server, not per automation, so
+ *  choosing one here is the same edit Chat makes and applies wherever that
+ *  model runs. */
 function AutomationModelPicker({
   model,
   onChange,
@@ -868,44 +873,52 @@ function AutomationModelPicker({
   model: string | null;
   onChange: (model: string | null) => void;
 }) {
-  const serverModels = useStore((state) => state.serverModels);
-  const serverConfig = useStore((state) => state.serverConfig);
-  const availableModels = useMemo(
-    // Configured models stand in when the catalog never loaded, so the picker
-    // is never reduced to whatever this automation already had.
-    () => availableModelChoices(model, serverModels?.models ?? configuredModelChoices(serverConfig)),
-    [model, serverConfig, serverModels],
-  );
-  const options = [
-    { value: "", label: DEFAULT_MODEL_LABEL },
-    ...availableModels.map((choice) => ({ value: choice, label: shortModelLabel(choice) })),
-  ];
-  const displayValue = model ? shortModelLabel(model) : DEFAULT_MODEL_LABEL;
+  const catalog = useStore((state) => state.serverModels);
+  const config = useStore((state) => state.serverConfig);
+  const [pendingEffort, setPendingEffort] = useState(false);
+
+  // An automation with no override runs on the session default, so that model's
+  // effort is the one this row is really describing.
+  const effectiveModel = model ?? config?.chat_model ?? "";
+  const groups = useMemo<ModelGroup[]>(() => {
+    const configured = availableModelChoices(model, configuredModelChoices(config));
+    return catalog?.groups.length
+      ? catalog.groups
+      : [{ provider: "configured", label: "Configured", models: configured }];
+  }, [catalog, config, model]);
+
+  const selectEffort = async (effort: string | null) => {
+    if (!effectiveModel || pendingEffort) return;
+    setPendingEffort(true);
+    try {
+      await updateServerConfig({ reasoning_model: effectiveModel, reasoning_effort: effort });
+    } catch {
+      await fetchServerConfig();
+    } finally {
+      setPendingEffort(false);
+    }
+  };
 
   return (
-    <ModelMenuPicker
-      value={model ?? ""}
-      options={options}
-      ariaLabel="Automation model"
-      popupClassName="automation-model-menu"
-      triggerClassName="automation-detail__control-row automation-detail__control-row--button automation-detail__model-trigger"
-      disabled={!serverModels}
-      onValueChange={(selected) => onChange(selected || null)}
-      trigger={(
-        <>
-          <span className="automation-detail__control-label">
-            <AiMagic size={ICON.SM} aria-hidden />
-            <span>
-              <b>Model</b>
-              <small>Uses the session default unless overridden</small>
-            </span>
-          </span>
-          <span className="automation-detail__control-value" title={model ?? DEFAULT_MODEL_LABEL}>
-            <BlurSwap swapKey={displayValue}>{displayValue}</BlurSwap>
-          </span>
-          <ChevronDown className="automation-detail__row-chevron" size={12} aria-hidden />
-        </>
-      )}
-    />
+    <div className="automation-detail__control-row automation-detail__control-row--picker">
+      <span className="automation-detail__control-label">
+        <AiMagic size={ICON.SM} aria-hidden />
+        <span>
+          <b>Model</b>
+          <small>Uses the session default unless overridden</small>
+        </span>
+      </span>
+      <ModelReasoningPicker
+        buttonLabel={model ? shortModelLabel(model) : DEFAULT_MODEL_LABEL}
+        currentModel={effectiveModel}
+        currentEffort={config?.model_reasoning_efforts?.[effectiveModel] ?? null}
+        groups={groups}
+        efforts={catalog?.reasoning_efforts[effectiveModel] ?? []}
+        disabled={pendingEffort}
+        anchored
+        onSelectModel={(selected) => onChange(selected || null)}
+        onSelectEffort={(effort) => void selectEffort(effort)}
+      />
+    </div>
   );
 }

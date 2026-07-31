@@ -29,6 +29,11 @@
 
 .model-picker__popup {
   max-width: var(--available-width);
+  /* Without a height cap the list grows past the room below its trigger, and
+   * collision avoidance flips it above — landing on top of whatever the user
+   * was reading. Capping it keeps the menu under the control it belongs to and
+   * scrolls the overflow instead. */
+  max-height: var(--available-height);
   overflow: auto;
   border-radius: var(--r-menu);
   color: var(--ink);
@@ -139,7 +144,11 @@
 
 .model-picker__model-menu {
   width: 300px;
-  max-height: 260px;
+  /* 260px is the design cap; --available-height is what the viewport allows.
+   * The floor matters: the var is 0 before the positioner measures, and a bare
+   * min() would collapse the menu to nothing and then never grow back, because
+   * a zero-height popup reports zero available space on the next pass. */
+  max-height: min(260px, max(var(--available-height, 260px), 12rem));
   padding: 5px;
   display: flex;
   flex-direction: column;
@@ -283,10 +292,6 @@
 }
 
 .model-picker__empty:empty { display: none; }
-
-.automation-model-menu {
-  width: min(320px, calc(100vw - 32px));
-}
 
 /* Chat uses the same searchable model combobox and adjacent effort menu. */
 .board-composer .model-picker--field {

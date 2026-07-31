@@ -118,6 +118,7 @@ export function ModelReasoningPicker({
   efforts,
   groups,
   disabled = false,
+  anchored = false,
   onSelectModel,
   onSelectEffort,
 }: {
@@ -127,6 +128,10 @@ export function ModelReasoningPicker({
   efforts: string[];
   groups: ModelGroup[];
   disabled?: boolean;
+  /** Keep both menus under their triggers instead of flipping above. Chat wants
+   *  the flip (its composer sits on the bottom edge); a row inside a settings
+   *  panel does not — flipping there covers the fields above it. */
+  anchored?: boolean;
   onSelectModel: (model: string) => void;
   onSelectEffort: (effort: string | null) => void;
 }) {
@@ -182,6 +187,11 @@ export function ModelReasoningPicker({
         <Combobox.Portal>
           <Combobox.Positioner
             {...PICKER_POSITIONING}
+            collisionAvoidance={
+              anchored
+                ? { side: "none", align: "shift", fallbackAxisSide: "none" }
+                : PICKER_POSITIONING.collisionAvoidance
+            }
             side="bottom"
             align="start"
             className="model-picker__positioner"
@@ -239,6 +249,7 @@ export function ModelReasoningPicker({
         currentEffort={currentEffort}
         efforts={efforts}
         disabled={disabled || efforts.length === 0}
+        anchored={anchored}
         onSelect={onSelectEffort}
       />
     </div>
@@ -249,11 +260,13 @@ function ReasoningMenu({
   currentEffort,
   efforts,
   disabled,
+  anchored,
   onSelect,
 }: {
   currentEffort: string | null;
   efforts: string[];
   disabled: boolean;
+  anchored: boolean;
   onSelect: (effort: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -288,6 +301,11 @@ function ReasoningMenu({
       <Menu.Portal>
         <Menu.Positioner
           {...PICKER_POSITIONING}
+          collisionAvoidance={
+            anchored
+              ? { side: "none", align: "shift", fallbackAxisSide: "none" }
+              : PICKER_POSITIONING.collisionAvoidance
+          }
           side="bottom"
           align="end"
           className="model-picker__positioner"
@@ -341,6 +359,7 @@ export function ModelMenuPicker({
   triggerClassName,
   popupClassName,
   disabled = false,
+  anchored = false,
   onValueChange,
 }: {
   value: string;
@@ -350,6 +369,10 @@ export function ModelMenuPicker({
   triggerClassName?: string;
   popupClassName?: string;
   disabled?: boolean;
+  /** Keep the menu under its trigger instead of flipping above it. For a row
+   *  low in a settings panel, flipping lands the menu on top of the fields the
+   *  user was just reading; staying anchored and scrolling is the lesser evil. */
+  anchored?: boolean;
   onValueChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -386,6 +409,11 @@ export function ModelMenuPicker({
       <Combobox.Portal>
         <Combobox.Positioner
           {...PICKER_POSITIONING}
+          collisionAvoidance={
+            anchored
+              ? { side: "none", align: "shift", fallbackAxisSide: "none" }
+              : PICKER_POSITIONING.collisionAvoidance
+          }
           side="bottom"
           align="start"
           className="model-picker__positioner"

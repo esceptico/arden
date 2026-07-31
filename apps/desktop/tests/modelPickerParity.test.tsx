@@ -216,7 +216,11 @@ test("all picker variants use the mock geometry, material, and side-aware motion
 
   expect(css).toMatch(/\.model-picker--field\s*\{[^}]*width:\s*276px;[^}]*grid-template-columns:\s*180px 88px;/s);
   expect(css).toMatch(/:is\(\.model-picker--field, \.model-picker--embedding\) \.model-picker__trigger\s*\{[^}]*height:\s*32px;[^}]*background:\s*var\(--paper\);[^}]*box-shadow:\s*var\(--shadow-2\);/s);
-  expect(css).toMatch(/\.model-picker__model-menu\s*\{[^}]*width:\s*300px;[^}]*max-height:\s*260px;/s);
+  // 260px is still the design cap, but it yields to the room actually available
+  // so a long catalog cannot run off the bottom of the window.
+  expect(css).toMatch(
+    /\.model-picker__model-menu\s*\{[^}]*width:\s*300px;[^}]*max-height:\s*min\(260px, max\(var\(--available-height, 260px\), 12rem\)\);/s,
+  );
   expect(css).toMatch(/\.model-picker__model-menu\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;/s);
   expect(css).toMatch(/\.model-picker__model-list\s*\{[^}]*flex:\s*1;[^}]*overflow:\s*auto;/s);
   expect(pickers).not.toContain("autoHighlight");
@@ -226,11 +230,15 @@ test("all picker variants use the mock geometry, material, and side-aware motion
   expect(css).toMatch(/\.model-picker__positioner\s*\{[^}]*z-index:\s*var\(--z-nested\);/s);
   expect(css).toContain('[data-side="top"]');
   expect(css).toContain("--popover-offset-above");
-  expect(css).toMatch(/\.automation-model-menu\s*\{[^}]*width:\s*min\(320px,/s);
   expect(pickers).toMatch(/export function ModelMenuPicker[\s\S]*?side="bottom"\s+align="start"/);
   expect(automation).toContain("<AutomationModelPicker");
-  expect(automation).toContain("<ModelMenuPicker");
-  expect(automation).not.toContain("<ModelReasoningPicker");
+  // An automation picks a model AND its reasoning effort, so it uses the same
+  // pair Chat and Settings do rather than a lone model menu.
+  expect(automation).toContain("<ModelReasoningPicker");
+  expect(automation).not.toContain("<ModelMenuPicker");
+  // That row sits low in a settings panel: flipping the menu above the trigger
+  // would cover the fields the user just read, so it stays anchored.
+  expect(automation).toContain("anchored");
   // The composer's combined model+effort menu is gone — Chat uses the same two
   // controls as Settings via ModelReasoningChip, so its bespoke menu classes
   // should exist nowhere.
