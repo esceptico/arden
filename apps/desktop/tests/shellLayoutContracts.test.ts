@@ -15,6 +15,7 @@ const home = read("../src/features/home/components/WorkBrief.tsx");
 const homeStyles = read("../src/features/home/components/Home.css");
 const inspector = read("../src/features/background-agents/components/AgentRightSidebar.tsx");
 const shellNav = read("../src/components/workspace/ShellNav.tsx");
+const foundation = read("../src/design/foundation.css");
 const sidebar = read("../src/features/sessions/components/Sidebar.tsx");
 const sessionList = read("../src/features/sessions/components/SessionList.tsx");
 
@@ -150,6 +151,11 @@ test("hidden-sidebar Chat reserves the native chrome lane for its title", () => 
   );
   expect(styles).toContain(".sidebar-toggle { left: var(--chrome-sidebar-toggle-resolved-left); }");
   expect(styles).toContain(".shell-nav { left: var(--chrome-back-control-resolved-left); }");
+  // Shell chrome is made of controls, so its radius follows the corner
+  // profile via --r-icon. A hardcoded --r-circle derives from nothing
+  // switchable: under Soft square every other control squared off while
+  // back/forward/Home and the rail toggles stayed round.
+  expect(foundation).not.toMatch(/\.shell-control\s*\{[^}]*border-radius/);
 });
 
 test("shared rail geometry keeps app rows and Chat hierarchy on their mock heights", () => {

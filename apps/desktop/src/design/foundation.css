@@ -310,8 +310,14 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
 
 /* Shell controls stay visually 22px (the xs IconButton role) while extending
    their target by 5px in every direction. Keep this role on both rail and
-   inspector toggles so desktop chrome has one hit-area contract. */
-.shell-control { border-radius: var(--r-circle); }
+   inspector toggles so desktop chrome has one hit-area contract.
+
+   Radius is deliberately NOT set here: it comes from .arden-icon-button's
+   --r-icon, so back/forward/Home and the rail toggles follow the corner
+   profile like every other control. A hardcoded --r-circle (50%) derives from
+   nothing switchable — under Soft square the whole app squared off while the
+   shell chrome stayed perfectly round. At 22px the round profile's --r-pill
+   clamps to a circle anyway, so this costs nothing and fixes the other half. */
 .shell-control::before {
   content: "";
   position: absolute;
