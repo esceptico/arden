@@ -1,14 +1,16 @@
 import { useSyncExternalStore } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { ArrowLeft02, ArrowRight02 } from "@/components/icons";
+import { ArrowLeft02, ArrowRight02, House } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import {
   getHistorySnapshot,
   goBack,
   goForward,
+  navigateHome,
   readHistoryAvailability,
   subscribeToHistory,
 } from "@/actions/navigation";
+import { useStore } from "@/stores";
 import { ICON } from "@/lib/icons";
 import { DISTANCE, EASE_OUT, MOTION } from "@/lib/tokens/motion";
 
@@ -18,15 +20,22 @@ export function useHistoryAvailability() {
   );
 }
 
-/** Shell-level route history: back and forward over Home, chats, areas,
+/** Shell-level route navigation: back, forward, and Home over chats, areas,
  *  Memory and Automations. Settings is a Takeover, not a route, so it never
  *  appears here — see currentDestination.
  *
- *  Both controls stay mounted and disable at the ends rather than
- *  appearing and disappearing: a control that vanishes takes its slot with
- *  it, and the sidebar toggle beside it would shift every time you navigate. */
+ *  Home earns its place beside the other two rather than living only in the
+ *  sidebar: Memory and Automations hide that rail to show their own, and
+ *  stepping back one entry at a time was the only way out of them.
+ *
+ *  Every control stays mounted and disables where it has nowhere to go. One
+ *  that vanished would take its slot with it, shifting the chrome beside it
+ *  every time you navigated. */
 export function ShellNav() {
   const { canBack, canForward } = useHistoryAvailability();
+  const atHome = useStore((s) => (
+    !s.memoryOpen && !s.automationsOpen && !s.areas.openAreaKey && s.currentSessionId === null
+  ));
   const reducedMotion = useReducedMotion() ?? false;
 
   return (
@@ -58,6 +67,17 @@ export function ShellNav() {
         title="Forward (⌘])"
       >
         <ArrowRight02 size={ICON.MD} />
+      </IconButton>
+      <IconButton
+        size="xs"
+        shape="circle"
+        className="shell-control"
+        onClick={navigateHome}
+        disabled={atHome}
+        aria-label="Home"
+        title="Home (⇧⌘H)"
+      >
+        <House size={ICON.MD} />
       </IconButton>
     </motion.div>
   );

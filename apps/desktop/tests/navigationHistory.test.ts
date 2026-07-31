@@ -4,6 +4,7 @@ import { NavigationHistory } from "@/lib/navigationHistory";
 import { setNavigationGuard, withNavigationGuard } from "@/lib/navigationGuard";
 import {
   appHistory,
+  navigateHome,
   currentDestination,
   goBack,
   goForward,
@@ -246,4 +247,39 @@ test("a real move between pages still costs its own step", () => {
   goBack();
   expect(getState().memoryTargetPath).toBe("index.md");
   expect(getState().memoryOpen).toBe(true);
+});
+
+test("Home is one step, from anywhere, and the unsaved-work guard still holds", () => {
+  getState().setCurrentSession("s1");
+  recordCurrentDestination();
+  getState().openMemory();
+  getState().setMemoryCurrentPath("areas/ops.md");
+  recordCurrentDestination();
+
+  // Memory and Automations hide the sidebar to show their own rail, so
+  // stepping back entry by entry was the only way home from them.
+  navigateHome();
+  expect(getState().memoryOpen).toBe(false);
+  expect(getState().currentSessionId).toBe(null);
+
+  // And it is a destination like any other: back returns where you came from.
+  recordCurrentDestination();
+  goBack();
+  expect(getState().memoryOpen).toBe(true);
+});
+
+test("Home obeys a route holding unsaved work", () => {
+  getState().openAutomations();
+  getState().setAutomationCurrentId("task-a");
+  recordCurrentDestination();
+
+  let resume: (() => void) | null = null;
+  setNavigationGuard((retry) => { resume = retry; return false; });
+
+  navigateHome();
+  expect(getState().automationsOpen).toBe(true);
+
+  setNavigationGuard(null);
+  resume!();
+  expect(getState().automationsOpen).toBe(false);
 });

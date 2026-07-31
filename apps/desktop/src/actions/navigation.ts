@@ -165,6 +165,13 @@ function step(movement: "back" | "forward"): void {
   publishHistory();
 }
 
+/** Home as a user action: the same unsaved-work guard the trail obeys.
+ *  goHome itself stays unguarded — back/forward replay through it, and a
+ *  guard there would re-enter itself mid-step. */
+export function navigateHome(): void {
+  withNavigationGuard(goHome);
+}
+
 export function goBack(): void {
   if (!appHistory.canBack) return;
   withNavigationGuard(() => step("back"));

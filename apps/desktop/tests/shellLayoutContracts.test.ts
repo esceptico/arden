@@ -41,6 +41,11 @@ test("shell controls stay operable above both rails but below blocking overlays"
   expect(app).toContain("{!settingsOpen && <ShellNav />}");
   expect(shellNav).toContain("goBack");
   expect(shellNav).toContain("goForward");
+  // Home sits with back/forward, not only in the sidebar: rail-owning routes
+  // hide that rail, leaving one-entry-at-a-time as the only way out.
+  expect(shellNav).toContain("navigateHome");
+  expect(shellNav).toContain('aria-label="Home"');
+  expect(shellNav).toContain("disabled={atHome}");
   // Memory and Automations draw their own rail toggle for their own column.
   // The shell's lands on the same fixed coordinates, so rendering both leaves
   // two controls stacked where the user sees one — and clicks reach whichever

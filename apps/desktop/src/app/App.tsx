@@ -44,7 +44,7 @@ import {
 } from "@/lib/shellOwnership";
 import { bootstrap, startServerConnectionPolling } from "@/actions/bootstrap";
 import { createSession, switchSession } from "@/actions/sessions";
-import { goBack, goForward, goHome, recordCurrentDestination } from "@/actions/navigation";
+import { goBack, goForward, navigateHome, recordCurrentDestination } from "@/actions/navigation";
 import { sendMessage } from "@/actions/messages";
 
 // Takeovers stay lazy: they mount outside the route host, so a chunk fetch
@@ -267,7 +267,7 @@ export function App() {
         }
         if (k === "h" && e.shiftKey) {
           e.preventDefault();
-          goHome();
+          navigateHome();
           return;
         }
         if (e.key === ",") {
