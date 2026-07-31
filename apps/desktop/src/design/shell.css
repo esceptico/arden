@@ -152,6 +152,10 @@
 
 .home-area-list::-webkit-scrollbar { display: none; }
 
+/* Matches the automations rail: a paused row recedes without changing colour,
+   so "paused" reads as deliberate rather than as an error state. */
+.home-area-list__row--paused { opacity: .72; }
+
 .home-area-list__row {
   display: grid;
   width: 100%;

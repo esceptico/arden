@@ -67,7 +67,10 @@ export function duplicateAutomationPayload(
     auto_approve: source.auto_approve,
     triggers: duplicateableTriggers.map(duplicateTrigger),
     cooldown_minutes: source.cooldown_minutes,
-    tool_scope: source.tool_scope,
+    // A copy of a custodian is not a custodian, so the fine-grained keys never
+    // travel. Anything but plain read-only copies as `all` — the source could
+    // act, and a copy that silently could not would be the worse surprise.
+    tool_scope: source.tool_scope === "read_only" ? "read_only" : "all",
   };
 }
 

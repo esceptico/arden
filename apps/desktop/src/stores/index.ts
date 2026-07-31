@@ -282,6 +282,7 @@ export const useStore = create<State & Actions>((set) => ({
   archivedSessions: null,
   compacting: false,
   memoryOpen: false,
+  memoryTargetPath: null,
   sourceFocus: null,
   rightInspectorTab: "activity",
   sourceTurnId: null,
@@ -622,6 +623,7 @@ export const useStore = create<State & Actions>((set) => ({
       automationTargetId: null,
       automationTargetRun: null,
       memoryOpen: false,
+      memoryTargetPath: null,
       settingsTab: tab ?? null,
       connectionDraft: { ...s.config },
       connectionError: null,
@@ -826,6 +828,7 @@ export const useStore = create<State & Actions>((set) => ({
       automationsOpen: true,
       settingsOpen: false,
       memoryOpen: false,
+      memoryTargetPath: null,
       automationTargetId: taskId ?? null,
       automationTargetRun: taskId ? options?.run ?? null : null,
       modalOrigin: null,
@@ -879,15 +882,17 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setArchivedSessions: (archivedSessions) => set({ archivedSessions }),
   setCompacting: (compacting) => set({ compacting }),
-  openMemory: () =>
+  openMemory: (targetPath) =>
     set({
       memoryOpen: true,
+      memoryTargetPath: targetPath ?? null,
       settingsOpen: false,
       automationsOpen: false,
       automationTargetId: null,
       modalOrigin: null,
     }),
-  closeMemory: () => set({ memoryOpen: false }),
+  clearMemoryTarget: () => set({ memoryTargetPath: null }),
+  closeMemory: () => set({ memoryOpen: false, memoryTargetPath: null }),
   setSourceFocus: (sourceFocus) => set({ sourceFocus }),
   setRightInspectorTab: (rightInspectorTab) =>
     set({

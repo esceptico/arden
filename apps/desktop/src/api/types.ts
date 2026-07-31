@@ -195,6 +195,22 @@ export interface AutomationTrigger {
 
 export type AutomationKind = "automation" | "loop";
 
+/** Mirrors ScopeKey in apps/server/arden/tools/scopes.py. Custodians and
+ *  builtin workers carry the fine-grained keys; only the two in
+ *  SettableToolScope may be chosen by a person or the agent. */
+export type ToolScope =
+  | SettableToolScope
+  | "area_observe"
+  | "area_act"
+  | "area_reply"
+  | "area_action"
+  | "fact_maintenance"
+  | "fact_retention"
+  | "wiki_maintenance"
+  | "wiki_producer";
+
+export type SettableToolScope = "read_only" | "all";
+
 export interface Automation {
   task_id: string;
   name: string;
@@ -222,9 +238,13 @@ export interface Automation {
   handler: string | null;
   builtin: boolean;
   cooldown_minutes: number | null;
-  /** Server-owned execution boundary. Preserved when duplicating a visible
-   * automation so a copy does not silently gain broader tool access. */
-  tool_scope?: string[] | null;
+  /** Server-owned execution boundary — a key into the server's scope table,
+   * never a tool list. Preserved when duplicating a visible automation so a
+   * copy does not silently gain broader tool access. */
+  tool_scope?: ToolScope;
+  /** What that key grants, rendered by the server (`read | submit_area_report`)
+   *  so the client never re-derives it. */
+  tool_scope_label?: string | null;
   /** "automation" for standard scheduled tasks; "loop" for self-paced /loop
    *  and post-mode tasks. The composer already surfaces loops in a chip, so
    *  the desktop hides kind=loop from the main automation list. */
@@ -258,7 +278,7 @@ export interface CreateAutomationPayload {
   end?: string;
   triggers?: AutomationTrigger[];
   cooldown_minutes?: number | null;
-  tool_scope?: string[] | null;
+  tool_scope?: SettableToolScope;
 }
 
 export type UpdateAutomationPayload = Partial<

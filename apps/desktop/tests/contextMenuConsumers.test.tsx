@@ -282,7 +282,7 @@ test("Sidebar menus open real app and area destinations, and keep Set aside boun
 test("Automation duplicate payload retains the real trigger and capability boundary", () => {
   const payload = duplicateAutomationPayload({
     ...automation,
-    tool_scope: ["calendar.read"],
+    tool_scope: "area_observe",
     triggers: [{
       type: "message",
       source: "slack",
@@ -306,7 +306,9 @@ test("Automation duplicate payload retains the real trigger and capability bound
       contains: ["brief"],
     }],
     cooldown_minutes: null,
-    tool_scope: ["calendar.read"],
+    // A copy of a custodian is not a custodian: the fine-grained key never
+    // travels, and the copy keeps the source's reach rather than silently losing it.
+    tool_scope: "all",
   });
   expect(payload.idempotency_key).toEqual(expect.any(String));
 });

@@ -257,6 +257,8 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [artifacts, setArtifacts] = useState<MemoryArtifactSummary[]>([]);
   const [directories, setDirectories] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const memoryTargetPath = useStore((state) => state.memoryTargetPath);
+  const clearMemoryTarget = useStore((state) => state.clearMemoryTarget);
   const [activeDetail, setActiveDetail] = useState<MemoryArtifactDetail | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
@@ -613,6 +615,21 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     }
     setSelected(fallback);
   }, [activeTab, loading, navigableArtifacts, reviewPending, selected, tabs, workspaceEmpty]);
+
+  // A caller can ask Memory to land on a specific page — the Area room's page
+  // link does. It outranks the restored/README fallback above, and is consumed
+  // on arrival so the next plain open behaves normally.
+  useLayoutEffect(() => {
+    if (loading || !memoryTargetPath) return;
+    if (!navigableArtifacts.some((artifact) => artifact.path === memoryTargetPath)) return;
+    clearMemoryTarget();
+    if (selected === memoryTargetPath) return;
+    navigationHistory.current.push({
+      path: memoryTargetPath, anchor: null, scrollTop: 0, focusSelector: null,
+    });
+    setHistoryVersion((version) => version + 1);
+    setSelected(memoryTargetPath);
+  }, [clearMemoryTarget, loading, memoryTargetPath, navigableArtifacts, selected]);
 
   const setInspectorVisibility = useCallback((open: boolean) => {
     persistInspectorOpen(open);

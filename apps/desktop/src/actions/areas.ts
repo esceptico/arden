@@ -1,7 +1,6 @@
 import {
   createAreaPage as createAreaPageApi,
   createAreaOutcome as createAreaOutcomeApi,
-  detachAreaPage as detachAreaPageApi,
   fetchAreasOverview as fetchAreasOverviewApi,
   fetchAreaDetail as fetchAreaDetailApi,
   resolveAsk as resolveAskApi,
@@ -144,13 +143,6 @@ export async function updateAreaSettings(
 export async function createAreaPage(key: string): Promise<void> {
   const s = getState();
   const record = await createAreaPageApi(s.config, key);
-  s.upsertAreaRecord(record);
-  await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
-}
-
-export async function detachAreaPage(key: string): Promise<void> {
-  const s = getState();
-  const record = await detachAreaPageApi(s.config, key);
   s.upsertAreaRecord(record);
   await Promise.all([fetchAreaDetail(key), fetchAreasOverview()]);
 }

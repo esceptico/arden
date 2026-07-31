@@ -1,20 +1,14 @@
 import { useEffect, useState } from "react";
 import type { AreaAttention, AreaDetail, AreaInterrupts } from "@/api/areas";
 import { useStore } from "@/stores";
-import {
-  createAreaPage,
-  detachAreaPage,
-  updateAreaAutonomy,
-  updateAreaSettings,
-} from "@/actions/areas";
+import { createAreaPage, updateAreaAutonomy, updateAreaSettings } from "@/actions/areas";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
-import { SwitchControl } from "@/components/ui/SwitchControl";
 import { Textarea } from "@/components/ui/Textarea";
 
 /** AREA_ATTENTION_PRESETS, apps/server/arden/constants.py — mirrored so the
  *  control can state the cadence it is choosing rather than only naming it. */
-const ATTENTION_CADENCE: Record<AreaAttention, string> = {
+export const ATTENTION_CADENCE: Record<AreaAttention, string> = {
   active: "Checks 2h–48h apart, up to 8 runs a day.",
   ambient: "Checks 12h–7d apart, up to 3 runs a day.",
   dormant: "Checks 3d–14d apart, at most 1 run a day.",
@@ -62,7 +56,17 @@ function Row({
  * Every control states the consequence it commits to rather than only naming
  * the field, because none of these have an obvious effect from the label.
  */
-export function AreaSettings({ area }: { area: AreaDetail }) {
+export function AreaSettings({
+  area,
+  pageOpen,
+  onTogglePage,
+}: {
+  area: AreaDetail;
+  /** The page preview is owned by the room: this section sits inside the
+   *  scroller, whose scroll-fade mask would clip a peek rendered here. */
+  pageOpen: boolean;
+  onTogglePage: () => void;
+}) {
   const pushToast = useStore((s) => s.pushToast);
   const [instructions, setInstructions] = useState(area.instructions ?? "");
   const [busy, setBusy] = useState(false);
@@ -173,19 +177,6 @@ export function AreaSettings({ area }: { area: AreaDetail }) {
             <p className="area-settings__consequence">{INTERRUPT_REACH[interrupts]}</p>
           </div>
 
-          <div className="area-settings__section">
-            <Row label="Paused" hint="Keeps the area and its page; stops the agent running.">
-              <SwitchControl
-                checked={area.paused}
-                onChange={(paused) =>
-                  void run("pause the custodian", () => updateAreaSettings(area.key, { paused }))
-                }
-                aria-label="Paused"
-                disabled={busy}
-              />
-            </Row>
-          </div>
-
           <div className="area-settings__section area-settings__section--stacked">
             <span className="area-settings__row-label">
               <b>Standing instructions</b>
@@ -196,7 +187,7 @@ export function AreaSettings({ area }: { area: AreaDetail }) {
               onChange={(event) => setInstructions(event.target.value)}
               onBlur={commitInstructions}
               rows={3}
-              placeholder="e.g. I want to ship the j-lens replication — propose the next concrete step rather than waiting for me."
+              placeholder="e.g. Propose the next concrete step instead of asking me what I want. Skip anything I can’t act on this week."
               aria-label="Standing instructions"
             />
           </div>
@@ -204,16 +195,24 @@ export function AreaSettings({ area }: { area: AreaDetail }) {
       ) : null}
 
       <div className="area-settings__section">
-        <Row label="Page" hint={area.page_path ?? "This area has no page."}>
+        <Row
+          label="Page"
+          hint={
+            area.page_path
+              ? "What the custodian has written down about this area."
+              : "The custodian has nowhere to write down what it learns."
+          }
+        >
           {area.page_path ? (
-            <Button
-              variant="quiet"
-              size="sm"
-              disabled={busy}
-              onClick={() => void run("detach the page", () => detachAreaPage(area.key))}
+            <button
+              type="button"
+              className="area-settings__page-link"
+              data-area-page-owner
+              aria-expanded={pageOpen}
+              onClick={onTogglePage}
             >
-              Detach
-            </Button>
+              {area.page_path}
+            </button>
           ) : (
             <Button
               variant="secondary"
@@ -226,6 +225,7 @@ export function AreaSettings({ area }: { area: AreaDetail }) {
           )}
         </Row>
       </div>
+
     </section>
   );
 }

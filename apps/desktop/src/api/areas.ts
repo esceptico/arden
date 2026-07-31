@@ -10,6 +10,9 @@ export interface AreaSummary {
   autonomy: "observe" | "act" | null;
   page_path: string | null;
   live: boolean;
+  /** Custodian paused by the user: the rail says so rather than showing the
+   *  area as merely quiet. */
+  paused: boolean;
   updated: string;
   ask_count: number;
 }
@@ -292,8 +295,4 @@ export async function updateAreaSettings(
 
 export async function createAreaPage(config: AppConfig, key: string): Promise<Area> {
   return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/page`, { method: "POST" });
-}
-
-export async function detachAreaPage(config: AppConfig, key: string): Promise<Area> {
-  return apiWithConfig(config, `/areas/${encodeURIComponent(key)}/page`, { method: "DELETE" });
 }

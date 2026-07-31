@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import type { AreaDetail, AreaOutcome } from "@/api/areas";
 import { useStore } from "@/stores";
-import { fetchAreaDetail, replyToAsk } from "@/actions/areas";
+import { fetchAreaDetail, replyToAsk, updateAreaSettings } from "@/actions/areas";
 import { AreaRequestDeck } from "@/features/areas/components/AreaRequestDeck";
-import { AreaSettings } from "@/features/areas/components/AreaSettings";
+import { AreaPagePeek } from "@/features/areas/components/AreaPagePeek";
+import { ATTENTION_CADENCE, AreaSettings } from "@/features/areas/components/AreaSettings";
+import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
 import { Callout } from "@/components/ui/Callout";
 import { formatRelativePast } from "@/lib/format";
@@ -42,9 +44,10 @@ const OUTCOME_STATE: Record<AreaOutcome["status"], string> = {
 };
 
 /**
- * An Area is a room for the current decision and its one active outcome.
- * Broader activity belongs in the Area inspector, rather than competing with
- * the request deck in the room itself.
+ * An Area is a room for the current decision, what the area is working toward,
+ * and the contract its custodian runs under. The page preview is mounted here
+ * rather than beside its trigger: the trigger lives inside the scrolling body,
+ * whose scroll-fade mask clips every descendant it paints — fixed ones too.
  */
 export function AreaRoom({ areaKey }: { areaKey: string }) {
   const detail = useStore((s) => s.areas.detailByKey[areaKey]);
@@ -53,6 +56,8 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
+  const [pageOpen, setPageOpen] = useState(false);
+  const [pausing, setPausing] = useState(false);
 
   useEffect(() => {
     void fetchAreaDetail(areaKey);
@@ -82,6 +87,25 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
   const outcomes = detail.work.outcomes.filter((o) => o.status !== "cancelled");
   const tally = outcomeTally(detail.work.outcomes);
   const presence = agentPresence(detail);
+
+  const pauseLabel = pausing ? "Updating" : detail.paused ? "Resume" : "Pause";
+
+  const togglePause = async () => {
+    if (pausing) return;
+    setPausing(true);
+    try {
+      await updateAreaSettings(areaKey, { paused: !detail.paused });
+    } catch {
+      pushToast({
+        id: `area-pause-fail:${areaKey}:${Date.now()}`,
+        title: detail.paused ? "Couldn’t resume the custodian" : "Couldn’t pause the custodian",
+        status: "failed",
+        target: { kind: "automation", taskId: `area:${areaKey}` },
+      });
+    } finally {
+      setPausing(false);
+    }
+  };
 
   const discussAsk = (ask: { id: string }) => {
     setReplyingTo(ask.id);
@@ -157,8 +181,40 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
             )}
           </section>
 
-          <AreaSettings area={detail} />
+          <AreaSettings
+            area={detail}
+            pageOpen={pageOpen}
+            onTogglePage={() => setPageOpen((value) => !value)}
+          />
         </div>
+
+        {detail.autonomy ? (
+          <footer className="board-area-footer">
+            <span className="board-area-footer__state" aria-live="polite">
+              <BlurSwap swapKey={detail.paused ? "paused" : "running"}>
+                {detail.paused
+                  ? "Paused. Nothing runs until you resume — the area and its page are kept."
+                  : `Running. ${ATTENTION_CADENCE[detail.attention ?? "ambient"]}`}
+              </BlurSwap>
+            </span>
+            <Button
+              size="md"
+              className="board-area-footer__pause"
+              disabled={pausing}
+              onClick={() => void togglePause()}
+            >
+              <BlurSwap swapKey={pauseLabel}>{pauseLabel}</BlurSwap>
+            </Button>
+          </footer>
+        ) : null}
+
+        {detail.page_path ? (
+          <AreaPagePeek
+            path={detail.page_path}
+            open={pageOpen}
+            onClose={() => setPageOpen(false)}
+          />
+        ) : null}
 
         {replyingTo && (
           <form

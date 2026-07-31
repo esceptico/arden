@@ -441,6 +441,9 @@ export interface State {
   archivedSessions: ArchivedSession[] | null;
   compacting: boolean;
   memoryOpen: boolean;
+  /** Page path Memory should land on when it opens, instead of its usual
+   *  restored/README fallback. Cleared once Memory has honoured it. */
+  memoryTargetPath: string | null;
   sourceFocus: MessageSourceFocus | null;
   rightInspectorTab: "activity" | "sources";
   sourceTurnId: string | null;
@@ -653,7 +656,8 @@ export interface Actions {
   setPendingGoalProposal: (proposal: PendingGoalProposal | null) => void;
   setArchivedSessions: (sessions: ArchivedSession[] | null) => void;
   setCompacting: (compacting: boolean) => void;
-  openMemory: () => void;
+  openMemory: (targetPath?: string) => void;
+  clearMemoryTarget: () => void;
   closeMemory: () => void;
   setSourceFocus: (focus: MessageSourceFocus | null) => void;
   setRightInspectorTab: (tab: "activity" | "sources") => void;

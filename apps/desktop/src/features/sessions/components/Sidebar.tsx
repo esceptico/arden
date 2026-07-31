@@ -1,3 +1,4 @@
+import clsx from "clsx";
 import {
   Brain01,
   BubbleChat,
@@ -152,7 +153,10 @@ export function Sidebar() {
               <button
                 key={area.key}
                 type="button"
-                className="home-area-list__row"
+                className={clsx(
+                  "home-area-list__row",
+                  area.paused && "home-area-list__row--paused",
+                )}
                 data-active={area.key === openAreaKey ? "true" : undefined}
                 aria-current={area.key === openAreaKey ? "page" : undefined}
                 onClick={() => useStore.getState().openArea(area.key)}
@@ -179,7 +183,13 @@ export function Sidebar() {
               >
                 <span>{area.title}</span>
                 <small data-tone={area.ask_count > 0 ? "warning" : area.live ? "live" : undefined}>
-                  {area.ask_count > 0 ? "needs you" : area.live ? "running" : "quiet"}
+                  {area.ask_count > 0
+                    ? "needs you"
+                    : area.paused
+                      ? "paused"
+                      : area.live
+                        ? "running"
+                        : "quiet"}
                 </small>
               </button>
             ))}

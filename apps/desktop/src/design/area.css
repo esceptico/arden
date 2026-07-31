@@ -477,6 +477,155 @@
   text-wrap: pretty;
 }
 
+/* The page's path IS the affordance — a label plus a separate "View" button
+   would be two controls for one destination. It reads as a chip at rest so it
+   is legible as a control before hover, and stays inside the row's box: a
+   negative margin put its fill past the scroller's clip edge, which sheared
+   the right end off. */
+.area-settings__page-link {
+  max-width: 15rem;
+  min-height: var(--control-size);
+  padding: 0 var(--space-2-5);
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  font: 500 var(--text-xs)/1 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--motion-feedback) var(--smooth-out),
+    background var(--motion-feedback) var(--smooth-out);
+}
+
+.area-settings__page-link:hover,
+.area-settings__page-link[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--surface-4);
+}
+
+/* Pinned pause ----------------------------------------------------------- */
+
+/* The custodian's on/off switch is the room's one standing action, so it does
+   not scroll away with the rest of the contract — same instrument as the
+   automations detail footer. */
+.board-area-footer {
+  flex: none;
+  min-height: var(--area-footer-height);
+  min-width: 0;
+  margin-top: var(--space-2);
+  padding-top: var(--space-2-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border-top: 1px solid var(--edge);
+}
+
+.board-area-footer__state {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.4 var(--sans);
+  text-wrap: pretty;
+}
+
+.board-area-footer__pause {
+  flex: none;
+  min-width: var(--automation-pause-control-width);
+  justify-content: center;
+}
+
+/* Area page preview ------------------------------------------------------ */
+
+.area-page-peek {
+  position: fixed;
+  z-index: var(--z-peek);
+  top: 4.5rem;
+  right: var(--floating-edge);
+  width: clamp(22rem, 34vw, 30rem);
+  max-width: calc(100vw - var(--space-8));
+  max-height: calc(100vh - 9rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.area-page-peek__head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.area-page-peek__head > span {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.area-page-peek__head b {
+  overflow: hidden;
+  color: var(--ink);
+  font: 600 var(--text-base)/1.3 var(--sans);
+  letter-spacing: -.008em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.area-page-peek__head small {
+  overflow: hidden;
+  color: var(--faint);
+  font: 500 var(--text-2xs)/1.4 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.area-page-peek__body {
+  min-height: 0;
+  padding: var(--space-3) var(--space-4) var(--space-5);
+  overflow: clip auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+/* Same body type as the automations prompt peek — the Markdown primitive's
+   own scale is tuned for the chat column and reads oversized in a peek. */
+.area-page-peek__body :is(p, li, td, th, blockquote) {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+.area-page-peek__body :is(h1, h2, h3, h4) {
+  margin-top: var(--space-4);
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.area-page-peek__body > :first-child { margin-top: 0; }
+
+.area-page-peek__body::-webkit-scrollbar { display: none; }
+
+.area-page-peek__state {
+  margin: 0;
+  color: var(--muted);
+  font: 460 var(--text-sm)/1.5 var(--sans);
+  text-wrap: pretty;
+}
+
+.area-page-peek__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2-5) var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
 .area-settings__consequence {
   max-width: 65ch;
   margin: var(--space-2) 0 0;
