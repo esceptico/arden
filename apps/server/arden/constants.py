@@ -7,6 +7,16 @@ from pathlib import Path
 # sink and settings.py imports arden.logging — importing the other way would cycle.
 ARDEN_DIR = Path(os.environ.get("ARDEN_DIR", str(Path.home() / ".arden"))).expanduser()
 
+# Integrations Arden implements itself are `_`-prefixed; the rest are outside
+# services. Tool scopes select on this (`tools.system`, `tools.integrations`),
+# so the convention is decoded here rather than at each reader.
+SYSTEM_SOURCE_PREFIX = "_"
+
+
+def is_external_source(source: str) -> bool:
+    return not source.startswith(SYSTEM_SOURCE_PREFIX)
+
+
 # --- Content Truncation Limits ---
 
 EMBEDDING_TEXT_LIMIT = 8000  # for embedder input only — see embedder.py

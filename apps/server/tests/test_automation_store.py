@@ -1067,14 +1067,7 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
     assert retention.handler is None
     assert retention.model == "memory-model"
     assert retention.triggers == [TimeTrigger(at="03:45", days="daily")]
-    assert retention.tool_scope == [
-        "search_facts",
-        "get_fact",
-        "get_fact_history",
-        "get_due_fact_reviews",
-        "plan_fact_changes",
-        "commit_fact_changes",
-    ]
+    assert retention.tool_scope == "fact_retention"
     assert "Never treat silence or age alone as evidence." in retention.prompt
 
     synthesis = rows[BUILTIN_MEMORY_SYNTHESIZE_ID]

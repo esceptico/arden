@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
 
 import arden.database as database
 from arden.automation.models import IdempotencyClaim
@@ -17,10 +16,7 @@ from arden.context.store import SessionStore
 from arden.server.routers.automation import (
     create_automation as create_automation_route,
 )
-from arden.server.routers.automation import (
-    update_automation as update_automation_route,
-)
-from arden.server.schemas import CreateAutomationRequest, UpdateAutomationRequest
+from arden.server.schemas import CreateAutomationRequest
 from arden.services.session import SessionService
 from arden.tools.executor import ToolExecutor
 
@@ -457,7 +453,7 @@ async def test_automation_post_replays_same_global_creation(service: AutomationS
         prompt="Update automations/wiki-digest.md.",
         trigger_type="time",
         every="1d",
-        tool_scope=["create_wiki_page", "edit_wiki_page"],
+        tool_scope="all",
         idempotency_key="wiki-automation:wiki-digest",
     )
     runtime = SimpleNamespace(executor=ToolExecutor())
@@ -470,47 +466,6 @@ async def test_automation_post_replays_same_global_creation(service: AutomationS
     tasks = await service.list_all()
     assert len(tasks) == 1
     assert tasks[0].thread_id is not None
-
-
-@pytest.mark.asyncio
-async def test_automation_post_rejects_unknown_tool_scope(service: AutomationService):
-    request = CreateAutomationRequest(
-        name="broken scope",
-        description="Exercises scope validation.",
-        prompt="Run with a misspelled tool.",
-        trigger_type="time",
-        every="1d",
-        tool_scope=["edit_wki_page"],
-        idempotency_key="broken-scope",
-    )
-
-    with pytest.raises(HTTPException, match="tool_scope patterns match no registered tool"):
-        await create_automation_route(request, service, SimpleNamespace(executor=ToolExecutor()))
-
-    assert await service.list_all() == []
-
-
-@pytest.mark.asyncio
-async def test_automation_patch_rejects_unknown_tool_scope(service: AutomationService):
-    task = await service.create(
-        name="safe scope",
-        description="Exercises update scope validation.",
-        prompt="Keep the valid scope.",
-        trigger_type="time",
-        every="1d",
-        tool_scope=["create_wiki_page"],
-    )
-    assert task is not None
-
-    with pytest.raises(HTTPException, match="tool_scope patterns match no registered tool"):
-        await update_automation_route(
-            task.task_id,
-            UpdateAutomationRequest(tool_scope=["edit_wki_page"]),
-            service,
-            SimpleNamespace(executor=ToolExecutor()),
-        )
-
-    assert (await service.get(task.task_id)).tool_scope == ["create_wiki_page"]
 
 
 @pytest.mark.asyncio

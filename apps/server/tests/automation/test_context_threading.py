@@ -166,12 +166,12 @@ async def test_only_iteration_dispatcher_receives_context_for_iteration_run(stor
 
 @pytest.mark.asyncio
 async def test_session_bound_email_feed_honors_its_model_and_exact_tool_scope(store: AutomationStore):
-    """The scheduler's channel path must not inherit a stale chat model or read floor."""
+    """The scheduler's channel path must not inherit a stale chat model or scope."""
 
     automation = replace(
         _session_bound(task_id="congenial-caracal", thread_id="email-feed-channel"),
         model="openai-codex/gpt-5.6-luna",
-        tool_scope=["emails", "read_email", "read_wiki_page", "publish_wiki_generated"],
+        tool_scope="wiki_producer",
     )
     await store.save(automation)
 
@@ -196,7 +196,7 @@ async def test_session_bound_email_feed_honors_its_model_and_exact_tool_scope(st
 
     assert observed == {
         "model": "openai-codex/gpt-5.6-luna",
-        "tool_scope": ("emails", "read_email", "read_wiki_page", "publish_wiki_generated"),
+        "tool_scope": "wiki_producer",
     }
     assert runtime.calls == []
 

@@ -8,7 +8,6 @@ from arden.automation.models import Automation, IdempotencyClaim
 from arden.automation.triggers import parse_triggers
 from arden.logging import get_logger
 from arden.outbox.store import OutboxStore
-from arden.tools.core.scope import READ_FLOOR
 
 _logger = get_logger(__name__)
 
@@ -109,7 +108,7 @@ def _row_to_automation(row: dict) -> Automation:
         parent_automation_id=row["parent_automation_id"],
         idempotency_key=row["idempotency_key"],
         idempotency_scope=row["idempotency_scope"],
-        tool_scope=json.loads(row["tool_scope"]) if dict(row).get("tool_scope") else None,
+        tool_scope=dict(row)["tool_scope"],
     )
 
 
@@ -885,26 +884,6 @@ async def _migrate_v12(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN tool_scope TEXT")
 
 
-async def _migrate_v16(conn: aiosqlite.Connection) -> None:
-    """Write the read floor into the scopes that were silently receiving it.
-
-    Every scoped run used to be unioned with all read-only tools inside the
-    executor. Now the grant is declared, so a scope authored under the old rule
-    must say so explicitly or it would quietly narrow — several automations
-    (`["archive_session"]`, `["publish_wiki_generated"]`) list only their one
-    write tool and would lose the ability to read anything at all.
-    """
-    rows = await conn.execute_fetchall("SELECT task_id, tool_scope FROM scheduled_tasks WHERE tool_scope IS NOT NULL")
-    for row in rows:
-        scope = json.loads(row["tool_scope"])
-        if not scope or READ_FLOOR in scope:
-            continue
-        await conn.execute(
-            "UPDATE scheduled_tasks SET tool_scope = ? WHERE task_id = ?",
-            (json.dumps([READ_FLOOR, *scope]), row["task_id"]),
-        )
-
-
 async def _migrate_v14(conn: aiosqlite.Connection) -> None:
     """Split executable instructions from concise display copy.
 
@@ -1299,12 +1278,6 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
         await conn.commit()
         _logger.info("Migrated automation store to v15 (durable detached chat run identity)")
 
-    if version < 16:
-        await _migrate_v16(conn)
-        await _set_schema_version(conn, 16)
-        await conn.commit()
-        _logger.info("Migrated automation store to v16 (explicit read floor)")
-
 
 class AutomationStore:
     def __init__(
@@ -1365,7 +1338,7 @@ class AutomationStore:
                 automation.parent_automation_id,
                 automation.idempotency_key,
                 automation.idempotency_scope,
-                json.dumps(automation.tool_scope) if automation.tool_scope else None,
+                automation.tool_scope,
             ),
         )
         await self.conn.commit()
@@ -1891,7 +1864,7 @@ class AutomationStore:
                 automation.parent_automation_id,
                 automation.idempotency_key,
                 automation.idempotency_scope,
-                json.dumps(automation.tool_scope) if automation.tool_scope else None,
+                automation.tool_scope,
                 automation.task_id,
             ),
         )
@@ -2139,7 +2112,7 @@ class AutomationStore:
                         automation.parent_automation_id,
                         automation.idempotency_key,
                         automation.idempotency_scope,
-                        json.dumps(automation.tool_scope) if automation.tool_scope else None,
+                        automation.tool_scope,
                     ),
                 )
                 await self.conn.commit()

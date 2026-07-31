@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.core.content import ContextContent, ContextManifestEntry
 from arden.tools.core.types import ToolOverrideDecision
+from arden.tools.scopes import SettableScopeKey
 
 # --- Chat / run ---
 
@@ -557,7 +558,7 @@ class CreateAutomationRequest(BaseModel):
     end: str | None = None
     triggers: list[dict] | None = None
     cooldown_minutes: int | None = None
-    tool_scope: list[str] | None = None
+    tool_scope: SettableScopeKey = "read_only"
     idempotency_key: str = Field(min_length=1, max_length=200)
     idempotency_scope: Literal["global"] = "global"
 
@@ -583,7 +584,7 @@ class UpdateAutomationRequest(BaseModel):
     enabled: bool | None = None
     triggers: list[dict] | None = None
     cooldown_minutes: int | None = None
-    tool_scope: list[str] | None = None
+    tool_scope: SettableScopeKey | None = None
 
 
 class CreateLoopRequest(BaseModel):

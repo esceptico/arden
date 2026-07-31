@@ -43,6 +43,4 @@ async def test_custom_embedding_only_provider_is_connected(monkeypatch):
     custom = next(provider for provider in payload["providers"] if provider["id"] == "custom")
     assert custom["connected"] is True
     assert custom["embedding_models"] == ["local/embed"]
-    assert custom["custom_embedding_models"] == [
-        {"id": "local/embed", "base_url": "http://localhost", "dimensions": 3}
-    ]
+    assert custom["custom_embedding_models"] == [{"id": "local/embed", "base_url": "http://localhost", "dimensions": 3}]

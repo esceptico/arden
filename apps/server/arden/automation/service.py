@@ -15,6 +15,7 @@ from arden.context.models import SessionState
 from arden.integrations.slack.client import SlackClient
 from arden.llm.models import get_models
 from arden.services.session import SessionService
+from arden.tools.scopes import ScopeKey
 
 _AUTOMATION_CHANNEL_SUFFIX = ":channel"
 _IDEMPOTENT_AUTOMATION_PREFIX = "automation-"
@@ -328,7 +329,7 @@ class AutomationService:
         max_iterations: int | None = None,
         stop_when: str | None = None,
         max_age_days: int | None = None,
-        tool_scope: list[str] | None = None,
+        tool_scope: ScopeKey | None = None,
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
         if name is not None:
@@ -354,8 +355,7 @@ class AutomationService:
         if max_age_days is not None:
             changes["max_age_days"] = max_age_days
         if tool_scope is not None:
-            # [] clears the scope back to unrestricted; a non-empty list replaces it.
-            changes["tool_scope"] = tool_scope or None
+            changes["tool_scope"] = tool_scope
         return changes
 
     @staticmethod
@@ -413,7 +413,7 @@ class AutomationService:
         max_iterations: int | None = None,
         stop_when: str | None = None,
         max_age_days: int | None = None,
-        tool_scope: list[str] | None = None,
+        tool_scope: ScopeKey | None = None,
     ) -> Automation:
         task = await self.get(task_id)
         normalized_prompt = self._normalize_prompt(prompt) if prompt is not None else None
@@ -508,7 +508,7 @@ class AutomationService:
         parent_automation_id: str | None = None,
         parent_fire_at: str | None = None,
         attempt_n: int | None = None,
-        tool_scope: list[str] | None = None,
+        tool_scope: ScopeKey | None = None,
         task_id: str | None = None,
         enabled: bool = True,
         triggers_resolved: bool = False,

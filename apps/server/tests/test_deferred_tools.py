@@ -31,6 +31,7 @@ from arden.integrations.core import APP_CONTROL, SESSIONS
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.scope import tools
 from arden.tools.core.types import ApprovalInfo
 from arden.tools.deferred import (
     build_deferred_tools_prompt,
@@ -762,7 +763,7 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
         ]
     )
     agent = Agent(
-        tools=registry.get_schemas(scope=("read_wiki_page", "publish_wiki_generated")),
+        tools=registry.get_schemas(scope=tools.named("read_wiki_page") | tools.named("publish_wiki_generated")),
         client=MockLLMClient(llm),
         executor=ArdenToolExecutor(executor, ctx),
         model="gpt-5.5",

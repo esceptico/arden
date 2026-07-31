@@ -91,8 +91,8 @@ def test_shared_spawn_guidance_reaches_each_spawn_surface():
 def test_create_automation_description_keeps_scope_and_approval_distinct():
     description = ToolExecutor().registry.get("create_automation").description
 
-    assert "Grant required action tools with tool_scope" in description
-    assert "auto_approve=true only skips approvals" in description
+    assert "Set all_tools=true when the prompt must act" in description
+    assert "auto_approve=true only skips approvals, it never widens" in description
 
 
 def test_cross_tool_parameter_names_are_canonical():

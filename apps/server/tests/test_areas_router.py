@@ -23,6 +23,9 @@ from arden.revisions import ManagedFileRepository
 from arden.server.app import app
 from arden.server.routers.areas import asks_router
 from arden.server.routers.areas import router as areas_router
+from arden.tools.core.scope import ToolFacts
+from arden.tools.core.types import ToolAction
+from arden.tools.scopes import resolve
 from arden.wiki.pages import create_page
 from arden.wiki.service import WikiService
 
@@ -175,13 +178,13 @@ def client(tmp_path: Path):
                 return None
             return SimpleNamespace(
                 thread_id="custodian-thread",
-                tool_scope=["submit_area_report", "area_page_read", "search_facts"],
+                tool_scope="area_observe",
             )
 
     dispatched: list[tuple] = []
 
     async def _dispatch_session_message(session_id, message, **kwargs):
-        dispatched.append((session_id, message, kwargs.get("tool_scope")))
+        dispatched.append((session_id, message, kwargs.get("tool_scope"), kwargs.get("skip_approvals")))
 
     work = _FakeWorkStore()
     test_app.state.runtime = SimpleNamespace(
@@ -401,16 +404,23 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
     assert res.status_code == 200
     assert res.json()["resolution"] == "replied"
     # Reply turns keep read/edit permissions but cannot submit a custodian report.
-    assert c.app.state.dispatched == [
-        ("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.", ("area_page_read", "search_facts"))
-    ]
+    session_id, message, tool_scope, skip_approvals = c.app.state.dispatched[0]
+    assert (session_id, message) == ("custodian-thread", f"REPLY TO ASK [agent:{o1a}:dose]\nUse 5 mg.")
+    assert tool_scope == "area_reply"
+    # A reply is a conversation, not an approved action — it mints nothing and
+    # waives nothing.
+    assert skip_approvals is False
+    scope = resolve(tool_scope)
+    assert not scope.matches(ToolFacts("submit_area_report", ToolAction.EXECUTE, "_area", False))
+    assert scope.matches(ToolFacts("area_page_read", ToolAction.READ, "_area", False))
     assert emitted == [[o1a]]
 
 
-def test_approving_a_review_runs_its_action_with_the_users_own_scope(client):
+def test_approving_a_review_runs_its_action_with_minted_internal_reach(client):
     """The custodian is read-only and a child it spawned would inherit that
-    allowlist, so approval is what mints the capability — an unrestricted
-    tool_scope, granted per action and only for what the user just saw."""
+    allowlist, so approval is what mints the capability — `area_action`,
+    granted per run and only for what the user just saw. It carries the
+    approval too: re-asking inside an approved action is the same question."""
     c, svc, _, o1a, _ = client
     svc._asks.upsert(
         Ask(
@@ -430,10 +440,19 @@ def test_approving_a_review_runs_its_action_with_the_users_own_scope(client):
     res = c.post(f"/asks/agent:{o1a}:assay/resolve", json={"state": "done", "resolution": "approved"})
 
     assert res.status_code == 200
-    session_id, message, tool_scope = c.app.state.dispatched[0]
+    session_id, message, tool_scope, skip_approvals = c.app.state.dispatched[0]
     assert session_id == "custodian-thread"
     assert "Scaffold src/aside_oracle/jspace/" in message
-    assert tool_scope is None, "an approved action runs unrestricted, not inside the observe allowlist"
+    # Approval mints reach the custodian never had — but only inside Arden.
+    # Touching an outside service is a separate consent from "yes, do this".
+    assert tool_scope == "area_action"
+    scope = resolve(tool_scope)
+    assert scope.matches(ToolFacts("write_file", ToolAction.WRITE, "_system", False))
+    assert not scope.matches(ToolFacts("send_email", ToolAction.WRITE, "gmail", True))
+    # The user read the action and approved it. Re-asking per tool call inside
+    # it poses the same question again, which stalled approved edits behind a
+    # second prompt; bash and app control still block, they refuse a bypass.
+    assert skip_approvals is True
 
 
 def test_rejecting_a_review_runs_nothing(client):
@@ -496,7 +515,9 @@ def test_reply_to_unfiled_ask_dispatches_into_the_origin_session(client):
 
     assert res.status_code == 200
     assert res.json()["resolution"] == "replied"
-    assert c.app.state.dispatched == [("chat-1", "REPLY TO ASK [tool:chat-1:overdue]\nChase it.", None)]
+    # A chat's own session keeps its own scope and approval policy: the reply
+    # goes back where the ask came from, it does not mint anything.
+    assert c.app.state.dispatched == [("chat-1", "REPLY TO ASK [tool:chat-1:overdue]\nChase it.", None, False)]
     assert emitted == [[]]
 
 

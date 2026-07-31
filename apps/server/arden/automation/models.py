@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from arden.automation.triggers import Trigger
+from arden.tools.scopes import ScopeKey
 
 AutomationKind = Literal["automation", "loop"]
 AutomationDescriptionSource = Literal["manual", "generated"]
@@ -32,10 +33,10 @@ class Automation:
     max_age_days: int | None = None
     thread_id: str | None = None
     read_history: bool = False
-    # Allowlist of tool-name patterns ('*', exact, 'slack_*') this
-    # automation's runs may use; None = unrestricted. Applied as the hard
-    # outer gate in ToolRegistry.get_schemas.
-    tool_scope: list[str] | None = None
+    # Which tools this automation's runs may use — a key into arden.tools.scopes,
+    # never a tool list. The UI and the agent may only set "read_only" or "all";
+    # custodians and builtin workers get a fine-grained key from code.
+    tool_scope: ScopeKey = "read_only"
     parent_automation_id: str | None = None
     idempotency_key: str | None = None
     idempotency_scope: str | None = None

@@ -119,6 +119,9 @@ class AreaService:
                     "autonomy": s.autonomy,
                     "page_path": s.page_path,
                     "live": bool(area_asks) or bool(any(a.get("running_since") for a in self._area_automations(s.key))),
+                    # A paused custodian looks identical to a quiet one from the
+                    # rail otherwise, so pausing reads as the area going silent.
+                    "paused": bool((self._get_area(s.key) or {}).get("paused_at")),
                     "updated": summary["updated"],
                     "ask_count": len(area_asks),
                 }

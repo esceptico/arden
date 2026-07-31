@@ -8,39 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from arden.areas.asks import AskStore
 from arden.areas.models import Area, Ask
 from arden.areas.work_models import AreaWorkSnapshot, EvidenceDraft, OutcomeChange, WorkChange
-from arden.tools.core.scope import READ_FLOOR
+from arden.tools.scopes import AREA_REPORT_TOOL_NAME, ScopeKey
 
-# Observe-mode toolset as DATA: the automation's tool_scope allowlist
-# (visible and editable on the automation itself) instead of a code-side
-# toolset hack. `read:*` is the read floor, declared rather than assumed;
-# the rest is this area's own page and its report. Nothing acts on the
-# outside world. Naming the individual read tools here would restrict
-# nothing — the floor already grants them — while drifting from the
-# integrations it mirrored.
-AREA_REPORT_TOOL_NAME = "submit_area_report"
+# A custodian's toolset is one of the fine-grained scopes in arden.tools.scopes.
+# Children mint under area:{key}:{slug} — the boundary area_run_automation
+# enforces.
 CUSTODIAN_TASK_PREFIX = "area:"
 CUSTODIAN_ACTOR_PREFIX = "automation:area:"
-
-OBSERVE_TOOL_SCOPE = [
-    READ_FLOOR,
-    AREA_REPORT_TOOL_NAME,
-    "area_page_read",
-    "area_page_patch",
-    "area_page_write",
-]
-
-# Acting expands only to named integration tools. Their own policies still
-# require approval for consequential writes (create_automation is
-# approval-gated), so autonomy never becomes a wildcard or an approval
-# bypass. Children mint under area:{key}:{slug} — the boundary
-# area_run_automation enforces.
-ACT_TOOL_SCOPE = [
-    *OBSERVE_TOOL_SCOPE,
-    "create_automation",
-    "list_automations",
-    "get_automation_result",
-    "area_run_automation",
-]
 
 _CONTRACT = {
     "observe": "You may read anything and update this area's topic page, but take no external action.",
@@ -223,14 +197,14 @@ def render_work_context(snapshot: AreaWorkSnapshot) -> str:
 @dataclass(frozen=True)
 class CustodianContract:
     description: str
-    tool_scope: list[str]
+    tool_scope: ScopeKey
     auto_approve: bool = False
 
 
 def is_custodian_task_id(task_id: str) -> bool:
     """Custodian runs are exactly `area:{id}`. Colon-suffixed children
     (`area:{id}:{slug}`) are ordinary automations — no cap, no intake, and
-    user-scope semantics (read floor) instead of the curated contract."""
+    the settable read_only/all lever instead of the curated contract."""
     suffix = task_id.removeprefix(CUSTODIAN_TASK_PREFIX)
     return task_id.startswith(CUSTODIAN_TASK_PREFIX) and ":" not in suffix
 
@@ -241,10 +215,9 @@ def custodian_contract(area: Area) -> CustodianContract:
     Tool policies remain the approval authority. In particular, acting mode
     expands the allowlist but never disables approvals globally.
     """
-    scope = ACT_TOOL_SCOPE if area.autonomy == "act" else OBSERVE_TOOL_SCOPE
     return CustodianContract(
         description=area_agent_instructions(area),
-        tool_scope=list(scope),
+        tool_scope="area_act" if area.autonomy == "act" else "area_observe",
     )
 
 

@@ -11,7 +11,12 @@ from arden.tools.core import EmptyInput, ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
-from arden.tools.tool_scope import validate_tool_scope
+
+ALL_TOOLS_DESCRIPTION = (
+    "Whether the runs may use every tool, or only read-only ones. Default false: the runs read but "
+    "never write or execute. Set true only when the prompt genuinely needs to act — approvals still "
+    "apply to each consequential call."
+)
 
 # --- Descriptions ---
 
@@ -27,8 +32,8 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "Time triggers support two modes: schedule ('at' a specific time) or interval ('every' N hours/minutes). "
     "Optional model override per automation (falls back to default chat model when omitted). "
     "Each automation gets its own dedicated channel for results; use create_loop to repeat work in this chat. "
-    "Runs are read-only by default. Grant required action tools with tool_scope; auto_approve=true only skips "
-    "approvals for tools already granted by that scope. "
+    "Runs are read-only by default. Set all_tools=true when the prompt must act; auto_approve=true only skips "
+    "approvals, it never widens what the run may use. "
     "Always provide one stable idempotency_key and reuse it unchanged after an ambiguous retry; standalone "
     "automations use idempotency_scope='global'."
     f" {SPAWN_SURFACE_GUIDANCE}"
@@ -194,20 +199,10 @@ class CreateAutomationInput(BaseModel):
     auto_approve: bool = Field(
         default=False,
         description=(
-            "Skip per-tool approvals within tool_scope. This never grants tools: "
-            "without tool_scope the automation remains read-only."
+            "Skip per-tool approvals. This never widens the toolset: without all_tools the automation stays read-only."
         ),
     )
-    tool_scope: list[str] | None = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
-        description=(
-            "Tool-name allowlist patterns (exact names or prefixes like 'slack_*') granting tools ON TOP of the "
-            "always-available read-only toolset. List the write/action tools the prompt needs; read tools are "
-            "always there. Omit for read-only access."
-        ),
-    )
+    all_tools: bool = Field(default=False, description=ALL_TOOLS_DESCRIPTION)
     parent_automation_id: str | None = Field(
         default=None,
         description=(
@@ -246,6 +241,10 @@ class CreateAutomationInput(BaseModel):
 
 
 class UpdateAutomationInput(BaseModel):
+    # Without this a stale field name (the removed `tool_scope`) is accepted and
+    # ignored, so the model believes it set something it did not.
+    model_config = ConfigDict(extra="forbid")
+
     task_id: str = Field(description="The automation ID to update")
     name: str | None = Field(default=None, description="New name")
     description: str | None = Field(default=None, max_length=220, description="New concise display summary")
@@ -285,17 +284,9 @@ class UpdateAutomationInput(BaseModel):
     )
     auto_approve: bool | None = Field(
         default=None,
-        description="Skip per-tool approvals within the existing tool_scope. This never grants tools.",
+        description="Skip per-tool approvals. This never widens the toolset.",
     )
-    tool_scope: list[str] | None = Field(
-        default=None,
-        min_length=1,
-        max_length=200,
-        description=(
-            "Replace the tool-name allowlist patterns for this automation. Patterns grant tools on top of the "
-            "always-available read-only toolset — list the write/action tools the prompt needs."
-        ),
-    )
+    all_tools: bool | None = Field(default=None, description=ALL_TOOLS_DESCRIPTION)
     enabled: bool | None = Field(default=None, description="Enable or disable the automation")
 
 
@@ -350,7 +341,7 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
         lines.append(f"Model: {args.model}")
     if args.auto_approve:
         lines.append("Auto-approve: yes (skips approval for granted tools; does not grant access)")
-    lines.append(f"Tools: {', '.join(args.tool_scope)}" if args.tool_scope else "Tools: read-only (no scope grant)")
+    lines.append("Tools: every tool" if args.all_tools else "Tools: read-only")
     lines.append("Results: dedicated automation channel")
     try:
         inferred_parent, _ = await _resolve_parent_context(execution, args.parent_automation_id, args.idempotency_scope)
@@ -378,23 +369,8 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     )
 
 
-def _tool_scope_error(execution: ToolExecution, patterns: list[str]) -> ToolResult | None:
-    try:
-        validate_tool_scope(patterns, execution.ctx.registry.tools)
-    except ValueError as exc:
-        return ToolResult.failure(
-            code="invalid_arguments",
-            message=str(exc),
-            preview="Unknown tools in scope",
-            recovery_action="Use exact registered tool names or prefix patterns like 'slack_*', then retry.",
-        )
-    return None
-
-
 async def create_automation(execution: ToolExecution, args: CreateAutomationInput) -> ToolResult:
     svc = execution.ctx.services["automation"]
-    if args.tool_scope and (scope_error := _tool_scope_error(execution, args.tool_scope)):
-        return scope_error
     try:
         parent_automation_id, parent_fire_at = await _resolve_parent_context(
             execution, args.parent_automation_id, args.idempotency_scope
@@ -439,7 +415,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             idempotency_scope=args.idempotency_scope,
             parent_fire_at=parent_fire_at,
             attempt_n=args.attempt_n,
-            tool_scope=args.tool_scope,
+            tool_scope="all" if args.all_tools else "read_only",
         )
     except ValueError as e:
         return ToolResult.failure(
@@ -517,7 +493,7 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
         "prompt": args.prompt,
         "enabled": args.enabled,
         "auto_approve": args.auto_approve,
-        "tool_scope": args.tool_scope,
+        "tools": None if args.all_tools is None else ("every tool" if args.all_tools else "read-only"),
         "model": args.model,
         "trigger_type": args.trigger_type,
         "at": args.at,
@@ -544,8 +520,6 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
 
 
 async def update_automation(execution: ToolExecution, args: UpdateAutomationInput) -> ToolResult:
-    if args.tool_scope and (scope_error := _tool_scope_error(execution, args.tool_scope)):
-        return scope_error
     message_triggers: list[dict] | None = None
     if args.trigger_type == "message":
         message_trigger: dict = {"type": "message", "source": "slack", "channels": args.channels or []}
@@ -573,7 +547,9 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
             end=args.end,
             auto_approve=args.auto_approve,
             enabled=args.enabled,
-            tool_scope=args.tool_scope,
+            # None leaves the scope alone — and a custodian's fine-grained key
+            # is never reachable from here, only "all" or "read_only".
+            tool_scope=None if args.all_tools is None else ("all" if args.all_tools else "read_only"),
         )
     except KeyError:
         return _automation_not_found(args.task_id)

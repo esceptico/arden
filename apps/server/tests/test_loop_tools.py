@@ -260,7 +260,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
                 "every": "1h",
                 "thread_id": "sess-target",
                 "read_history": True,
-                "tool_scope": ["slack_search", "slack_post_message"],
+                "all_tools": True,
                 "idempotency_key": "channel-automation",
             }
         )
@@ -270,7 +270,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
         prompt="Post into its own channel.",
         trigger_type="time",
         every="1h",
-        tool_scope=["slack_search", "slack_post_message"],
+        all_tools=True,
         idempotency_key="channel-automation",
     )
     result = await create_automation(execution, args)
@@ -280,7 +280,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
     created = next(a for a in rows if a.name == "channel automation")
     assert created.thread_id != "sess-target"
     assert created.read_history is True
-    assert created.tool_scope == ["slack_search", "slack_post_message"]
+    assert created.tool_scope == "all"
     channel = await svc.session_service.load(created.thread_id)
     assert channel is not None
     assert channel.state.session_type == "channel"
@@ -298,7 +298,7 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
         trigger_type="time",
         every="1h",
         auto_approve=True,
-        tool_scope=["slack_search", "slack_post_message"],
+        all_tools=True,
         idempotency_key="scoped-sender",
     )
 
@@ -306,7 +306,7 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
 
     assert info is not None
     assert "Auto-approve: yes (skips approval for granted tools; does not grant access)" in (info.preview or "")
-    assert "Tools: slack_search, slack_post_message" in (info.preview or "")
+    assert "Tools: every tool" in (info.preview or "")
 
 
 @pytest.mark.asyncio
@@ -330,12 +330,12 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
 
     result = await update_automation(
         execution,
-        UpdateAutomationInput(task_id=created.task_id, tool_scope=["gmail_search", "read_email"]),
+        UpdateAutomationInput(task_id=created.task_id, all_tools=True),
     )
 
     assert not result.is_error
     updated = await store.get(created.task_id)
-    assert updated.tool_scope == ["gmail_search", "read_email"]
+    assert updated.tool_scope == "all"
 
 
 class _FakeSlack:
@@ -644,78 +644,39 @@ async def test_approve_create_loop_flags_missing_parent(store_and_svc):
 
 
 @pytest.mark.asyncio
-async def test_create_automation_rejects_unknown_tool_scope_names(store_and_svc):
-    # A typo'd scope pattern must fail loudly with candidates — storing it
-    # would silently strip the automation of the tool its author meant.
-    _, svc = store_and_svc
-    execution = _execution(svc, loop_task_id=None)
-
-    result = await create_automation(
-        execution,
-        CreateAutomationInput(
-            name="typo scope",
-            description="Archives chats.",
-            prompt="Archive old chats.",
-            trigger_type="time",
-            every="1d",
-            tool_scope=["archve_session"],
-            idempotency_key="typo-scope",
-        ),
-    )
-
-    assert result.is_error
-    assert result.outcome.error.code == "invalid_arguments"
-    assert "archve_session" in result.content
-    assert "archive_session" in result.content  # the suggestion
-
-
-@pytest.mark.asyncio
-async def test_create_automation_accepts_prefix_scope_patterns(store_and_svc):
+async def test_the_agent_can_only_choose_read_only_or_everything(store_and_svc):
+    """The model no longer authors a tool list, so a typo'd or over-broad name
+    cannot reach the store at all — the field is a bool and the stored value is
+    a key the code owns."""
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    result = await create_automation(
-        execution,
-        CreateAutomationInput(
-            name="prefix scope",
-            description="Posts to Slack.",
-            prompt="Post to Slack.",
-            trigger_type="time",
-            every="1d",
-            tool_scope=["slack_*"],
-            idempotency_key="prefix-scope",
-        ),
-    )
+    assert "tool_scope" not in CreateAutomationInput.model_fields
+    with pytest.raises(ValidationError):
+        CreateAutomationInput.model_validate(
+            {
+                "name": "x",
+                "prompt": "x",
+                "trigger_type": "time",
+                "every": "1d",
+                "idempotency_key": "x",
+                "tool_scope": ["archive_session"],
+            }
+        )
 
-    assert not result.is_error
-    created = next(a for a in await store.list_all() if a.name == "prefix scope")
-    assert created.tool_scope == ["slack_*"]
-
-
-@pytest.mark.asyncio
-async def test_update_automation_rejects_unknown_tool_scope_names(store_and_svc):
-    from arden.tools.automation import UpdateAutomationInput, update_automation
-
-    store, svc = store_and_svc
-    execution = _execution(svc, loop_task_id=None)
-    await create_automation(
-        execution,
-        CreateAutomationInput(
-            name="scope guard",
-            description="Reads email.",
-            prompt="Read email.",
-            trigger_type="time",
-            every="1d",
-            idempotency_key="scope-guard",
-        ),
-    )
-    created = next(a for a in await store.list_all() if a.name == "scope guard")
-
-    result = await update_automation(
-        execution,
-        UpdateAutomationInput(task_id=created.task_id, tool_scope=["gmail_serch"]),
-    )
-
-    assert result.is_error
-    assert "gmail_search" in result.content
-    assert (await store.get(created.task_id)).tool_scope is None
+    for all_tools, expected in ((False, "read_only"), (True, "all")):
+        result = await create_automation(
+            execution,
+            CreateAutomationInput(
+                name=f"lever-{expected}",
+                description="Reads things.",
+                prompt="Read things.",
+                trigger_type="time",
+                every="1d",
+                all_tools=all_tools,
+                idempotency_key=f"lever-{expected}",
+            ),
+        )
+        assert not result.is_error
+        created = next(a for a in await store.list_all() if a.name == f"lever-{expected}")
+        assert created.tool_scope == expected

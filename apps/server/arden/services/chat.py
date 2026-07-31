@@ -65,6 +65,7 @@ from arden.tools.deferred import (
 )
 from arden.tools.directives import load_directives
 from arden.tools.executor import ToolExecutor
+from arden.tools.scopes import ScopeKey
 from arden.wiki.context import WikiContextBuilder
 
 _logger = get_logger(__name__)
@@ -689,7 +690,7 @@ async def prepare_chat(
     loop_task_id: str | None = None,
     automation_id: str | None = None,
     emit: Callable[[object], Awaitable[None]] | None = None,
-    tool_scope: tuple[str, ...] | None = None,
+    tool_scope: ScopeKey | None = None,
     resume_run_id: str | None = None,
 ) -> ChatContext:
     registry = deps.run_registry
@@ -883,7 +884,7 @@ async def submit_chat_message(
     context: list[dict] | None = None,
     client_id: str | None = None,
     session_service: SessionService | None = None,
-    tool_scope: tuple[str, ...] | None = None,
+    tool_scope: ScopeKey | None = None,
     loop_task_id: str | None = None,
     automation_id: str | None = None,
     queue_if_busy: bool = True,
@@ -971,7 +972,7 @@ async def _submit_chat_message_locked(
     context: list[dict] | None = None,
     client_id: str | None = None,
     session_service: SessionService | None = None,
-    tool_scope: tuple[str, ...] | None = None,
+    tool_scope: ScopeKey | None = None,
     loop_task_id: str | None = None,
     automation_id: str | None = None,
     queue_if_busy: bool = True,

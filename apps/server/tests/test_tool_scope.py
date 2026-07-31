@@ -1,6 +1,9 @@
-"""Per-automation tool scoping — allowlist-only patterns applied as the hard
-outer gate in ToolRegistry.get_schemas (design learned from dex's toolset:
-no denylist, narrow the allowlist instead)."""
+"""Tool scoping: a filter algebra built in code, keyed by name where it persists.
+
+Nothing stored mentions a tool, so renaming a tool cannot narrow a saved scope.
+The UI and the agent may only choose between `read_only` and `all`; the
+fine-grained keys belong to custodians and builtin workers.
+"""
 
 from datetime import UTC, datetime
 
@@ -8,58 +11,140 @@ import pytest
 
 from arden.automation.models import Automation
 from arden.automation.triggers import TimeTrigger
-from arden.tools.core.scope import matches_scope
+from arden.tools.core.base import Tool
+from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.scope import ToolFacts, tools
+from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.scopes import SCOPES, SETTABLE_SCOPES, resolve
 
 
-def test_matches_scope_grammar():
-    assert matches_scope(("*",), "anything")
-    assert matches_scope(("recall",), "recall")
-    assert not matches_scope(("recall",), "recall_all")
-    assert matches_scope(("slack_*",), "slack_search")
-    assert not matches_scope(("slack_*",), "gmail_search")
-    assert not matches_scope((), "recall")
+def _tool(action: ToolAction) -> Tool:
+    class _T(Tool):
+        description = "t"
+        policy = ToolPolicy(action=action, scope=ToolScope.INTERNAL)
+
+        async def execute(self, execution, **kwargs):  # pragma: no cover
+            raise NotImplementedError
+
+        def to_dict(self, name):
+            return {"name": name}
+
+    return _T()
 
 
-def test_registry_scope_is_outer_gate_over_extras():
-    from arden.tools.core.base import Tool
-    from arden.tools.core.registry import ToolRegistry
-    from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+FACTS = (
+    ToolFacts("slack_search", ToolAction.READ, "slack", True),
+    ToolFacts("slack_post_message", ToolAction.WRITE, "slack", True),
+    ToolFacts("send_email", ToolAction.WRITE, "gmail", True),
+    ToolFacts("recall", ToolAction.READ, "_facts", False),
+    ToolFacts("memory_patch", ToolAction.WRITE, "_facts", False),
+)
 
-    reg = ToolRegistry()
 
-    def make(action):
-        class _T(Tool):
-            description = "t"
-            policy = ToolPolicy(action=action, scope=ToolScope.INTERNAL)
+def _granted(scope, facts=FACTS) -> set[str]:
+    return {fact.name for fact in facts if scope.matches(fact)}
 
-            async def execute(self, execution, **kwargs):  # pragma: no cover
-                raise NotImplementedError
 
-            def to_dict(self, name):
-                return {"name": name}
+def test_leaves_select_on_registry_facts_not_on_the_name_string():
+    assert _granted(tools.read) == {"slack_search", "recall"}
+    assert _granted(tools.system) == {"recall", "memory_patch"}
+    assert _granted(tools.integrations) == {"slack_search", "slack_post_message", "send_email"}
+    assert _granted(tools.source("slack")) == {"slack_search", "slack_post_message"}
+    assert _granted(tools.named("recall")) == {"recall"}
+    assert _granted(tools.prefix("slack_")) == {"slack_search", "slack_post_message"}
+    assert _granted(tools.ALL) == {fact.name for fact in FACTS}
 
-        return _T()
 
-    reg.register("slack_search", make(ToolAction.READ))
-    reg.register("gmail_read", make(ToolAction.READ))
-    reg.register("memory_patch", make(ToolAction.WRITE))
-
-    names = {t["name"] for t in reg.get_schemas(scope=("slack_*",))}
-    assert names == {"slack_search"}
-
-    # scope gates even extra_names — no path widens past the allowlist
-    names = {
-        t["name"] for t in reg.get_schemas(read_only=True, extra_names=frozenset({"memory_patch"}), scope=("slack_*",))
+def test_union_intersection_and_narrowing_compose():
+    assert _granted(tools.system | (tools.integrations & tools.read)) == {
+        "slack_search",
+        "recall",
+        "memory_patch",
     }
-    assert names == {"slack_search"}
+    assert _granted(tools.integrations & ~tools.source("slack")) == {"send_email"}
 
-    # None = unrestricted (existing behavior untouched)
-    names = {t["name"] for t in reg.get_schemas()}
-    assert names == {"slack_search", "gmail_read", "memory_patch"}
+
+def test_expressions_render_with_correct_precedence():
+    assert str(tools.read | tools.named("send_email") | tools.prefix("slack_")) == "read | send_email | slack_*"
+    assert str(tools.system | (tools.integrations & tools.read)) == "system | integrations & read"
+    # `&` binds tighter, so a nested union must carry its own parens.
+    assert str((tools.read | tools.write) & ~tools.source("slack")) == "(read | write) & ~source(slack)"
+
+
+def test_a_source_selector_survives_a_tool_rename_where_a_prefix_would_not():
+    renamed = (ToolFacts("slack_v2_search", ToolAction.READ, "slack", True),)
+    assert _granted(tools.source("slack"), renamed) == {"slack_v2_search"}
+    assert _granted(tools.prefix("slack_search"), renamed) == set()
+
+
+def test_every_key_resolves_and_only_two_are_settable():
+    for key in SCOPES:
+        assert resolve(key) is SCOPES[key]
+    assert SETTABLE_SCOPES == ("read_only", "all")
+    # The fine-grained contracts exist but are never offered as a choice.
+    assert {"area_observe", "area_act", "wiki_producer"} <= set(SCOPES) - set(SETTABLE_SCOPES)
+
+
+def test_an_unknown_key_fails_loudly_rather_than_granting_nothing():
+    with pytest.raises(ValueError, match="unknown tool scope 'read_onlyy'"):
+        resolve("read_onlyy")
+
+
+def test_the_settable_lever_is_read_only_versus_everything():
+    assert _granted(resolve("read_only")) == {"slack_search", "recall"}
+    assert _granted(resolve("all")) == {fact.name for fact in FACTS}
+
+
+def test_registry_scope_is_the_outer_gate_over_extras():
+    reg = ToolRegistry()
+    reg.register("slack_search", _tool(ToolAction.READ), source="slack")
+    reg.register("slack_post_message", _tool(ToolAction.WRITE), source="slack")
+    reg.register("recall", _tool(ToolAction.READ), source="_facts")
+    reg.register("memory_patch", _tool(ToolAction.WRITE), source="_facts")
+
+    assert {t["name"] for t in reg.get_schemas(scope=tools.source("slack"))} == {
+        "slack_search",
+        "slack_post_message",
+    }
+
+    # Scope gates even extra_names — no path widens past the declaration.
+    assert {
+        t["name"]
+        for t in reg.get_schemas(
+            read_only=True,
+            extra_names=frozenset({"memory_patch"}),
+            scope=tools.source("slack"),
+        )
+    } == {"slack_search"}
+
+    # None = unrestricted.
+    assert len(reg.get_schemas()) == 4
+
+
+def test_registry_owns_the_system_versus_service_classification():
+    """No caller encodes the `_` prefix — that was the original coupling."""
+    reg = ToolRegistry()
+    reg.register("recall", _tool(ToolAction.READ), source="_facts")
+    reg.register("slack_search", _tool(ToolAction.READ), source="slack")
+
+    assert reg.facts("recall").external is False
+    assert reg.facts("slack_search").external is True
+    assert {t["name"] for t in reg.get_schemas(scope=tools.system)} == {"recall"}
+
+
+def test_read_only_never_smuggles_in_a_write():
+    from arden.tools.executor import ToolExecutor
+
+    executor = ToolExecutor(get_services=lambda: {"wiki": object(), "wiki_post_commit": object()})
+    granted = {s["function"]["name"] for s in executor.get_tools(scope=resolve("read_only"))}
+
+    assert {"list_wiki_pages", "read_wiki_page", "wiki_links"} <= granted
+    for name in ("create_wiki_page", "edit_wiki_page", "archive_wiki_page", "send_email"):
+        assert name not in granted, name
 
 
 @pytest.mark.asyncio
-async def test_automation_tool_scope_roundtrip(tmp_path):
+async def test_automation_scope_roundtrips_as_a_key(tmp_path):
     import aiosqlite
 
     from arden.automation.store import AutomationStore
@@ -68,38 +153,16 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
     conn.row_factory = aiosqlite.Row
     store = AutomationStore(conn)
     await store.init_schema()
-    trigger = TimeTrigger(at="06:30", days="daily")
-    await store.save(
-        Automation(
-            task_id="t1",
-            name="slack only",
-            description=None,
-            description_source=None,
-            prompt="Use the allowed Slack tools.",
-            model=None,
-            triggers=[trigger],
-            enabled=True,
-            created_at=datetime.now(UTC),
-            next_run_at=None,
-            last_run_at=None,
-            last_result=None,
-            running_since=None,
-            auto_approve=False,
-            tool_scope=["slack_*", "current_time"],
-        )
-    )
-    loaded = await store.get("t1")
-    assert loaded.tool_scope == ["slack_*", "current_time"]
 
-    await store.save(
-        Automation(
-            task_id="t2",
-            name="unrestricted",
+    def automation(task_id: str, scope: str) -> Automation:
+        return Automation(
+            task_id=task_id,
+            name=task_id,
             description=None,
             description_source=None,
-            prompt="Run without a tool scope.",
+            prompt="Use the allowed tools.",
             model=None,
-            triggers=[trigger],
+            triggers=[TimeTrigger(at="06:30", days="daily")],
             enabled=True,
             created_at=datetime.now(UTC),
             next_run_at=None,
@@ -107,81 +170,14 @@ async def test_automation_tool_scope_roundtrip(tmp_path):
             last_result=None,
             running_since=None,
             auto_approve=False,
+            tool_scope=scope,
         )
-    )
-    assert (await store.get("t2")).tool_scope is None
+
+    for key in ("read_only", "all", "area_observe", "wiki_producer"):
+        await store.save(automation(f"t-{key}", key))
+        assert (await store.get(f"t-{key}")).tool_scope == key
+
     await conn.close()
-
-
-def test_read_floor_is_granted_only_when_declared():
-    """The floor used to be unioned into every scoped run inside the executor,
-    which made "can read anything" a property of the plumbing that no author
-    had written down. It is an ordinary grant now."""
-    from arden.tools.core.scope import READ_FLOOR, expand_scope
-
-    floor = ("list_recent_sessions", "read_session", "read_file")
-
-    # Declared: the write grant rides on top of every read tool, deduped,
-    # order-stable, and the marker itself does not survive into the result.
-    assert expand_scope((READ_FLOOR, "archive_session"), floor) == (
-        "archive_session",
-        "list_recent_sessions",
-        "read_session",
-        "read_file",
-    )
-    assert expand_scope(("read_file", READ_FLOOR, "bash"), floor) == (
-        "read_file",
-        "bash",
-        "list_recent_sessions",
-        "read_session",
-    )
-
-    # Undeclared: the scope stands exactly as authored.
-    assert expand_scope(("archive_session",), floor) == ("archive_session",)
-
-
-def test_registry_read_only_names_lists_only_read_tools():
-    from arden.tools.core.base import Tool
-    from arden.tools.core.registry import ToolRegistry
-    from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
-
-    def make(action):
-        class _T(Tool):
-            description = "t"
-            policy = ToolPolicy(action=action, scope=ToolScope.INTERNAL)
-
-            async def execute(self, execution, **kwargs):  # pragma: no cover
-                raise NotImplementedError
-
-            def to_dict(self, name):
-                return {"name": name}
-
-        return _T()
-
-    reg = ToolRegistry()
-    reg.register("slack_search", make(ToolAction.READ))
-    reg.register("read_file", make(ToolAction.READ))
-    reg.register("slack_post_message", make(ToolAction.WRITE))
-
-    assert set(reg.read_only_names()) == {"slack_search", "read_file"}
-
-
-def test_executor_grants_the_read_floor_only_to_a_scope_that_declares_it():
-    from arden.tools.core.scope import READ_FLOOR
-    from arden.tools.executor import ToolExecutor
-
-    executor = ToolExecutor(get_services=lambda: {"wiki": object(), "wiki_post_commit": object()})
-    resolve = lambda scope: {s["function"]["name"] for s in executor.get_tools(scope=scope)}  # noqa: E731
-
-    declared = resolve((READ_FLOOR, "create_wiki_page"))
-    assert {"create_wiki_page", "list_wiki_pages", "read_wiki_page", "wiki_links"} <= declared
-    # The floor is reads only — it never smuggles in a write the author omitted.
-    assert "edit_wiki_page" not in declared
-    assert "archive_wiki_page" not in declared
-    assert "send_email" not in declared
-
-    bare = resolve(("create_wiki_page",))
-    assert bare == {"create_wiki_page"}
 
 
 def test_is_custodian_task_id_matches_only_bare_area_tasks():

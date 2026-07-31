@@ -22,7 +22,7 @@ from arden.server.schemas import (
 )
 from arden.server.sse_stream import live_records, reset_chunk
 from arden.server.sse_stream import replay_records as iter_replay_records
-from arden.tools.tool_scope import validate_tool_scope
+from arden.tools.scopes import resolve
 
 router = APIRouter(tags=["automations"])
 
@@ -51,22 +51,14 @@ def _automation_to_dict(a: Automation, recent_statuses: list[str] | None = None)
         "builtin": a.builtin,
         "cooldown_minutes": a.cooldown_minutes,
         "tool_scope": a.tool_scope,
+        # The contract the key names, rendered by the server so the client
+        # never re-derives it.
+        "tool_scope_label": str(resolve(a.tool_scope)),
         "kind": a.kind,
         "read_history": a.read_history,
         "idempotency_key": a.idempotency_key,
         "idempotency_scope": a.idempotency_scope,
     }
-
-
-def _validate_tool_scope(patterns: list[str] | None, runtime: Runtime) -> None:
-    if not patterns:
-        return
-    if runtime.executor is None:
-        raise HTTPException(status_code=503, detail="Tool registry unavailable")
-    try:
-        validate_tool_scope(patterns, runtime.executor.registry.tools)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/automations")
@@ -75,7 +67,6 @@ async def create_automation(
     svc: AutomationService = Depends(require_automation_service),
     runtime: Runtime = Depends(get_runtime),
 ):
-    _validate_tool_scope(request.tool_scope, runtime)
     try:
         automation = await svc.create(
             name=request.name,
@@ -290,7 +281,6 @@ async def update_automation(
     svc: AutomationService = Depends(require_automation_service),
     runtime: Runtime = Depends(get_runtime),
 ):
-    _validate_tool_scope(request.tool_scope, runtime)
     try:
         automation = await svc.update(
             task_id,

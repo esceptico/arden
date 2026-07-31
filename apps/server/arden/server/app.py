@@ -56,6 +56,7 @@ from arden.server.routers.skills import router as skills_router
 from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
 from arden.services.chat import resume_suspended_chat_run, submit_chat_message
+from arden.tools.scopes import ScopeKey
 
 _logger = get_logger(__name__)
 
@@ -82,10 +83,10 @@ def _iteration_client_id(automation: Automation, automation_run_id: int) -> str:
     return f"loop:{automation.task_id}:{generation}:{automation.iteration_count + 1}:{automation_run_id}"
 
 
-def _automation_tool_scope(automation: Automation) -> tuple[str, ...] | None:
+def _automation_tool_scope(automation: Automation) -> ScopeKey:
     """Return an automation's declared tool authority without widening it."""
 
-    return None if not automation.tool_scope else tuple(automation.tool_scope)
+    return automation.tool_scope
 
 
 async def _automation_chat_model(runtime: Runtime, automation: Automation) -> str | None:
@@ -345,7 +346,7 @@ async def lifespan(app: FastAPI):
         client_id: str | None = None,
         skip_approvals: bool | None = False,
         images: list[dict] | None = None,
-        tool_scope: tuple[str, ...] | None = None,
+        tool_scope: ScopeKey | None = None,
         chat_model: str | None = None,
         loop_task_id: str | None = None,
         automation_id: str | None = None,

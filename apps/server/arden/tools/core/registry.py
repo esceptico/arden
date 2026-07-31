@@ -2,11 +2,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Self
 
 from arden.agent import ToolOutcomeStatus
+from arden.constants import is_external_source
 from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.middleware import DEFAULT_TOOL_MIDDLEWARE, ToolCall, ToolMiddleware
-from arden.tools.core.scope import matches_scope
+from arden.tools.core.scope import ToolFacts, ToolFilter
 from arden.tools.core.types import ApprovalMode, ToolAction, ToolOverrideDecision, ToolPolicy
 
 
@@ -92,7 +93,7 @@ class ToolRegistry:
         read_only: bool | None = None,
         actions: frozenset[ToolAction] | None = None,
         extra_names: frozenset[str] = frozenset(),
-        scope: tuple[str, ...] | None = None,
+        scope: ToolFilter | None = None,
     ) -> list[dict]:
         schemas = []
         for name, tool in self._tools.items():
@@ -100,8 +101,8 @@ class ToolRegistry:
                 continue
             # Scope is the hard outer gate — applied before every other
             # selection (including extra_names) so no path widens a run past
-            # its author's allowlist.
-            if scope is not None and not matches_scope(scope, name):
+            # its author's declaration.
+            if scope is not None and not scope.matches(self.facts(name)):
                 continue
             tool = self._effective_tool(name, tool)
             if names is not None and name not in names:
@@ -142,10 +143,18 @@ class ToolRegistry:
     def tools(self) -> dict[str, Tool]:
         return dict(self._tools)
 
-    def read_only_names(self) -> tuple[str, ...]:
-        """Names of every registered READ-action tool — the safe floor that
-        user-authored scopes build on (see scope.with_read_floor)."""
-        return tuple(name for name, tool in self._tools.items() if tool.policy.action == ToolAction.READ)
+    def facts(self, name: str) -> ToolFacts:
+        """What a scope filter may ask about one tool."""
+        source = self._sources.get(name, "unknown")
+        return ToolFacts(
+            name=name,
+            action=self._effective_tool(name, self._tools[name]).policy.action,
+            source=source,
+            external=is_external_source(source),
+        )
+
+    def all_facts(self) -> tuple[ToolFacts, ...]:
+        return tuple(self.facts(name) for name in self._tools)
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools

@@ -151,7 +151,7 @@ async def run_agent_execution(
         model=automation.model,
         skip_approvals=automation.auto_approve,
         automation_id=automation.task_id,
-        tool_scope=tuple(automation.tool_scope) if automation.tool_scope else None,
+        tool_scope=automation.tool_scope,
     )
     if bus_registry is not None:
         bus = bus_registry.get_or_create(AUTOMATION_BUS_KEY)

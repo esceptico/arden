@@ -11,7 +11,6 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from arden.areas.agent import AREA_REPORT_TOOL_NAME
 from arden.areas.lifecycle import AreaWikiUnavailable
 from arden.areas.models import Ask
 from arden.areas.work_store import AreaWorkConflict
@@ -251,13 +250,16 @@ async def update_area_autonomy(request: Request, area_id: str, body: AutonomyBod
 
 
 async def _dispatch_approved_action(request: Request, ask: Ask) -> None:
-    """Run an approved proposal as a fresh top-level agent carrying the user's
-    own tool scope.
+    """Carry out a proposal the user approved.
 
-    The custodian that proposed it never gains this reach: a child it spawned
-    would be intersected with its own read-only allowlist (see spawn_child).
-    Approval is what mints the capability, so it is granted per action and only
-    after the user has seen exactly what will run.
+    Approval mints the capability, per run: this run gets `area_action`, and
+    the custodian's scheduled runs keep `area_observe`/`area_act` untouched.
+
+    It also carries the approval. The user read the action text and said yes;
+    asking again for each tool call inside it poses the same question with no
+    new information — which is what left an approved edit stalled behind a
+    second prompt. Tools that refuse a bypass (bash, app control) still block,
+    so this is not a blanket grant.
     """
     runtime = request.app.state.runtime
     automation = await runtime.stores.automations.get(f"area:{ask.area_key}")
@@ -268,8 +270,8 @@ async def _dispatch_approved_action(request: Request, ask: Ask) -> None:
         f"APPROVED ACTION [{ask.id}]\nThe user approved this proposal. Carry it out now and "
         f"report what changed, file:line.\n\n{ask.action}",
         client_id=f"area-ask-action:{ask.id}",
-        skip_approvals=False,
-        tool_scope=None,
+        skip_approvals=True,
+        tool_scope="area_action",
     )
 
 
@@ -309,11 +311,7 @@ async def reply_to_ask(request: Request, ask_id: str, body: ReplyBody):
         if automation is None or not automation.thread_id:
             raise HTTPException(status_code=409, detail="Reply channel unavailable")
         target = automation.thread_id
-        tool_scope = (
-            tuple(name for name in automation.tool_scope if name != AREA_REPORT_TOOL_NAME)
-            if automation.tool_scope
-            else None
-        )
+        tool_scope = "area_reply"
     await dispatch(
         target,
         f"REPLY TO ASK [{ask.id}]\n{body.message.strip()}",

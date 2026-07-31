@@ -14,6 +14,7 @@ from arden.operator import runner
 from arden.operator.runner import OperatorDeps, RunRequest
 from arden.server.bus import SessionBus
 from arden.skills.registry import SkillRegistry
+from arden.tools.scopes import resolve
 
 
 def _write_skill(root: Path, name: str, description: str) -> None:
@@ -301,7 +302,7 @@ async def test_prepare_explicit_scope_selects_writes_without_global_widening(mon
             auto_approve=True,
             skip_approvals=True,
             source_id="test",
-            tool_scope=("slack_post_message", "current_time"),
+            tool_scope="all",
         ),
     )
 
@@ -310,6 +311,6 @@ async def test_prepare_explicit_scope_selects_writes_without_global_widening(mon
             "read_only": None,
             "actions": None,
             "extra_names": frozenset(),
-            "scope": ("slack_post_message", "current_time"),
+            "scope": resolve("all"),
         }
     ]

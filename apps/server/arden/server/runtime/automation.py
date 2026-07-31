@@ -9,9 +9,7 @@ from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
 from arden.automation.builtins import (
     FACT_MAINTENANCE_PROMPT,
-    FACT_MAINTENANCE_TOOL_SCOPE,
     WIKI_MAINTENANCE_PROMPT,
-    WIKI_MAINTENANCE_TOOL_SCOPE,
     seed_builtins,
 )
 from arden.automation.descriptions import AutomationDescriptionGenerator
@@ -45,7 +43,7 @@ from arden.outbox import AutomationSettled
 from arden.revisions.models import CollectionReport
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
-from arden.wiki.constants import PUBLISH_WIKI_GENERATED_TOOL_NAME, READ_WIKI_PAGE_TOOL_NAME
+from arden.wiki.constants import READ_WIKI_PAGE_TOOL_NAME
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService
 from arden.wiki.maintenance.runner import WikiMaintenance, WikiMaintenanceReviewer
 from arden.wiki.service import WikiService
@@ -120,8 +118,7 @@ class AutomationRuntime:
             await self.on_automation_finished(event.task_id, event.success)
 
     async def _validate_completed_run(self, automation: Automation, run_id: str | None) -> None:
-        scope = automation.tool_scope or ()
-        if PUBLISH_WIKI_GENERATED_TOOL_NAME not in scope:
+        if automation.tool_scope != "wiki_producer":
             return
         if run_id is None:
             raise RuntimeError("wiki producer did not expose a chat run for completion proof")
@@ -421,7 +418,7 @@ class AutomationRuntime:
                 model=model,
                 skip_approvals=True,
                 automation_id=BUILTIN_MEMORY_CONSOLIDATE_ID,
-                tool_scope=tuple(FACT_MAINTENANCE_TOOL_SCOPE),
+                tool_scope="fact_maintenance",
             )
             agent_run = None
             while not review.done:
@@ -494,7 +491,7 @@ class AutomationRuntime:
             model=model,
             skip_approvals=True,
             automation_id=BUILTIN_WIKI_MAINTENANCE_ID,
-            tool_scope=tuple(WIKI_MAINTENANCE_TOOL_SCOPE),
+            tool_scope="wiki_maintenance",
         )
         results = []
         agent_run = None
@@ -557,7 +554,7 @@ class AutomationRuntime:
         AutomationService.create like everything else: an area-tagged channel
         session owns each agent's runs (visible transcript, replyable,
         approvals surface in the session), iteration mode gives run-to-run
-        memory, and the observe contract lives in tool_scope as editable
+        memory, and the observe contract is a scope key resolved from
         data. Also migrates rows from the earlier handler-based shape."""
         records = [record for record in await self.stores.sessions.list_areas() if record.get("autonomy") is not None]
         for index, record in enumerate(records):

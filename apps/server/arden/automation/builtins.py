@@ -18,8 +18,7 @@ from arden.constants import (
     RETIRED_BUILTIN_AUTOMATION_IDS,
 )
 from arden.logging import get_logger
-from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
-from arden.wiki.constants import WIKI_MAINTENANCE_REVIEW_TOOL_NAME
+from arden.tools.scopes import ScopeKey
 
 _logger = get_logger(__name__)
 
@@ -35,18 +34,10 @@ class BuiltinSpec:
     enabled: bool = True
     auto_approve: bool = False
     cooldown_minutes: int | None = None
-    tool_scope: list[str] | None = None
+    tool_scope: ScopeKey = "read_only"
     uses_memory_model: bool = False
 
 
-_FACT_RETENTION_TOOL_SCOPE = [
-    "search_facts",
-    "get_fact",
-    "get_fact_history",
-    "get_due_fact_reviews",
-    "plan_fact_changes",
-    "commit_fact_changes",
-]
 _FACT_RETENTION_DESCRIPTION = "Review temporary canonical facts when their lifecycle review is due."
 _FACT_RETENTION_PROMPT = (
     "Review only canonical facts that are due for lifecycle review. Start with "
@@ -61,7 +52,6 @@ _FACT_RETENTION_PROMPT = (
     "every change first and commit only the returned plan."
 )
 _FACT_MAINTENANCE_DESCRIPTION = "Reconcile duplicate and misclassified canonical facts."
-FACT_MAINTENANCE_TOOL_SCOPE = [FACT_MAINTENANCE_REVIEW_TOOL_NAME]
 FACT_MAINTENANCE_PROMPT = (
     "Run Memory Maintenance to completion. Start with fact_maintenance_review action='next'. "
     "For each prepared cluster, merge only genuine duplicates, correct only "
@@ -80,7 +70,6 @@ _FACT_SYNTHESIS_PROMPT = (
 )
 _WIKI_MAINTENANCE_DESCRIPTION = "Reconcile cross-page wiki consistency from prepared evidence."
 _MEMORY_STORAGE_MAINTENANCE_DESCRIPTION = "Collect expired unreachable managed-history objects."
-WIKI_MAINTENANCE_TOOL_SCOPE = [WIKI_MAINTENANCE_REVIEW_TOOL_NAME]
 WIKI_MAINTENANCE_PROMPT = (
     "Run Wiki Maintenance to completion. Start with wiki_maintenance_review action='next'. "
     "For each prepared report, preserve user intent and use only the supplied evidence. "
@@ -100,7 +89,7 @@ BUILTINS = [
         triggers=[TimeTrigger(at=MEMORY_CONSOLIDATE_AT, days="daily")],
         handler="memory_maintenance",
         auto_approve=True,
-        tool_scope=list(FACT_MAINTENANCE_TOOL_SCOPE),
+        tool_scope="fact_maintenance",
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_SYNTHESIZE_ID,
@@ -119,7 +108,7 @@ BUILTINS = [
         triggers=[TimeTrigger(at=MEMORY_RETENTION_AT, days="daily")],
         handler=None,
         auto_approve=True,
-        tool_scope=list(_FACT_RETENTION_TOOL_SCOPE),
+        tool_scope="fact_retention",
         uses_memory_model=True,
     ),
     BuiltinSpec(
@@ -130,7 +119,7 @@ BUILTINS = [
         triggers=[TimeTrigger(every="6h")],
         handler="wiki_maintenance",
         auto_approve=True,
-        tool_scope=list(WIKI_MAINTENANCE_TOOL_SCOPE),
+        tool_scope="wiki_maintenance",
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_DREAM_ID,
@@ -202,7 +191,7 @@ async def seed_builtins(
             if existing.cooldown_minutes != spec.cooldown_minutes:
                 changes["cooldown_minutes"] = spec.cooldown_minutes
             if existing.tool_scope != spec.tool_scope:
-                changes["tool_scope"] = None if spec.tool_scope is None else list(spec.tool_scope)
+                changes["tool_scope"] = spec.tool_scope
             # Enabled remains the user's pause control. Timing belongs to the
             # system phase contract.
             time_triggers = [trigger for trigger in spec.triggers if isinstance(trigger, TimeTrigger)]
@@ -236,7 +225,7 @@ async def seed_builtins(
                 handler=spec.handler,
                 builtin=True,
                 cooldown_minutes=spec.cooldown_minutes,
-                tool_scope=None if spec.tool_scope is None else list(spec.tool_scope),
+                tool_scope=spec.tool_scope,
             )
         )
         _logger.info("Seeded builtin automation: %s", spec.name)

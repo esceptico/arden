@@ -34,10 +34,8 @@ def _schema_limit(model, field: str, keyword: str) -> int | None:
     [
         (CreateAutomationInput, "channels", 100),
         (CreateAutomationInput, "contains", 100),
-        (CreateAutomationInput, "tool_scope", 200),
         (UpdateAutomationInput, "channels", 100),
         (UpdateAutomationInput, "contains", 100),
-        (UpdateAutomationInput, "tool_scope", 200),
         (ResearchOutlineInput, "sections", 50),
         (ResearchVerifyClaimInput, "sources", 50),
         (NotifyInput, "names", 50),

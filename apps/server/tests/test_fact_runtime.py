@@ -92,7 +92,7 @@ def _wiki_producer() -> Automation:
         auto_approve=True,
         thread_id="producer-session",
         read_history=True,
-        tool_scope=["read_wiki_page", "publish_wiki_generated"],
+        tool_scope="wiki_producer",
     )
 
 
@@ -442,7 +442,7 @@ async def test_fact_commit_syncs_index_and_requests_synthesis(tmp_path, monkeypa
         assert result.result == "fact maintenance: reviewed 2; amended 1; merged 1"
         assert requests[0].model == config.memory_model
         assert requests[0].automation_id == "builtin-memory-consolidate"
-        assert requests[0].tool_scope == ("fact_maintenance_review",)
+        assert requests[0].tool_scope == "fact_maintenance"
 
         async def stop_early(*_args, **_kwargs):
             return RunResult(run_id="maintenance-run", output=None, usage=Usage())

@@ -177,7 +177,7 @@ async def test_runtime_uses_the_exact_wiki_agent_scope_and_rejects_early_exit(tm
         assert result.run_id == "wiki-maintenance-run"
         assert result.result == "wiki maintenance: current; reviewed 1; updated 0"
         assert requests[0].automation_id == BUILTIN_WIKI_MAINTENANCE_ID
-        assert requests[0].tool_scope == ("wiki_maintenance_review",)
+        assert requests[0].tool_scope == "wiki_maintenance"
 
         async def stop_early(*_args, **_kwargs):
             return RunResult(run_id="wiki-maintenance-run", output=None, usage=Usage())

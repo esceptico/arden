@@ -20,6 +20,7 @@ from arden.tools.deferred import (
 )
 from arden.tools.directives import load_directives
 from arden.tools.executor import ToolExecutor
+from arden.tools.scopes import ScopeKey, resolve
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class RunRequest:
     # Allowlist patterns ('*', exact, 'slack_*') applied as the hard outer
     # gate over the registry. For detached runs, None means read-only; an
     # explicit scope is the only arbitrary write/execute capability grant.
-    tool_scope: tuple[str, ...] | None = None
+    tool_scope: ScopeKey | None = None
 
 
 @dataclass(frozen=True)
@@ -68,11 +69,12 @@ async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list
     executor = deps.executor
     # Capability selection is independent from approval bypass. Detached runs
     # are read-only unless the caller supplies an explicit outer scope.
-    scope_kw = {"scope": request.tool_scope} if request.tool_scope is not None else {}
+    scope = resolve(request.tool_scope) if request.tool_scope is not None else None
+    scope_kw = {"scope": scope} if scope is not None else {}
     if request.extra_tool_names:
         tools = executor.get_tools(read_only=True, extra_names=request.extra_tool_names, **scope_kw)
     elif request.tool_scope is not None:
-        tools = executor.get_tools(scope=request.tool_scope)
+        tools = executor.get_tools(scope=scope)
     else:
         tools = executor.get_tools(read_only=True)
 

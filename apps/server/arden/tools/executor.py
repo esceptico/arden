@@ -1,13 +1,14 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Self
 
+from arden.constants import is_external_source
 from arden.integrations import ALL_INTEGRATIONS
 from arden.logging import get_logger
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.middleware import ToolMiddleware
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.core.scope import expand_scope
+from arden.tools.core.scope import ToolFilter
 from arden.tools.core.types import ToolAction, ToolOverrideDecision
 from arden.tools.discover import discover_user_tools
 
@@ -82,7 +83,7 @@ class ToolExecutor:
                     continue
                 raise ValueError(f"duplicate tool name from {source}: {name}")
             self.registry.register(name, tool, source=source)
-            if not source.startswith("_"):
+            if is_external_source(source):
                 _logger.info("Loaded %s tool: %s", source, name)
 
     def with_registry(self, registry: ToolRegistry) -> Self:
@@ -108,15 +109,14 @@ class ToolExecutor:
         read_only: bool | None = None,
         actions: frozenset[ToolAction] | None = None,
         extra_names: frozenset[str] = frozenset(),
-        scope: tuple[str, ...] | None = None,
+        scope: ToolFilter | None = None,
     ) -> list[dict]:
-        effective_scope = expand_scope(scope, self.registry.read_only_names()) if scope is not None else None
         return self.registry.get_schemas(
             capabilities=frozenset(self._get_services()),
             read_only=read_only,
             actions=actions,
             extra_names=extra_names,
-            scope=effective_scope,
+            scope=scope,
         )
 
     def get_tool_metadata(self) -> list[dict]:

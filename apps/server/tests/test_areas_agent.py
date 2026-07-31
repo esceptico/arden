@@ -10,8 +10,6 @@ import pytest
 from pydantic import ValidationError
 
 from arden.areas.agent import (
-    ACT_TOOL_SCOPE,
-    OBSERVE_TOOL_SCOPE,
     AreaAskNomination,
     AreaCustodianReport,
     area_agent_instructions,
@@ -20,7 +18,9 @@ from arden.areas.agent import (
 )
 from arden.areas.asks import AskStore
 from arden.areas.models import Area
-from arden.tools.core.scope import matches_scope
+from arden.tools.core.scope import ToolFacts, tools
+from arden.tools.core.types import ToolAction
+from arden.tools.scopes import resolve
 
 AREA = Area(key="o-1a", title="O-1A", page_path="topics/o-1a.md", autonomy="observe")
 
@@ -191,48 +191,85 @@ def test_repeated_stable_nomination_updates_without_becoming_new(tmp_path):
     assert [ask.text for ask in store.list("o-1a")] == ["Clearer wording"]
 
 
+def _facts(*specs: tuple[str, ToolAction, str, bool]) -> tuple[ToolFacts, ...]:
+    return tuple(ToolFacts(*spec) for spec in specs)
+
+
+READS = _facts(
+    ("search_facts", ToolAction.READ, "_facts", False),
+    ("get_fact", ToolAction.READ, "_facts", False),
+    ("list_recent_sessions", ToolAction.READ, "_sessions", False),
+    ("read_session", ToolAction.READ, "_sessions", False),
+    ("web_search", ToolAction.READ, "web", True),
+    ("emails", ToolAction.READ, "gmail", True),
+    ("calendar", ToolAction.READ, "calendar", True),
+    ("slack_search", ToolAction.READ, "slack", True),
+)
+WRITES = _facts(
+    ("send_email", ToolAction.WRITE, "gmail", True),
+    ("bash", ToolAction.EXECUTE, "_system", False),
+    ("create_calendar_event", ToolAction.WRITE, "calendar", True),
+    ("slack_post_message", ToolAction.WRITE, "slack", True),
+    ("write_file", ToolAction.WRITE, "_system", False),
+    ("memory_write", ToolAction.WRITE, "_facts", False),
+)
+AREA_OWN = _facts(
+    ("submit_area_report", ToolAction.EXECUTE, "_area", False),
+    ("area_page_patch", ToolAction.WRITE, "_area", False),
+    ("area_page_write", ToolAction.WRITE, "_area", False),
+    ("area_run_automation", ToolAction.EXECUTE, "_area", False),
+)
+AUTOMATION = _facts(("create_automation", ToolAction.WRITE, "_automation", False))
+
+OBSERVE = resolve("area_observe")
+ACT = resolve("area_act")
+
+
 def test_observe_scope_is_area_locked_and_uses_canonical_facts():
-    """Asserted against the RESOLVED scope, not the authored list: reading is
-    granted by the declared `read:*` floor rather than by naming each tool, so
-    matching the raw patterns would prove nothing about what the run can do."""
-    from arden.tools.core.scope import expand_scope
+    """Reading is granted by the `tools.read` floor rather than by naming each
+    tool, so this asserts against what the selector actually resolves to."""
+    for fact in READS:
+        assert OBSERVE.matches(fact), fact.name
+    for name in ("submit_area_report", "area_page_patch", "area_page_write"):
+        assert OBSERVE.matches(next(f for f in AREA_OWN if f.name == name)), name
 
-    reads = ("search_facts", "get_fact", "list_recent_sessions", "read_session", "web_search", "emails", "calendar")
-    resolved = expand_scope(tuple(OBSERVE_TOOL_SCOPE), (*reads, "slack_search"))
-
-    assert matches_scope(resolved, "submit_area_report")
-    assert matches_scope(resolved, "area_page_patch")
-    assert matches_scope(resolved, "area_page_write")
-    for name in (*reads, "slack_search"):
-        assert matches_scope(resolved, name), name
-
-    # Writes stay out however the floor expands — these are not read-only, so
+    # Writes stay out however the floor resolves — these are not read-only, so
     # nothing can put them in scope except an explicit grant.
-    for name in ("send_email", "bash", "create_calendar_event", "slack_post_message", "write_file"):
-        assert not matches_scope(resolved, name), name
+    for fact in WRITES:
+        assert not OBSERVE.matches(fact), fact.name
 
 
 def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
     observe = custodian_contract(AREA)
     acting = custodian_contract(replace(AREA, autonomy="act"))
 
-    assert observe.tool_scope == OBSERVE_TOOL_SCOPE
-    assert acting.tool_scope == ACT_TOOL_SCOPE
+    assert observe.tool_scope == "area_observe"
+    assert acting.tool_scope == "area_act"
     assert observe.auto_approve is False
     assert acting.auto_approve is False
     assert "observe" in observe.description
     assert "act" in acting.description
 
-    assert matches_scope(tuple(ACT_TOOL_SCOPE), "area_run_automation")
+    run_automation = next(f for f in AREA_OWN if f.name == "area_run_automation")
+    create_automation = AUTOMATION[0]
+    assert ACT.matches(run_automation)
     # Acting may propose child automations — creation itself is approval-gated.
-    assert matches_scope(tuple(ACT_TOOL_SCOPE), "create_automation")
-    assert not matches_scope(tuple(OBSERVE_TOOL_SCOPE), "create_automation")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "send_email")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "create_calendar_event")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "slack_post_message")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "bash")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "write_file")
-    assert not matches_scope(tuple(ACT_TOOL_SCOPE), "memory_write")
+    assert ACT.matches(create_automation)
+    assert not OBSERVE.matches(create_automation)
+    for fact in WRITES:
+        assert not ACT.matches(fact), fact.name
+
+
+def test_a_reply_keeps_the_area_scope_minus_the_terminal_report():
+    """The narrowing `~` exists for: a reply is a conversation, not a run, so it
+    may do everything the custodian may except submit the report."""
+    reply_scope = OBSERVE & ~tools.named("submit_area_report")
+
+    report = next(f for f in AREA_OWN if f.name == "submit_area_report")
+    assert not reply_scope.matches(report)
+    assert reply_scope.matches(next(f for f in AREA_OWN if f.name == "area_page_write"))
+    for fact in READS:
+        assert reply_scope.matches(fact), fact.name
 
 
 @pytest.mark.asyncio
@@ -272,7 +309,7 @@ async def test_runtime_reconciles_permission_downgrades_in_place():
 
     await runtime._sync_area_automation(AREA, paused=False, index=0)
 
-    assert automation.tool_scope == OBSERVE_TOOL_SCOPE
+    assert automation.tool_scope == "area_observe"
     assert automation.auto_approve is False
     assert automation.description == "A custom area summary."
     assert automation.description_source == "manual"
