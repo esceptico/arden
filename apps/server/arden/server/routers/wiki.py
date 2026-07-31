@@ -120,11 +120,10 @@ async def _project_wiki_after_commit(request: Request, commit_id: str | None) ->
     if commit_id is None:
         return False
     try:
-        await get_runtime(request).project_wiki_state()
+        return await get_runtime(request).project_wiki_change_after_commit()
     except Exception:
-        _logger.exception("Wiki projection failed after a committed rename", commit_id=commit_id)
+        _logger.exception("Wiki projection enqueue failed after a committed rename", commit_id=commit_id)
         return True
-    return False
 
 
 @router.post("/rename-approvals", response_model=WikiRenameResultResponse)

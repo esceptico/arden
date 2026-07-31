@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -38,7 +38,11 @@ class OutboxWorker:
         completed_retention_days: int = OUTBOX_COMPLETED_RETENTION_DAYS,
         prune_batch_size: int = OUTBOX_PRUNE_BATCH_SIZE,
         prune_interval_seconds: int = OUTBOX_PRUNE_INTERVAL_SECONDS,
+        event_types: Iterable[str] | None = None,
+        excluded_event_types: Iterable[str] | None = None,
     ):
+        if event_types is not None and excluded_event_types is not None:
+            raise ValueError("event_types and excluded_event_types are mutually exclusive")
         self.store = store
         self.worker_id = worker_id or f"outbox-{uuid4().hex[:8]}"
         self.batch_size = batch_size
@@ -50,6 +54,8 @@ class OutboxWorker:
         self.completed_retention_days = completed_retention_days
         self.prune_batch_size = prune_batch_size
         self.prune_interval_seconds = prune_interval_seconds
+        self.event_types = None if event_types is None else tuple(dict.fromkeys(event_types))
+        self.excluded_event_types = None if excluded_event_types is None else tuple(dict.fromkeys(excluded_event_types))
         self._handlers: dict[str, OutboxHandler] = {}
         self._task: asyncio.Task | None = None
         self._next_prune_at: datetime | None = None
@@ -75,7 +81,11 @@ class OutboxWorker:
             await self._task
         except asyncio.CancelledError:
             pass
-        self._task = None
+        finally:
+            self._task = None
+        released = await self.store.release_running(self.worker_id)
+        if released:
+            _logger.info("Released outbox rows during worker stop", worker_id=self.worker_id, count=released)
         _logger.info("Outbox worker stopped", worker_id=self.worker_id)
 
     async def _loop(self) -> None:
@@ -100,7 +110,12 @@ class OutboxWorker:
 
     async def process_once(self) -> bool:
         await self._prune_completed_if_due()
-        events = await self.store.claim_batch(worker_id=self.worker_id, limit=self.batch_size)
+        events = await self.store.claim_batch(
+            worker_id=self.worker_id,
+            limit=self.batch_size,
+            event_types=self.event_types,
+            excluded_event_types=self.excluded_event_types,
+        )
         for event in events:
             await self._dispatch(event)
         return bool(events)

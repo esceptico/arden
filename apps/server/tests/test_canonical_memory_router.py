@@ -80,8 +80,9 @@ def _client(tmp_path: Path) -> TestClient:
     def require_wiki_user_edit_queue() -> None:
         return None
 
-    async def project_wiki_state() -> None:
+    async def project_wiki_change_after_commit() -> bool:
         projected.append(wiki.repository.head)
+        return True
 
     runtime = SimpleNamespace(
         connected=True,
@@ -90,7 +91,7 @@ def _client(tmp_path: Path) -> TestClient:
         require_wiki_user_edit_queue=require_wiki_user_edit_queue,
         enqueue_wiki_user_edit=enqueue_wiki_user_edit,
         queued_wiki_edits=queued,
-        project_wiki_state=project_wiki_state,
+        project_wiki_change_after_commit=project_wiki_change_after_commit,
         projected_wiki_heads=projected,
         facts_connection=None,
     )
@@ -425,10 +426,10 @@ def test_wiki_update_reports_committed_edit_when_curator_enqueue_fails(tmp_path:
 def test_wiki_create_reports_committed_page_when_projection_fails(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
 
-        async def fail_projection() -> None:
+        async def fail_projection() -> bool:
             raise RuntimeError("wiki projection failed")
 
-        client.app.state.runtime.project_wiki_state = fail_projection
+        client.app.state.runtime.project_wiki_change_after_commit = fail_projection
         response = client.post(
             "/admin/wiki/pages",
             json={"path": "one.md", "title": "One", "page_id": "one", "expected_head": None},
@@ -464,10 +465,10 @@ def test_wiki_maintenance_history_restore_commits_and_reports_projection_pending
         )
         maintained = service.read_page("one")
 
-        async def fail_projection() -> None:
+        async def fail_projection() -> bool:
             raise RuntimeError("wiki projection failed")
 
-        client.app.state.runtime.project_wiki_state = fail_projection
+        client.app.state.runtime.project_wiki_change_after_commit = fail_projection
         response = client.post(
             f"/admin/wiki/pages/one/history/{maintenance_commit_id}/restore",
             json={

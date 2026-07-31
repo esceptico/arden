@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
+    OUTBOX_WIKI_PROJECTION_REQUESTED,
     AutomationSettled,
     OutboxStore,
     OutboxWorker,
@@ -78,6 +80,27 @@ async def test_enqueue_run_failed_is_idempotent_and_claims_payload(outbox_store:
     claimed = await outbox_store.claim_batch(worker_id="test-worker", limit=10)
     assert claimed[0].event_type == OUTBOX_RUN_FAILED
     assert run_failed_from_payload(claimed[0].payload) == event
+
+
+@pytest.mark.asyncio
+async def test_claim_batch_filters_event_types(outbox_store: OutboxStore):
+    revision = "a" * 64
+    await outbox_store.enqueue_wiki_projection(revision)
+    await outbox_store.enqueue_run_completed(_run_completed())
+
+    main = await outbox_store.claim_batch(
+        worker_id="main-worker",
+        limit=10,
+        excluded_event_types=(OUTBOX_WIKI_PROJECTION_REQUESTED,),
+    )
+    wiki = await outbox_store.claim_batch(
+        worker_id="wiki-worker",
+        limit=10,
+        event_types=(OUTBOX_WIKI_PROJECTION_REQUESTED,),
+    )
+
+    assert [event.event_type for event in main] == [OUTBOX_RUN_COMPLETED]
+    assert [event.event_type for event in wiki] == [OUTBOX_WIKI_PROJECTION_REQUESTED]
 
 
 @pytest.mark.asyncio
@@ -310,3 +333,24 @@ async def test_worker_retries_then_dead_letters(outbox_store: OutboxStore):
     assert rows[0]["status"] == "dead"
     assert rows[0]["attempts"] == 2
     assert "RuntimeError: boom" in rows[0]["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_releases_claimed_rows_immediately(outbox_store: OutboxStore):
+    await outbox_store.enqueue_run_completed(_run_completed())
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def handle(_row):
+        started.set()
+        await blocked.wait()
+
+    worker = OutboxWorker(outbox_store, worker_id="stopping-worker", poll_interval=0.01)
+    worker.register_handler(OUTBOX_RUN_COMPLETED, handle)
+    worker.start()
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await worker.stop()
+
+    rows = await outbox_store.conn.execute_fetchall("SELECT status, locked_at, locked_by FROM outbox_events")
+    assert [(row["status"], row["locked_at"], row["locked_by"]) for row in rows] == [("pending", None, None)]

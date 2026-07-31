@@ -864,23 +864,23 @@ class Runtime:
         await self.project_wiki_change()
 
     async def project_wiki_change_after_commit(self) -> bool:
-        """Project a committed write now or durably queue its retry."""
+        """Durably queue derived consumers after a committed wiki write."""
 
+        if self.stores is None or self.wiki_service is None:
+            raise RuntimeError("managed wiki projection retry is unavailable")
+        revision = self.wiki_service.repository.head
+        if revision is None:
+            raise RuntimeError("committed wiki projection has no revision")
         try:
-            await self.project_wiki_change()
-        except Exception:
-            if self.stores is None or self.wiki_service is None:
-                raise RuntimeError("managed wiki projection retry is unavailable")
-            revision = self.wiki_service.repository.head
-            if revision is None:
-                raise RuntimeError("committed wiki projection has no revision")
             await self.stores.outbox.enqueue_wiki_projection(revision)
+        except Exception:
             _logger.exception(
-                "Wiki projection deferred after committed write",
+                "Wiki projection enqueue failed after committed write; projecting inline",
                 revision=revision,
             )
-            return True
-        return False
+            await self.project_wiki_change()
+            return False
+        return True
 
     async def project_wiki_change(self) -> None:
         """Publish one canonical wiki-head transition to every derived consumer."""
@@ -889,6 +889,8 @@ class Runtime:
             raise RuntimeError("managed wiki projection is unavailable")
         async with self._wiki_projection_lock:
             previous_head = self._wiki_change_head
+            if self.wiki_service.repository.head == previous_head:
+                return
             final_head = None
             for _attempt in range(3):
                 await self.wiki_page_projection.sync()

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
@@ -30,26 +31,36 @@ class RuntimeOutbox:
         on_automation_settled: Callable[[AutomationSettled], Awaitable[None]] | None = None,
         on_wiki_projection: Callable[[], Awaitable[None]] | None = None,
     ):
-        self.worker = OutboxWorker(outbox_store)
         self.outbox_store = outbox_store
         self.scheduler = scheduler
         self._on_area_run = on_area_run
         self._on_area_run_failed = on_area_run_failed
         self._on_automation_settled_callback = on_automation_settled
         self._on_wiki_projection_callback = on_wiki_projection
+        self.worker = OutboxWorker(
+            outbox_store,
+            excluded_event_types=(OUTBOX_WIKI_PROJECTION_REQUESTED,),
+        )
+        self.wiki_worker = OutboxWorker(
+            outbox_store,
+            batch_size=1,
+            prune_batch_size=0,
+            event_types=(OUTBOX_WIKI_PROJECTION_REQUESTED,),
+        )
         self._register_handlers()
 
     def start(self) -> None:
         self.worker.start()
+        self.wiki_worker.start()
 
     async def stop(self) -> None:
-        await self.worker.stop()
+        await asyncio.gather(self.worker.stop(), self.wiki_worker.stop())
 
     def _register_handlers(self) -> None:
         self.worker.register_handler(OUTBOX_AUTOMATION_SETTLED, self._on_automation_settled)
         self.worker.register_handler(OUTBOX_RUN_COMPLETED, self._on_run_completed)
         self.worker.register_handler(OUTBOX_RUN_FAILED, self._on_run_failed)
-        self.worker.register_handler(
+        self.wiki_worker.register_handler(
             OUTBOX_WIKI_PROJECTION_REQUESTED,
             self._on_wiki_projection,
         )
@@ -108,11 +119,16 @@ class RuntimeOutbox:
 
     async def get_status(self) -> dict:
         worker_running = self.worker.is_running
+        wiki_worker_running = self.wiki_worker.is_running
         return {
-            "status": "running" if worker_running else "stopped",
+            "status": "running" if worker_running and wiki_worker_running else "stopped",
             "worker": {
                 "running": worker_running,
                 "worker_id": self.worker.worker_id,
+            },
+            "wiki_worker": {
+                "running": wiki_worker_running,
+                "worker_id": self.wiki_worker.worker_id,
             },
             "events": await self.outbox_store.get_status(),
         }
@@ -122,7 +138,8 @@ class RuntimeOutbox:
         events = status.get("events", {})
         by_status = events.get("by_status", {})
         return {
-            "worker_running": status.get("worker", {}).get("running", False),
+            "worker_running": status.get("worker", {}).get("running", False)
+            and status.get("wiki_worker", {}).get("running", False),
             "pending": by_status.get("pending", 0),
             "ready": events.get("ready", 0),
             "running": by_status.get("running", 0),

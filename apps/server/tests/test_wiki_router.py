@@ -58,14 +58,11 @@ async def wiki_client(tmp_path: Path):
         health_calls=0,
     )
 
-    async def project_wiki_health() -> None:
+    async def project_wiki_change_after_commit() -> bool:
         runtime.health_calls += 1
+        return True
 
-    async def project_wiki_state() -> None:
-        await runtime.project_wiki_health()
-
-    runtime.project_wiki_health = project_wiki_health
-    runtime.project_wiki_state = project_wiki_state
+    runtime.project_wiki_change_after_commit = project_wiki_change_after_commit
     app.state.runtime = runtime
 
     async def apply_rename_plan(plan):
@@ -284,10 +281,10 @@ def test_rename_accept_keeps_committed_result_when_projection_fails(wiki_client)
         json={"page_id": "target", "new_path": "new.md", "new_title": "New"},
     ).json()["approval"]
 
-    async def fail_health_projection() -> None:
+    async def fail_health_projection() -> bool:
         raise RuntimeError("health projector unavailable")
 
-    client.app.state.runtime.project_wiki_health = fail_health_projection
+    client.app.state.runtime.project_wiki_change_after_commit = fail_health_projection
     response = client.post(f"/admin/wiki/rename-approvals/{approval['approval_id']}/accept")
 
     assert response.status_code == 200

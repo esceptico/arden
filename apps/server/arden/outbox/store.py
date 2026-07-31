@@ -66,6 +66,26 @@ ORDER BY id
 LIMIT ?
 """
 
+_SQL_CLAIM_CANDIDATES_BY_TYPE = """
+SELECT *
+FROM outbox_events
+WHERE status = 'pending'
+  AND available_at <= ?
+  AND event_type IN ({placeholders})
+ORDER BY id
+LIMIT ?
+"""
+
+_SQL_CLAIM_CANDIDATES_EXCLUDING_TYPES = """
+SELECT *
+FROM outbox_events
+WHERE status = 'pending'
+  AND available_at <= ?
+  AND event_type NOT IN ({placeholders})
+ORDER BY id
+LIMIT ?
+"""
+
 _SQL_CLAIM = """
 UPDATE outbox_events
 SET status = 'running',
@@ -105,6 +125,16 @@ SET status = 'pending',
     updated_at = ?
 WHERE status = 'running'
   AND locked_at < ?
+"""
+
+_SQL_RELEASE_WORKER = """
+UPDATE outbox_events
+SET status = 'pending',
+    locked_at = NULL,
+    locked_by = NULL,
+    updated_at = ?
+WHERE status = 'running'
+  AND locked_by = ?
 """
 
 _SQL_REPLAY_DEAD = """
@@ -330,12 +360,37 @@ class OutboxStore:
             idempotency_key=f"{OUTBOX_AUTOMATION_SETTLED}:{automation_run_id}",
         )
 
-    async def claim_batch(self, *, worker_id: str, limit: int, now: datetime | None = None) -> list[OutboxEvent]:
+    async def claim_batch(
+        self,
+        *,
+        worker_id: str,
+        limit: int,
+        now: datetime | None = None,
+        event_types: tuple[str, ...] | None = None,
+        excluded_event_types: tuple[str, ...] | None = None,
+    ) -> list[OutboxEvent]:
         claimed_at = now or _now()
-        rows = await self.conn.execute_fetchall(
-            _SQL_CLAIM_CANDIDATES,
-            (_format_dt(claimed_at), limit),
-        )
+        if event_types is not None and excluded_event_types is not None:
+            raise ValueError("event_types and excluded_event_types are mutually exclusive")
+        if event_types is not None:
+            event_types = tuple(dict.fromkeys(event_types))
+            if not event_types:
+                return []
+            rows = await self.conn.execute_fetchall(
+                _SQL_CLAIM_CANDIDATES_BY_TYPE.format(placeholders=_placeholders(len(event_types))),
+                (_format_dt(claimed_at), *event_types, limit),
+            )
+        elif excluded_event_types:
+            excluded_event_types = tuple(dict.fromkeys(excluded_event_types))
+            rows = await self.conn.execute_fetchall(
+                _SQL_CLAIM_CANDIDATES_EXCLUDING_TYPES.format(placeholders=_placeholders(len(excluded_event_types))),
+                (_format_dt(claimed_at), *excluded_event_types, limit),
+            )
+        else:
+            rows = await self.conn.execute_fetchall(
+                _SQL_CLAIM_CANDIDATES,
+                (_format_dt(claimed_at), limit),
+            )
 
         events: list[OutboxEvent] = []
         for row in rows:
@@ -394,6 +449,15 @@ class OutboxStore:
         cursor = await self.conn.execute(
             _SQL_RELEASE_STALE,
             (_format_dt(now), _format_dt(locked_before)),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
+
+    async def release_running(self, worker_id: str) -> int:
+        now = _now()
+        cursor = await self.conn.execute(
+            _SQL_RELEASE_WORKER,
+            (_format_dt(now), worker_id),
         )
         await self.conn.commit()
         return cursor.rowcount

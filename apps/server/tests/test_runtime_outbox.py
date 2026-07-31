@@ -283,6 +283,54 @@ async def test_runtime_outbox_routes_durable_wiki_projection_request():
 
 
 @pytest.mark.asyncio
+async def test_wiki_projection_request_is_persisted_once_per_revision(persisted_outbox_store: OutboxStore):
+    revision = "a" * 64
+
+    assert await persisted_outbox_store.enqueue_wiki_projection(revision) is True
+    assert await persisted_outbox_store.enqueue_wiki_projection(revision) is False
+
+    events = await persisted_outbox_store.claim_batch(worker_id="test-worker", limit=10)
+    assert len(events) == 1
+    assert events[0].event_type == OUTBOX_WIKI_PROJECTION_REQUESTED
+    assert events[0].aggregate_type == "wiki"
+    assert events[0].aggregate_id == revision
+    assert events[0].payload == {"revision": revision}
+
+
+@pytest.mark.asyncio
+async def test_wiki_projection_does_not_block_run_completion(persisted_outbox_store: OutboxStore):
+    projection_calls = 0
+
+    async def project() -> None:
+        nonlocal projection_calls
+        projection_calls += 1
+
+    scheduler = _Scheduler()
+    runtime_outbox = RuntimeOutbox(
+        outbox_store=persisted_outbox_store,
+        scheduler=scheduler,
+        on_wiki_projection=project,
+    )
+    await persisted_outbox_store.enqueue_wiki_projection("a" * 64)
+    await persisted_outbox_store.enqueue_run_completed(
+        RunCompleted(
+            run_id="run-1",
+            session_id="session-1",
+            messages=(),
+            usage=Usage(),
+            result="done",
+        )
+    )
+
+    assert await runtime_outbox.worker.process_once() is True
+    assert [event.run_id for event in scheduler.completed] == ["run-1"]
+    assert projection_calls == 0
+
+    assert await runtime_outbox.wiki_worker.process_once() is True
+    assert projection_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_runtime_outbox_propagates_automation_settled_callback_error():
     async def fail(_event):
         raise RuntimeError("observer unavailable")

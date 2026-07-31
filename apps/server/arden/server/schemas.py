@@ -244,6 +244,7 @@ class OutboxEventsStatusResponse(BaseModel):
 class OutboxStatusResponse(BaseModel):
     status: Literal["running", "stopped", "disabled"]
     worker: OutboxWorkerResponse | None = None
+    wiki_worker: OutboxWorkerResponse | None = None
     events: OutboxEventsStatusResponse | None = None
 
 

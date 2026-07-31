@@ -511,18 +511,30 @@ async def test_wiki_state_projection_syncs_index_before_health(tmp_path, monkeyp
     runtime = Runtime(_config(tmp_path))
     calls: list[str] = []
 
+    class _Repository:
+        head = "new-head"
+
+        def history(self, *, start, stop_before):
+            assert (start, stop_before) == ("new-head", None)
+            return ()
+
     class _Projection:
         last_state = SimpleNamespace(wiki_head=None)
 
         async def sync(self) -> None:
             calls.append("index")
 
-    async def health() -> None:
+    async def health() -> str:
         calls.append("health")
+        return "new-head"
 
-    runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head=None))
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            assert (expected_revision, revision) == (None, "new-head")
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
     runtime.wiki_page_projection = _Projection()
-    runtime._wiki_maintenance_store = SimpleNamespace(record_projection_revision=None)
+    runtime._wiki_maintenance_store = _Watermarks()
     monkeypatch.setattr(runtime, "project_wiki_health", health)
 
     await runtime.project_wiki_state()
@@ -550,8 +562,10 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
     class _Projection:
         def __init__(self) -> None:
             self.last_state = SimpleNamespace(wiki_head="old-head")
+            self.sync_calls = 0
 
         async def sync(self) -> None:
+            self.sync_calls += 1
             await asyncio.sleep(0)
             self.last_state = SimpleNamespace(wiki_head="new-head")
 
@@ -569,7 +583,8 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
         return "new-head"
 
     runtime.wiki_service = SimpleNamespace(repository=_Repository())
-    runtime.wiki_page_projection = _Projection()
+    projection = _Projection()
+    runtime.wiki_page_projection = projection
     runtime.automation = _Automation()
     runtime._wiki_change_head = "old-head"
     revisions: list[tuple[str | None, str]] = []
@@ -588,6 +603,7 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
 
     assert notifications == [(["topics/dex.md"], "new-head", {"topics/dex.md": {"dex"}})]
     assert revisions == [("old-head", "new-head")]
+    assert projection.sync_calls == 2
 
 
 @pytest.mark.asyncio
@@ -772,7 +788,7 @@ async def test_new_common_page_requests_fact_synthesis_but_automation_and_readme
 
 
 @pytest.mark.asyncio
-async def test_committed_wiki_projection_failure_is_durably_queued(tmp_path, monkeypatch) -> None:
+async def test_committed_wiki_projection_is_durably_queued_without_inline_projection(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     revision = "a" * 64
     queued: list[str] = []
@@ -785,13 +801,34 @@ async def test_committed_wiki_projection_failure_is_durably_queued(tmp_path, mon
     runtime.stores = SimpleNamespace(outbox=_Outbox())
     runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head=revision))
 
-    async def fail_projection() -> None:
-        raise RuntimeError("notifier unavailable")
+    async def unexpected_projection() -> None:
+        raise AssertionError("post-commit projection must run through the outbox")
 
-    monkeypatch.setattr(runtime, "project_wiki_change", fail_projection)
+    monkeypatch.setattr(runtime, "project_wiki_change", unexpected_projection)
 
     assert await runtime.project_wiki_change_after_commit() is True
     assert queued == [revision]
+
+
+@pytest.mark.asyncio
+async def test_committed_wiki_projection_enqueue_failure_falls_back_inline(tmp_path, monkeypatch) -> None:
+    runtime = Runtime(_config(tmp_path))
+    projected: list[str] = []
+
+    class _Outbox:
+        async def enqueue_wiki_projection(self, _value: str) -> bool:
+            raise RuntimeError("outbox unavailable")
+
+    runtime.stores = SimpleNamespace(outbox=_Outbox())
+    runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head="a" * 64))
+
+    async def project() -> None:
+        projected.append("projected")
+
+    monkeypatch.setattr(runtime, "project_wiki_change", project)
+
+    assert await runtime.project_wiki_change_after_commit() is False
+    assert projected == ["projected"]
 
 
 @pytest.mark.asyncio

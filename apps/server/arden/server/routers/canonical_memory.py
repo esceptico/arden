@@ -205,11 +205,10 @@ async def _project_committed_wiki_change(request: Request, revision: str | None)
     if revision is None:
         return False
     try:
-        await get_runtime(request).project_wiki_state()
+        return await get_runtime(request).project_wiki_change_after_commit()
     except Exception:
-        _logger.exception("Wiki projection failed after a committed user change", revision=revision)
+        _logger.exception("Wiki projection enqueue failed after a committed user change", revision=revision)
         return True
-    return False
 
 
 @wiki_router.get("/pages")
