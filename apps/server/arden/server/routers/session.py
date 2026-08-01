@@ -619,11 +619,20 @@ async def clear_session_goal(
 
 
 @router.get("/sessions/{session_id}/todo")
-async def get_session_todo_override(
+async def get_session_todo(
     session_id: str,
     svc: SessionService = Depends(require_session_service),
 ):
-    return await svc.get_todo_override(session_id)
+    """The session's effective todo list: the user's manual override when one
+    exists, otherwise the agent's current list. Null once the list is retired
+    (all items completed) or dismissed."""
+    override = await svc.get_todo_override(session_id)
+    if override is not None:
+        return {**override, "edited": True}
+    current = await svc.get_session_todos(session_id)
+    if current is not None:
+        return {**current, "edited": False}
+    return None
 
 
 @router.post("/sessions/{session_id}/todo")
@@ -642,10 +651,22 @@ async def set_session_todo_override(
 
 
 @router.delete("/sessions/{session_id}/todo")
+async def dismiss_session_todo(
+    session_id: str,
+    svc: SessionService = Depends(require_session_service),
+):
+    """Dismiss the whole list — agent state and manual override both go."""
+    cleared_current = await svc.clear_session_todos(session_id)
+    cleared_override = await svc.clear_todo_override(session_id)
+    return {"status": "cleared" if cleared_current or cleared_override else "noop", "session_id": session_id}
+
+
+@router.delete("/sessions/{session_id}/todo/override")
 async def clear_session_todo_override(
     session_id: str,
     svc: SessionService = Depends(require_session_service),
 ):
+    """Reset manual edits back to the agent's list."""
     cleared = await svc.clear_todo_override(session_id)
     return {"status": "cleared" if cleared else "noop", "session_id": session_id}
 

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { clearTodoOverrideApi, getTodoOverrideApi, setTodoOverrideApi } from "@/api/chat";
+import { setTodoOverrideApi } from "@/api/chat";
 import type { TodoListItem, TodoStatus } from "@/api/types";
+import { dismissSessionTodo, resetSessionTodoOverride } from "@/actions/todos";
 import { nextTodoStatus, todoSignature } from "@/features/background-agents/lib/todoOverride";
-import { useStore, type TodoListState } from "@/stores";
+import { useStore, type SessionTodo } from "@/stores";
 
 export interface EditableTodo {
   key: string;
@@ -16,52 +17,45 @@ let todoKeySeq = 0;
 const withTodoKeys = (items: TodoListItem[]): EditableTodo[] =>
   items.map((item) => ({ key: `todo-${todoKeySeq++}`, content: item.content, status: item.status }));
 
-// Editable todo list. Agent-produced todos are the base; the user's manual
-// edits persist server-side (so the agent sees them on its next run) and last
-// until the agent emits a different list, which supersedes them.
-export function useEditableTodo(sessionId: string | null, todo: TodoListState) {
+// Editable todo list over the session's effective state (override-aware,
+// hydrated into the store). Manual edits persist server-side as an override
+// (so the agent sees them on its next run) until the agent emits a new list,
+// which supersedes them. Deleting the last item dismisses the whole list.
+export function useEditableTodo(sessionId: string | null, todo: SessionTodo) {
   const config = useStore((s) => s.config);
-  const agentItems = todo.items;
-  const agentSig = useMemo(() => todoSignature(agentItems), [agentItems]);
-  const [items, setItems] = useState<EditableTodo[]>(() => withTodoKeys(agentItems));
-  const [edited, setEdited] = useState(false);
-  const lastSig = useRef(agentSig);
+  const sig = useMemo(() => todoSignature(todo.items), [todo.items]);
+  const [items, setItems] = useState<EditableTodo[]>(() => withTodoKeys(todo.items));
+  const [edited, setEdited] = useState(todo.edited);
+  const lastSig = useRef(sig);
 
-  // Load any persisted override on mount (the section remounts per session).
+  // The store's copy changed underneath us (agent emitted a new list, or a
+  // reset refetched) — adopt it. Our own commits pre-set lastSig so local
+  // keys survive the round-trip.
   useEffect(() => {
-    if (!sessionId) return;
-    let cancelled = false;
-    void getTodoOverrideApi(config, sessionId)
-      .then((override) => {
-        if (!cancelled && override) {
-          setItems(withTodoKeys(override.items));
-          setEdited(true);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, config]);
-
-  // The agent emitted a new list — it supersedes the manual edit (the server
-  // already cleared the override when update_todos ran).
-  useEffect(() => {
-    if (lastSig.current === agentSig) return;
-    lastSig.current = agentSig;
-    setItems(withTodoKeys(agentItems));
-    setEdited(false);
-  }, [agentSig, agentItems]);
+    if (lastSig.current === sig) return;
+    lastSig.current = sig;
+    setItems(withTodoKeys(todo.items));
+    setEdited(todo.edited);
+  }, [sig, todo]);
 
   const commit = (next: EditableTodo[]) => {
+    const plain = next.map(({ content, status }) => ({ content, status }));
+    // Deleting the last row means "get rid of the list", not "store an
+    // empty override that haunts the sidebar".
+    if (plain.length === 0) {
+      if (sessionId) void dismissSessionTodo(sessionId);
+      return;
+    }
     setItems(next);
     setEdited(true);
+    lastSig.current = todoSignature(plain);
     if (sessionId) {
-      void setTodoOverrideApi(
-        config,
-        sessionId,
-        next.map(({ content, status }) => ({ content, status })),
-      ).catch(() => {});
+      useStore.getState().setSessionTodo(sessionId, {
+        items: plain,
+        explanation: todo.explanation ?? null,
+        edited: true,
+      });
+      void setTodoOverrideApi(config, sessionId, plain).catch(() => {});
     }
   };
 
@@ -75,9 +69,7 @@ export function useEditableTodo(sessionId: string | null, todo: TodoListState) {
     cycle: (key: string) =>
       commit(items.map((item) => (item.key === key ? { ...item, status: nextTodoStatus(item.status) } : item))),
     reset: () => {
-      setItems(withTodoKeys(agentItems));
-      setEdited(false);
-      if (sessionId) void clearTodoOverrideApi(config, sessionId).catch(() => {});
+      if (sessionId) void resetSessionTodoOverride(sessionId);
     },
   };
 }

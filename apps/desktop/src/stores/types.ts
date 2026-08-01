@@ -306,6 +306,13 @@ export interface TodoListState {
   explanation?: string | null;
 }
 
+/** The session's effective todo list (override-aware), mirrored from the
+ *  server's session-level slot — NOT derived from the transcript. Absent
+ *  once the list is retired (all completed) or dismissed. */
+export interface SessionTodo extends TodoListState {
+  edited: boolean;
+}
+
 export interface TurnMeta {
   startedAt: number;
   endedAt: number | null;
@@ -484,6 +491,7 @@ export interface State {
   /** The workflow expanded/focused in the agent hub. Null when none. */
   workflowViewer: WorkflowViewerState | null;
   goals: Record<string, SessionGoal>;
+  sessionTodos: Record<string, SessionTodo>;
   pendingGoalProposal: PendingGoalProposal | null;
   toasts: Toast[];
   prefs: Prefs;
@@ -658,6 +666,7 @@ export interface Actions {
   workflowTokenUsage: (input: WorkflowTokenUsageInput, at?: number) => void;
   dismissWorkflow: (sessionId: string, workflowId: string) => void;
   setGoal: (sessionId: string, goal: SessionGoal | null) => void;
+  setSessionTodo: (sessionId: string, todo: SessionTodo | null) => void;
   setPendingGoalProposal: (proposal: PendingGoalProposal | null) => void;
   setArchivedSessions: (sessions: ArchivedSession[] | null) => void;
   setCompacting: (compacting: boolean) => void;

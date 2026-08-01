@@ -119,6 +119,7 @@ export type {
   ThemeChoice,
   ThinkingIntensity,
   TodoListState,
+  SessionTodo,
   TurnMeta,
   UiMessage,
 } from "@/stores/types";
@@ -303,6 +304,7 @@ export const useStore = create<State & Actions>((set) => ({
   backgroundAgents: createBackgroundAgentsDomainState(),
   workflows: createWorkflowsDomainState(),
   goals: {},
+  sessionTodos: {},
   pendingGoalProposal: null,
   toasts: [],
   prefs: loadPrefs(),
@@ -806,6 +808,13 @@ export const useStore = create<State & Actions>((set) => ({
       if (goal) goals[sessionId] = goal;
       else delete goals[sessionId];
       return { goals };
+    }),
+  setSessionTodo: (sessionId, todo) =>
+    set((s) => {
+      const sessionTodos = { ...s.sessionTodos };
+      if (todo) sessionTodos[sessionId] = todo;
+      else delete sessionTodos[sessionId];
+      return { sessionTodos };
     }),
   setPendingGoalProposal: (pendingGoalProposal) => set({ pendingGoalProposal }),
 

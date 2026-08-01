@@ -56,10 +56,18 @@ async def update_todos(execution: ToolExecution, args: UpdateTodosInput) -> Tool
         )
 
     # The agent's list supersedes any manual edit the user made (the override
-    # was already injected into this run's context).
+    # was already injected into this run's context). The session-level slot is
+    # what the sidebar shows; an all-completed list RETIRES it — finished work
+    # must not linger as an eternal unresolved item.
     session_service = execution.ctx.services.get("session")
+    session_id = execution.ctx.session_state.session_id
     if session_service is not None and hasattr(session_service, "clear_todo_override"):
-        await session_service.clear_todo_override(execution.ctx.session_state.session_id)
+        await session_service.clear_todo_override(session_id)
+    if session_service is not None and hasattr(session_service, "set_session_todos"):
+        if completed == len(items):
+            await session_service.clear_session_todos(session_id)
+        else:
+            await session_service.set_session_todos(session_id, items, args.explanation)
 
     return ToolResult(content="Todo list updated.", preview=preview, data=data)
 
@@ -70,7 +78,9 @@ update_todos_tool = tool(
     description=(
         "Update the visible todo list for complex work. Use it for multi-step tasks, explicit todo/list requests, "
         "or when requirements change. Keep the list current, keep exactly one item in_progress when actively working, "
-        "and do not mark an item completed until the work is actually verified."
+        "and do not mark an item completed until the work is actually verified. When the work is finished, send the "
+        "final list with every item completed — that retires the list. Replace items that became irrelevant instead "
+        "of leaving them pending forever."
     ),
     input_model=UpdateTodosInput,
     policy=ToolPolicy(

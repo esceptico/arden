@@ -351,6 +351,13 @@ CREATE TABLE IF NOT EXISTS session_todo_overrides (
     explanation TEXT,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS session_todos (
+    session_id TEXT PRIMARY KEY,
+    items_json TEXT NOT NULL,
+    explanation TEXT,
+    updated_at TEXT NOT NULL
+);
 		"""
 
 SQL_SAVE_SESSION = """
@@ -1079,6 +1086,45 @@ class SessionStore:
         lock = await self._session_write_lock(session_id)
         async with lock:
             cursor = await self.conn.execute("DELETE FROM session_todo_overrides WHERE session_id = ?", (session_id,))
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
+    async def set_session_todos(self, session_id: str, items: list[dict], explanation: str | None = None) -> dict:
+        now = datetime.now(UTC).isoformat()
+        lock = await self._session_write_lock(session_id)
+        async with lock:
+            await self.conn.execute(
+                """
+                INSERT INTO session_todos (session_id, items_json, explanation, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    items_json = excluded.items_json,
+                    explanation = excluded.explanation,
+                    updated_at = excluded.updated_at
+                """,
+                (session_id, json.dumps(items), explanation, now),
+            )
+            await self.conn.commit()
+        return {"items": items, "explanation": explanation, "updated_at": now}
+
+    async def get_session_todos(self, session_id: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT items_json, explanation, updated_at FROM session_todos WHERE session_id = ?",
+            (session_id,),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "items": json.loads(row["items_json"]),
+            "explanation": row["explanation"],
+            "updated_at": row["updated_at"],
+        }
+
+    async def clear_session_todos(self, session_id: str) -> bool:
+        lock = await self._session_write_lock(session_id)
+        async with lock:
+            cursor = await self.conn.execute("DELETE FROM session_todos WHERE session_id = ?", (session_id,))
             await self.conn.commit()
             return cursor.rowcount > 0
 

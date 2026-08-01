@@ -14,7 +14,6 @@ import { loadHistory } from "@/actions/history";
 import { cancelSubagent, sendMessage, stopRun } from "@/actions/messages";
 import {
   isActiveBackgroundAgent,
-  latestTodoListFromMessages,
   RIGHT_PANEL_WIDTH,
 } from "@/features/background-agents/components/AgentRightSidebar";
 import { childAgentTaskToBackgroundSnapshot } from "@/lib/agentRun";
@@ -36,6 +35,7 @@ beforeEach(() => {
     running: false,
     currentRunId: null,
     currentSessionId: null,
+    sessionTodos: {},
     error: null,
     backgroundAgents: createBackgroundAgentsDomainState(),
   });
@@ -266,6 +266,7 @@ test("live tool target matches persisted history formatting without description"
 });
 
 test("todo update stays hidden in chat but available to sidebar", () => {
+  setState({ currentSessionId: "todo-session" });
   handleServerEvent({ type: "RUN_STARTED", run_id: "run-todos", session_id: "todo-session" });
   handleServerEvent({
     type: "todo_updated",
@@ -286,7 +287,7 @@ test("todo update stays hidden in chat but available to sidebar", () => {
     roles: state.order.map((id) => state.messages.get(id)?.role ?? null),
     contents: state.order.map((id) => state.messages.get(id)?.content ?? ""),
   });
-  const sidebarTodo = latestTodoListFromMessages(state.order, state.messages);
+  const sidebarTodo = state.sessionTodos["todo-session"];
 
   expect(state.order).toEqual(["todo-run-todos"]);
   expect(visibleIds).toEqual([]);
@@ -299,7 +300,8 @@ test("todo update stays hidden in chat but available to sidebar", () => {
   ]);
 });
 
-test("right sidebar derives the latest todo list from transcript state", () => {
+test("right sidebar tracks the latest todo list in the session slot", () => {
+  setState({ currentSessionId: "todo-session" });
   handleServerEvent({ type: "RUN_STARTED", run_id: "run-todos-1", session_id: "todo-session" });
   handleServerEvent({
     type: "todo_updated",
@@ -315,9 +317,10 @@ test("right sidebar derives the latest todo list from transcript state", () => {
   });
 
   const state = getState();
-  const todo = latestTodoListFromMessages(state.order, state.messages);
+  const todo = state.sessionTodos["todo-session"];
 
   expect(todo?.items).toEqual([{ content: "Current task", status: "in_progress" }]);
+  expect(todo?.edited).toBe(false);
 });
 
 test("right sidebar is wider than the old 256px panel", () => {

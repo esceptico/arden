@@ -24,10 +24,7 @@ import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { Collapse } from "@/components/ui/Collapse";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
 import { PeekSurface } from "@/components/workspace/PeekSurface";
-import {
-  latestTodoListFromMessages,
-  RIGHT_PANEL_WIDTH,
-} from "@/features/background-agents/lib/panelConstants";
+import { RIGHT_PANEL_WIDTH } from "@/features/background-agents/lib/panelConstants";
 import { rosterRowMotion } from "@/features/background-agents/lib/rosterMotion";
 import { useChildAgentsPoll } from "@/features/background-agents/hooks/useChildAgentsPoll";
 import { childAgentResultKey, useChildAgentResults } from "@/features/background-agents/hooks/useChildAgentResults";
@@ -40,7 +37,7 @@ import { ParentBreadcrumb } from "@/features/background-agents/components/Parent
 import { TodoSidebarSection } from "@/features/background-agents/components/TodoSidebarSection";
 
 export { isActiveBackgroundAgent } from "@/stores/background-agent-domain";
-export { latestTodoListFromMessages, RIGHT_PANEL_WIDTH } from "@/features/background-agents/lib/panelConstants";
+export { RIGHT_PANEL_WIDTH } from "@/features/background-agents/lib/panelConstants";
 
 const RECENT_AGENT_LIMIT = 6;
 const INSPECTOR_SECTION_ORDER = ["activity", "sources"] as const;
@@ -190,7 +187,11 @@ export function AgentRightSidebar({
   const backgroundAgentRows = useStore((s) => s.backgroundAgents.rows);
   const workflowRows = useStore((s) => s.workflows.rows);
   const openAutomations = useStore((s) => s.openAutomations);
-  const todo = useStore((s) => latestTodoListFromMessages(s.order, s.messages));
+  // Session-level slot (hydrated on switch, updated by todo_updated events);
+  // retired and dismissed lists are simply absent.
+  const todo = useStore((s) =>
+    s.currentSessionId ? s.sessionTodos[s.currentSessionId] ?? null : null,
+  );
   const pendingApprovals = useStore((s) => s.pendingApprovals);
   // Shared (in prefs) so the chat area can reflow to dock the panel.
   const collapsed = useStore((s) =>
