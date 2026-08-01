@@ -105,6 +105,7 @@ PERSIST_KEYS = frozenset(
         "embedding_model",
         "memory",
         "memory_timezone",
+        "timezone",
         "integration_states",
         "gmail_days",
         "max_depth",
@@ -160,6 +161,11 @@ class Config(BaseSettings):
     # of the codebase never learned about the move.
     model_roles: dict[str, RoleModelSetup] = Field(default_factory=dict)
     embedding_model: str | None = None
+
+    # The user's timezone (IANA name). Defaults to the machine's local zone,
+    # which is right for a local server; set explicitly when the server runs
+    # remotely so time-facing surfaces report the user's clock, not the host's.
+    timezone: str = Field(default_factory=lambda: _local_timezone_name())
 
     # Memory
     memory: bool = True
@@ -324,13 +330,13 @@ class Config(BaseSettings):
             return None
         return v
 
-    @field_validator("memory_timezone")
+    @field_validator("timezone", "memory_timezone")
     @classmethod
-    def _validate_memory_timezone(cls, value: str) -> str:
+    def _validate_timezone(cls, value: str) -> str:
         try:
             ZoneInfo(value)
         except ZoneInfoNotFoundError as exc:
-            raise ValueError(f"unknown memory timezone: {value}") from exc
+            raise ValueError(f"unknown timezone: {value}") from exc
         return value
 
     @field_validator("embedding_model")

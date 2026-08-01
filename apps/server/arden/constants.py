@@ -219,3 +219,7 @@ DETACHED_RUN_MAX_AGE = timedelta(hours=3)
 # heartbeat; expiry lets a reconnect supersede it and fences stale results.
 EXECUTOR_LEASE_TTL_SECONDS = 60
 EXECUTOR_STREAM_KEEPALIVE_SECONDS = 15
+
+# Skill archives uploaded from a device (POST /skills/upload) — one zipped
+# skill directory; the cap keeps a stray upload from filling the server disk.
+SKILL_ARCHIVE_MAX_BYTES = 5 * 1024 * 1024
