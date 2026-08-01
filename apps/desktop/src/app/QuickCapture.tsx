@@ -39,14 +39,6 @@ import { loadPrefs } from "@/stores/prefs";
 
 type Phase = "compose" | "exit-submit" | "exit-cancel";
 
-/** Shadow gutters around the card inside the transparent window —
- *  mirrors the pt-2/pb-9 padding on the root and the geometry in
- *  electron/main.cjs. The card hugs its content; a ResizeObserver
- *  requests `card height + gutters` from main, which clamps to
- *  [QUICK_BASE_HEIGHT, QUICK_MAX_HEIGHT]. */
-const WINDOW_GUTTERS = 8 + 36;
-/** Covers a full picker unfold in one leading resize (7 rows + padding). */
-const GROWTH_HEADROOM = 240;
 const MAX_PICKER_SESSIONS = 6;
 const MAX_IMAGES = 3;
 
@@ -77,7 +69,6 @@ export function QuickCapture() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerIndex, setPickerIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
 
   const items: PickerItem[] = [
     { sessionId: null, label: "New chat" },
@@ -90,36 +81,6 @@ export function QuickCapture() {
     setPickerIndex(Math.max(0, items.findIndex((i) => i.sessionId === (target?.session_id ?? null))));
     setPickerOpen(true);
   }, [items, target]);
-
-  // The bar grows with content (multi-line drafts, image chips, the
-  // picker); the window follows the card instead of hand-maintained
-  // height math per state. Growth LEADS with transparent headroom — the
-  // window must never clip the springing card, and oversize is invisible
-  // in a transparent window — then settles to the exact height once the
-  // card stops moving. Shrinks only settle, so collapse-out never clips.
-  useEffect(() => {
-    const card = cardRef.current;
-    if (!card) return;
-    let settleTimer: ReturnType<typeof setTimeout> | null = null;
-    let requested = 0;
-    const observer = new ResizeObserver(() => {
-      const target = Math.ceil(card.getBoundingClientRect().height) + WINDOW_GUTTERS;
-      if (settleTimer !== null) clearTimeout(settleTimer);
-      if (target > requested) {
-        requested = target + GROWTH_HEADROOM;
-        void window.ardenDesktop?.quickCapture?.resize?.(requested);
-      }
-      settleTimer = setTimeout(() => {
-        requested = target;
-        void window.ardenDesktop?.quickCapture?.resize?.(target);
-      }, 280);
-    });
-    observer.observe(card);
-    return () => {
-      observer.disconnect();
-      if (settleTimer !== null) clearTimeout(settleTimer);
-    };
-  }, []);
 
   // Single-line at rest, grows to a cap with the draft, scrolls beyond.
   const autogrow = useCallback(() => {
@@ -253,13 +214,22 @@ export function QuickCapture() {
 
   return (
     <MotionConfig reducedMotion="user">
-      {/* Padding gives the card's drop shadow room to render inside the
-          transparent BrowserWindow (24px sides, 36px below — matched to
-          the window size set in electron/main.cjs). The card is a
-          Spotlight-class BAR: one input row with inline accessories,
-          growing only with content (draft lines, image chips, picker).
-          Esc and window blur dismiss; Enter sends, ⇧↩ breaks a line. */}
-      <div className="quick-capture-root grid min-h-screen items-end px-6 pt-2 pb-9">
+      {/* The window is a fixed 560px-tall transparent sheet; the card
+          bottom-anchors inside it and grows UPWARD into the invisible
+          headroom, so it can never be clipped. Padding gives the drop
+          shadow room (24px sides, 36px below — matched to the geometry
+          in electron/main.cjs). The card is a Spotlight-class BAR: one
+          input row with inline accessories, growing only with content
+          (draft lines, image chips, picker). Esc and window blur
+          dismiss; Enter sends, ⇧↩ breaks a line. Clicks on the
+          transparent headroom land in THIS window (no blur fires), so
+          they dismiss explicitly — same draft-preserving hide as blur. */}
+      <div
+        className="quick-capture-root grid min-h-screen items-end px-6 pt-2 pb-9"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) void window.ardenDesktop?.quickCapture?.close();
+        }}
+      >
         <motion.div
           key={summonId}
           initial={POSE_SHEET_IN}
@@ -268,22 +238,17 @@ export function QuickCapture() {
           onAnimationComplete={onCardAnimationComplete}
           className="quick-capture-card surface-sheet flex flex-col overflow-hidden rounded-[var(--r-panel)]"
         >
-          {/* Bottom-anchored: the window grows UPWARD, so the picker and
+          {/* Bottom-anchored: the card grows UPWARD, so the picker and
               image chips render ABOVE the input row — the bar itself never
               moves on screen. */}
-          <div ref={cardRef} className="flex flex-col">
+          <div className="flex flex-col">
             <Collapse open={pickerOpen} mode="height">
               {/* Spacing lives INSIDE the measured content (Height Collapse
-                  contract) so the reveal travels with it. */}
-              {/* Fixed natural cap ONLY — never viewport-relative, and no
-                  height caps on the card either: the resize flow is card-led,
-                  so the card must always LAYOUT at its natural height for the
-                  window to have a growth target. (A viewport-coupled cap here
-                  once deadlocked the picker at 1-2px of growth.) The 220px
-                  cap bounds many-chat lists and keeps the whole card well
-                  under the window's height clamp. */}
+                  contract) so the reveal travels with it. The list needs no
+                  scroll cap: MAX_PICKER_SESSIONS bounds it to 7 rows, which
+                  always fit the fixed window height. */}
               <div
-                className="max-h-[220px] overflow-y-auto scroll-thin border-b border-line-soft px-1.5 py-1.5"
+                className="border-b border-line-soft px-1.5 py-1.5"
                 role="listbox"
                 aria-label="Destination chat"
               >

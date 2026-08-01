@@ -50,19 +50,21 @@ test("native Quick Capture keeps the companion-bar geometry and motion contract"
   const capture = read("../src/app/QuickCapture.tsx");
   const electron = read("../electron/main.cjs");
 
-  // Shared sheet motion, bar-shaped card: bottom-anchored root so upward
-  // window growth keeps the input row fixed on screen, picker above it.
+  // Shared sheet motion, bar-shaped card: bottom-anchored root inside a
+  // fixed-height transparent window, so the card grows upward into the
+  // invisible headroom and the input row stays fixed on screen.
   expect(capture).toContain("initial={POSE_SHEET_IN}");
   expect(capture).toContain("transition={exiting ? SHEET_EXIT_TRANSITION : SHEET_ENTER_TRANSITION}");
   expect(capture).toContain("What needs attention?");
   expect(capture).toContain("items-end");
-  expect(capture).toContain("const WINDOW_GUTTERS = 8 + 36;");
-  expect(capture).toContain("ResizeObserver");
   expect(capture).toContain("rounded-[var(--r-panel)]");
-  // Companion-bar placement: bottom-fraction anchor, upward growth.
+  // No renderer→main resize protocol: the fixed window can't clip the card.
+  expect(capture).not.toContain("ResizeObserver");
+  expect(capture).not.toContain("quickCapture?.resize");
+  // Companion-bar placement: bottom-fraction anchor, fixed window height.
   expect(electron).toContain("const QUICK_WIDTH = 656;");
-  expect(electron).toContain("const QUICK_BASE_HEIGHT = 102;");
+  expect(electron).toContain("const QUICK_HEIGHT = 560;");
   expect(electron).toContain("const QUICK_VISIBLE_BOTTOM_GUTTER = 36;");
   expect(electron).toContain("const QUICK_BOTTOM_FRACTION = 0.15;");
-  expect(electron).toContain("y: y + (current - clamped)");
+  expect(electron).not.toContain("quick:resize");
 });

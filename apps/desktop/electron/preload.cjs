@@ -40,7 +40,6 @@ contextBridge.exposeInMainWorld("ardenDesktop", {
     submit: payload => ipcRenderer.invoke("quick:submit", payload),
     close: () => ipcRenderer.invoke("quick:close"),
     captureScreen: () => ipcRenderer.invoke("quick:captureScreen"),
-    resize: height => ipcRenderer.invoke("quick:resize", height),
     setShortcut: accelerator => ipcRenderer.invoke("quick:setShortcut", accelerator),
     onMessage: callback => {
       const listener = (_event, message) => callback(message);
