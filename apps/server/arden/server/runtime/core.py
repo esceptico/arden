@@ -15,6 +15,7 @@ from arden.constants import (
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
 from arden.core.factory import AgentConfig
+from arden.execution.gateway import ExecutorGateway
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
 from arden.integrations.slack.client import SlackClient
 from arden.llm.base import CompletionClient
@@ -124,6 +125,7 @@ class Runtime:
         self.knowledge = KnowledgeRuntime(initial_config)
 
         self.stores: Stores | None = None
+        self.executor_gateway: ExecutorGateway | None = None
         self.automation: AutomationRuntime | None = None
         self.mcp_manager: MCPManager | None = None
         self.executor: ToolExecutor | None = None
@@ -458,6 +460,12 @@ class Runtime:
         init_tracing()
         llm_init(self.config)
         self.stores = await Stores.connect(self.config)
+        self.executor_gateway = ExecutorGateway(
+            self.stores.executor_devices,
+            self.stores.executor_leases,
+            self.stores.executor_commands,
+            self.stores.invocations,
+        )
         if self.config.memory:
             await self._init_wiki()
         await self._init_facts(fact_ledger)
