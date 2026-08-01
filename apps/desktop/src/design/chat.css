@@ -452,6 +452,54 @@
 
 .board-composer__input::placeholder { color: var(--faint); }
 
+/* Contenteditable composer document: plain text nodes, atomic mention
+   tokens, and <br>s — nothing else (mentionEditor.ts is the contract). */
+.board-composer__editor {
+  position: relative;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.board-composer__editor[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  inset: 0;
+  color: var(--faint);
+  pointer-events: none;
+}
+
+/* Inline skill token — a link with an icon, nothing else. Same voice as
+   the app's typeset links (medium weight, soft underline) so it reads as
+   a link in every palette, including the neutral ones where accent inks
+   sit close to body ink. Clicking it opens the skill (delegated from the
+   editor), matching SkillInlineToken in sent bubbles. */
+.composer-mention {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3125rem;
+  color: var(--accent-ink);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-mention__label {
+  text-transform: capitalize;
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklab, currentColor 30%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.composer-mention:hover .composer-mention__label { text-decoration-color: currentColor; }
+
+.composer-mention > svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  align-self: center;
+  translate: 0 1px;
+}
+
 .board-composer__toolbar { height: 2.625rem; min-height: 2.625rem; flex: none; }
 .board-composer .composer-tool-button { min-height: var(--control-size-large); }
 /* .arden-icon-button's base size (--icon-button-size, 28px) is narrower than

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { Box } from "@/components/icons";
+import { AnimatePresence } from "motion/react";
 import clsx from "clsx";
 import { useShallow } from "zustand/react/shallow";
 import { selectSentUserMessages, useStore } from "@/stores";
@@ -23,12 +22,16 @@ import { ComposerImageStrip } from "@/features/chat/components/ComposerImageStri
 import { ComposerToolbar, type ComposerAction } from "@/features/chat/components/ComposerToolbar";
 import { WorkingStrip } from "@/features/chat/components/WorkingStrip";
 import { useListNav } from "@/lib/hooks";
-import { ICON } from "@/lib/icons";
-import { RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
 import { workingLabel } from "@/features/chat/lib/workingLabel";
 import { filterCommands, useCommandList, type CommandEntry } from "@/features/chat/lib/commands";
-import { SECTION_ENTER, SECTION_EXIT } from "@/features/chat/lib/composerMotion";
-import { fileToImageBlock, mentionQueryAt, resize } from "@/features/chat/lib/composerHelpers";
+import { fileToImageBlock, mentionQueryAt } from "@/features/chat/lib/composerHelpers";
+import {
+  caretOffset,
+  insertMention,
+  placeCaretAtEnd,
+  renderDraft,
+  serializeEditor,
+} from "@/features/chat/lib/mentionEditor";
 import { recallHistory } from "@/features/chat/lib/composerHistory";
 import { QUEUE_MAX_ITEMS } from "@/features/chat/lib/queue";
 
@@ -47,8 +50,6 @@ export function Composer() {
   const setPickerOpen = useStore((s) => s.setCommandPickerOpen);
   const setPickerIndex = useStore((s) => s.setCommandPickerIndex);
   const skills = useStore((s) => s.skills);
-  const selectedSkill = useStore((s) => s.selectedSkill);
-  const setSelectedSkill = useStore((s) => s.setSelectedSkill);
   const pendingImages = useStore((s) => s.pendingImages);
   const addPendingImages = useStore((s) => s.addPendingImages);
   const removePendingImage = useStore((s) => s.removePendingImage);
@@ -56,7 +57,7 @@ export function Composer() {
   const pendingGoalProposal = useStore((s) => s.pendingGoalProposal);
   const queuedCount = useStore((s) => s.queuedMessages.length);
   const queueFull = queuedCount >= QUEUE_MAX_ITEMS;
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Readline-style recall over the session's sent messages. `historyIndex` is
@@ -115,7 +116,7 @@ export function Composer() {
   }, [query, filteredCommands.length, pickerOpen, setPickerOpen]);
 
   const hasDraft = draft.trim().length > 0;
-  const hasContent = hasDraft || Boolean(selectedSkill) || pendingImages.length > 0;
+  const hasContent = hasDraft || pendingImages.length > 0;
   // While a run is in flight, submit enqueues onto the active run instead
   // of being blocked. Disable only when disconnected or there's nothing
   // to send.
@@ -153,12 +154,31 @@ export function Composer() {
   const activityMessage = activeActivityId ? messages.get(activeActivityId) : null;
   const stripLabel = useMemo(() => workingLabel(activityMessage), [activityMessage]);
 
-  // Layout effect so the height is set before paint — an effect-timed
-  // resize lets a multi-line programmatic draft (history recall, edit)
-  // paint one frame at the stale height.
+  // The editor DOM is browser-owned while the user types; the store's draft
+  // string is the single source of truth everywhere else. Programmatic draft
+  // changes (history recall, message edit, clear-on-send) re-render the DOM
+  // from the string, tokenizing every known /skill mention into an atomic
+  // inline token. Layout effect so a multi-line recall never paints one
+  // frame of stale content.
   useLayoutEffect(() => {
-    if (inputRef.current) resize(inputRef.current);
-  }, [draft]);
+    const el = inputRef.current;
+    if (!el) return;
+    if (serializeEditor(el) === draft) return;
+    renderDraft(el, draft, skills);
+    if (document.activeElement === el) placeCaretAtEnd(el);
+  }, [draft, skills]);
+
+  // Clicks and arrow keys move the caret without an input event; the picker's
+  // mid-text mention query needs the live offset.
+  useEffect(() => {
+    const handler = () => {
+      const el = inputRef.current;
+      if (!el || document.activeElement !== el) return;
+      setCaret(caretOffset(el));
+    };
+    document.addEventListener("selectionchange", handler);
+    return () => document.removeEventListener("selectionchange", handler);
+  }, []);
 
   const [dragOver, setDragOver] = useState(false);
 
@@ -176,60 +196,34 @@ export function Composer() {
 
   function applyPickerSelection(entry: CommandEntry) {
     setPickerOpen(false);
-
-    // Mid-text mention: complete the token in place — the server expands
-    // /name anywhere in the message, so the text is the whole mechanism.
-    if (mention !== null && mention.start > 0) {
-      const completed = `${draft.slice(0, mention.start)}/${entry.name} ${draft.slice(caret)}`;
-      const nextCaret = mention.start + entry.name.length + 2;
-      setDraft(completed);
-      setCaret(nextCaret);
-      const input = inputRef.current;
-      if (input) {
-        requestAnimationFrame(() => {
-          input.focus();
-          input.setSelectionRange(nextCaret, nextCaret);
-        });
-      }
-      return;
-    }
-
-    setDraft("");
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      resize(inputRef.current);
-    }
+    const el = inputRef.current;
 
     if (entry.kind === "builtin") {
-      // Builtins fire-and-forget.
+      // Builtins fire-and-forget; the draft-sync effect clears the editor.
+      setDraft("");
       void runBuiltinCommand(entry.name, "");
       return;
     }
 
-    // Skills attach as a pill above the textarea so the user can type a
-    // prompt under the skill before sending. Submit assembles
-    // `/<skill-name> <prompt>` and the server's expand_skill_command does
-    // the substitution.
+    // Complete the mention in place — start of text and mid-text are the
+    // same mechanism: an atomic inline token wherever the mention sits.
+    // Serialization turns it back into /name, which the server expands.
     const skill = skills.find((s) => s.name === entry.name);
-    if (skill) setSelectedSkill(skill);
-    requestAnimationFrame(() => inputRef.current?.focus());
+    if (!skill || !el || mention === null) return;
+    insertMention(el, mention.start, caret, skill);
+    setDraft(serializeEditor(el));
+    setCaret(caretOffset(el));
   }
 
   function submit(delivery: "queue" | "steer" = "queue") {
     const text = draft;
-    const skill = selectedSkill;
     const images = pendingImages;
-    if (!text.trim() && !skill && images.length === 0) return;
+    if (!text.trim() && images.length === 0) return;
     if (running && delivery === "queue" && queueFull) return;
 
     setHistoryIndex(null);
     setDraft("");
-    setSelectedSkill(null);
     clearPendingImages();
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      resize(inputRef.current);
-    }
     setPickerOpen(false);
 
     const trimmed = text.trim();
@@ -246,29 +240,20 @@ export function Composer() {
       return;
     }
 
-    // Pure builtin (no skill, no images) — route to the dispatcher.
-    if (!skill && images.length === 0 && dispatchCommand(text)) return;
+    // Pure builtin (no images) — route to the dispatcher.
+    if (images.length === 0 && dispatchCommand(text)) return;
 
-    const fullText = skill
-      ? trimmed.length > 0
-        ? `/${skill.name} ${trimmed}`
-        : `/${skill.name}`
-      : text;
     if (running) {
-      void (delivery === "steer" ? steerMessage(fullText, images) : enqueueMessage(fullText, images));
+      void (delivery === "steer" ? steerMessage(text, images) : enqueueMessage(text, images));
       inputRef.current?.focus({ preventScroll: true });
     } else {
-      void sendMessage(fullText, images);
+      void sendMessage(text, images);
     }
   }
 
   function cancelEdit() {
     setEditingId(null);
     setDraft("");
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      resize(inputRef.current);
-    }
   }
 
   const editQueuedMessage = useCallback((message: import("@/stores").QueuedMessage) => {
@@ -276,7 +261,12 @@ export function Composer() {
     setDraft(message.text);
     clearPendingImages();
     if (message.images?.length) addPendingImages(message.images);
-    requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      placeCaretAtEnd(el);
+    });
   }, [addPendingImages, clearPendingImages, setDraft]);
 
   async function attachFiles(fileList: FileList | File[] | null) {
@@ -360,144 +350,164 @@ export function Composer() {
             }}
           />
           <div className="board-composer__input-row flex min-h-[66px] items-start gap-2 px-4 pt-[13px] pb-1">
-            <AnimatePresence initial={false}>
-              {selectedSkill && (
-                <motion.button
-                  key="skill-pill"
-                  type="button"
-                  initial={RISE_IN}
-                  animate={RISE_SETTLED}
-                  exit={SECTION_EXIT}
-                  transition={SECTION_ENTER}
-                  onClick={() => void viewSkill(selectedSkill.name)}
-                  title={`${selectedSkill.path ?? selectedSkill.name} - Backspace on empty input detaches`}
-                  className="mt-[1px] inline-flex max-w-[240px] shrink-0 items-baseline gap-1.5 truncate text-md leading-[1.5] text-info hover:text-accent-strong transition-colors"
-                >
-                  <Box size={ICON.MD} strokeWidth={2} className="relative top-[1px] shrink-0" />
-                  <span className="truncate capitalize">{selectedSkill.name.replace(/[_-]/g, " ")}</span>
-                </motion.button>
-              )}
-            </AnimatePresence>
-            <textarea
-              ref={inputRef}
-              id="message-input"
-              aria-label="Message arden"
-              value={draft}
-              onChange={(e) => {
-                // Real typing exits history mode (recall sets the draft
-                // programmatically, which doesn't fire onChange).
-                setHistoryIndex(null);
-                setDraft(e.target.value);
-                setCaret(e.target.selectionStart ?? e.target.value.length);
-              }}
-              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-              onKeyDown={(e) => {
-                // Enter (or any key) during IME composition confirms the
-                // conversion — it must never submit or hit shortcut branches.
-                if (e.nativeEvent.isComposing) return;
-                // Backspace on empty draft + attached skill → detach the skill.
-                if (
-                  e.key === "Backspace" &&
-                  !pickerOpen &&
-                  selectedSkill &&
-                  draft.length === 0
-                ) {
-                  e.preventDefault();
-                  setSelectedSkill(null);
-                  return;
-                }
-                // Esc cancels an in-flight run when the picker isn't open.
-                if (e.key === "Escape" && !pickerOpen && running) {
-                  e.preventDefault();
-                  void stopRun();
-                  return;
-                }
-                if (pickerOpen && filteredCommands.length > 0) {
-                  if (e.key === "Tab") {
+            <div
+                ref={inputRef}
+                id="message-input"
+                role="textbox"
+                aria-multiline="true"
+                aria-label="Message arden"
+                contentEditable
+                suppressContentEditableWarning
+                data-empty={draft.length === 0 ? "true" : undefined}
+                data-placeholder={dragOver ? "Drop images here" : "Message arden…"}
+                onClick={(e) => {
+                  // Tokens are links: clicking one opens the skill, same as
+                  // SkillInlineToken in sent bubbles.
+                  const token = (e.target as HTMLElement).closest<HTMLElement>("[data-mention]");
+                  if (token?.dataset.mention) void viewSkill(token.dataset.mention);
+                }}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  // Real typing exits history mode (recall sets the draft
+                  // programmatically, which doesn't fire onInput).
+                  setHistoryIndex(null);
+                  const text = serializeEditor(el);
+                  const at = caretOffset(el);
+                  // Typing a boundary after a known /skill name tokenizes it
+                  // in place — same result as picking it from the picker.
+                  const native = e.nativeEvent as InputEvent;
+                  if (native.inputType === "insertText" && native.data && /\s/.test(native.data)) {
+                    const match = /\/([a-z][a-z0-9-]{0,47})\s$/.exec(text.slice(0, at));
+                    if (match && (match.index === 0 || /\s/.test(text[match.index - 1]!))) {
+                      const skill = skills.find((s) => s.name === match[1]);
+                      if (skill) {
+                        insertMention(el, match.index, at, skill);
+                        setDraft(serializeEditor(el));
+                        setCaret(caretOffset(el));
+                        return;
+                      }
+                    }
+                  }
+                  setDraft(text);
+                  setCaret(at);
+                }}
+                onBeforeInput={(e) => {
+                  // Normalize paragraphs to line breaks so the document stays
+                  // flat: text nodes, tokens, and <br>s — nothing else.
+                  const native = e.nativeEvent as InputEvent;
+                  if (native.inputType === "insertParagraph") {
                     e.preventDefault();
-                    applyPickerSelection(filteredCommands[pickerIndex]);
-                    return;
+                    document.execCommand("insertLineBreak");
                   }
-                  if (e.key === "Escape") {
+                }}
+                onCopy={(e) => {
+                  const sel = window.getSelection();
+                  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+                  e.preventDefault();
+                  e.clipboardData.setData("text/plain", serializeEditor(sel.getRangeAt(0).cloneContents()));
+                }}
+                onCut={(e) => {
+                  const sel = window.getSelection();
+                  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+                  e.preventDefault();
+                  e.clipboardData.setData("text/plain", serializeEditor(sel.getRangeAt(0).cloneContents()));
+                  document.execCommand("delete");
+                }}
+                onKeyDown={(e) => {
+                  // Enter (or any key) during IME composition confirms the
+                  // conversion — it must never submit or hit shortcut branches.
+                  if (e.nativeEvent.isComposing) return;
+                  // Esc cancels an in-flight run when the picker isn't open.
+                  if (e.key === "Escape" && !pickerOpen && running) {
                     e.preventDefault();
-                    dismissedQueryRef.current = query;
-                    setPickerOpen(false);
+                    void stopRun();
                     return;
                   }
-                  if (
-                    e.key === "ArrowDown" ||
-                    e.key === "ArrowUp" ||
-                    (
-                      e.key === "Enter"
-                      && !e.shiftKey
-                      && !e.metaKey
-                      && !e.ctrlKey
-                      && !e.altKey
-                    )
-                  ) {
-                    pickerNav.onKeyDown(e);
-                    return;
-                  }
-                }
-                // Readline-style history. Picker nav takes precedence (handled
-                // above); here the picker is closed. Plain ArrowUp/ArrowDown
-                // only (no modifiers), and only when the caret sits on the
-                // first/last line so multi-line editing still works.
-                if (
-                  !pickerOpen &&
-                  (e.key === "ArrowUp" || e.key === "ArrowDown") &&
-                  !e.shiftKey &&
-                  !e.altKey &&
-                  !e.metaKey &&
-                  !e.ctrlKey &&
-                  inputRef.current
-                ) {
-                  const el = inputRef.current;
-                  const caretStart = el.selectionStart ?? 0;
-                  const caretEnd = el.selectionEnd ?? caretStart;
-                  const onFirstLine = !el.value.slice(0, caretStart).includes("\n");
-                  const onLastLine = !el.value.slice(caretEnd).includes("\n");
-                  const direction = e.key === "ArrowUp" ? "up" : "down";
-                  const atEdge = direction === "up" ? onFirstLine : onLastLine;
-                  const inHistory = historyIndex != null;
-                  if (atEdge && (direction === "up" || inHistory)) {
-                    const result = recallHistory(
-                      { historyIndex, draft, stashedDraft: stashedDraftRef.current },
-                      direction,
-                      sentMessages,
-                    );
-                    if (result.value !== draft || result.historyIndex !== historyIndex) {
+                  if (pickerOpen && filteredCommands.length > 0) {
+                    if (e.key === "Tab") {
                       e.preventDefault();
-                      stashedDraftRef.current = result.stashedDraft;
-                      setHistoryIndex(result.historyIndex);
-                      setDraft(result.value);
-                      requestAnimationFrame(() => {
-                        const node = inputRef.current;
-                        if (node) node.setSelectionRange(node.value.length, node.value.length);
-                      });
+                      applyPickerSelection(filteredCommands[pickerIndex]);
+                      return;
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      dismissedQueryRef.current = query;
+                      setPickerOpen(false);
+                      return;
+                    }
+                    if (
+                      e.key === "ArrowDown" ||
+                      e.key === "ArrowUp" ||
+                      (
+                        e.key === "Enter"
+                        && !e.shiftKey
+                        && !e.metaKey
+                        && !e.ctrlKey
+                        && !e.altKey
+                      )
+                    ) {
+                      pickerNav.onKeyDown(e);
                       return;
                     }
                   }
-                }
-                if (e.key === "Enter" && !e.shiftKey) {
+                  // Readline-style history. Picker nav takes precedence (handled
+                  // above); here the picker is closed. Plain ArrowUp/ArrowDown
+                  // only (no modifiers), and only when the caret sits on the
+                  // first/last line so multi-line editing still works.
+                  if (
+                    !pickerOpen &&
+                    (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+                    !e.shiftKey &&
+                    !e.altKey &&
+                    !e.metaKey &&
+                    !e.ctrlKey &&
+                    inputRef.current
+                  ) {
+                    const el = inputRef.current;
+                    const text = serializeEditor(el);
+                    const at = caretOffset(el);
+                    const onFirstLine = !text.slice(0, at).includes("\n");
+                    const onLastLine = !text.slice(at).includes("\n");
+                    const direction = e.key === "ArrowUp" ? "up" : "down";
+                    const atEdge = direction === "up" ? onFirstLine : onLastLine;
+                    const inHistory = historyIndex != null;
+                    if (atEdge && (direction === "up" || inHistory)) {
+                      const result = recallHistory(
+                        { historyIndex, draft, stashedDraft: stashedDraftRef.current },
+                        direction,
+                        sentMessages,
+                      );
+                      if (result.value !== draft || result.historyIndex !== historyIndex) {
+                        e.preventDefault();
+                        stashedDraftRef.current = result.stashedDraft;
+                        setHistoryIndex(result.historyIndex);
+                        // The draft-sync effect re-renders the editor and
+                        // parks the caret at the end.
+                        setDraft(result.value);
+                        return;
+                      }
+                    }
+                  }
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit((e.metaKey || e.ctrlKey) && running ? "steer" : "queue");
+                  }
+                }}
+                onPaste={(e) => {
+                  const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
+                    f.type.startsWith("image/"),
+                  );
+                  if (files.length > 0) {
+                    e.preventDefault();
+                    void attachFiles(files);
+                    return;
+                  }
+                  // Plain text only — pasted markup must never enter the doc.
                   e.preventDefault();
-                  submit((e.metaKey || e.ctrlKey) && running ? "steer" : "queue");
-                }
-              }}
-              onPaste={(e) => {
-                const files = Array.from(e.clipboardData?.files ?? []).filter((f) =>
-                  f.type.startsWith("image/"),
-                );
-                if (files.length > 0) {
-                  e.preventDefault();
-                  void attachFiles(files);
-                }
-              }}
-              rows={1}
-              placeholder={
-                dragOver ? "Drop images here" : selectedSkill ? "if needed" : "Message arden…"
-              }
-              className="board-composer__input min-h-[44px] max-h-[220px] min-w-0 flex-1 resize-none border-0 bg-transparent p-0 text-md leading-[1.5] text-ink outline-none tracking-[-0.005em] placeholder:text-muted"
+                  const text = e.clipboardData.getData("text/plain");
+                  if (text) document.execCommand("insertText", false, text);
+                }}
+                className="board-composer__input board-composer__editor min-h-[44px] max-h-[220px] min-w-0 flex-1 border-0 bg-transparent p-0 text-md leading-[1.5] text-ink outline-none tracking-[-0.005em]"
             />
           </div>
           <ComposerToolbar

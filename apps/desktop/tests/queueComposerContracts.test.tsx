@@ -175,7 +175,6 @@ test("a nonempty running composer queues through the submit control instead of s
     draft: getState().draft,
     queuedMessages: getState().queuedMessages,
     pendingApprovals: getState().pendingApprovals,
-    selectedSkill: getState().selectedSkill,
     pendingImages: getState().pendingImages,
     commandPickerOpen: getState().commandPickerOpen,
     commandPickerIndex: getState().commandPickerIndex,
@@ -213,7 +212,6 @@ test("a nonempty running composer queues through the submit control instead of s
       draft: "Keep this queued",
       queuedMessages: [],
       pendingApprovals: [],
-      selectedSkill: null,
       pendingImages: [],
       commandPickerOpen: false,
       commandPickerIndex: 0,
@@ -224,7 +222,7 @@ test("a nonempty running composer queues through the submit control instead of s
       root.render(<Composer />);
     });
 
-    const input = el.querySelector<HTMLTextAreaElement>('#message-input')!;
+    const input = el.querySelector<HTMLElement>('#message-input')!;
     const queueControl = el.querySelector<HTMLButtonElement>('[aria-label="Queue message"]')!;
     expect(queueControl.type).toBe("submit");
     await act(async () => {
@@ -236,7 +234,7 @@ test("a nonempty running composer queues through the submit control instead of s
     expect(requests.filter((request) => request.path === "/chat/message")).toHaveLength(0);
     expect(requests.some((request) => request.path === "/cancel")).toBe(false);
     expect(getState().draft).toBe("");
-    expect(input.value).toBe("");
+    expect(input.textContent).toBe("");
     expect(document.activeElement).toBe(input);
     expect(getState().queuedMessages).toHaveLength(1);
     expect(getState().queuedMessages[0]?.text).toBe("Keep this queued");

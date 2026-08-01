@@ -38,7 +38,3 @@ export function mentionQueryAt(
   return { query: token, start: slash };
 }
 
-export function resize(input: HTMLTextAreaElement) {
-  input.style.height = "0px";
-  input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
-}

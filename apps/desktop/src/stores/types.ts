@@ -426,7 +426,6 @@ export interface State {
   skills: SkillDescriptor[];
   commandPickerOpen: boolean;
   commandPickerIndex: number;
-  selectedSkill: SkillDescriptor | null;
   viewingMarkdown: MarkdownViewState | null;
   viewingTool: ActivityItem | null;
   pendingImages: ImageBlock[];
@@ -600,7 +599,6 @@ export interface Actions {
   setSkills: (skills: SkillDescriptor[]) => void;
   setCommandPickerOpen: (open: boolean) => void;
   setCommandPickerIndex: (index: number) => void;
-  setSelectedSkill: (skill: SkillDescriptor | null) => void;
   setViewingMarkdown: (view: MarkdownViewState | null) => void;
   setViewingTool: (item: ActivityItem | null) => void;
   setViewingWorkflow: (view: WorkflowViewerState | null) => void;
