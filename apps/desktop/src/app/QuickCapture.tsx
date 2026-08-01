@@ -266,17 +266,20 @@ export function QuickCapture() {
           animate={exiting ? POSE_SHEET_OUT : POSE_SHEET_VISIBLE}
           transition={exiting ? SHEET_EXIT_TRANSITION : SHEET_ENTER_TRANSITION}
           onAnimationComplete={onCardAnimationComplete}
-          className="quick-capture-card surface-sheet flex flex-col overflow-hidden rounded-[var(--r-panel)]"
+          className="quick-capture-card surface-sheet flex max-h-[calc(100vh-2.75rem)] flex-col overflow-hidden rounded-[var(--r-panel)]"
         >
           {/* Bottom-anchored: the window grows UPWARD, so the picker and
               image chips render ABOVE the input row — the bar itself never
               moves on screen. */}
-          <div ref={cardRef} className="flex flex-col">
+          <div ref={cardRef} className="flex min-h-0 flex-col">
             <Collapse open={pickerOpen} mode="height">
               {/* Spacing lives INSIDE the measured content (Height Collapse
                   contract) so the reveal travels with it. */}
+              {/* The list scrolls internally past ~6 rows and whenever the
+                  window lags the card (resize race / clamp) — the input row
+                  below must never be pushed off-window. */}
               <div
-                className="border-b border-line-soft px-1.5 py-1.5"
+                className="max-h-[min(220px,calc(100vh-6.5rem))] overflow-y-auto scroll-thin border-b border-line-soft px-1.5 py-1.5"
                 role="listbox"
                 aria-label="Destination chat"
               >
@@ -324,7 +327,7 @@ export function QuickCapture() {
                 ))}
               </div>
             )}
-            <div className="flex min-h-14 items-center gap-2 pl-5 pr-3">
+            <div className="flex min-h-14 shrink-0 items-center gap-2 pl-5 pr-3">
               <textarea
                 ref={inputRef}
                 rows={1}
