@@ -403,6 +403,7 @@ class BackgroundTaskRegistry:
         child_session_id: str | None = None,
         agent_type: str | None = None,
         wait: bool | None = None,
+        spawn_spec: str | None = None,
     ) -> None:
         if not self.record_event:
             return
@@ -421,6 +422,7 @@ class BackgroundTaskRegistry:
             result_ref=result_ref,
             result_text=result_text,
             terminal=terminal,
+            spawn_spec=spawn_spec,
         )
 
     async def record_started(
@@ -433,6 +435,7 @@ class BackgroundTaskRegistry:
         child_session_id: str | None = None,
         agent_type: str | None = None,
         wait: bool | None = None,
+        spawn_spec: str | None = None,
     ) -> None:
         self._commands[task_id] = command
         if child_session_id:
@@ -445,6 +448,7 @@ class BackgroundTaskRegistry:
             child_session_id=child_session_id,
             agent_type=agent_type,
             wait=wait,
+            spawn_spec=spawn_spec,
         )
 
     async def record_activity(self, task_id: str, detail: str) -> None:

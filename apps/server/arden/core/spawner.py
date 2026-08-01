@@ -32,6 +32,7 @@ from arden.core.llm_client import llm_client
 from arden.core.model_context_budget import ToolResultContextBudgetMiddleware
 from arden.core.naming import generate_agent_name
 from arden.core.prompts import AREA_BLOCK
+from arden.core.spawn_spec import ParentRef, SpawnSpec, WorkflowRef
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.usage_tracker import UsageTracker
 from arden.events.sse import (
@@ -620,6 +621,26 @@ def create_spawn_fn(
             {"role": Role.SYSTEM, "content": child_system_prompt},
             {"role": Role.USER, "content": task},
         ]
+        # Everything is resolved by here — freeze the spawn as a durable value.
+        # Live objects never cross this boundary; the spec is what makes the
+        # spawn re-dispatchable and attributable after this process is gone.
+        spawn_spec = SpawnSpec(
+            context=tuple(dict(m) for m in child_messages),
+            agent_type=resolved_agent_type,
+            tools=tuple(sorted(allowed_tool_names or ())),
+            model=child_model,
+            reasoning_effort=child_reasoning_effort,
+            timeout_seconds=timeout,
+            isolation=isolation,
+            parent=ParentRef(
+                session_id=calling_ctx.session_id,
+                run_id=calling_ctx.run.run_id,
+                tool_call_id=parent_id,
+            ),
+            workflow=WorkflowRef(workflow_id=workflow_id, phase=phase, lifecycle_id=lifecycle_id)
+            if workflow_id
+            else None,
+        )
         session_service = calling_ctx.services.get("session")
         child_session_persisted = False
 
@@ -1148,6 +1169,7 @@ def create_spawn_fn(
                 child_session_id=child_state.session_id if has_child_session else None,
                 agent_type=resolved_agent_type,
                 wait=should_wait,
+                spawn_spec=spawn_spec.to_json(),
             )
             bg_task = asyncio.create_task(_run_background())
             registry.register(task_id, bg_task, command=label)

@@ -287,6 +287,7 @@ def _background_event_recorder(session_service: SessionService):
                 agent_type=str(event.get("agent_type") or "background_research"),
                 wait=bool(event.get("wait")),
                 command=str(event.get("command") or ""),
+                spawn_spec=event.get("spawn_spec"),
             )
         elif bool(event.get("terminal")):
             await store.record_background_agent_finished(

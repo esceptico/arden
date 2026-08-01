@@ -308,6 +308,7 @@ CREATE TABLE IF NOT EXISTS background_agent_runs (
     cancel_requested_at TEXT,
     notified_at TEXT,
     completion_id TEXT,
+    spawn_spec TEXT,
     PRIMARY KEY (session_id, task_id)
 );
 
@@ -1454,6 +1455,9 @@ class SessionStore:
             if "completion_id" not in columns:
                 await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN completion_id TEXT")
                 changed = True
+            if "spawn_spec" not in columns:
+                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN spawn_spec TEXT")
+                changed = True
             if changed:
                 await self.conn.commit()
             return
@@ -1488,6 +1492,7 @@ class SessionStore:
                 cancel_requested_at TEXT,
                 notified_at TEXT,
                 completion_id TEXT,
+                spawn_spec TEXT,
                 PRIMARY KEY (session_id, task_id)
             )
             """
@@ -2714,16 +2719,17 @@ class SessionStore:
         child_session_id: str | None = None,
         agent_type: str = "background_research",
         wait: bool = False,
+        spawn_spec: str | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         cursor = await self.conn.execute(
             """
             INSERT INTO background_agent_runs (
                 task_id, session_id, parent_run_id, parent_tool_call_id, child_session_id,
-                agent_type, wait, status, command,
+                agent_type, wait, status, command, spawn_spec,
                 created_at, started_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
             ON CONFLICT(session_id, task_id) DO UPDATE SET
                 session_id = excluded.session_id,
                 parent_run_id = excluded.parent_run_id,
@@ -2733,6 +2739,7 @@ class SessionStore:
                 wait = excluded.wait,
                 status = 'running',
                 command = excluded.command,
+                spawn_spec = COALESCE(excluded.spawn_spec, spawn_spec),
                 detail = NULL,
                 result_ref = NULL,
                 result_text = NULL,
@@ -2752,6 +2759,7 @@ class SessionStore:
                 agent_type,
                 int(wait),
                 command,
+                spawn_spec,
                 now,
                 now,
                 now,
