@@ -138,14 +138,16 @@ class ArdenToolExecutor:
                 await self._ledger.mark_accessed(access_key(name, args))
 
         execution = ToolExecution(tool_id=tool_call_id, tool_name=name, ctx=self._ctx)
-        invocation = ToolInvocation(invocation_id=tool_call_id, tool_name=name, arguments=args)
+        timeout_seconds = _effective_timeout_seconds(tool)
+        invocation = ToolInvocation(
+            invocation_id=tool_call_id, tool_name=name, arguments=args, timeout_seconds=timeout_seconds
+        )
         result: ToolResult | None = None
         read_succeeded = False
         finish_status: str | None = None
         finish_preview: str | None = None
         try:
             execute = self._executor.router.execute(invocation, execution)
-            timeout_seconds = _effective_timeout_seconds(tool)
             try:
                 if timeout_seconds is None:
                     result = await execute
@@ -266,7 +268,9 @@ class ArdenToolExecutor:
             )
 
         try:
-            invocation = ToolInvocation(invocation_id=execution.tool_id, tool_name=name, arguments=args)
+            invocation = ToolInvocation(
+                invocation_id=execution.tool_id, tool_name=name, arguments=args, timeout_seconds=timeout_seconds
+            )
             retry = self._executor.router.execute(invocation, execution)
             if timeout_seconds is None:
                 return await retry

@@ -515,3 +515,54 @@ def test_skill_advertisement_rejects_stale_lease(http):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 403
+
+
+# -- restart reconciliation --
+
+
+@pytest.mark.asyncio
+async def test_reconcile_settles_orphaned_invocations(gateway):
+    device, _token = await _enrolled(gateway)
+    requested = await _client_invocation(gateway, "inv-requested")
+    running = await _client_invocation(gateway, "inv-running")
+    await gateway.invocations.mark_running(running.invocation_id)
+
+    reconciled = await gateway.reconcile_open_invocations()
+
+    assert reconciled == 2
+    settled_requested = await gateway.invocations.get(requested.invocation_id)
+    settled_running = await gateway.invocations.get(running.invocation_id)
+    # Never picked up -> cancelled; possibly executed on the device -> uncertain.
+    assert settled_requested.status == InvocationStatus.CANCELLED
+    assert settled_running.status == InvocationStatus.UNCERTAIN
+    assert settled_requested.cancel_requested is True
+    assert settled_running.cancel_requested is True
+    assert settled_requested.error_code == "server_restart"
+    # A reconnecting device replaying stale execute_tool commands finds the
+    # abort instruction in the same log.
+    commands = await gateway.pending_commands(device.executor_id, 0)
+    cancel_targets = {c.invocation_id for c in commands if c.command_type == COMMAND_CANCEL_TOOL}
+    assert cancel_targets == {"inv-requested", "inv-running"}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_with_nothing_open_is_a_no_op(gateway):
+    assert await gateway.reconcile_open_invocations() == 0
+
+
+@pytest.mark.asyncio
+async def test_late_result_for_reconciled_invocation_conflicts(gateway):
+    device, _token = await _enrolled(gateway)
+    lease = await gateway.connect(device)
+    running = await _client_invocation(gateway, "inv-late")
+    await gateway.invocations.mark_running(running.invocation_id)
+    await gateway.reconcile_open_invocations()
+
+    with pytest.raises(InvocationConflictError):
+        await gateway.accept_result(
+            device,
+            lease.lease_id,
+            invocation_id="inv-late",
+            status=InvocationStatus.SUCCEEDED,
+            result_payload='{"content": "too late"}',
+        )

@@ -1,4 +1,7 @@
+import asyncio
+import contextlib
 import json
+from datetime import UTC, datetime, timedelta
 
 from arden.constants import OFFLOAD_THRESHOLD
 from arden.core.tool_result_files import RESULTS_BASE
@@ -41,6 +44,11 @@ class ClientExecutionBackend:
                 recovery_action="Retry once the desktop app is running, or continue without this tool.",
             )
 
+        deadline_at = (
+            datetime.now(UTC) + timedelta(seconds=invocation.timeout_seconds)
+            if invocation.timeout_seconds is not None
+            else None
+        )
         record = await self._invocations.create(
             invocation_id=invocation.invocation_id,
             run_id=execution.ctx.run.run_id,
@@ -49,6 +57,7 @@ class ClientExecutionBackend:
             tool_name=invocation.tool_name,
             placement=ToolPlacement.CLIENT,
             arguments_json=json.dumps(invocation.arguments),
+            deadline_at=deadline_at,
         )
         if record.status in TERMINAL_STATUSES:
             # Duplicate execution of an already-settled invocation (e.g. a
@@ -59,6 +68,14 @@ class ClientExecutionBackend:
         await self._gateway.dispatch(executor_id, record, context=self._context(execution))
         try:
             record = await waiter
+        except asyncio.CancelledError:
+            # The caller gave up (run cancel or wait_for timeout) — tell the
+            # device to abort instead of letting it run to completion for a
+            # result nobody is waiting on. Shielded: this cleanup must survive
+            # the cancellation that triggered it.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(self._gateway.cancel(executor_id, invocation.invocation_id))
+            raise
         finally:
             self._gateway.drop_waiter(invocation.invocation_id)
         return self._settle(record, execution)

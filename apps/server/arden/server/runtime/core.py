@@ -471,6 +471,7 @@ class Runtime:
             self.stores.executor_commands,
             self.stores.invocations,
         )
+        await self.executor_gateway.reconcile_open_invocations()
         if self.config.memory:
             await self._init_wiki()
         await self._init_facts(fact_ledger)

@@ -6,6 +6,9 @@ from arden.execution.devices import ExecutorDevice, ExecutorDeviceStore
 from arden.execution.leases import ExecutorLease, LeaseStore
 from arden.execution.models import InvocationRecord, InvocationStatus
 from arden.execution.store import InvocationStore
+from arden.logging import get_logger
+
+_logger = get_logger(__name__)
 
 COMMAND_EXECUTE_TOOL = "execute_tool"
 COMMAND_CANCEL_TOOL = "cancel_tool"
@@ -80,6 +83,43 @@ class ExecutorGateway:
         if acked_seq is not None:
             await self.commands.ack(device.executor_id, acked_seq)
         return lease
+
+    async def reconcile_open_invocations(self) -> int:
+        """Settle invocations orphaned by a server restart.
+
+        Their waiters were in-process futures and died with the process, so no
+        outcome can ever be consumed: a `requested` invocation was never picked
+        up and becomes `cancelled`; a `running` one may or may not have executed
+        on the device and becomes `uncertain`. Each also gets a cancel_tool
+        command to every enrolled device, so a reconnecting executor aborts the
+        stale work (or refuses to start it — accept_started reports the
+        cancel_requested flag) instead of running side effects nobody awaits."""
+        open_records = await self.invocations.open_invocations()
+        if not open_records:
+            return 0
+        devices = [d for d in await self.devices.list_devices() if d.revoked_at is None]
+        for record in open_records:
+            await self.invocations.request_cancel(record.invocation_id)
+            for device in devices:
+                await self.commands.append(
+                    device.executor_id,
+                    COMMAND_CANCEL_TOOL,
+                    {"invocation_id": record.invocation_id},
+                    invocation_id=record.invocation_id,
+                )
+            status = (
+                InvocationStatus.CANCELLED
+                if record.status == InvocationStatus.REQUESTED
+                else InvocationStatus.UNCERTAIN
+            )
+            await self.invocations.complete(
+                record.invocation_id,
+                status=status,
+                result_payload=json.dumps({"error": "orphaned by server restart"}),
+                error_code="server_restart",
+            )
+        _logger.info("Reconciled %d orphaned tool invocation(s) after restart", len(open_records))
+        return len(open_records)
 
     # -- dispatch --
 

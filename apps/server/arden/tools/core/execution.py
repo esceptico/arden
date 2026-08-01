@@ -14,6 +14,9 @@ class ToolInvocation:
     invocation_id: str
     tool_name: str
     arguments: dict[str, Any]
+    # The caller's effective timeout, so out-of-process backends can record a
+    # durable deadline for the invocation. None = no timeout.
+    timeout_seconds: float | None = None
 
 
 class ExecutionBackend(Protocol):

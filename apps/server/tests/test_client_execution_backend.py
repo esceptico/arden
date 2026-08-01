@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import arden.database as database
 from arden.context.models import SessionState
 from arden.execution import (
+    COMMAND_CANCEL_TOOL,
     ExecutorCommandLog,
     ExecutorDeviceStore,
     ExecutorGateway,
@@ -245,3 +246,61 @@ def test_client_tools_hidden_without_client_backend(rig):
     _gateway, _router, registry = rig
     executor = ToolExecutor().with_registry(registry)
     assert "read_device_file" not in _schema_names(executor.get_tools())
+
+
+@pytest.mark.asyncio
+async def test_upstream_cancellation_requests_device_abort(rig):
+    gateway, router, registry = rig
+    device, _ = await gateway.devices.enroll(name="mac", capabilities=[])
+    await gateway.connect(device)
+
+    task = asyncio.create_task(
+        router.execute(
+            ToolInvocation(invocation_id="call-1", tool_name="read_device_file", arguments={}),
+            _make_execution(registry),
+        )
+    )
+    for _ in range(100):
+        if await gateway.pending_commands(device.executor_id, 0):
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The caller gave up — the device must be told to abort, not left running.
+    record = await gateway.invocations.get("call-1")
+    assert record.cancel_requested is True
+    commands = await gateway.pending_commands(device.executor_id, 0)
+    assert any(c.command_type == COMMAND_CANCEL_TOOL and c.invocation_id == "call-1" for c in commands)
+
+
+@pytest.mark.asyncio
+async def test_caller_timeout_becomes_a_durable_deadline(rig):
+    gateway, router, registry = rig
+    device, _ = await gateway.devices.enroll(name="mac", capabilities=[])
+    await gateway.connect(device)
+
+    task = asyncio.create_task(
+        router.execute(
+            ToolInvocation(
+                invocation_id="call-1",
+                tool_name="read_device_file",
+                arguments={},
+                timeout_seconds=120,
+            ),
+            _make_execution(registry),
+        )
+    )
+    try:
+        for _ in range(100):
+            if await gateway.pending_commands(device.executor_id, 0):
+                break
+            await asyncio.sleep(0.01)
+        record = await gateway.invocations.get("call-1")
+        assert record.deadline_at is not None
+        remaining = (record.deadline_at - datetime.now(UTC)).total_seconds()
+        assert 100 < remaining <= 120
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
