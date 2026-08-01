@@ -322,8 +322,6 @@ export function AgentRightSidebar({
   const areaTodo = currentSessionIsInArea ? todo : null;
   const areaSources = useMemo(() => areaHubSources(areaScope), [areaScope]);
 
-  const runningAgentCount = agents.filter((agent) => isActiveAgentStatus(agent.status)).length;
-  const runningWorkflowCount = visibleWorkflows.filter(isActiveWorkflow).length;
   const hasBreadcrumb = mode !== "hub" && inAgentSession && !!parentId;
   const hasTodo = mode !== "hub" && todo != null;
   const hasAgents = agents.length > 0;
@@ -331,8 +329,6 @@ export function AgentRightSidebar({
   const hasAutomations = mode === "hub" ? areaAutomations.length > 0 : runningAutomations.length > 0;
   const sectionCount = [hasTodo, hasAgents, hasWorkflows, hasAutomations].filter(Boolean).length;
   const visible = hasTodo || hasAgents || hasWorkflows || hasAutomations;
-  const todoOpenCount = todo?.items.filter((item) => item.status !== "completed").length ?? 0;
-  const areaTodoOpenCount = areaTodo?.items.filter((item) => item.status !== "completed").length ?? 0;
   const hasAreaSessions = (areaScope?.sessions.length ?? 0) > 0;
   const hasAreaActivity = scopedApprovals.length > 0
     || areaTodo !== null
@@ -345,10 +341,6 @@ export function AgentRightSidebar({
     + sortedWorkflows.length
     + (mode === "hub" ? areaAutomations.length : runningAutomations.length)
     + (mode === "hub" ? areaTodo?.items.length ?? 0 : hasTodo ? todo?.items.length ?? 0 : 0);
-  const activeCount = runningAgentCount
-    + runningWorkflowCount
-    + (mode === "hub" ? areaTodoOpenCount : runningAutomations.length)
-    + (hasTodo ? todoOpenCount : 0);
   const inspectorDirection = useTabDirection(INSPECTOR_SECTION_ORDER, rightInspectorTab);
   const hubDirection = useTabDirection(INSPECTOR_SECTION_ORDER, hubSection);
 
@@ -411,9 +403,9 @@ export function AgentRightSidebar({
         className="board-inspector-toggle"
         data-inspector-trigger
       >
-        {effectiveCollapsed && activeCount > 0 && (
-          <span className="arden-status" aria-hidden>{activeCount} active</span>
-        )}
+        {/* No status on the collapsed toggle — the icon alone. The active
+            count lives in the tooltip ("Show inspector (N)") and inside the
+            panel; a corner chip crowded the glyph and read as noise. */}
       </SidebarToggle>
 
       <PeekSurface
