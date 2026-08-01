@@ -6,6 +6,13 @@ import preload from "vite-plugin-preload";
 
 export default defineConfig({
   root: "src",
+  // Vite 8's native (rolldown/notify) file watcher is silently dead on this
+  // macOS (Darwin 27): edits were never re-transformed under node OR bun, so
+  // HMR and even fresh page loads served stale modules until a restart —
+  // the same rot behind the "@import'd CSS needs a restart" quirk. Polling
+  // is the reliable fallback; scope is just src/, so the cost is negligible.
+  // Revisit when a vite/rolldown release fixes fsevents on this OS.
+  server: { watch: { usePolling: true, interval: 300 } },
   resolve: {
     // `@/` → apps/desktop/src (bulletproof-react absolute-import convention).
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
