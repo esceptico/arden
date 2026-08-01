@@ -10,7 +10,7 @@ from arden.tools.core.execution import ExecutionRouter, ToolInvocation
 from arden.tools.core.middleware import ToolMiddleware
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.scope import ToolFilter
-from arden.tools.core.types import ToolOverrideDecision
+from arden.tools.core.types import ToolOverrideDecision, ToolPlacement
 from arden.tools.discover import discover_user_tools
 
 _logger = get_logger(__name__)
@@ -110,10 +110,14 @@ class ToolExecutor:
         return await self.router.execute(invocation, execution)
 
     def get_tools(self, scope: ToolFilter | None = None) -> list[dict]:
-        return self.registry.get_schemas(
+        schemas = self.registry.get_schemas(
             capabilities=frozenset(self._get_services()),
             scope=scope,
         )
+        if not self.router.client_tools_available():
+            hidden = {name for name, t in self.registry.tools.items() if t.policy.placement == ToolPlacement.CLIENT}
+            schemas = [schema for schema in schemas if schema["function"]["name"] not in hidden]
+        return schemas
 
     def get_tool_metadata(self) -> list[dict]:
         return self.registry.get_metadata()

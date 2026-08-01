@@ -138,6 +138,9 @@ class RunContext:
     def resource_observation(self, resource_id: str) -> ResourceObservation | None:
         return self._resource_observations.get(resource_id)
 
+    def resource_observations(self) -> dict[str, ResourceObservation]:
+        return dict(self._resource_observations)
+
     def to_rehydration_state(
         self,
         *,

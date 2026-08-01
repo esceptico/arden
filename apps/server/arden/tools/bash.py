@@ -1,14 +1,10 @@
-import asyncio
-import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from arden.constants import BASH_MAX_OUTPUT_CHARS, BASH_TIMEOUT
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
+from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPlacement, ToolPolicy, ToolScope
 
 BLOCKED_PATTERNS = frozenset(
     {
@@ -24,9 +20,9 @@ BLOCKED_PATTERNS = frozenset(
     }
 )
 
-BASH_DESCRIPTION = """Execute a bash command in the user's shell.
+BASH_DESCRIPTION = """Execute a bash command on the user's device (the machine running the desktop app).
 
-Each command runs in a fresh subprocess — no state (env vars, shell functions, cwd) persists between calls. Commands run in the area's default cwd when set, otherwise in the server's working directory. Use the working_dir parameter to run in a different directory instead of 'cd'.
+Each command runs in a fresh subprocess — no state (env vars, shell functions, cwd) persists between calls. Commands run in the area's default cwd when set, otherwise in the executor's working directory. Use the working_dir parameter to run in a different directory instead of 'cd'.
 
 PREFER OTHER TOOLS:
 - For listing/finding files: use list_files() or find_files()
@@ -39,57 +35,15 @@ USE bash FOR:
 - File operations that do not have a native tool yet: mkdir, cp, mv
 - Checking system state: pwd, whoami, date
 
-Every Bash command requires interactive approval and cannot run in a headless
-auto-approved session. The small denylist is defense-in-depth, not the
-security boundary."""
+Requires the desktop app to be running; fails cleanly when no device is
+connected. Every Bash command requires interactive approval and cannot run in
+a headless auto-approved session. The small denylist is defense-in-depth, not
+the security boundary."""
 
 
 def is_blocked_command(command: str) -> bool:
     cmd_lower = command.lower().strip()
     return any(blocked in cmd_lower for blocked in BLOCKED_PATTERNS)
-
-
-@dataclass(frozen=True, slots=True)
-class BashExecution:
-    content: str
-    returncode: int | None = None
-    timed_out: bool = False
-    failed_to_start: bool = False
-
-
-def execute_bash(command: str, working_dir: str | None = None, timeout: int = BASH_TIMEOUT) -> BashExecution:
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=working_dir,
-        )
-
-        output = ""
-        if result.stdout:
-            output += result.stdout
-        if result.stderr:
-            if output:
-                output += "\n"
-            output += f"[stderr]\n{result.stderr}"
-
-        if result.returncode != 0:
-            output += f"\n[exit code: {result.returncode}]"
-
-        if len(output) > BASH_MAX_OUTPUT_CHARS:
-            half = BASH_MAX_OUTPUT_CHARS // 2
-            omitted = len(output) - BASH_MAX_OUTPUT_CHARS
-            output = f"{output[:half]}\n\n[... {omitted} chars elided ...]\n\n{output[-half:]}"
-
-        return BashExecution(content=output if output else "(no output)", returncode=result.returncode)
-
-    except subprocess.TimeoutExpired:
-        return BashExecution(content=f"Command timed out after {timeout}s", timed_out=True)
-    except Exception:
-        return BashExecution(content="Command could not be started", failed_to_start=True)
 
 
 class BashInput(BaseModel):
@@ -112,54 +66,27 @@ async def approve_bash(execution: ToolExecution, args: BashInput) -> ApprovalInf
 
 
 async def run_bash(execution: ToolExecution, args: BashInput) -> ToolResult:
-    if is_blocked_command(args.command):
-        return ToolResult.failure(
-            code="permission_denied",
-            message=f"Blocked command: {args.command}",
-            preview="Blocked",
-            recovery_action="Use a safer command or a purpose-built file tool.",
-        )
-
-    execution_result = await asyncio.to_thread(
-        execute_bash,
-        args.command,
-        _working_dir(execution, args),
-        BASH_TIMEOUT,
+    # bash is client-placed: the ExecutionRouter dispatches it to the device
+    # executor before the registry runs. This body executes only when no
+    # client execution backend is wired, and it refuses — shell commands
+    # never silently fall back to server execution.
+    return ToolResult.failure(
+        code="no_client_execution",
+        message="bash runs on the user's device, and this server has no client execution backend configured.",
+        preview="No device executor",
+        recovery_action="Start the desktop app, or use server-side tools instead.",
     )
-    if execution_result.timed_out:
-        return ToolResult.failure(
-            code="timed_out",
-            message=execution_result.content,
-            preview="Timed out",
-            retryable=True,
-            recovery_action="Retry with a narrower command or a longer-running workflow.",
-        )
-    if execution_result.failed_to_start:
-        return ToolResult.failure(
-            code="command_failed",
-            message=execution_result.content,
-            preview="Command failed",
-            recovery_action="Check the executable and working directory, then retry.",
-        )
-    if execution_result.returncode:
-        return ToolResult.failure(
-            code="command_failed",
-            message=execution_result.content,
-            preview=f"Exit {execution_result.returncode}",
-            recovery_action="Inspect stderr and retry with corrected arguments.",
-        )
-    lines = execution_result.content.count("\n") + 1
-    return ToolResult(content=execution_result.content, preview=f"{lines} lines")
 
 
 bash_tool = tool(
     display_name="Bash",
-    display_description="Run a shell command in the workspace.",
+    display_description="Run a shell command on the user's device.",
     description=BASH_DESCRIPTION,
     input_model=BashInput,
     policy=ToolPolicy(
         action=ToolAction.EXECUTE,
         scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
         requires_approval=True,
         allow_approval_bypass=False,
     ),

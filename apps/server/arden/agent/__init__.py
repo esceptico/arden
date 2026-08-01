@@ -11,7 +11,6 @@ from arden.agent.hooks import (
 from arden.agent.ledger import SharedLedger
 from arden.agent.llm import LLMClient
 from arden.agent.model_request import ModelRequest, ModelRequestMiddleware, ModelRequestNext
-from arden.agent.spawn import SpawnContext
 from arden.agent.tools import AgentToolExecutor
 from arden.agent.types import (
     Choice,
@@ -85,7 +84,6 @@ __all__ = [
     "RunBudget",
     "SharedLedger",
     "SpecificTool",
-    "SpawnContext",
     "StopReason",
     "TextBlock",
     "TextDelta",

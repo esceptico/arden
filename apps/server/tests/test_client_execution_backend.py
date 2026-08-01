@@ -214,3 +214,34 @@ async def test_upstream_cancellation_drops_the_waiter(rig):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert "call-1" not in gateway._waiters
+
+
+def _schema_names(schemas):
+    return {schema["function"]["name"] for schema in schemas}
+
+
+@pytest.mark.asyncio
+async def test_client_tools_hidden_without_connected_executor(rig):
+    from arden.tools.executor import ToolExecutor
+
+    gateway, router, registry = rig
+    executor = ToolExecutor().with_registry(registry)
+    executor.router = router
+
+    # Backend wired but no executor connected: hidden.
+    assert "read_device_file" not in _schema_names(executor.get_tools())
+
+    device, _ = await gateway.devices.enroll(name="mac", capabilities=[])
+    await gateway.connect(device)
+    assert "read_device_file" in _schema_names(executor.get_tools())
+
+    gateway.disconnect(device.executor_id)
+    assert "read_device_file" not in _schema_names(executor.get_tools())
+
+
+def test_client_tools_hidden_without_client_backend(rig):
+    from arden.tools.executor import ToolExecutor
+
+    _gateway, _router, registry = rig
+    executor = ToolExecutor().with_registry(registry)
+    assert "read_device_file" not in _schema_names(executor.get_tools())

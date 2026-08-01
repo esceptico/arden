@@ -99,7 +99,7 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
   }
 
   async function handleExecute(config, command) {
-    const { invocation_id: invocationId, tool_name: toolName, arguments: args } = command.payload;
+    const { invocation_id: invocationId, tool_name: toolName, arguments: args, context = {} } = command.payload;
     const handler = handlers.get(toolName);
     if (!handler) {
       await submitResult(
@@ -115,7 +115,7 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
     const controller = new AbortController();
     running.set(invocationId, controller);
     try {
-      const result = await handler(args, { signal: controller.signal });
+      const result = await handler(args, { signal: controller.signal, context });
       await submitResult(config, invocationId, result.status ?? "succeeded", result.payload, result.errorCode);
     } catch (error) {
       const cancelled = controller.signal.aborted;
