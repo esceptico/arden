@@ -20,7 +20,6 @@ from arden.agent import (
     Role,
     RunBudget,
     SharedLedger,
-    SpawnContext,
     StopReason,
     TextBlock,
     TextDelta,
@@ -1224,58 +1223,6 @@ async def _consume(gen):
     async for e in gen:
         events.append(e)
     return events
-
-
-# ============================================================
-# Spawn / recursive agents
-# ============================================================
-
-
-@pytest.mark.asyncio
-async def test_spawn_context_creates_child_with_incremented_depth():
-    llm = FakeLLM([_response(text="child result")])
-    ctx = SpawnContext(client=llm, executor=FakeExecutor({}), max_depth=3)
-    child = ctx.child_agent(tools=[], model="test", current_depth=1)
-    assert child.current_depth == 1
-    assert child.max_depth == 3
-
-
-@pytest.mark.asyncio
-async def test_spawn_executes_child_and_returns_text():
-    llm = FakeLLM([_response(text="spawned result")])
-    ctx = SpawnContext(client=llm, executor=FakeExecutor({}), max_depth=3)
-    result = await ctx.spawn(
-        "child task",
-        system_prompt="you are child",
-        tools=[],
-        model="test",
-        current_depth=1,
-    )
-    assert result == "spawned result"
-
-
-@pytest.mark.asyncio
-async def test_spawn_timeout_raises():
-    slow = asyncio.Event()
-
-    class BlockingLLM:
-        async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None):
-            await slow.wait()
-            yield _response(text="never")
-
-        async def complete(self, *args, **kwargs):
-            raise NotImplementedError
-
-    ctx = SpawnContext(client=BlockingLLM(), executor=FakeExecutor({}))
-    with pytest.raises(asyncio.TimeoutError):
-        await ctx.spawn(
-            "task",
-            system_prompt="sys",
-            tools=[],
-            model="test",
-            current_depth=1,
-            timeout=0,
-        )
 
 
 # ============================================================

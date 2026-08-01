@@ -21,7 +21,7 @@ from arden.integrations.base import Integration
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.automation import create_automation_tool, loop_done_tool, schedule_wakeup_tool
 from arden.tools.background import cancel_agent_tool
-from arden.tools.bash import bash_tool, execute_bash, is_blocked_command
+from arden.tools.bash import bash_tool, is_blocked_command
 from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
 from arden.tools.core.context import (
     ApprovalControls,
@@ -38,6 +38,7 @@ from arden.tools.core.types import (
     ApprovalWaived,
     ToolAction,
     ToolOverrideDecision,
+    ToolPlacement,
     ToolPolicy,
     ToolScope,
 )
@@ -513,74 +514,22 @@ def test_blocked_commands():
     assert not is_blocked_command("echo hello")
 
 
-# --- Bash execution ---
-
-
-def test_execute_bash_simple():
-    output = execute_bash("echo hello")
-    assert "hello" in output.content
-
-
-def test_execute_bash_stderr():
-    output = execute_bash("echo err >&2")
-    assert "err" in output.content
-    assert "[stderr]" in output.content
-
-
-def test_execute_bash_exit_code():
-    output = execute_bash("exit 1")
-    assert "[exit code: 1]" in output.content
-    assert output.returncode == 1
-
-
-def test_execute_bash_timeout():
-    output = execute_bash("sleep 10", timeout=1)
-    assert "timed out" in output.content.lower()
-    assert output.timed_out
-
-
 # --- Bash tool ---
+# bash is client-placed: the device executor runs the command. The Python
+# body only refuses when no client execution backend is wired.
 
 
 @pytest.mark.asyncio
-async def test_bash_tool_execute():
+async def test_bash_tool_refuses_in_process_execution():
     execution = _make_execution("bash")
     result = await bash_tool.execute(execution, command="echo test123")
-    assert "test123" in result.content
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_nonzero_exit_is_typed_failure():
-    result = await bash_tool.execute(_make_execution("bash"), command="exit 7")
-
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "command_failed"
+    assert result.outcome.error.code == "no_client_execution"
 
 
-@pytest.mark.asyncio
-async def test_bash_tool_timeout_is_typed_failure(monkeypatch):
-    monkeypatch.setattr("arden.tools.bash.BASH_TIMEOUT", 0.01)
-    result = await bash_tool.execute(_make_execution("bash"), command="sleep 1")
-
-    assert result.is_error
-    assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "timed_out"
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_blocked():
-    execution = _make_execution("bash")
-    result = await bash_tool.execute(execution, command="rm -rf /")
-    assert result.is_error
-    assert "Blocked" in result.content
-
-
-@pytest.mark.asyncio
-async def test_bash_tool_working_dir(tmp_path):
-    execution = _make_execution("bash")
-    result = await bash_tool.execute(execution, command="pwd", working_dir=str(tmp_path))
-    assert str(tmp_path) in result.content
+def test_bash_tool_is_client_placed():
+    assert bash_tool.policy.placement == ToolPlacement.CLIENT
 
 
 @pytest.mark.asyncio

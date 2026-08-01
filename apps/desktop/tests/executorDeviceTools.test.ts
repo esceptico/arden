@@ -32,3 +32,49 @@ describe("read_device_file handler", () => {
     expect(result.errorCode).toBe("invalid_path");
   });
 });
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { runBash } = require("../electron/executor-tools.cjs");
+
+describe("bash handler", () => {
+  test("runs a command and captures stdout", async () => {
+    const result = await runBash({ command: "echo hello" });
+    expect(result.status).toBe("succeeded");
+    expect(result.payload.content).toContain("hello");
+  });
+
+  test("nonzero exit is a typed failure with stderr", async () => {
+    const result = await runBash({ command: "echo err >&2; exit 7" });
+    expect(result.status).toBe("failed");
+    expect(result.errorCode).toBe("command_failed");
+    expect(result.payload.content).toContain("[stderr]");
+    expect(result.payload.content).toContain("[exit code: 7]");
+    expect(result.payload.preview).toBe("Exit 7");
+  });
+
+  test("blocked command is refused without executing", async () => {
+    const result = await runBash({ command: "rm -rf /" });
+    expect(result.status).toBe("failed");
+    expect(result.errorCode).toBe("permission_denied");
+  });
+
+  test("working_dir wins over context default_cwd", async () => {
+    const result = await runBash({ command: "pwd", working_dir: "/tmp" }, { context: { default_cwd: "/" } });
+    expect(result.status).toBe("succeeded");
+    expect(result.payload.content).toContain("/tmp");
+  });
+
+  test("context default_cwd applies when no working_dir given", async () => {
+    const result = await runBash({ command: "pwd" }, { context: { default_cwd: "/tmp" } });
+    expect(result.payload.content).toContain("/tmp");
+  });
+
+  test("abort mid-command reports uncertain", async () => {
+    const controller = new AbortController();
+    const pending = runBash({ command: "sleep 5" }, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 50);
+    const result = await pending;
+    expect(result.status).toBe("uncertain");
+    expect(result.errorCode).toBe("cancelled");
+  });
+});

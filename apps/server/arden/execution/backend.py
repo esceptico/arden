@@ -22,6 +22,9 @@ class ClientExecutionBackend:
         self._gateway = gateway
         self._invocations = invocations
 
+    def available(self) -> bool:
+        return self._gateway.connected_executor() is not None
+
     async def execute(self, invocation: ToolInvocation, execution: ToolExecution) -> ToolResult:
         executor_id = self._gateway.connected_executor()
         if executor_id is None:
@@ -50,8 +53,10 @@ class ClientExecutionBackend:
             # replayed agent step): return the recorded outcome, never re-run.
             return tool_result_from_record(record)
 
+        area = execution.ctx.area
+        context = {"default_cwd": area.default_cwd if area else None}
         waiter = self._gateway.waiter(invocation.invocation_id)
-        await self._gateway.dispatch(executor_id, record)
+        await self._gateway.dispatch(executor_id, record, context=context)
         try:
             record = await waiter
         finally:

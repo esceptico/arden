@@ -66,7 +66,13 @@ class ExecutorGateway:
 
     # -- dispatch --
 
-    async def dispatch(self, executor_id: str, invocation: InvocationRecord) -> ExecutorCommand:
+    async def dispatch(
+        self,
+        executor_id: str,
+        invocation: InvocationRecord,
+        *,
+        context: dict | None = None,
+    ) -> ExecutorCommand:
         command = await self.commands.append(
             executor_id,
             COMMAND_EXECUTE_TOOL,
@@ -75,6 +81,7 @@ class ExecutorGateway:
                 "tool_call_id": invocation.tool_call_id,
                 "tool_name": invocation.tool_name,
                 "arguments": json.loads(invocation.arguments_json),
+                "context": context or {},
                 "run_id": invocation.run_id,
                 "session_id": invocation.session_id,
                 "deadline_at": invocation.deadline_at.isoformat() if invocation.deadline_at else None,

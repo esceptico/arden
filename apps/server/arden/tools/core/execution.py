@@ -20,6 +20,10 @@ class ExecutionBackend(Protocol):
     async def execute(self, invocation: ToolInvocation, execution: ToolExecution) -> ToolResult: ...
 
 
+class ClientBackend(ExecutionBackend, Protocol):
+    def available(self) -> bool: ...
+
+
 class InProcessExecutionBackend:
     def __init__(self, registry: ToolRegistry):
         self._registry = registry
@@ -37,13 +41,18 @@ class ExecutionRouter:
     client-placed tool never silently executes server work.
     """
 
-    def __init__(self, registry: ToolRegistry, client_backend: ExecutionBackend | None = None):
+    def __init__(self, registry: ToolRegistry, client_backend: "ClientBackend | None" = None):
         self._registry = registry
         self._in_process = InProcessExecutionBackend(registry)
         self.client_backend = client_backend
 
-    def set_client_backend(self, backend: ExecutionBackend) -> None:
+    def set_client_backend(self, backend: "ClientBackend") -> None:
         self.client_backend = backend
+
+    def client_tools_available(self) -> bool:
+        """Client-placed tools are advertised to a run only while a device
+        executor is connected."""
+        return self.client_backend is not None and self.client_backend.available()
 
     def backend_for(self, tool_name: str) -> ExecutionBackend:
         tool = self._registry.get(tool_name)
