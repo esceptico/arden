@@ -14,44 +14,47 @@ import {
   useSourceFocused,
 } from "@/features/chat/lib/messageShared";
 
-/** Detect a skill invocation in user content. Handles two formats:
- *
- *  1. Live (pre-server-expansion): `/skill-name <prompt>` — what the
- *     composer actually sends.
- *
- *  2. Historic (server-expanded): `<skill name="...">…body…</skill>\n\n
- *     User request: <prompt>` — what `expand_skill_command` writes into
- *     `sessions.messages` before saving.
- *
- *  Returns the matched skill descriptor + the user's actual prompt
- *  (everything after the skill block / slash command), or null. */
-function detectSkillPrefix(
+/** Historic (server-expanded) format: `<skill name="...">…body…</skill>\n\n
+ *  User request: <prompt>` — what the old start-of-message expansion wrote
+ *  into `sessions.messages` before mentions moved to prompt assembly. */
+function detectExpandedSkill(
   content: string,
   skills: SkillDescriptor[],
 ): { skill: SkillDescriptor; rest: string } | null {
-  // Format 1: /skill-name args
-  if (content.startsWith("/")) {
-    const slash = content.match(/^\/([\w-]+)\s*([\s\S]*)$/);
-    if (slash) {
-      const [, name, rest = ""] = slash;
-      const skill = skills.find((s) => s.name === name);
-      if (skill) return { skill, rest: rest.trimStart() };
-    }
-  }
+  if (!content.startsWith("<skill")) return null;
+  const xml = content.match(
+    /^<skill\s+name="([^"]+)"[^>]*>[\s\S]*?<\/skill>\s*(?:User request:\s*([\s\S]*))?$/,
+  );
+  if (!xml) return null;
+  const [, name, rest = ""] = xml;
+  const skill = skills.find((s) => s.name === name);
+  return skill ? { skill, rest: rest.trim() } : null;
+}
 
-  // Format 2: <skill name="..."> ... </skill>[\n\nUser request: ...]
-  if (content.startsWith("<skill")) {
-    const xml = content.match(
-      /^<skill\s+name="([^"]+)"[^>]*>[\s\S]*?<\/skill>\s*(?:User request:\s*([\s\S]*))?$/,
-    );
-    if (xml) {
-      const [, name, rest = ""] = xml;
-      const skill = skills.find((s) => s.name === name);
-      if (skill) return { skill, rest: rest.trim() };
-    }
+/** Split content on /skill-name mentions (start of text or after
+ *  whitespace, matching the composer + server rule) so each mention can
+ *  render as an inline token exactly where it sits in the sentence.
+ *  Returns null when no known skill is mentioned — the ordinary markdown
+ *  path stays untouched for every other message. */
+function splitSkillMentions(
+  content: string,
+  skills: SkillDescriptor[],
+): Array<string | SkillDescriptor> | null {
+  const re = /(?:^|(?<=\s))\/([a-z][a-z0-9-]{0,47})(?![\w/-])/g;
+  const segments: Array<string | SkillDescriptor> = [];
+  let cursor = 0;
+  let found = false;
+  for (const match of content.matchAll(re)) {
+    const skill = skills.find((s) => s.name === match[1]);
+    if (!skill) continue;
+    found = true;
+    if (match.index! > cursor) segments.push(content.slice(cursor, match.index));
+    segments.push(skill);
+    cursor = match.index! + match[0].length;
   }
-
-  return null;
+  if (!found) return null;
+  if (cursor < content.length) segments.push(content.slice(cursor));
+  return segments;
 }
 
 function SkillInlineToken({ skill }: { skill: SkillDescriptor }) {
@@ -89,8 +92,12 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
   if (!message) return null;
 
   const skillMatch = useMemo(
-    () => detectSkillPrefix(message.content, skills),
+    () => detectExpandedSkill(message.content, skills),
     [message.content, skills],
+  );
+  const mentionSegments = useMemo(
+    () => (skillMatch ? null : splitSkillMentions(message.content, skills)),
+    [message.content, skillMatch, skills],
   );
   const goalMatch = useMemo(() => {
     const match = message.content.match(/^\/goal\s+([\s\S]+)$/);
@@ -98,7 +105,7 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
   }, [message.content]);
 
   const visibleText = goalMatch ?? (skillMatch ? skillMatch.rest : message.content);
-  const showBubble = visibleText.trim().length > 0 || Boolean(skillMatch);
+  const showBubble = visibleText.trim().length > 0 || Boolean(skillMatch) || Boolean(mentionSegments);
   // The anchor is the whole article, so textContent would sweep in the action
   // row's timestamp — the rail label has to be the prompt itself.
   const railLabel = visibleText.trim().replace(/\s+/g, " ");
@@ -136,18 +143,31 @@ export const UserMessage = memo(function UserMessage({ id }: { id: string }) {
             <GoalMessageBubble objective={goalMatch} />
           ) : showBubble && (
             <div className="board-user__bubble surface-panel text-left text-ink break-words">
-              {/* The token used to sit inline with the prompt. Prose is a block
-                  now, so it takes its own line and needs the gap explicitly. */}
+              {/* Historic server-expanded messages keep the token-above-prose
+                  layout; live mention messages render tokens inline, exactly
+                  where they sit in the sentence. */}
               {skillMatch && (
                 <div className={visibleText.trim().length > 0 ? "mb-1" : undefined}>
                   <SkillInlineToken skill={skillMatch.skill} />
                 </div>
               )}
-              <Markdown
-                content={visibleText}
-                codeChrome={false}
-                className="typeset-verbatim"
-              />
+              {mentionSegments ? (
+                <div className="whitespace-pre-wrap">
+                  {mentionSegments.map((segment, i) =>
+                    typeof segment === "string" ? (
+                      <span key={i}>{segment}</span>
+                    ) : (
+                      <SkillInlineToken key={i} skill={segment} />
+                    ),
+                  )}
+                </div>
+              ) : (
+                <Markdown
+                  content={visibleText}
+                  codeChrome={false}
+                  className="typeset-verbatim"
+                />
+              )}
             </div>
           )}
         </div>

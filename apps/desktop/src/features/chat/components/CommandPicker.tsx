@@ -40,15 +40,23 @@ function iconFor(entry: CommandEntry): ArdenIcon {
 export function CommandPicker({
   query,
   onSelect,
+  skillsOnly = false,
 }: {
   query: string;
   onSelect: (entry: CommandEntry) => void;
+  /** Mid-text mentions complete skills only — builtins act on the whole
+   *  message. Must mirror the Composer's own filtering, or keyboard
+   *  selection and the rendered rows drift out of index alignment. */
+  skillsOnly?: boolean;
 }) {
   const open = useStore((s) => s.commandPickerOpen);
   const index = useStore((s) => s.commandPickerIndex);
   const setIndex = useStore((s) => s.setCommandPickerIndex);
   const all = useCommandList();
-  const filtered = useMemo(() => filterCommands(all, query), [all, query]);
+  const filtered = useMemo(() => {
+    const matches = filterCommands(all, query);
+    return skillsOnly ? matches.filter((entry) => entry.kind === "skill") : matches;
+  }, [all, query, skillsOnly]);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Split into sections so we can render group headers and a divider, while
