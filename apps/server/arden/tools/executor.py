@@ -6,6 +6,7 @@ from arden.integrations import ALL_INTEGRATIONS
 from arden.logging import get_logger
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
+from arden.tools.core.execution import ExecutionRouter, ToolInvocation
 from arden.tools.core.middleware import ToolMiddleware
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.scope import ToolFilter
@@ -51,6 +52,8 @@ class ToolExecutor:
         if mcp_tools:
             self._register_tools(_tools_from_named_tools(mcp_tools), source="mcp", conflict="skip")
 
+        self.router = ExecutionRouter(self.registry)
+
         capabilities = frozenset(self._get_services())
         hidden = [
             (name, tool)
@@ -90,6 +93,7 @@ class ToolExecutor:
         clone = ToolExecutor.__new__(ToolExecutor)
         clone._get_services = self._get_services
         clone.registry = registry
+        clone.router = ExecutionRouter(registry)
         return clone
 
     async def execute(self, tool_name: str, arguments: dict, execution: ToolExecution) -> ToolResult:
@@ -102,7 +106,8 @@ class ToolExecutor:
                 recovery_action="Use a tool exposed in the current system prompt.",
             )
 
-        return await self.registry.execute(tool_name, execution, arguments)
+        invocation = ToolInvocation(invocation_id=execution.tool_id, tool_name=tool_name, arguments=arguments)
+        return await self.router.execute(invocation, execution)
 
     def get_tools(self, scope: ToolFilter | None = None) -> list[dict]:
         return self.registry.get_schemas(

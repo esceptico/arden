@@ -10,6 +10,7 @@ from arden.core.tool_executor import ArdenToolExecutor
 from arden.llm.base import CompletionClient
 from arden.tools.core import Tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.execution import ExecutionRouter
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.executor import ToolExecutor
 
@@ -77,6 +78,7 @@ def make_executor(tools: dict[str, Tool] | None = None) -> ToolExecutor:
     executor.registry = ToolRegistry()
     for name, tool in (tools or {}).items():
         executor.registry.register(name, tool)
+    executor.router = ExecutionRouter(executor.registry)
     return executor
 
 

@@ -5,6 +5,7 @@ from arden.areas.work_store import AreaWorkStore
 from arden.automation.store import AutomationStore
 from arden.config import Config
 from arden.context.store import SessionStore
+from arden.execution.store import InvocationStore
 from arden.monitor.store import MonitorStateStore
 from arden.notifiers.store import NotifierStore
 from arden.outbox.store import OutboxStore
@@ -33,6 +34,7 @@ class Stores:
         monitor: MonitorStateStore,
         outbox: OutboxStore,
         area_work: AreaWorkStore,
+        invocations: InvocationStore,
     ):
         self.conn = conn
         self.automation_settlement_conn = automation_settlement_conn
@@ -44,6 +46,7 @@ class Stores:
         self.monitor = monitor
         self.outbox = outbox
         self.area_work = area_work
+        self.invocations = invocations
 
     @classmethod
     async def connect(cls, config: Config) -> Self:
@@ -81,6 +84,9 @@ class Stores:
         monitor = MonitorStateStore(conn)
         await monitor.init_schema()
 
+        invocations = InvocationStore(conn)
+        await invocations.init_schema()
+
         return cls(
             conn=conn,
             automation_settlement_conn=automation_settlement_conn,
@@ -92,6 +98,7 @@ class Stores:
             monitor=monitor,
             outbox=outbox,
             area_work=area_work,
+            invocations=invocations,
         )
 
     async def close(self) -> None:

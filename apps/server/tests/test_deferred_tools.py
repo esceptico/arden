@@ -30,6 +30,7 @@ from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.core import APP_CONTROL, SESSIONS
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.execution import ExecutionRouter
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.scope import tools
 from arden.tools.core.types import ApprovalInfo
@@ -179,6 +180,7 @@ async def _identity(req: ModelRequest) -> ModelRequest:
 class _Executor:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
+        self.router = ExecutionRouter(registry)
 
     @property
     def tool_services(self):
