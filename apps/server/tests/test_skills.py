@@ -135,3 +135,87 @@ def test_skill_governance_endpoint_returns_report(tmp_path):
     assert response.status_code == 200
     assert response.json()["summary"]["cleanup_candidate_count"] == 1
     assert response.json()["cleanup_candidates"][0]["name"] == "old-helper"
+
+
+# --- archive upload (device-authored skills → remote server) ---
+
+
+def _zip_bytes(entries: dict[str, str]) -> bytes:
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _archive_service(tmp_path, monkeypatch) -> SkillService:
+    monkeypatch.setattr("arden.skills.service.ARDEN_DIR", tmp_path)
+    monkeypatch.setattr("arden.skills.service.get_skills_dirs", lambda: [(tmp_path / "skills", "global")])
+    registry = SkillRegistry()
+    registry.load([(tmp_path / "skills", "global")])
+    return SkillService(registry)
+
+
+def test_install_archive_with_top_level_directory(tmp_path, monkeypatch):
+    service = _archive_service(tmp_path, monkeypatch)
+    data = _zip_bytes(
+        {
+            "zip-helper/SKILL.md": "---\nname: zip-helper\ndescription: Zipped helper\n---\n\n# Steps\n",
+            "zip-helper/reference.md": "extra file\n",
+        }
+    )
+
+    meta = service.install_archive(data)
+
+    assert meta.name == "zip-helper"
+    assert (tmp_path / "skills" / "zip-helper" / "SKILL.md").exists()
+    assert (tmp_path / "skills" / "zip-helper" / "reference.md").read_text() == "extra file\n"
+
+
+def test_install_archive_flat_layout(tmp_path, monkeypatch):
+    service = _archive_service(tmp_path, monkeypatch)
+    data = _zip_bytes({"SKILL.md": "---\nname: flat-helper\ndescription: Flat helper\n---\n\n# Steps\n"})
+
+    meta = service.install_archive(data)
+
+    assert meta.name == "flat-helper"
+    assert (tmp_path / "skills" / "flat-helper" / "SKILL.md").exists()
+
+
+def test_install_archive_rejects_path_traversal(tmp_path, monkeypatch):
+    service = _archive_service(tmp_path, monkeypatch)
+    data = _zip_bytes(
+        {
+            "evil/SKILL.md": "---\nname: evil\ndescription: Evil\n---\n\n# Steps\n",
+            "evil/../../outside.txt": "escape\n",
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"Unsafe path|single skill directory"):
+        service.install_archive(data)
+    assert not (tmp_path / "outside.txt").exists()
+    assert not (tmp_path / "skills" / "evil").exists()
+
+
+def test_install_archive_rejects_directory_name_mismatch(tmp_path, monkeypatch):
+    service = _archive_service(tmp_path, monkeypatch)
+    data = _zip_bytes({"wrong-dir/SKILL.md": "---\nname: right-name\ndescription: X\n---\n\n# Steps\n"})
+
+    with pytest.raises(ValueError, match="must match the skill name"):
+        service.install_archive(data)
+
+
+def test_install_archive_rejects_duplicate_and_garbage(tmp_path, monkeypatch):
+    service = _archive_service(tmp_path, monkeypatch)
+    data = _zip_bytes({"dup-skill/SKILL.md": "---\nname: dup-skill\ndescription: X\n---\n\n# Steps\n"})
+    service.install_archive(data)
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.install_archive(data)
+    with pytest.raises(ValueError, match="not a valid zip"):
+        service.install_archive(b"not-a-zip")
+    with pytest.raises(ValueError, match=r"exactly one SKILL\.md"):
+        service.install_archive(_zip_bytes({"a/SKILL.md": "x", "b/SKILL.md": "y"}))

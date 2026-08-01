@@ -1878,3 +1878,17 @@ tools = {
 
     assert set(discovered) == {"hello"}
     assert discovered["hello"].to_dict("hello")["function"]["name"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_current_time_uses_configured_timezone(monkeypatch):
+    from types import SimpleNamespace
+
+    from arden.tools.time import current_time_tool
+
+    monkeypatch.setattr("arden.tools.time.get_config", lambda: SimpleNamespace(timezone="Asia/Tokyo"))
+    result = await current_time_tool.execute(_make_execution("current_time"))
+
+    assert result.data["timezone"] == "Asia/Tokyo"
+    assert result.content.endswith("+09:00")
+    assert result.data["utc"].endswith("+00:00")

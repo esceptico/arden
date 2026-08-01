@@ -1,12 +1,16 @@
+import io
 import re
+import shutil
+import zipfile
 from datetime import date
 from pathlib import Path
 
 import yaml
 
+from arden.constants import SKILL_ARCHIVE_MAX_BYTES
 from arden.settings import ARDEN_DIR
 from arden.skills.installer import install_from_github
-from arden.skills.registry import SkillMeta, SkillRegistry
+from arden.skills.registry import SkillMeta, SkillRegistry, _parse_skill_md
 
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 
@@ -74,6 +78,76 @@ class SkillService:
         name = await install_from_github(source, target_dir)
         self._registry.reload(get_skills_dirs())
         return self._registry.get(name)
+
+    def install_archive(self, data: bytes) -> SkillMeta:
+        """Install one skill from a zip of its directory.
+
+        The upload path for skills authored on the user's device when the
+        server runs remotely. The archive must contain exactly one skill:
+        a SKILL.md at the root or inside a single top-level directory whose
+        name matches the frontmatter name.
+        """
+        if len(data) > SKILL_ARCHIVE_MAX_BYTES:
+            raise ValueError(f"Skill archive exceeds {SKILL_ARCHIVE_MAX_BYTES // (1024 * 1024)} MiB.")
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile as exc:
+            raise ValueError("Skill archive is not a valid zip file.") from exc
+
+        entries = [info for info in archive.infolist() if not info.is_dir()]
+        if not entries:
+            raise ValueError("Skill archive is empty.")
+
+        skill_md_paths = [info.filename for info in entries if Path(info.filename).name == "SKILL.md"]
+        if len(skill_md_paths) != 1:
+            raise ValueError("Skill archive must contain exactly one SKILL.md.")
+        root = str(Path(skill_md_paths[0]).parent)
+        prefix = "" if root == "." else f"{root}/"
+        if "/" in root:
+            raise ValueError("SKILL.md must sit at the archive root or in one top-level directory.")
+
+        try:
+            skill_md = archive.read(skill_md_paths[0]).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("SKILL.md must be UTF-8 text.") from exc
+        parsed = _parse_skill_md(skill_md)
+        if parsed is None:
+            raise ValueError("SKILL.md is missing valid YAML frontmatter.")
+        frontmatter, _ = parsed
+        name = frontmatter.get("name")
+        if not isinstance(name, str) or not _SKILL_NAME_RE.fullmatch(name):
+            raise ValueError("Skill name must be lowercase letters/digits/hyphens, start with a letter, max 48 chars.")
+        if prefix and root != name:
+            raise ValueError(f"Archive directory {root!r} must match the skill name {name!r}.")
+        if self._registry.get(name) is not None:
+            raise ValueError(f"Skill '{name}' already exists.")
+
+        target_dir = ARDEN_DIR / "skills" / name
+        base = target_dir.resolve()
+        members: list[tuple[str, Path]] = []
+        for info in entries:
+            if not info.filename.startswith(prefix):
+                raise ValueError("Skill archive must contain a single skill directory.")
+            relative = info.filename[len(prefix) :]
+            destination = (target_dir / relative).resolve()
+            if not destination.is_relative_to(base):
+                raise ValueError(f"Unsafe path in skill archive: {info.filename}")
+            members.append((info.filename, destination))
+
+        target_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            for member, destination in members:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(archive.read(member))
+            self._registry.reload(get_skills_dirs())
+            meta = self._registry.get(name)
+            if meta is None:
+                raise ValueError(f"Skill '{name}' failed validation after extraction.")
+            return meta
+        except Exception:
+            shutil.rmtree(target_dir, ignore_errors=True)
+            self._registry.reload(get_skills_dirs())
+            raise
 
     def create(
         self,
