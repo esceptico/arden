@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { useStore } from "@/stores";
 import { CopyGlyph } from "@/components/ui/CopyGlyph";
 import { branchAtMessage } from "@/actions/sessions";
+import { placeCaretAtEnd } from "@/features/chat/lib/mentionEditor";
 import { ICON } from "@/lib/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { useTimeoutFlag } from "@/lib/hooks";
@@ -45,10 +46,10 @@ export function MessageActions({ id, role }: { id: string; role: "user" | "assis
     useStore.getState().setEditingId(id);
     useStore.getState().setDraft(message.content);
     requestAnimationFrame(() => {
-      const input = document.querySelector<HTMLTextAreaElement>("#message-input");
+      const input = document.querySelector<HTMLElement>("#message-input");
       if (!input) return;
       input.focus();
-      input.setSelectionRange(message.content.length, message.content.length);
+      placeCaretAtEnd(input);
     });
   }
 

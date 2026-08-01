@@ -9,6 +9,7 @@ import {
 import { IS_DESKTOP_MAC } from "@/lib/platform";
 import { Sidebar } from "@/features/sessions/components/Sidebar";
 import { Chat } from "@/features/chat/components/Chat";
+import { placeCaretAtEnd } from "@/features/chat/lib/mentionEditor";
 import { Home } from "@/features/home/components/Home";
 import { MemorySurface } from "@/features/memory/components/MemorySurface";
 import { AutomationsModal } from "@/features/automations/components/AutomationsModal";
@@ -314,12 +315,13 @@ export function App() {
       ) {
         return;
       }
-      const composer = document.getElementById("message-input") as HTMLTextAreaElement | null;
+      const composer = document.getElementById("message-input");
       if (!composer) return;
       e.preventDefault();
       const state = useStore.getState();
       state.setDraft(state.draft + e.key);
       composer.focus();
+      placeCaretAtEnd(composer);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

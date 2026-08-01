@@ -5,6 +5,7 @@ import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
 import type { SkillDescriptor } from "@/api/types";
 import { viewSkill } from "@/actions/skills";
+import { splitSkillMentions } from "@/features/chat/lib/skillMentions";
 import { ICON } from "@/lib/icons";
 import { MessageActions } from "@/features/chat/components/MessageActions";
 import {
@@ -31,42 +32,18 @@ function detectExpandedSkill(
   return skill ? { skill, rest: rest.trim() } : null;
 }
 
-/** Split content on /skill-name mentions (start of text or after
- *  whitespace, matching the composer + server rule) so each mention can
- *  render as an inline token exactly where it sits in the sentence.
- *  Returns null when no known skill is mentioned — the ordinary markdown
- *  path stays untouched for every other message. */
-function splitSkillMentions(
-  content: string,
-  skills: SkillDescriptor[],
-): Array<string | SkillDescriptor> | null {
-  const re = /(?:^|(?<=\s))\/([a-z][a-z0-9-]{0,47})(?![\w/-])/g;
-  const segments: Array<string | SkillDescriptor> = [];
-  let cursor = 0;
-  let found = false;
-  for (const match of content.matchAll(re)) {
-    const skill = skills.find((s) => s.name === match[1]);
-    if (!skill) continue;
-    found = true;
-    if (match.index! > cursor) segments.push(content.slice(cursor, match.index));
-    segments.push(skill);
-    cursor = match.index! + match[0].length;
-  }
-  if (!found) return null;
-  if (cursor < content.length) segments.push(content.slice(cursor));
-  return segments;
-}
-
 function SkillInlineToken({ skill }: { skill: SkillDescriptor }) {
   return (
     <button
       type="button"
       onClick={() => void viewSkill(skill.name)}
       title={skill.path ?? skill.name}
-      className="inline-flex max-w-full items-baseline gap-1.5 align-baseline text-info hover:text-accent-strong transition-colors"
+      className="inline-flex max-w-full items-baseline gap-1.5 align-baseline text-info font-medium hover:text-accent-strong transition-colors"
     >
       <Box size={ICON.SM} strokeWidth={2} className="relative top-[1px] shrink-0" />
-      <span className="capitalize">{skill.name.replace(/[_-]/g, " ")}</span>
+      <span className="capitalize underline decoration-[color-mix(in_oklab,currentColor_30%,transparent)] underline-offset-2 hover:decoration-current">
+        {skill.name.replace(/[_-]/g, " ")}
+      </span>
     </button>
   );
 }
