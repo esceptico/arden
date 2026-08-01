@@ -54,6 +54,7 @@ from arden.services.goal_continuation import (
 )
 from arden.services.session import SessionService
 from arden.services.token_directive import parse_token_budget
+from arden.skills.mentions import render_skill_mentions
 from arden.skills.registry import SkillRegistry
 from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import render_connection_catalog
@@ -336,19 +337,6 @@ async def _record_run_status(
         await fn(run_id, status, **kwargs)
 
 
-def expand_skill_command(message: str, registry: SkillRegistry) -> tuple[str, bool]:
-    stripped = message.strip()
-    if not stripped.startswith("/"):
-        return message, False
-    parts = stripped[1:].split(None, 1)
-    skill_name = parts[0]
-    args = parts[1] if len(parts) > 1 else ""
-    expanded = registry.render_skill_xml(skill_name, args=args, args_label="User request")
-    if expanded is None:
-        return message, False
-    return expanded, True
-
-
 def _is_anthropic(model: str) -> bool:
     return get_model(model).provider == Provider.ANTHROPIC
 
@@ -507,6 +495,7 @@ async def _prepare_messages(
     append_user: bool = True,
     context_manifest: list[ContextManifestEntry] | None = None,
     automation_id: str | None = None,
+    skill_mention_blocks: list[str] | None = None,
 ) -> list[dict]:
     wiki_context = deps.wiki_context
     wiki_resident = await wiki_context.resident_context() if wiki_context is not None else None
@@ -596,6 +585,11 @@ async def _prepare_messages(
         if _is_meta_client_id(client_id):
             user_msg["is_meta"] = True
     messages.append(user_msg)
+
+    # Mentioned skills ride as separate model-visible messages right after
+    # the user's raw text; is_meta hides the bubble in the transcript.
+    for block in skill_mention_blocks or []:
+        messages.append({"role": Role.USER, "content": block, "is_meta": True})
 
     return messages
 
@@ -723,10 +717,13 @@ async def prepare_chat(
     is_resume = resume_run_id is not None
     user_message = message
     is_init = not is_resume and user_message.strip().lower() == "/init"
+    skill_mention_blocks: list[str] = []
     if is_init:
         user_message = INIT_INSTRUCTION
-    elif deps.skill_registry:
-        user_message, _ = expand_skill_command(user_message, deps.skill_registry)
+    elif deps.skill_registry and not is_resume:
+        # /skill-name anywhere in the text loads the skill: the raw message
+        # is preserved and each skill body rides as its own is_meta message.
+        skill_mention_blocks = render_skill_mentions(user_message, deps.skill_registry)
 
     stripped_message = message.strip()
     should_name_session = not is_resume and (
@@ -772,6 +769,7 @@ async def prepare_chat(
         append_user=not is_resume,
         context_manifest=context_manifest,
         automation_id=automation_id,
+        skill_mention_blocks=skill_mention_blocks,
     )
 
     run.messages = messages
