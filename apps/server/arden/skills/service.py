@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from arden.constants import SKILL_ARCHIVE_MAX_BYTES
+from arden.constants import SKILL_ARCHIVE_MAX_BYTES, SKILL_ARCHIVE_MAX_UNCOMPRESSED_BYTES
 from arden.settings import ARDEN_DIR
 from arden.skills.installer import install_from_github
 from arden.skills.registry import SkillMeta, SkillRegistry, _parse_skill_md
@@ -97,6 +97,12 @@ class SkillService:
         entries = [info for info in archive.infolist() if not info.is_dir()]
         if not entries:
             raise ValueError("Skill archive is empty.")
+        # The request-size cap bounds only compressed bytes; a crafted zip can
+        # expand ~1000x, so budget the declared uncompressed sizes too.
+        if sum(info.file_size for info in entries) > SKILL_ARCHIVE_MAX_UNCOMPRESSED_BYTES:
+            raise ValueError(
+                f"Skill archive decompresses past {SKILL_ARCHIVE_MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MiB."
+            )
 
         skill_md_paths = [info.filename for info in entries if Path(info.filename).name == "SKILL.md"]
         if len(skill_md_paths) != 1:

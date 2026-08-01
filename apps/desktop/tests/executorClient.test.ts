@@ -237,3 +237,66 @@ describe("executor client", () => {
     expect(await store.load()).toBeNull();
   });
 });
+
+  test("heartbeat 401 clears the credential and re-enrolls", async () => {
+    const store = makeStateStore({ executorId: "exec_1", token: "revoked-mid-session", cursor: 0 });
+    const hold = deferred();
+    const client = makeClient({
+      heartbeatIntervalMs: 30,
+      getConfig: () => ({ serverUrl: "http://server", apiKey: "" }),
+      stateStore: store,
+      fetchImpl: async (url: URL, init?: RequestInit) => {
+        const target = String(url);
+        if (target.includes("/executor/heartbeat")) return jsonResponse(401, {});
+        if (target.includes("/executor/stream")) {
+          return streamResponse([sse("lease", { lease_id: "lease_1" })], hold);
+        }
+        return jsonResponse(200, {});
+      },
+    });
+    client.start();
+
+    await until(() => store.saves.includes(null));
+    expect(await store.load()).toBeNull();
+    hold.resolve();
+  });
+
+  test("result delivery retries network failures until it lands", async () => {
+    const store = makeStateStore({ executorId: "exec_1", token: "device-token", cursor: 0 });
+    const results: Array<Record<string, unknown>> = [];
+    let resultAttempts = 0;
+    const hold = deferred();
+    const client = makeClient({
+      getConfig: () => ({ serverUrl: "http://server", apiKey: "" }),
+      stateStore: store,
+      fetchImpl: async (url: URL, init?: RequestInit) => {
+        const target = String(url);
+        if (target.includes("/executor/results")) {
+          resultAttempts += 1;
+          if (resultAttempts < 3) throw new Error("network down");
+          results.push(JSON.parse(String(init?.body)));
+          return jsonResponse(200, {});
+        }
+        if (init?.method === "POST") return jsonResponse(200, {});
+        return streamResponse(
+          [
+            sse("lease", { lease_id: "lease_1" }),
+            sse("command", {
+              seq: 1,
+              type: "execute_tool",
+              invocation_id: "inv-retry",
+              payload: { invocation_id: "inv-retry", tool_name: "quick", arguments: {} },
+            }),
+          ],
+          hold,
+        );
+      },
+    });
+    client.registerHandler("quick", async () => ({ status: "succeeded", payload: { content: "done", preview: "ok" } }));
+    client.start();
+
+    await until(() => results.length === 1, 10_000);
+    expect(resultAttempts).toBe(3);
+    expect(results[0].invocation_id).toBe("inv-retry");
+    hold.resolve();
+  });

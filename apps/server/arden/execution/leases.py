@@ -79,6 +79,10 @@ class LeaseStore:
             expires_at=expires_at,
         )
 
+    async def release_all(self, executor_id: str) -> None:
+        await self._conn.execute("DELETE FROM executor_leases WHERE executor_id = ?", (executor_id,))
+        await self._conn.commit()
+
     async def is_current(self, lease_id: str, executor_id: str) -> bool:
         current = await self._get(lease_id)
         return current is not None and current.executor_id == executor_id and current.expires_at > _now()

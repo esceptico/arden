@@ -36,24 +36,41 @@ class ExecutorGateway:
         self.invocations = invocations
         self._wakeups: dict[str, asyncio.Event] = {}
         self._waiters: dict[str, asyncio.Future[InvocationRecord]] = {}
-        self._connected: set[str] = set()
+        # executor_id -> lease_id of the stream that owns the connection.
+        self._connected: dict[str, str] = {}
 
     # -- connection lifecycle --
 
     async def connect(self, device: ExecutorDevice) -> ExecutorLease:
         lease = await self.leases.acquire(device.executor_id)
         await self.devices.touch(device.executor_id)
-        self._connected.add(device.executor_id)
+        self._connected[device.executor_id] = lease.lease_id
         return lease
 
-    def disconnect(self, executor_id: str) -> None:
-        self._connected.discard(executor_id)
+    def disconnect(self, executor_id: str, lease_id: str | None = None) -> None:
+        """Drop a connection. With a lease_id, only the stream that still owns
+        the connection may drop it — a superseded stream's late teardown must
+        not un-mark the live one (reconnect race)."""
+        if lease_id is not None and self._connected.get(executor_id) != lease_id:
+            return
+        self._connected.pop(executor_id, None)
 
     def is_connected(self, executor_id: str) -> bool:
         return executor_id in self._connected
 
+    def stream_owner(self, executor_id: str) -> str | None:
+        return self._connected.get(executor_id)
+
     def connected_executor(self) -> str | None:
         return next(iter(self._connected), None)
+
+    async def revoke(self, executor_id: str) -> None:
+        """Kill switch: revoke the credential, fence every lease, drop the
+        connection, and wake its stream so it terminates immediately."""
+        await self.devices.revoke(executor_id)
+        await self.leases.release_all(executor_id)
+        self._connected.pop(executor_id, None)
+        self._wakeup(executor_id).set()
 
     async def heartbeat(self, device: ExecutorDevice, lease_id: str, *, acked_seq: int | None = None) -> ExecutorLease:
         lease = await self.leases.renew(lease_id)

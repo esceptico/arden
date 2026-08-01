@@ -386,3 +386,45 @@ def test_result_flow_over_http(http):
         headers=headers,
     )
     assert conflict.status_code == 409
+
+
+# -- reconnect race / revocation kill switch --
+
+
+@pytest.mark.asyncio
+async def test_stale_stream_teardown_does_not_unmark_live_connection(gateway):
+    device, _ = await _enrolled(gateway)
+    old_lease = await gateway.connect(device)
+    new_lease = await gateway.connect(device)  # fast reconnect supersedes
+
+    # The old stream's late finally block must be a no-op.
+    gateway.disconnect(device.executor_id, old_lease.lease_id)
+    assert gateway.is_connected(device.executor_id)
+    assert gateway.stream_owner(device.executor_id) == new_lease.lease_id
+
+    gateway.disconnect(device.executor_id, new_lease.lease_id)
+    assert not gateway.is_connected(device.executor_id)
+
+
+@pytest.mark.asyncio
+async def test_revoke_fences_lease_and_terminates_stream_ownership(gateway):
+    device, token = await _enrolled(gateway)
+    lease = await gateway.connect(device)
+    await _client_invocation(gateway)
+    await gateway.accept_started(device, lease.lease_id, "inv-1")
+
+    await gateway.revoke(device.executor_id)
+
+    assert not gateway.is_connected(device.executor_id)
+    assert gateway.stream_owner(device.executor_id) is None
+    assert await gateway.devices.authenticate(token) is None
+    with pytest.raises(StaleLeaseError):
+        await gateway.accept_result(
+            device,
+            lease.lease_id,
+            invocation_id="inv-1",
+            status=InvocationStatus.SUCCEEDED,
+            result_payload="{}",
+        )
+    with pytest.raises(StaleLeaseError):
+        await gateway.heartbeat(device, lease.lease_id)
