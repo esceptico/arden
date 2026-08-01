@@ -1,6 +1,9 @@
 import type { ActivityItem, BackgroundAgent } from "@/stores";
 import type { Automation, AutomationTrigger, BackgroundTaskSummary } from "@/api/types";
-import type { BackgroundAgentSnapshot } from "@/stores/background-agent-domain";
+import {
+  normalizeBackgroundAgentStatus,
+  type BackgroundAgentSnapshot,
+} from "@/stores/background-agent-domain";
 import { isChannelAutomation } from "@/lib/automationFilters";
 import { activityItemStatus, extractTask, friendlyAgentLabel } from "@/lib/agent";
 
@@ -10,19 +13,11 @@ import { activityItemStatus, extractTask, friendlyAgentLabel } from "@/lib/agent
 export function childAgentTaskToBackgroundSnapshot(
   task: BackgroundTaskSummary,
 ): BackgroundAgentSnapshot {
-  const status =
-    task.status === "completed" ||
-    task.status === "failed" ||
-    task.status === "cancelled" ||
-    task.status === "interrupted" ||
-    task.status === "cancel_requested"
-      ? task.status
-      : "running";
   return {
     taskId: task.child_run_id ?? task.task_id,
     childSessionId: task.child_session_id ?? undefined,
     command: task.command,
-    status,
+    status: normalizeBackgroundAgentStatus(task.status),
     detail: task.detail ?? undefined,
     resultRef: task.result_ref ?? undefined,
     parentToolCallId: task.parent_tool_call_id ?? undefined,
@@ -182,28 +177,64 @@ export function isAgentSessionId(sessionId: string | null | undefined): boolean 
   return !!sessionId && sessionId.includes("::");
 }
 
+const TERMINAL_AGENT_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+
+/** Whether the transcript itself (task events / tool result data) says the
+ *  agent finished — the evidence that outranks a possibly stale roster poll. */
+function activityItemIsTerminal(item: ActivityItem): boolean {
+  return (
+    (item.taskStatus != null && TERMINAL_AGENT_STATUSES.has(item.taskStatus)) ||
+    (item.childAgent != null && TERMINAL_AGENT_STATUSES.has(item.childAgent.status))
+  );
+}
+
 function resolveActivityStatus(item: ActivityItem): AgentRunStatus {
   if (item.cancelRequested) return "cancel_requested";
   if (item.taskStatus === "running") return "running";
-  if (item.taskStatus === "completed") return "completed";
-  if (item.taskStatus === "failed") return "failed";
-  if (item.taskStatus === "cancelled") return "cancelled";
+  if (item.taskStatus != null && TERMINAL_AGENT_STATUSES.has(item.taskStatus)) {
+    return item.taskStatus;
+  }
   const childStatus = item.childAgent?.status;
-  if (
-    childStatus === "completed" ||
-    childStatus === "failed" ||
-    childStatus === "cancelled" ||
-    childStatus === "interrupted"
-  ) {
-    return childStatus;
+  if (childStatus != null && TERMINAL_AGENT_STATUSES.has(childStatus)) {
+    return childStatus as AgentRunStatus;
+  }
+  // An unrecognized child status must not read "running" forever — settle it
+  // as interrupted, matching normalizeBackgroundAgentStatus.
+  if (childStatus && childStatus !== "running" && childStatus !== "activity") {
+    return "interrupted";
   }
   return activityItemStatus(item) === "ongoing" ? "running" : "completed";
 }
 
-/** Build a view from an inline activity-trace agent item. */
-export function agentRunFromActivityItem(item: ActivityItem): AgentRunView {
+export interface ActivityItemRunContext {
+  /** Durable roster row backing this item (same rows the sidebar renders). */
+  roster?: BackgroundAgent;
+  /** Fetched one-line result preview (shared childAgentResultSnippets cache). */
+  resultSnippet?: string;
+}
+
+/** Build a view from an inline activity-trace agent item. When the durable
+ *  roster row is supplied, running-ness and the terminal status come from the
+ *  same record the sidebar shows — the transcript's own terminal evidence
+ *  still outranks a stale poll row. */
+export function agentRunFromActivityItem(
+  item: ActivityItem,
+  context: ActivityItemRunContext = {},
+): AgentRunView {
   const child = item.childAgent;
-  const status = resolveActivityStatus(item);
+  let status = resolveActivityStatus(item);
+  const roster = context.roster;
+  if (roster && !item.cancelRequested && !activityItemIsTerminal(item)) {
+    // No terminal transcript evidence → the roster row is the truth. This is
+    // what keeps a detached agent (whose parent item.result is just the spawn
+    // ack) reading "running" in chat exactly as long as the sidebar does.
+    status = roster.status;
+  }
   // Prefer the server's concise display name; fall back to the task (better
   // than the raw `Background(task: "…")` tool target) then the target itself.
   const name =
@@ -214,17 +245,18 @@ export function agentRunFromActivityItem(item: ActivityItem): AgentRunView {
     type: humanizeAgentType(child?.agentType ?? item.kind),
     status,
     elapsedLabel: item.durationMs != null ? formatDuration(item.durationMs) : "",
-    childSessionId: child?.childSessionId,
+    childSessionId: child?.childSessionId ?? roster?.childSessionId,
     runId: item.runId,
-    detached: child ? child.wait === false : undefined,
+    detached: child ? child.wait === false : roster ? roster.wait === false : undefined,
     progress: item.progress,
     // For a detached agent the parent's `item.result` is only the spawn ack,
-    // not the real output (that lives in the child session) — so don't preview
-    // it inline. Awaited agents do carry their result here.
-    resultPreview:
-      isActiveAgentStatus(status) || child?.wait === false
-        ? undefined
-        : resultSnippet(item.result),
+    // not the real output (that lives in the child session) — so never preview
+    // it inline; the fetched durable snippet stands in once it lands. Awaited
+    // agents carry their real result (including failure text) here.
+    resultPreview: isActiveAgentStatus(status)
+      ? undefined
+      : context.resultSnippet ??
+        (child?.wait === false ? undefined : resultSnippet(item.result)),
   };
 }
 

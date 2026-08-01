@@ -26,10 +26,15 @@ import {
   Wrench,
 } from "@/components/icons";
 import clsx from "clsx";
-import type { ActivityItem } from "@/stores";
+import { useStore, type ActivityItem } from "@/stores";
+import {
+  backgroundAgentKey,
+  findBackgroundAgentForActivityItem,
+} from "@/stores/background-agent-domain";
 import { activityItemStatus, isAgent } from "@/lib/agent";
 import { switchSession } from "@/actions/sessions";
 import { cancelSubagent } from "@/actions/messages";
+import { cancelChildAgent } from "@/actions/childAgents";
 import { ICON } from "@/lib/icons";
 import { Reveal } from "@/components/ui/Reveal";
 import { ThinkingStep } from "@/components/ui/ThinkingStep";
@@ -208,10 +213,37 @@ function AgentRow({
   onOpen: (item: ActivityItem) => void;
   last?: boolean;
 }) {
-  const run = agentRunFromActivityItem(item);
+  // The durable roster row (same rows the sidebar renders) is the authority
+  // on running-ness and the cancel route — chat and sidebar must agree on
+  // both for the same agent.
+  const roster = useStore((s) =>
+    findBackgroundAgentForActivityItem(s.backgroundAgents.rows, item, s.currentSessionId),
+  );
+  const fetchedSnippet = useStore((s) => {
+    const key = roster
+      ? backgroundAgentKey(roster.sessionId, roster.taskId)
+      : item.childAgent && s.currentSessionId
+        ? backgroundAgentKey(s.currentSessionId, item.childAgent.childRunId)
+        : null;
+    return key ? s.childAgentResultSnippets[key] : undefined;
+  });
+  const run = agentRunFromActivityItem(item, { roster, resultSnippet: fetchedSnippet });
   const running = isActiveAgentStatus(run.status);
   const childSessionId = run.childSessionId;
-  const canStop = item.taskStatus === "running" && !!item.runId && !item.cancelRequested;
+  // Awaited agents cancel through the parent run; anything else (detached, or
+  // an agent known only via its roster row) cancels the durable child run —
+  // the same route the sidebar's stop uses.
+  const canCancelAwaited =
+    run.detached !== true && item.taskStatus === "running" && !!item.runId;
+  const canCancelRoster = roster?.status === "running";
+  const canStop = !item.cancelRequested && (canCancelAwaited || canCancelRoster);
+  const stop = () => {
+    if (canCancelAwaited && item.runId) {
+      void cancelSubagent(item.runId, item.id);
+    } else if (roster && canCancelRoster) {
+      void cancelChildAgent(roster);
+    }
+  };
   const detail = running ? run.progress : run.resultPreview;
   const terminalBad = run.status === "failed" || run.status === "cancelled";
   return (
@@ -238,7 +270,7 @@ function AgentRow({
                 aria-label="Stop subagent"
                 onClick={(event) => {
                   event.stopPropagation();
-                  if (item.runId) void cancelSubagent(item.runId, item.id);
+                  stop();
                 }}
                 className="absolute inset-0 grid place-items-center rounded-[var(--r-icon)] border-0 p-0 m-0 bg-surface-soft text-faint opacity-0 pointer-events-none transition-[opacity,color] duration-row ease-out group-hover/agent:pointer-events-auto group-hover/agent:opacity-100 hover:text-bad focus-visible:pointer-events-auto focus-visible:opacity-100"
               >

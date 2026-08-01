@@ -10,6 +10,7 @@ import { visibleMessageIds } from "@/lib/messageVisibility";
 import { messageSegments } from "@/lib/messageSegments";
 import { firstMessageIdInSourceFocus } from "@/lib/messageSourceFocus";
 import { loadNewerHistory, loadOlderHistory } from "@/actions/history";
+import { useChildAgentResults } from "@/hooks/useChildAgentResults";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT, SPRING_SCROLL_RIVER } from "@/lib/tokens/motion";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/Marker";
@@ -36,6 +37,17 @@ export function Messages() {
     })),
   );
   const sessionReady = currentSessionId === null || historyLoadedFor === currentSessionId;
+  // Terminal agents' durable result previews feed the trace's agent rows (a
+  // detached agent's inline item.result is only the spawn ack). Same shared
+  // cache the sidebar hub fills — mounted once here, not per row.
+  const sessionRosterAgents = useStore(
+    useShallow((s) =>
+      Object.values(s.backgroundAgents.rows).filter(
+        (agent) => agent.sessionId === s.currentSessionId,
+      ),
+    ),
+  );
+  useChildAgentResults(currentSessionId ?? "", sessionRosterAgents);
   const firstSourceFocusId = useStore((s) =>
     firstMessageIdInSourceFocus(s.order, s.messages, s.sourceFocus, s.currentSessionId),
   );

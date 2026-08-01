@@ -14,6 +14,7 @@ import {
   reduceBackgroundAgentsForSession,
   reduceBackgroundAgentsRefreshFailed,
   reduceBackgroundAgentsRefreshStarted,
+  normalizeBackgroundAgentStatus,
 } from "@/stores/background-agent-domain";
 
 test("automation domain areas stream phase and per-task status", () => {
@@ -101,6 +102,24 @@ test("background agent domain keeps child-agent metadata from snapshots", () => 
     wait: false,
     parentToolCallId: "tool-call-1",
   });
+});
+
+test("unknown statuses normalize to interrupted, never an eternal running", () => {
+  expect(normalizeBackgroundAgentStatus("running")).toBe("running");
+  expect(normalizeBackgroundAgentStatus("activity")).toBe("running");
+  expect(normalizeBackgroundAgentStatus("cancel_requested")).toBe("cancel_requested");
+  expect(normalizeBackgroundAgentStatus("interrupted")).toBe("interrupted");
+  expect(normalizeBackgroundAgentStatus("weird")).toBe("interrupted");
+  expect(normalizeBackgroundAgentStatus(null)).toBe("interrupted");
+  expect(normalizeBackgroundAgentStatus(undefined)).toBe("interrupted");
+
+  const state = reduceBackgroundAgentsForSession(
+    createBackgroundAgentsDomainState(),
+    "session-1",
+    [{ taskId: "bg-1", command: "research", status: "orphaned" }],
+    1,
+  );
+  expect(state.rows["session-1:bg-1"].status).toBe("interrupted");
 });
 
 test("background agent domain tracks refresh status", () => {

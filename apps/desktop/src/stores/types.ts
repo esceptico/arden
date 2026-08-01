@@ -236,7 +236,7 @@ export interface ActivityItem {
   durationMs?: number;
   /** Structured terminal execution result from the server. */
   outcome?: ToolOutcome;
-  taskStatus?: "running" | "completed" | "failed" | "cancelled";
+  taskStatus?: "running" | "completed" | "failed" | "cancelled" | "interrupted";
   progress?: string;
   /** Subagent token usage (only populated when `semanticKind === "agent"`).
    *  Reports the spawned agent's INTERNAL spend — these tokens never enter
@@ -493,6 +493,10 @@ export interface State {
   modalOrigin: { x: number; y: number } | null;
   loops: ServerLoop[];
   backgroundAgents: BackgroundAgentsDomainState;
+  /** Fetched one-line result previews, keyed `${sessionId}:${taskId}`.
+   *  Shared cache: the sidebar hub and the chat trace read the same entry so a
+   *  detached agent's result reads identically on both surfaces. */
+  childAgentResultSnippets: Record<string, string>;
   workflows: WorkflowsDomainState;
   /** The workflow expanded/focused in the agent hub. Null when none. */
   workflowViewer: WorkflowViewerState | null;
@@ -610,6 +614,7 @@ export interface Actions {
   upsertBackgroundAgent: (
     agent: Omit<BackgroundAgent, "createdAt"> & { createdAt?: number },
   ) => void;
+  setChildAgentResultSnippet: (key: string, snippet: string) => void;
   setSkills: (skills: SkillDescriptor[]) => void;
   setCommandPickerOpen: (open: boolean) => void;
   setCommandPickerIndex: (index: number) => void;

@@ -27,7 +27,7 @@ import { PeekSurface } from "@/components/workspace/PeekSurface";
 import { RIGHT_PANEL_WIDTH } from "@/features/background-agents/lib/panelConstants";
 import { rosterRowMotion } from "@/features/background-agents/lib/rosterMotion";
 import { useChildAgentsPoll } from "@/features/background-agents/hooks/useChildAgentsPoll";
-import { childAgentResultKey, useChildAgentResults } from "@/features/background-agents/hooks/useChildAgentResults";
+import { childAgentResultKey, useChildAgentResults } from "@/hooks/useChildAgentResults";
 import { RightPanelResizeHandle } from "@/features/background-agents/components/RightPanelResizeHandle";
 import { SidebarAgentRow } from "@/features/background-agents/components/SidebarAgentRow";
 import { SidebarAutomationRow } from "@/features/background-agents/components/SidebarAutomationRow";

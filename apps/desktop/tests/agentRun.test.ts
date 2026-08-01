@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
   agentRunFromActivityItem,
+  agentRunStatusLabel,
+  childAgentTaskToBackgroundSnapshot,
   agentRunFromAutomation,
   agentRunFromBackgroundAgent,
   humanizeAgentType,
@@ -273,5 +275,95 @@ describe("agentRunFromActivityItem", () => {
     );
     expect(view.detached).toBe(true);
     expect(view.resultPreview).toBeUndefined();
+  });
+
+  it("shows the fetched durable snippet for a terminal detached agent", () => {
+    const view = agentRunFromActivityItem(
+      activityItem({ taskStatus: "completed", result: "spawn ack" }),
+      { resultSnippet: "Real durable answer" },
+    );
+    expect(view.resultPreview).toBe("Real durable answer");
+  });
+
+  it("a failed awaited agent's result text becomes the preview (never just the word failed)", () => {
+    const view = agentRunFromActivityItem(
+      activityItem({
+        taskStatus: "failed",
+        result: "# Salvage: the child run hit a tool error",
+        childAgent: { ...activityItem().childAgent!, wait: true, status: "failed" },
+      }),
+    );
+    expect(view.status).toBe("failed");
+    expect(view.resultPreview).toBe("Salvage: the child run hit a tool error");
+  });
+
+  it("a failed detached agent shows the fetched failure snippet", () => {
+    const view = agentRunFromActivityItem(
+      activityItem({ taskStatus: "failed", result: "spawn ack" }),
+      { resultSnippet: "Tool error: bash exited 1" },
+    );
+    expect(view.status).toBe("failed");
+    expect(view.resultPreview).toBe("Tool error: bash exited 1");
+  });
+
+  it("settles an unknown child status as interrupted, never running", () => {
+    const view = agentRunFromActivityItem(
+      activityItem({
+        taskStatus: undefined,
+        childAgent: { ...activityItem().childAgent!, status: "vanished" },
+      }),
+    );
+    expect(view.status).toBe("interrupted");
+    expect(agentRunStatusLabel(view.status)).toBe("interrupted");
+  });
+
+  it("maps a taskStatus of interrupted through", () => {
+    expect(agentRunFromActivityItem(activityItem({ taskStatus: "interrupted" })).status).toBe(
+      "interrupted",
+    );
+  });
+
+  it("derives running-ness from the roster row when the transcript has no terminal evidence", () => {
+    // A detached spawn ack: item.result is set (reads "executed"), but the
+    // durable roster row still says running — chat must agree with the sidebar.
+    const item = activityItem({
+      taskStatus: undefined,
+      result: "spawn ack",
+      childAgent: { ...activityItem().childAgent!, status: "running" },
+    });
+    expect(agentRunFromActivityItem(item).status).toBe("completed");
+    const view = agentRunFromActivityItem(item, {
+      roster: backgroundAgent({ status: "running" }),
+    });
+    expect(view.status).toBe("running");
+    expect(view.resultPreview).toBeUndefined();
+  });
+
+  it("transcript terminal evidence outranks a stale running roster row", () => {
+    const view = agentRunFromActivityItem(activityItem({ taskStatus: "completed" }), {
+      roster: backgroundAgent({ status: "running" }),
+    });
+    expect(view.status).toBe("completed");
+  });
+
+  it("takes a terminal roster status immediately, ahead of the transcript patch", () => {
+    const view = agentRunFromActivityItem(activityItem({ taskStatus: "running" }), {
+      roster: backgroundAgent({ status: "failed" }),
+    });
+    expect(view.status).toBe("failed");
+  });
+});
+
+describe("childAgentTaskToBackgroundSnapshot", () => {
+  it("keeps live statuses running and settles unknown statuses as interrupted", () => {
+    const base = { task_id: "t1", command: "research" };
+    expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "running" }).status).toBe("running");
+    expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "activity" }).status).toBe("running");
+    expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "interrupted" }).status).toBe(
+      "interrupted",
+    );
+    expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "weird" }).status).toBe(
+      "interrupted",
+    );
   });
 });

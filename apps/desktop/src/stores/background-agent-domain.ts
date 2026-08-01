@@ -1,4 +1,4 @@
-import type { BackgroundAgent, BackgroundAgentStatus } from "@/stores/types";
+import type { ActivityItem, BackgroundAgent, BackgroundAgentStatus } from "@/stores/types";
 
 export type { BackgroundAgent } from "@/stores/types";
 
@@ -149,14 +149,48 @@ function isEquivalentBackgroundAgent(
   );
 }
 
-function normalizeBackgroundAgentStatus(
+/** Map a server status onto the client union. Only statuses the server
+ *  actually emits for live work count as running — an unrecognized status must
+ *  not claim "running" forever, so it settles as "interrupted". */
+export function normalizeBackgroundAgentStatus(
   status: BackgroundAgentStatus | string | null | undefined,
 ): BackgroundAgentStatus {
-  return status === "completed" ||
+  if (
+    status === "completed" ||
     status === "failed" ||
     status === "cancelled" ||
     status === "interrupted" ||
     status === "cancel_requested"
-    ? status
-    : "running";
+  ) {
+    return status;
+  }
+  return status === "running" || status === "activity" ? "running" : "interrupted";
+}
+
+/** The roster row backing a transcript agent item — matched exactly the way
+ *  turnActiveAgents matches (parent tool call id, child run id, child session
+ *  id) so chat rows and the sidebar agree on which durable run an item is. */
+export function findBackgroundAgentForActivityItem(
+  rows: Record<string, BackgroundAgent>,
+  item: Pick<ActivityItem, "id" | "runId" | "childAgent">,
+  sessionId: string | null,
+): BackgroundAgent | undefined {
+  if (!sessionId) return undefined;
+  for (const agent of Object.values(rows)) {
+    if (agent.sessionId !== sessionId) continue;
+    if (
+      agent.parentToolCallId &&
+      (agent.parentToolCallId === item.id ||
+        agent.parentToolCallId === item.childAgent?.parentToolCallId)
+    ) {
+      return agent;
+    }
+    if (agent.childSessionId && agent.childSessionId === item.childAgent?.childSessionId) {
+      return agent;
+    }
+    if (agent.taskId === item.childAgent?.childRunId || agent.taskId === item.runId) {
+      return agent;
+    }
+  }
+  return undefined;
 }

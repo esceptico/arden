@@ -1,30 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { getChildAgentResultApi } from "@/api/agents";
 import { isActiveAgentStatus, resultSnippet } from "@/lib/agentRun";
-import { useStore, type BackgroundAgent } from "@/stores";
+import { getState, useStore, type BackgroundAgent } from "@/stores";
 
 export function childAgentResultKey(agent: Pick<BackgroundAgent, "sessionId" | "taskId">): string {
   return `${agent.sessionId}:${agent.taskId}`;
 }
 
-// Lazily fetch a one-line result preview for each terminal agent, once.
-// Running agents have no durable result yet, so they're skipped.
+// Fetches shared across every mount (sidebar hub + chat trace), so two
+// surfaces watching the same agent issue one request between them.
+const inflight = new Set<string>();
+
+// Lazily fetch a one-line result preview for each terminal agent, once, into
+// the store's childAgentResultSnippets cache (keyed session:task) — the chat
+// trace rows read the same entries. Running agents have no durable result
+// yet, so they're skipped; failed/interrupted agents are fetched too since
+// their result_text carries the failure reason.
 export function useChildAgentResults(
   scopeKey: string,
   agents: BackgroundAgent[],
 ): Record<string, string> {
   const config = useStore((s) => s.config);
-  const [snippets, setSnippets] = useState<Record<string, string>>({});
-  const done = useRef<Set<string>>(new Set());
-  const inflight = useRef<Set<string>>(new Set());
-
-  // The panel mounts once and is reused across navigation, so reset the
-  // cache when the hub's session scope changes.
-  useEffect(() => {
-    done.current = new Set();
-    inflight.current = new Set();
-    setSnippets({});
-  }, [scopeKey]);
+  const snippets = useStore((s) => s.childAgentResultSnippets);
 
   // Include resultRef so the effect re-fires when a durable result lands
   // after the agent went terminal (otherwise an empty first fetch never retries).
@@ -38,23 +35,20 @@ export function useChildAgentResults(
     for (const agent of agents) {
       if (isActiveAgentStatus(agent.status)) continue;
       const key = childAgentResultKey(agent);
-      if (done.current.has(key) || inflight.current.has(key)) continue;
-      inflight.current.add(key);
+      if (getState().childAgentResultSnippets[key] !== undefined || inflight.has(key)) continue;
+      inflight.add(key);
       void getChildAgentResultApi(config, agent.sessionId, agent.taskId)
         .then((result) => {
           const snippet = resultSnippet(result.result ?? undefined);
           // Keyed + idempotent, so it's safe to apply even if the roster
-          // changed mid-flight. Only mark done once we actually have a
-          // preview, so a result written just after the agent goes terminal
-          // still resolves on a later poll instead of staying blank forever.
-          if (snippet) {
-            done.current.add(key);
-            setSnippets((prev) => ({ ...prev, [key]: snippet }));
-          }
+          // changed mid-flight. Only cache once we actually have a preview,
+          // so a result written just after the agent goes terminal still
+          // resolves on a later poll instead of staying blank forever.
+          if (snippet) getState().setChildAgentResultSnippet(key, snippet);
         })
         .catch(() => {})
         .finally(() => {
-          inflight.current.delete(key);
+          inflight.delete(key);
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

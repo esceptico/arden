@@ -19,9 +19,7 @@ export function isHtmlWidget(item: ActivityItem): boolean {
 export function activityItemStatus(item: ActivityItem): "ongoing" | "executed" | "backgrounded" {
   if (item.status) return item.status;
   if (item.taskStatus === "running") return "ongoing";
-  if (item.taskStatus === "completed" || item.taskStatus === "failed" || item.taskStatus === "cancelled") {
-    return "executed";
-  }
+  if (item.taskStatus != null) return "executed";
   return item.result == null ? "ongoing" : "executed";
 }
 

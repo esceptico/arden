@@ -5,7 +5,11 @@ import {
   applyChatEventToTranscript,
 } from "@/stores/transcript-projection";
 import { reduceRunThinking } from "@/stores/run-lifecycle";
-import { backgroundAgentKey, type BackgroundAgentUpsert } from "@/stores/background-agent-domain";
+import {
+  backgroundAgentKey,
+  normalizeBackgroundAgentStatus,
+  type BackgroundAgentUpsert,
+} from "@/stores/background-agent-domain";
 import type { WorkflowTaskEventKind } from "@/stores/workflow-domain";
 import type { BackgroundAgentStatus } from "@/stores/types";
 import type {
@@ -321,11 +325,7 @@ function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
         taskId: event.task_id,
         sessionId: event.session_id ?? s.currentSessionId ?? "",
         command: event.command,
-        status:
-          event.status === "completed" || event.status === "failed" || event.status === "cancelled"
-            || event.status === "interrupted" || event.status === "cancel_requested"
-            ? event.status
-            : "running",
+        status: normalizeBackgroundAgentStatus(event.status),
         detail: event.detail ?? undefined,
         resultRef: event.result_ref ?? undefined,
         updatedAt: ts,

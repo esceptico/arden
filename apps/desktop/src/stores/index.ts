@@ -47,6 +47,7 @@ import {
   type BackgroundAgentsDomainState,
   type BackgroundAgentRefreshStatus,
 } from "@/stores/background-agent-domain";
+import { syncTranscriptAgentsFromRoster } from "@/stores/transcript-roster-sync";
 import {
   appendDismissedWorkflow,
   createWorkflowsDomainState,
@@ -302,6 +303,7 @@ export const useStore = create<State & Actions>((set) => ({
   modalOrigin: null,
   loops: [],
   backgroundAgents: createBackgroundAgentsDomainState(),
+  childAgentResultSnippets: {},
   workflows: createWorkflowsDomainState(),
   goals: {},
   sessionTodos: {},
@@ -760,17 +762,37 @@ export const useStore = create<State & Actions>((set) => ({
       ),
     })),
   setBackgroundAgentsForSession: (sessionId, agents) =>
-    set((s) => ({
-      backgroundAgents: reduceBackgroundAgentsForSession(
+    set((s) => {
+      const backgroundAgents = reduceBackgroundAgentsForSession(
         s.backgroundAgents,
         sessionId,
         agents,
-      ),
-    })),
+      );
+      // Roster updates settle the matching transcript rows too, so the chat
+      // trace never disagrees with the sidebar about a terminal agent.
+      const messages = syncTranscriptAgentsFromRoster(
+        s.messages,
+        backgroundAgents.rows,
+        s.currentSessionId,
+      );
+      return messages ? { backgroundAgents, messages } : { backgroundAgents };
+    }),
   upsertBackgroundAgent: (agent) =>
-    set((s) => ({
-      backgroundAgents: reduceBackgroundAgentUpsert(s.backgroundAgents, agent),
-    })),
+    set((s) => {
+      const backgroundAgents = reduceBackgroundAgentUpsert(s.backgroundAgents, agent);
+      const messages = syncTranscriptAgentsFromRoster(
+        s.messages,
+        backgroundAgents.rows,
+        s.currentSessionId,
+      );
+      return messages ? { backgroundAgents, messages } : { backgroundAgents };
+    }),
+  setChildAgentResultSnippet: (key, snippet) =>
+    set((s) =>
+      s.childAgentResultSnippets[key] === snippet
+        ? s
+        : { childAgentResultSnippets: { ...s.childAgentResultSnippets, [key]: snippet } },
+    ),
   workflowStarted: (input, at) =>
     set((s) => ({
       workflows: reduceWorkflowStarted(s.workflows, input, at),
