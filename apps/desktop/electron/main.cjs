@@ -326,7 +326,8 @@ function startExecutor() {
     fetchImpl: mainProcessFetch,
     // eslint-disable-next-line no-console
     log: message => console.log(`[arden executor] ${message}`),
-    capabilities: ["filesystem"],
+    capabilities: ["filesystem", "shell"],
+    skillsDirs: [path.join(os.homedir(), ".agents", "skills")],
   });
   registerDeviceTools(executorClient);
   executorClient.onStatusChange(() => updateTrayMenu());

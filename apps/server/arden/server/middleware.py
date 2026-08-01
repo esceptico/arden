@@ -60,6 +60,8 @@ class AuthMiddleware:
             "/executor/started",
             "/executor/results",
             "/executor/heartbeat",
+            "/executor/skills",
+            "/executor/skills/bodies",
         }
         path = request.url.path
         if path not in public_paths and path not in executor_device_paths:

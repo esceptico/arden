@@ -4,12 +4,18 @@ import json
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from arden.constants import EXECUTOR_STREAM_KEEPALIVE_SECONDS
+from arden.constants import (
+    DEVICE_SKILL_MAX_BODY_BYTES,
+    DEVICE_SKILL_MAX_COUNT,
+    DEVICE_SKILL_MAX_DESCRIPTION_CHARS,
+    EXECUTOR_STREAM_KEEPALIVE_SECONDS,
+)
 from arden.execution.devices import ExecutorDevice
 from arden.execution.gateway import ExecutorGateway, StaleLeaseError
 from arden.execution.models import InvocationConflictError, InvocationStatus
 from arden.server.middleware import SSEStreamingResponse
 from arden.server.runtime import Runtime, get_runtime
+from arden.skills.service import _SKILL_NAME_RE
 
 router = APIRouter(prefix="/executor", tags=["executor"])
 
@@ -185,6 +191,88 @@ async def results(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     return {"invocation_id": record.invocation_id, "status": record.status}
+
+
+class DeviceSkillAd(BaseModel):
+    name: str
+    description: str = ""
+    sha256: str
+
+
+class SkillsAdvertisement(BaseModel):
+    lease_id: str
+    skills: list[DeviceSkillAd]
+
+
+class DeviceSkillBody(BaseModel):
+    name: str
+    sha256: str
+    body: str
+
+
+class SkillBodiesRequest(BaseModel):
+    lease_id: str
+    skills: list[DeviceSkillBody]
+
+
+def _validated_skill_ads(skills: list[DeviceSkillAd]) -> list[dict]:
+    if len(skills) > DEVICE_SKILL_MAX_COUNT:
+        raise HTTPException(status_code=413, detail=f"At most {DEVICE_SKILL_MAX_COUNT} device skills are accepted.")
+    validated = []
+    for skill in skills:
+        if not _SKILL_NAME_RE.fullmatch(skill.name):
+            continue
+        validated.append(
+            {
+                "name": skill.name,
+                "description": skill.description[:DEVICE_SKILL_MAX_DESCRIPTION_CHARS],
+                "sha256": skill.sha256,
+            }
+        )
+    return validated
+
+
+@router.post("/skills")
+async def advertise_skills(
+    body: SkillsAdvertisement,
+    device: ExecutorDevice = Depends(require_executor_device),
+    gateway: ExecutorGateway = Depends(require_executor_gateway),
+    runtime: Runtime = Depends(get_runtime),
+):
+    """Authoritative snapshot of the device's skills; responds with the names
+    whose SKILL.md body the server still needs."""
+    if not runtime.stores:
+        raise HTTPException(status_code=503, detail="Stores not available")
+    try:
+        await gateway.heartbeat(device, body.lease_id)
+    except StaleLeaseError:
+        raise HTTPException(status_code=403, detail="Stale executor lease") from None
+    needed = await runtime.stores.device_skills.replace_snapshot(device.executor_id, _validated_skill_ads(body.skills))
+    await runtime.hydrate_device_skills()
+    return {"need": needed}
+
+
+@router.post("/skills/bodies")
+async def upload_skill_bodies(
+    body: SkillBodiesRequest,
+    device: ExecutorDevice = Depends(require_executor_device),
+    gateway: ExecutorGateway = Depends(require_executor_gateway),
+    runtime: Runtime = Depends(get_runtime),
+):
+    if not runtime.stores:
+        raise HTTPException(status_code=503, detail="Stores not available")
+    try:
+        await gateway.heartbeat(device, body.lease_id)
+    except StaleLeaseError:
+        raise HTTPException(status_code=403, detail="Stale executor lease") from None
+    bodies = [
+        {"name": entry.name, "sha256": entry.sha256, "body": entry.body}
+        for entry in body.skills
+        if len(entry.body.encode("utf-8")) <= DEVICE_SKILL_MAX_BODY_BYTES
+    ]
+    await runtime.stores.device_skills.save_bodies(device.executor_id, bodies)
+    await runtime.hydrate_device_skills()
+    return {"stored": [entry["name"] for entry in bodies]}
 
 
 class HeartbeatRequest(BaseModel):

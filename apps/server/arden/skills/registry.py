@@ -53,6 +53,11 @@ def _parse_skill_md(content: str) -> tuple[dict, str] | None:
 class SkillRegistry:
     def __init__(self):
         self._skills: dict[str, SkillMeta] = {}
+        # Skills advertised by a connected executor device, cached server-side
+        # (name -> (meta, full SKILL.md content)). Directory skills win on
+        # name conflicts; device entries survive reload() since they do not
+        # come from server disk.
+        self._device_skills: dict[str, tuple[SkillMeta, str]] = {}
         self._validation_issues: list[SkillValidationIssue] = []
 
     def load(self, dirs: list[tuple[Path, str]]) -> None:
@@ -140,15 +145,27 @@ class SkillRegistry:
                 kind="workflow" if frontmatter.get("kind") == "workflow" else "skill",
             )
 
+    def set_device_skills(self, entries: list[tuple[SkillMeta, str]]) -> None:
+        self._device_skills = {meta.name: (meta, content) for meta, content in entries}
+
     def list_all(self) -> list[SkillMeta]:
-        return list(self._skills.values())
+        merged = {name: meta for name, (meta, _) in self._device_skills.items()}
+        merged.update(self._skills)
+        return list(merged.values())
 
     def get(self, name: str) -> SkillMeta | None:
-        return self._skills.get(name)
+        if name in self._skills:
+            return self._skills[name]
+        entry = self._device_skills.get(name)
+        return entry[0] if entry else None
 
     def load_body(self, name: str) -> str | None:
         meta = self._skills.get(name)
         if not meta:
+            entry = self._device_skills.get(name)
+            if entry:
+                parsed = _parse_skill_md(entry[1])
+                return parsed[1].strip() if parsed else None
             return None
         try:
             content = (meta.path / "SKILL.md").read_text()
@@ -184,10 +201,10 @@ class SkillRegistry:
         return content
 
     def to_prompt_xml(self) -> str:
-        if not self._skills:
+        if not self._skills and not self._device_skills:
             return ""
         lines = ["<available_skills>"]
-        for meta in self._skills.values():
+        for meta in self.list_all():
             lines.append("  <skill>")
             lines.append(f"    <name>{meta.name}</name>")
             lines.append(f"    <description>{meta.description}</description>")
@@ -214,13 +231,13 @@ class SkillRegistry:
 
     @property
     def names(self) -> list[str]:
-        return list(self._skills)
+        return [meta.name for meta in self.list_all()]
 
     def __len__(self) -> int:
-        return len(self._skills)
+        return len(self.list_all())
 
     def __bool__(self) -> bool:
-        return bool(self._skills)
+        return bool(self._skills) or bool(self._device_skills)
 
 
 def _optional_string(value: object) -> str | None:

@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 
@@ -59,7 +60,7 @@ from arden.server.state import RunRegistry
 from arden.server.stores import Stores
 from arden.server.wiki_health import dangling_fact_citation_issues
 from arden.services.session import SessionService
-from arden.skills.registry import SkillRegistry
+from arden.skills.registry import SkillMeta, SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
@@ -524,6 +525,8 @@ class Runtime:
         if self._wiki_maintenance_store is not None:
             self._wiki_change_head = await self._wiki_maintenance_store.get_projection_revision()
         self._init_skills()
+        if self.stores:
+            await self.hydrate_device_skills()
         await self._init_notifiers()
         self._init_automation()
         await self.project_wiki_health()
@@ -556,6 +559,21 @@ class Runtime:
         self.skill_registry = SkillRegistry()
         self.skill_registry.load(get_skills_dirs())
         self.skill_service = SkillService(self.skill_registry)
+
+    async def hydrate_device_skills(self) -> None:
+        """Load cached device-advertised skills into the registry so they
+        survive server restarts and stay usable while the device is offline."""
+        assert self.stores and self.skill_registry
+        entries = []
+        for skill in await self.stores.device_skills.all_loaded():
+            meta = SkillMeta(
+                name=skill.name,
+                description=skill.description,
+                path=Path("~/.agents/skills") / skill.name,
+                location="device",
+            )
+            entries.append((meta, skill.body or ""))
+        self.skill_registry.set_device_skills(entries)
 
     async def _init_wiki(self) -> None:
         wiki_root = self.config.memory_artifacts_dir / "wiki"

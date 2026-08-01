@@ -300,3 +300,40 @@ describe("executor client", () => {
     expect(results[0].invocation_id).toBe("inv-retry");
     hold.resolve();
   });
+
+  test("advertises device skills on lease and uploads needed bodies", async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const root = mkdtempSync(join(tmpdir(), "arden-skills-adv-"));
+    mkdirSync(join(root, "mac-notes"), { recursive: true });
+    writeFileSync(join(root, "mac-notes", "SKILL.md"), "---\nname: mac-notes\ndescription: Notes\n---\n\n# Steps\n");
+
+    const store = makeStateStore({ executorId: "exec_1", token: "device-token", cursor: 0 });
+    const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const hold = deferred();
+    const client = makeClient({
+      getConfig: () => ({ serverUrl: "http://server", apiKey: "" }),
+      stateStore: store,
+      skillsDirs: [root],
+      fetchImpl: async (url: URL, init?: RequestInit) => {
+        const target = String(url);
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body));
+          posts.push({ path: new URL(target).pathname, body });
+          if (target.endsWith("/executor/skills")) return jsonResponse(200, { need: ["mac-notes"] });
+          return jsonResponse(200, {});
+        }
+        return streamResponse([sse("lease", { lease_id: "lease_1" })], hold);
+      },
+    });
+    client.start();
+
+    await until(() => posts.some(p => p.path === "/executor/skills/bodies"));
+    const ad = posts.find(p => p.path === "/executor/skills");
+    expect((ad?.body.skills as Array<{ name: string }>)[0].name).toBe("mac-notes");
+    expect(ad?.body.lease_id).toBe("lease_1");
+    const bodies = posts.find(p => p.path === "/executor/skills/bodies");
+    expect((bodies?.body.skills as Array<{ body: string }>)[0].body).toContain("# Steps");
+    hold.resolve();
+  });

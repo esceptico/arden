@@ -14,6 +14,7 @@ from arden.monitor.store import MonitorStateStore
 from arden.notifiers.store import NotifierStore
 from arden.outbox.store import OutboxStore
 from arden.services.session import SessionService
+from arden.skills.device_store import DeviceSkillStore
 
 
 class Stores:
@@ -42,6 +43,7 @@ class Stores:
         executor_devices: ExecutorDeviceStore,
         executor_leases: LeaseStore,
         executor_commands: ExecutorCommandLog,
+        device_skills: DeviceSkillStore,
     ):
         self.conn = conn
         self.automation_settlement_conn = automation_settlement_conn
@@ -57,6 +59,7 @@ class Stores:
         self.executor_devices = executor_devices
         self.executor_leases = executor_leases
         self.executor_commands = executor_commands
+        self.device_skills = device_skills
 
     @classmethod
     async def connect(cls, config: Config) -> Self:
@@ -103,6 +106,8 @@ class Stores:
         await executor_leases.init_schema()
         executor_commands = ExecutorCommandLog(conn)
         await executor_commands.init_schema()
+        device_skills = DeviceSkillStore(conn)
+        await device_skills.init_schema()
 
         return cls(
             conn=conn,
@@ -119,6 +124,7 @@ class Stores:
             executor_devices=executor_devices,
             executor_leases=executor_leases,
             executor_commands=executor_commands,
+            device_skills=device_skills,
         )
 
     async def close(self) -> None:
