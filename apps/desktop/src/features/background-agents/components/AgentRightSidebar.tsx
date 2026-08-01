@@ -411,8 +411,15 @@ export function AgentRightSidebar({
         className="board-inspector-toggle"
         data-inspector-trigger
       >
+        {/* Bare count chip on the toggle's corner — the collapsed rail has no
+            room for prose, and the tooltip already says "Show inspector (N)". */}
         {effectiveCollapsed && activeCount > 0 && (
-          <span className="arden-status" aria-hidden>{activeCount} active</span>
+          <span
+            className="arden-status absolute -left-1.5 -top-1.5 grid h-4 min-w-4 place-items-center rounded-[var(--r-control)] border border-line-soft bg-surface px-[3px]"
+            aria-hidden
+          >
+            {activeCount}
+          </span>
         )}
       </SidebarToggle>
 
