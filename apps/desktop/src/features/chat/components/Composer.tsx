@@ -28,7 +28,7 @@ import { RISE_IN, RISE_SETTLED } from "@/lib/tokens/motion";
 import { workingLabel } from "@/features/chat/lib/workingLabel";
 import { filterCommands, useCommandList, type CommandEntry } from "@/features/chat/lib/commands";
 import { SECTION_ENTER, SECTION_EXIT } from "@/features/chat/lib/composerMotion";
-import { fileToImageBlock, pickerQuery, resize } from "@/features/chat/lib/composerHelpers";
+import { fileToImageBlock, mentionQueryAt, resize } from "@/features/chat/lib/composerHelpers";
 import { recallHistory } from "@/features/chat/lib/composerHistory";
 import { QUEUE_MAX_ITEMS } from "@/features/chat/lib/queue";
 
@@ -67,12 +67,21 @@ export function Composer() {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const stashedDraftRef = useRef("");
 
-  const query = useMemo(() => pickerQuery(draft), [draft]);
+  // Caret tracking makes the picker work for mid-text mentions, not just a
+  // leading slash. onChange + onSelect together cover typing, clicks, and
+  // arrow-key movement.
+  const [caret, setCaret] = useState(0);
+  const mention = useMemo(() => mentionQueryAt(draft, caret), [draft, caret]);
+  const query = mention?.query ?? null;
   const allCommands = useCommandList();
-  const filteredCommands = useMemo(
-    () => (query !== null ? filterCommands(allCommands, query) : []),
-    [allCommands, query],
-  );
+  const filteredCommands = useMemo(() => {
+    if (query === null) return [];
+    const matches = filterCommands(allCommands, query);
+    // Builtins act on the whole message; mid-text completion is skills only.
+    return mention !== null && mention.start > 0
+      ? matches.filter((entry) => entry.kind !== "builtin")
+      : matches;
+  }, [allCommands, mention, query]);
 
   const pickerNav = useListNav(
     filteredCommands.length,
@@ -167,6 +176,24 @@ export function Composer() {
 
   function applyPickerSelection(entry: CommandEntry) {
     setPickerOpen(false);
+
+    // Mid-text mention: complete the token in place — the server expands
+    // /name anywhere in the message, so the text is the whole mechanism.
+    if (mention !== null && mention.start > 0) {
+      const completed = `${draft.slice(0, mention.start)}/${entry.name} ${draft.slice(caret)}`;
+      const nextCaret = mention.start + entry.name.length + 2;
+      setDraft(completed);
+      setCaret(nextCaret);
+      const input = inputRef.current;
+      if (input) {
+        requestAnimationFrame(() => {
+          input.focus();
+          input.setSelectionRange(nextCaret, nextCaret);
+        });
+      }
+      return;
+    }
+
     setDraft("");
     if (inputRef.current) {
       inputRef.current.value = "";
@@ -273,7 +300,7 @@ export function Composer() {
       <div className="board-composer-wrap relative max-w-[760px] mx-auto">
         <QueueCard onEdit={editQueuedMessage} />
         {pickerOpen && query !== null && (
-          <CommandPicker query={query} onSelect={applyPickerSelection} />
+          <CommandPicker query={query} onSelect={applyPickerSelection} skillsOnly={mention !== null && mention.start > 0} />
         )}
         <form
           onSubmit={(e) => {
@@ -361,7 +388,9 @@ export function Composer() {
                 // programmatically, which doesn't fire onChange).
                 setHistoryIndex(null);
                 setDraft(e.target.value);
+                setCaret(e.target.selectionStart ?? e.target.value.length);
               }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
               onKeyDown={(e) => {
                 // Enter (or any key) during IME composition confirms the
                 // conversion — it must never submit or hit shortcut branches.
