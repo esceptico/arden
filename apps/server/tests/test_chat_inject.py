@@ -37,7 +37,6 @@ from arden.server.state import RunRegistry, RunState, RunStatus
 from arden.services.chat import (
     ChatDeps,
     _handle_background_result,
-    expand_skill_command,
 )
 from arden.services.session import SessionService
 from arden.skills.registry import SkillRegistry
@@ -757,7 +756,7 @@ def test_effective_after_seq_rejects_invalid_last_event_id():
     assert exc.value.status_code == 400
 
 
-def test_expand_skill_command_injects_skill_path(tmp_path):
+def _demo_registry(tmp_path):
     skill_dir = tmp_path / "demo"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text(
@@ -770,16 +769,35 @@ Run <skill_path>/scripts/demo.sh
 """,
         encoding="utf-8",
     )
-
     registry = SkillRegistry()
     registry.load([(tmp_path, "global")])
+    return registry, skill_dir
 
-    expanded, changed = expand_skill_command("/demo now", registry)
 
-    assert changed is True
-    assert f'<skill name="demo" path="{skill_dir}">' in expanded
-    assert f"Run {skill_dir}/scripts/demo.sh" in expanded
-    assert "User request: now" in expanded
+def test_skill_mention_renders_block_and_keeps_text(tmp_path):
+    from arden.skills.mentions import render_skill_mentions
+
+    registry, skill_dir = _demo_registry(tmp_path)
+
+    blocks = render_skill_mentions("/demo now please", registry)
+    assert len(blocks) == 1
+    assert f'<skill name="demo" path="{skill_dir}">' in blocks[0]
+    assert f"Run {skill_dir}/scripts/demo.sh" in blocks[0]
+
+    # Mid-text mention works; unknown names and paths do not expand.
+    assert len(render_skill_mentions("please use /demo for this", registry)) == 1
+    assert render_skill_mentions("see /unknown-skill here", registry) == []
+    assert render_skill_mentions("open /Users/me/demo file", registry) == []
+    assert render_skill_mentions("http://host/demo", registry) == []
+
+
+def test_skill_mention_dedup_and_multiple(tmp_path):
+    from arden.skills.mentions import find_skill_mentions
+
+    names = {"demo", "other"}
+    assert find_skill_mentions("/demo then /other then /demo again", names) == ["demo", "other"]
+    assert find_skill_mentions("nothing here", names) == []
+    assert find_skill_mentions("/demo, punctuation ok", names) == ["demo"]
 
 
 class _Config:
