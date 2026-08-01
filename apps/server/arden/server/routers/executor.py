@@ -74,7 +74,10 @@ async def revoke_device(executor_id: str, gateway: ExecutorGateway = Depends(req
 
 
 def _sse(event: str, data: dict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    # `kind` rides inside the payload because the desktop's shared SSE frame
+    # parser surfaces only `data:` lines, not event names.
+    payload = {"kind": event, **data}
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
 
 @router.get("/stream")

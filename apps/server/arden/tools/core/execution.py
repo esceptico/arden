@@ -4,6 +4,7 @@ from typing import Any, Protocol
 from arden.tools.core.base import ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolPlacement
 
 
 @dataclass(frozen=True)
@@ -30,14 +31,24 @@ class InProcessExecutionBackend:
 class ExecutionRouter:
     """Routes an invocation to the backend that executes it.
 
-    Every tool routes in-process today; client-executor routing slots in here
-    without touching tool code or callers.
+    Server-placed tools run in-process. Client-placed tools route to the
+    client execution backend when one is wired; with none wired they fall
+    through to in-process, where the tool's own handler refuses — a
+    client-placed tool never silently executes server work.
     """
 
-    def __init__(self, registry: ToolRegistry):
+    def __init__(self, registry: ToolRegistry, client_backend: ExecutionBackend | None = None):
+        self._registry = registry
         self._in_process = InProcessExecutionBackend(registry)
+        self.client_backend = client_backend
+
+    def set_client_backend(self, backend: ExecutionBackend) -> None:
+        self.client_backend = backend
 
     def backend_for(self, tool_name: str) -> ExecutionBackend:
+        tool = self._registry.get(tool_name)
+        if tool is not None and tool.policy.placement == ToolPlacement.CLIENT and self.client_backend is not None:
+            return self.client_backend
         return self._in_process
 
     async def execute(self, invocation: ToolInvocation, execution: ToolExecution) -> ToolResult:

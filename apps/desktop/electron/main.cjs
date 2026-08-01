@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeTheme, net, safeStorage, screen, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, clipboard, globalShortcut, ipcMain, nativeImage, nativeTheme, net, safeStorage, screen, session, shell } = require("electron");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
@@ -6,6 +6,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const { parseApiResponseBody } = require("./api-response.cjs");
+const { createExecutorClient } = require("./executor.cjs");
+const { registerDeviceTools } = require("./executor-tools.cjs");
 const { createMainProcessFetch } = require("./main-process-fetch.cjs");
 // The parser is an ESM module (shared with the Vite renderer, which can't
 // import CommonJS source). Kick off the import at load; await the cached
@@ -276,6 +278,98 @@ async function streamEvents(connectionId, webContents, configInput, sessionId, a
     }
     eventStreams.delete(connectionId);
   }
+}
+
+// --- Client executor: outbound connection to the server's executor
+// protocol, living in main so it survives window close. The tray mirrors
+// its status; tool handlers are registered as they are implemented.
+const executorStateFileName = "executor.json";
+let executorClient = null;
+let tray = null;
+let cachedConfig = { ...defaultConfig };
+
+function executorStatePath() {
+  return path.join(app.getPath("userData"), executorStateFileName);
+}
+
+const executorStateStore = {
+  deviceName: os.hostname(),
+  async load() {
+    try {
+      const raw = JSON.parse(await fs.readFile(executorStatePath(), "utf8"));
+      const token = decryptSecret(raw.token);
+      if (!raw.executorId || !token) return null;
+      return { executorId: raw.executorId, token, cursor: raw.cursor ?? 0 };
+    } catch {
+      return null;
+    }
+  },
+  async save(state) {
+    if (!state) {
+      await fs.rm(executorStatePath(), { force: true });
+      return;
+    }
+    await fs.mkdir(path.dirname(executorStatePath()), { recursive: true });
+    await fs.writeFile(
+      executorStatePath(),
+      JSON.stringify({ executorId: state.executorId, token: encryptSecret(state.token), cursor: state.cursor }, null, 2),
+      "utf8",
+    );
+  },
+};
+
+function startExecutor() {
+  executorClient?.dispose();
+  executorClient = createExecutorClient({
+    getConfig: () => cachedConfig,
+    stateStore: executorStateStore,
+    fetchImpl: mainProcessFetch,
+    // eslint-disable-next-line no-console
+    log: message => console.log(`[arden executor] ${message}`),
+    capabilities: ["filesystem"],
+  });
+  registerDeviceTools(executorClient);
+  executorClient.onStatusChange(() => updateTrayMenu());
+  executorClient.start();
+}
+
+function trayStatusLabel() {
+  const status = executorClient?.getStatus();
+  if (!status) return "Executor: off";
+  if (status.connected) return `Executor: connected (${status.executorId ?? "?"})`;
+  if (status.state === "connecting") return "Executor: connecting…";
+  return `Executor: offline${status.lastError ? ` — ${status.lastError}` : ""}`;
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "Open Arden",
+        click: () => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.focus();
+          } else {
+            createWindow({ show: true });
+          }
+        },
+      },
+      { type: "separator" },
+      { label: trayStatusLabel(), enabled: false },
+      { type: "separator" },
+      { label: "Quit Arden", click: () => app.quit() },
+    ]),
+  );
+}
+
+function createTray() {
+  const image = nativeImage.createFromPath(path.join(ICON_DIR, "icon.png")).resize({ height: 18 });
+  image.setTemplateImage(false);
+  tray = new Tray(image);
+  tray.setToolTip("Arden");
+  updateTrayMenu();
 }
 
 let mainWindow = null;
@@ -584,9 +678,17 @@ app.whenReady().then(() => {
     assertTrustedSender(event);
     return readConfig();
   });
-  ipcMain.handle("config:set", (event, config) => {
+  ipcMain.handle("config:set", async (event, config) => {
     assertTrustedSender(event);
-    return writeConfig(config);
+    const normalized = await writeConfig(config);
+    cachedConfig = normalized;
+    // Server or key changed — reconnect the executor against the new target.
+    startExecutor();
+    return normalized;
+  });
+  ipcMain.handle("executor:status", event => {
+    assertTrustedSender(event);
+    return executorClient?.getStatus() ?? { state: "idle", executorId: null, connected: false, lastError: null };
   });
   ipcMain.handle("api:request", (event, config, request) => {
     assertTrustedSender(event);
@@ -697,6 +799,14 @@ app.whenReady().then(() => {
   });
 
   createWindow({ show: true });
+  // Executor + tray live independently of any window: the menubar item is
+  // the app's face while every window is closed, and the executor keeps
+  // its server connection alive in the background.
+  void readConfig().then(config => {
+    cachedConfig = config;
+    createTray();
+    startExecutor();
+  });
   // Preload the quick-capture panel (hidden) so the first shortcut press
   // presents an already-loaded renderer — same instant behavior as every
   // later summon, no first-use race.
@@ -736,6 +846,7 @@ app.whenReady().then(() => {
 app.on("will-quit", () => {
   // Release the global shortcut so other apps can claim it after we exit.
   globalShortcut.unregisterAll();
+  executorClient?.dispose();
 });
 
 app.on("window-all-closed", () => {
