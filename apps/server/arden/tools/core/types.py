@@ -18,6 +18,15 @@ class ToolScope(StrEnum):
     EXTERNAL = "external"
 
 
+class ToolPlacement(StrEnum):
+    """Where a tool's handler runs: in the server process, or on a connected
+    client executor (the user's device). Client-placed tools never silently
+    fall back to server execution."""
+
+    SERVER = "server"
+    CLIENT = "client"
+
+
 class ApprovalMode(StrEnum):
     NEVER = "never"
     ALWAYS = "always"
@@ -28,6 +37,7 @@ class ToolPolicy(BaseModel):
 
     action: ToolAction
     scope: ToolScope
+    placement: ToolPlacement = ToolPlacement.SERVER
     requires_approval: StrictBool = False
     approval_mode: ApprovalMode | None = None
     permissions: frozenset[str] = Field(default_factory=frozenset)

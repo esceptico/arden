@@ -52,6 +52,9 @@ class ExecutorGateway:
     def is_connected(self, executor_id: str) -> bool:
         return executor_id in self._connected
 
+    def connected_executor(self) -> str | None:
+        return next(iter(self._connected), None)
+
     async def heartbeat(self, device: ExecutorDevice, lease_id: str, *, acked_seq: int | None = None) -> ExecutorLease:
         lease = await self.leases.renew(lease_id)
         if lease is None or lease.executor_id != device.executor_id:

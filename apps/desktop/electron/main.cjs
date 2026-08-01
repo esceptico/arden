@@ -7,6 +7,7 @@ const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const { parseApiResponseBody } = require("./api-response.cjs");
 const { createExecutorClient } = require("./executor.cjs");
+const { registerDeviceTools } = require("./executor-tools.cjs");
 const { createMainProcessFetch } = require("./main-process-fetch.cjs");
 // The parser is an ESM module (shared with the Vite renderer, which can't
 // import CommonJS source). Kick off the import at load; await the cached
@@ -325,7 +326,9 @@ function startExecutor() {
     fetchImpl: mainProcessFetch,
     // eslint-disable-next-line no-console
     log: message => console.log(`[arden executor] ${message}`),
+    capabilities: ["filesystem"],
   });
+  registerDeviceTools(executorClient);
   executorClient.onStatusChange(() => updateTrayMenu());
   executorClient.start();
 }

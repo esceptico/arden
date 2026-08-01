@@ -93,7 +93,7 @@ class ToolExecutor:
         clone = ToolExecutor.__new__(ToolExecutor)
         clone._get_services = self._get_services
         clone.registry = registry
-        clone.router = ExecutionRouter(registry)
+        clone.router = ExecutionRouter(registry, client_backend=self.router.client_backend)
         return clone
 
     async def execute(self, tool_name: str, arguments: dict, execution: ToolExecution) -> ToolResult:

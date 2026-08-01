@@ -137,6 +137,7 @@ def test_function_tool_metadata_exposes_policy():
     assert metadata["policy"] == {
         "action": "read",
         "scope": "internal",
+        "placement": "server",
         "requires_approval": False,
         "approval_mode": "never",
         "permissions": [],

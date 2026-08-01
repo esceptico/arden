@@ -14,7 +14,7 @@ const RECONNECT_MAX_MS = 30_000;
 
 class StaleLease extends Error {}
 
-function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}, heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS }) {
+function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}, heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS, capabilities = [] }) {
   let disposed = false;
   let abortController = null;
   let heartbeatTimer = null;
@@ -70,7 +70,7 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
     const response = await fetchImpl(new URL("/executor/enroll", config.serverUrl), {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
-      body: JSON.stringify({ name: stateStore.deviceName, capabilities: [] }),
+      body: JSON.stringify({ name: stateStore.deviceName, capabilities }),
     });
     if (!response.ok) throw new Error(`enroll failed: ${response.status}`);
     const body = await response.json();

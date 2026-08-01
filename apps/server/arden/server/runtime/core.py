@@ -15,6 +15,7 @@ from arden.constants import (
     BUILTIN_WIKI_MAINTENANCE_ID,
 )
 from arden.core.factory import AgentConfig
+from arden.execution.backend import ClientExecutionBackend
 from arden.execution.gateway import ExecutorGateway
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
 from arden.integrations.slack.client import SlackClient
@@ -273,11 +274,14 @@ class Runtime:
     def _create_executor(self, config: Config | None = None) -> ToolExecutor:
         config = config or self.config
         mcp_tools = list(self.mcp_manager.tools) if self.mcp_manager else None
-        return ToolExecutor(
+        executor = ToolExecutor(
             mcp_tools=mcp_tools,
             get_services=lambda: self.tool_services,
             tool_overrides=config.tool_overrides,
         )
+        if self.executor_gateway and self.stores:
+            executor.router.set_client_backend(ClientExecutionBackend(self.executor_gateway, self.stores.invocations))
+        return executor
 
     # --- Subsystem lifecycle ---
 
