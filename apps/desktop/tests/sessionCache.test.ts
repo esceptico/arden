@@ -296,6 +296,7 @@ test("switchSession preserves cached preview until canonical history replaces it
       "/chat/A/workflows",
       "/chat/child-agents?session_id=A",
       "/sessions/A/goal",
+      "/sessions/A/todo",
     ]);
 
     expect(getState().messages.get("server-a-1")?.content).toBe("canonical A");

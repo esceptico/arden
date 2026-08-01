@@ -3,6 +3,7 @@ import { archiveAreaApi, archiveSessionApi, branchSessionApi, createAreaApi, lis
 import type { Area, SessionListItem } from "@/api/types";
 import { getState } from "@/stores";
 import { fetchGoal } from "@/actions/goals";
+import { fetchSessionTodo } from "@/actions/todos";
 import { loadHistory, type LoadHistoryOptions } from "@/actions/history";
 
 export async function switchSession(sessionId: string, historyOptions: LoadHistoryOptions = {}): Promise<void> {
@@ -12,6 +13,9 @@ export async function switchSession(sessionId: string, historyOptions: LoadHisto
   // history so a stale/corrupted projection cannot survive until Cmd+R.
   await loadHistory(sessionId, historyOptions);
   await fetchGoal(sessionId);
+  // Non-blocking: the todo sidebar hydrates alongside the transcript, same
+  // shape as the workflows/child-agent rehydrates inside loadHistory.
+  void fetchSessionTodo(sessionId);
 }
 
 /** Land on Home (the no-session branch in App.tsx). Home's hero input

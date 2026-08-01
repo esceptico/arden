@@ -100,21 +100,26 @@ export async function cancelSubagentApi(
   );
 }
 
-export interface TodoOverride {
+export interface SessionTodoResponse {
   items: TodoListItem[];
   explanation: string | null;
   updated_at: string;
+  /** True when the list carries the user's manual edits (override). */
+  edited: boolean;
+}
+
+/** The session's effective todo list: the user's manual override when one
+ *  exists, otherwise the agent's current list. Null once the list is
+ *  retired (all completed) or dismissed. */
+export async function getSessionTodoApi(
+  config: AppConfig,
+  sessionId: string,
+): Promise<SessionTodoResponse | null> {
+  return apiWithConfig<SessionTodoResponse | null>(config, `/sessions/${encodeURIComponent(sessionId)}/todo`);
 }
 
 // Manual todo edits, persisted server-side so the agent sees them on its next
 // run. The agent's own update_todos clears the override (its list wins).
-export async function getTodoOverrideApi(
-  config: AppConfig,
-  sessionId: string,
-): Promise<TodoOverride | null> {
-  return apiWithConfig<TodoOverride | null>(config, `/sessions/${encodeURIComponent(sessionId)}/todo`);
-}
-
 export async function setTodoOverrideApi(
   config: AppConfig,
   sessionId: string,
@@ -126,7 +131,13 @@ export async function setTodoOverrideApi(
   });
 }
 
-export async function clearTodoOverrideApi(config: AppConfig, sessionId: string): Promise<void> {
+/** Reset manual edits back to the agent's list. */
+export async function resetTodoOverrideApi(config: AppConfig, sessionId: string): Promise<void> {
+  await apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/todo/override`, { method: "DELETE" });
+}
+
+/** Dismiss the whole list — agent state and manual override both go. */
+export async function dismissTodoApi(config: AppConfig, sessionId: string): Promise<void> {
   await apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/todo`, { method: "DELETE" });
 }
 

@@ -459,6 +459,29 @@ class SessionService:
             _logger.warning("Failed to clear todo override: %s", e)
             return False
 
+    async def set_session_todos(
+        self, session_id: str, items: list[dict], explanation: str | None = None
+    ) -> dict | None:
+        try:
+            return await self.store.set_session_todos(session_id, items, explanation)
+        except Exception as e:
+            _logger.warning("Failed to set session todos: %s", e)
+            return None
+
+    async def get_session_todos(self, session_id: str) -> dict | None:
+        try:
+            return await self.store.get_session_todos(session_id)
+        except Exception as e:
+            _logger.warning("Failed to load session todos: %s", e)
+            return None
+
+    async def clear_session_todos(self, session_id: str) -> bool:
+        try:
+            return await self.store.clear_session_todos(session_id)
+        except Exception as e:
+            _logger.warning("Failed to clear session todos: %s", e)
+            return False
+
     async def list_sessions(
         self,
         limit: int = 20,

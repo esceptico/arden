@@ -1,15 +1,21 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import clsx from "clsx";
 import { CheckCircle2, Circle, CircleDot, Plus, X } from "@/components/icons";
 import type { TodoStatus } from "@/api/types";
 import { EASE_OUT, MOTION } from "@/lib/tokens/motion";
 import { ICON } from "@/lib/icons";
-import { type TodoListState } from "@/stores";
+import { type SessionTodo } from "@/stores";
+import { dismissSessionTodo } from "@/actions/todos";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { Caption } from "@/components/ui/Caption";
 import { useEditableTodo } from "@/features/background-agents/hooks/useEditableTodo";
 import { rosterRowMotion } from "@/features/background-agents/lib/rosterMotion";
+
+/** A fully-completed list stays on screen just long enough to read the
+ *  final checkmarks, then retires itself (the server already cleared its
+ *  copy the moment the agent sent the all-completed update). */
+const RETIRE_LINGER_MS = 4_000;
 
 function todoStatusIcon(status: TodoStatus) {
   if (status === "completed") {
@@ -75,7 +81,7 @@ export function TodoSidebarSection({
   sessionId,
   label = "Tasks",
 }: {
-  todo: TodoListState;
+  todo: SessionTodo;
   sessionId: string | null;
   /** Area Activity uses the mockup's concise group label. */
   label?: string;
@@ -85,9 +91,17 @@ export function TodoSidebarSection({
   const [adding, setAdding] = useState(false);
   const completed = items.filter((item) => item.status === "completed").length;
 
+  // Retire linger: everything checked → pause, then the section leaves.
+  const allDone = items.length > 0 && completed === items.length;
+  useEffect(() => {
+    if (!allDone || !sessionId) return;
+    const timer = window.setTimeout(() => void dismissSessionTodo(sessionId), RETIRE_LINGER_MS);
+    return () => window.clearTimeout(timer);
+  }, [allDone, sessionId]);
+
   return (
     <section>
-      <div className="flex items-center justify-between gap-2 px-0.5 pt-0.5 pb-1.5">
+      <div className="group/todos flex items-center justify-between gap-2 px-0.5 pt-0.5 pb-1.5">
         <Caption tone="muted">{label}</Caption>
         <div className="flex items-center gap-1.5">
           {edited && (
@@ -112,6 +126,16 @@ export function TodoSidebarSection({
               className="grid place-items-center w-4 h-4 rounded text-faint hover:text-ink hover:bg-surface-soft/70 transition-[color,background-color,scale] duration-check ease-out active:scale-[0.97]"
             >
               <Plus size={ICON.XS} strokeWidth={2} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Dismiss the list">
+            <button
+              type="button"
+              onClick={() => sessionId && void dismissSessionTodo(sessionId)}
+              aria-label="Dismiss the list"
+              className="grid place-items-center w-4 h-4 rounded text-faint opacity-0 group-hover/todos:opacity-100 focus-visible:opacity-100 hover:text-ink hover:bg-surface-soft/70 transition-[opacity,color,background-color,scale] duration-check ease-out active:scale-[0.97]"
+            >
+              <X size={ICON.XS} strokeWidth={2} />
             </button>
           </Tooltip>
         </div>

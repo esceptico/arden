@@ -389,19 +389,31 @@ export function applyChatEventToTranscript(
 
     case "todo_updated": {
       if (s.currentRunId && s.currentRunId !== event.run_id) break;
+      const items = normalizeTodoItems(event.items);
       s.upsertTodoList(
         {
           id: `todo-${event.run_id}`,
           role: "todo",
           content: "",
           todo: {
-            items: normalizeTodoItems(event.items),
+            items,
             explanation: event.explanation ?? null,
           },
           suppressEntryMotion,
         },
         activityInsertAnchor(context),
       );
+      // The sidebar reads the session-level slot, not the transcript. An
+      // all-completed list stays visible here for the retire linger; the
+      // sidebar dismisses it after the pause (the server already cleared
+      // its copy).
+      if (s.currentSessionId) {
+        s.setSessionTodo(s.currentSessionId, {
+          items,
+          explanation: event.explanation ?? null,
+          edited: false,
+        });
+      }
       break;
     }
 
