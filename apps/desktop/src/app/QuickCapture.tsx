@@ -149,9 +149,12 @@ export function QuickCapture() {
       void (async () => {
         try {
           const config = await loadInitialConfig();
+          // Fetch deep, then filter: the recency window is shared with agent
+          // and channel sessions, which would otherwise crowd real chats out
+          // of a shallow page (the "I can't see my chats" bug).
           const { sessions: list } = await apiWithConfig<{ sessions: SessionListItem[] }>(
             config,
-            "/sessions?limit=12",
+            "/sessions?limit=60",
           );
           setSessions(
             list
@@ -353,7 +356,7 @@ export function QuickCapture() {
                 autoCapitalize="off"
                 readOnly={exiting}
                 aria-label="Capture message"
-                className="min-w-0 flex-1 resize-none self-center overflow-y-auto bg-transparent py-1 text-lg leading-normal text-ink outline-none placeholder:text-faint"
+                className="board-composer__input min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-ink"
               />
               <span className="flex shrink-0 items-center gap-1 self-center">
                 <IconButton
@@ -371,7 +374,7 @@ export function QuickCapture() {
                   aria-expanded={pickerOpen}
                   aria-label="Choose destination chat"
                   className={clsx(
-                    "flex h-7 max-w-44 min-w-0 items-center gap-1 rounded-[var(--r-control)] px-2.5 text-xs",
+                    "flex h-[30px] max-w-48 min-w-0 items-center gap-1.5 rounded-[var(--r-control)] px-2.5 text-sm",
                     pickerOpen ? "bg-fill-selected text-ink" : "text-muted hover:bg-fill-hover hover:text-ink",
                   )}
                 >
