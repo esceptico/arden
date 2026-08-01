@@ -293,6 +293,11 @@ class BackgroundTaskRegistry:
     # late steering must be refused (the sender gets a conflict) instead of
     # accepted into a void.
     _closed_inboxes: set[str] = field(default_factory=set)
+    # Awaited spawns reserved with limit=None. They hold roster slots (rows,
+    # cancel cascade, list_pending) but never count against the detached-agent
+    # cap: they are bounded by their awaiting parent, and the cap exists to
+    # bound runaway detached fan-out.
+    _uncapped: set[str] = field(default_factory=set)
     _delivered_completion_ids: set[str] = field(default_factory=set)
 
     def _remove(self, task_id: str) -> None:
@@ -303,19 +308,22 @@ class BackgroundTaskRegistry:
         self._child_sessions.pop(task_id, None)
         self._parent_runs.pop(task_id, None)
         self._closed_inboxes.discard(task_id)
+        self._uncapped.discard(task_id)
 
     def reserve(
         self,
         task_id: str,
         *,
         command: str,
-        limit: int,
+        limit: int | None,
         child_session_id: str | None = None,
         parent_run_id: str | None = None,
     ) -> bool:
         if task_id in self._tasks or task_id in self._reserved:
             return False
-        if self.pending_count >= limit:
+        if limit is None:
+            self._uncapped.add(task_id)
+        elif self.pending_count >= limit:
             return False
         self._reserved.add(task_id)
         self._commands[task_id] = command
@@ -457,6 +465,11 @@ class BackgroundTaskRegistry:
     async def record_activity(self, task_id: str, detail: str) -> None:
         await self._record(task_id=task_id, status="activity", detail=detail)
 
+    async def record_finished(self, *, task_id: str, status: str, result_text: str | None = None) -> None:
+        """Terminal row for an awaited spawn — its result returns in-process,
+        so there is no delivery; only the durable roster outcome."""
+        await self._record(task_id=task_id, status=status, result_text=result_text)
+
     def cancel_all(self) -> list[tuple[str, str]]:
         """Cancel all pending tasks. Returns list of (task_id, command) for cancelled tasks."""
         cancelled: list[tuple[str, str]] = []
@@ -492,7 +505,8 @@ class BackgroundTaskRegistry:
 
     @property
     def pending_count(self) -> int:
-        return sum(1 for t in self._tasks.values() if not t.done()) + len(self._reserved)
+        live = sum(1 for tid, t in self._tasks.items() if not t.done() and tid not in self._uncapped)
+        return live + sum(1 for tid in self._reserved if tid not in self._uncapped)
 
     def _write_result_file(self, task_id: str, content: str) -> Path:
         path = self._result_path(task_id)

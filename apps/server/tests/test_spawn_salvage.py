@@ -3,6 +3,7 @@ errors mid-run, we summarize the tool results gathered so far instead of
 returning a bare error string."""
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1638,3 +1639,175 @@ async def test_shared_subagent_does_not_use_child_bus(monkeypatch):
 
     assert result.child_session_id is None
     assert factory_calls == []
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawn_records_durable_row_and_terminal_status(monkeypatch):
+    """An awaited spawn writes the same durable roster row a detached one does:
+    started with wait=True and the frozen SpawnSpec, then the terminal outcome
+    with the result text — without any deliver_result injection."""
+    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+
+    events: list[dict] = []
+
+    async def record(**event):
+        events.append(event)
+
+    executor = make_executor()
+    bg_registry = BackgroundTaskRegistry(session_id="test", record_event=record)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        background_tasks=bg_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    result = await spawn(
+        ctx,
+        "research task",
+        system_prompt="sys",
+        tools=[],
+        parent_id="call-research",
+        agent_type="research",
+        timeout=1,
+    )
+
+    assert result.status == "completed"
+    started = next(e for e in events if e["status"] == "started")
+    assert started["task_id"] == result.child_run_id
+    assert started["wait"] is True
+    assert started["parent_run_id"] == "run-1"
+    spec = json.loads(started["spawn_spec"])
+    assert spec["agent_type"] == "research"
+    terminal = [e for e in events if e.get("terminal")]
+    assert [(e["status"], e["result_text"]) for e in terminal] == [("completed", "done")]
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawn_visible_in_registry_while_running(monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class GatedAgent:
+        async def stream(self, messages):
+            started.set()
+            await release.wait()
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: GatedAgent())
+
+    executor = make_executor()
+    bg_registry = BackgroundTaskRegistry(session_id="test")
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        background_tasks=bg_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    task = asyncio.create_task(
+        spawn(ctx, "slow research", system_prompt="sys", tools=[], parent_id="call-slow", timeout=5)
+    )
+    await started.wait()
+
+    pending = bg_registry.list_pending()
+    assert len(pending) == 1
+    task_id = pending[0][0]
+    assert bg_registry.parent_run(task_id) == "run-1"
+
+    release.set()
+    result = await task
+    assert result.status == "completed"
+    assert result.child_run_id == task_id
+    assert bg_registry.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawns_reserve_uncapped(monkeypatch):
+    """Awaited spawns hold roster slots but never hit (or count against) the
+    detached-agent cap — workflow fan-out legitimately exceeds it."""
+    from arden.constants import AGENT_MAX_CONCURRENT
+
+    streaming = 0
+    gate = asyncio.Event()
+
+    class GatedAgent:
+        async def stream(self, messages):
+            nonlocal streaming
+            streaming += 1
+            await gate.wait()
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: GatedAgent())
+
+    executor = make_executor()
+    bg_registry = BackgroundTaskRegistry(session_id="test")
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        background_tasks=bg_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    count = AGENT_MAX_CONCURRENT + 1
+    tasks = [
+        asyncio.create_task(spawn(ctx, f"task {i}", system_prompt="sys", tools=[], parent_id=f"call-{i}", timeout=5))
+        for i in range(count)
+    ]
+    while streaming < count:
+        await asyncio.sleep(0)
+
+    assert len(bg_registry.list_pending()) == count
+    assert bg_registry.pending_count == 0
+    # A detached reserve still has its full cap available beside them.
+    assert bg_registry.reserve("bg-probe", command="probe", limit=AGENT_MAX_CONCURRENT)
+    bg_registry.release("bg-probe")
+
+    gate.set()
+    results = await asyncio.gather(*tasks)
+    assert all(r.status == "completed" for r in results)
+    assert bg_registry.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_run_cancel_cascades_to_awaited_child(monkeypatch):
+    """cancel_run's registry sweep now sees awaited children: the durable
+    cancel mirror gets the pair and the parent's await raises CancelledError."""
+
+    class SlowAgent:
+        async def stream(self, messages):
+            await asyncio.sleep(60)
+            yield Result(text="never", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: SlowAgent())
+
+    executor = make_executor()
+    registry = RunRegistry()
+    parent_run = registry.create_run("test")
+    bg_registry = registry.get_background_registry("test")
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id=parent_run.run_id, current_depth=0, max_depth=3),
+        io=IOBridge(),
+        background_tasks=bg_registry,
+        run_registry=registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    task = asyncio.create_task(spawn(ctx, "long research", system_prompt="sys", tools=[], parent_id="call-research"))
+    while not bg_registry._tasks:
+        await asyncio.sleep(0)
+    child_task_id = next(iter(bg_registry._tasks))
+
+    outcome = registry.cancel_run(parent_run.run_id)
+    assert outcome["cancel_requested"]
+    assert ("test", child_task_id) in outcome["cancelled_children"]
+    with pytest.raises(asyncio.CancelledError):
+        await task
