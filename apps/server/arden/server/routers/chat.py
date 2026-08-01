@@ -625,7 +625,11 @@ async def submit_connection_result(
 
 
 @router.post("/cancel", status_code=202)
-async def cancel_run(request: CancelRequest, run_registry: RunRegistry = Depends(require_run_registry)):
+async def cancel_run(
+    request: CancelRequest,
+    runtime: Runtime = Depends(get_runtime),
+    run_registry: RunRegistry = Depends(require_run_registry),
+):
     run_id = request.run_id
     if not run_id and request.session_id:
         active = run_registry.get_active_run(request.session_id)
@@ -635,6 +639,14 @@ async def cancel_run(request: CancelRequest, run_registry: RunRegistry = Depends
     result = run_registry.cancel_run(run_id)
     if not result["found"]:
         raise HTTPException(status_code=404, detail="Run not found")
+    # Mirror the cascade durably, same as the child-agent cancel route — an
+    # in-memory cancel alone reads as still-running after a restart.
+    session_service = getattr(runtime, "session_service", None)
+    store = getattr(session_service, "store", None)
+    if store is not None:
+        for cancelled_session, cancelled_task in result.get("cancelled_children", []):
+            await store.request_background_agent_cancel(cancelled_session, cancelled_task)
+    result.pop("cancelled_children", None)
     return {"status": "cancelling", "run_id": run_id, **result}
 
 

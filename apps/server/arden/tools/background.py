@@ -116,10 +116,17 @@ async def cancel_agent(execution: ToolExecution, args: CancelAgentInput) -> Tool
     if emit := execution.ctx.io.emit:
         await emit(BackgroundTaskEvent(task_id=task_id, command=command, status="cancelled"))
     # An agent's own spawns run in ITS session, so stopping it must stop them too —
-    # same cascade the /chat/child-agents/{id}/cancel route performs.
-    cascaded = 0
+    # same cascade the /chat/child-agents/{id}/cancel route performs. Mirror
+    # every cancel durably like that route does: an in-memory cancel alone
+    # reads as still-running after a restart.
+    cancelled = [(registry.session_id, task_id)]
     if (run_registry := execution.ctx.run_registry) is not None:
-        cascaded = len(run_registry.cancel_subtree(args.session_id))
+        cancelled.extend(run_registry.cancel_subtree(args.session_id))
+    if (session_service := execution.ctx.services.get("session")) is not None:
+        if (store := getattr(session_service, "store", None)) is not None:
+            for cancelled_session, cancelled_task in cancelled:
+                await store.request_background_agent_cancel(cancelled_session, cancelled_task)
+    cascaded = len(cancelled) - 1
     tail = f" Also stopped {cascaded} agent(s) it had spawned." if cascaded else ""
     return ToolResult(
         content=f"Cancelled the agent in {args.session_id}.{tail}",

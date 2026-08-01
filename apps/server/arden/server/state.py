@@ -374,13 +374,27 @@ class RunRegistry:
             if handle.request_cancel():
                 cancel_requested = True
 
-        if is_current:
-            registry = self._bg_registries.get(run.session_id)
-            if registry:
-                for _task_id, _command in registry.cancel_all():
+        # Background agents: cancelling the current run stops everything in the
+        # session (the user hit stop); cancelling a superseded run stops only
+        # the agents THAT run spawned, so a newer run's agents survive. Either
+        # way the cascade recurses into child sessions — a cancelled agent's
+        # own detached spawns must not outlive it. Pairs are returned so the
+        # caller can mirror the cancels durably.
+        cancelled_children: list[tuple[str, str]] = []
+        registry = self._bg_registries.get(run.session_id)
+        if registry:
+            for task_id, _command in registry.list_pending():
+                if not is_current and registry.parent_run(task_id) != run_id:
+                    continue
+                child_session = registry.child_session(task_id)
+                if registry.cancel(task_id) is not None:
                     cancel_requested = True
+                    cancelled_children.append((run.session_id, task_id))
+                cancelled_children.extend(self.cancel_subtree(child_session))
+        if cancelled_children:
+            cancel_requested = True
 
-        return {"found": True, "cancel_requested": cancel_requested}
+        return {"found": True, "cancel_requested": cancel_requested, "cancelled_children": cancelled_children}
 
     def register_subagent(self, run_id: str, tool_call_id: str, task: asyncio.Task) -> SubagentHandle | None:
         run = self._runs.get(run_id)
@@ -444,6 +458,10 @@ class RunRegistry:
             for handle in run.subagents.values():
                 if handle.request_cancel():
                     tasks.append(handle.task)
+        # Shutdown sweeps every session registry FLAT, not recursively: the
+        # flat walk is exhaustive by construction (every child session has its
+        # own entry here), and unlike a subtree walk it also catches agents
+        # whose parent linkage is gone.
         background_cancelled = 0
         for registry in self._bg_registries.values():
             for _task_id, _command in registry.cancel_all():

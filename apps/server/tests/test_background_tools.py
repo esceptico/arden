@@ -275,3 +275,46 @@ async def test_queue_injection_skips_finished_agent():
     registry.register("agent-done", done, command="x")
     assert registry.queue_injection("agent-done", {"role": "user", "content": "x"}) is False
     assert registry.queue_injection("agent-never-existed", {"role": "user", "content": "x"}) is False
+
+
+@pytest.mark.asyncio
+async def test_close_inbox_refuses_late_steering_and_returns_leftovers():
+    registry = BackgroundTaskRegistry(session_id="test")
+    task = await _register_live(registry, "agent-A", "a")
+    try:
+        assert registry.queue_steering("agent-A", "before close") is True
+
+        leftover = registry.close_inbox("agent-A")
+
+        assert len(leftover) == 1
+        assert "before close" in leftover[0]["content"]
+        # The task is still not done (post-loop cleanup window) — a closed
+        # inbox must refuse anyway, so the sender gets a conflict, not a
+        # false "queued".
+        assert not task.done()
+        assert registry.queue_steering("agent-A", "after close") is False
+    finally:
+        await _cancel(task)
+
+
+@pytest.mark.asyncio
+async def test_deliver_result_folds_undelivered_steering_into_notification():
+    captured: list[dict] = []
+
+    async def on_result(messages: list[dict]) -> None:
+        captured.extend(messages)
+
+    registry = BackgroundTaskRegistry(session_id="test", on_result=on_result)
+
+    await registry.deliver_result(
+        task_id="agent-A",
+        result="done",
+        label="Agent",
+        status="completed",
+        emit=None,
+        undelivered_steering=["<steering_message>\ntoo late\n</steering_message>"],
+    )
+
+    assert captured
+    assert "<undelivered_steering>" in captured[0]["content"]
+    assert "too late" in captured[0]["content"]

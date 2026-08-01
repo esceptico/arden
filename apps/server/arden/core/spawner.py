@@ -1022,6 +1022,7 @@ def create_spawn_fn(
             command=label,
             limit=AGENT_MAX_CONCURRENT,
             child_session_id=child_state.session_id if has_child_session else None,
+            parent_run_id=calling_ctx.run.run_id,
         )
         if not reserved:
             return SpawnResult(
@@ -1069,6 +1070,7 @@ def create_spawn_fn(
             )
 
         async def _run_background():
+            timed_out = False
             try:
                 result = await asyncio.wait_for(_stream_to(_to_bg_events), timeout=timeout)
                 status = "completed"
@@ -1076,6 +1078,21 @@ def create_spawn_fn(
                 result = "Cancelled"
                 status = "cancelled"
             except TimeoutError:
+                timed_out = True
+                result = ""
+                status = "failed"
+            except Exception as e:
+                # _stream_to handles its own salvage internally, so we only
+                # land here for exceptions outside the stream loop itself.
+                result = f"Error: {e}"
+                status = "failed"
+                _logger.warning("Background task %s failed: %s", task_id, e)
+            # The loop will never step again: close the inbox NOW — before the
+            # salvage LLM call below — so late steering gets a conflict instead
+            # of a false "queued". Anything already queued arrived too late for
+            # the agent and is redelivered to the parent with the result.
+            undelivered = [m.get("content", "") for m in registry.close_inbox(task_id)]
+            if timed_out:
                 _logger.warning("Background task %s timed out, salvaging", task_id)
                 # Belt-and-suspenders: if the salvage call itself raises
                 # (e.g. cancelled mid-await), still emit the deterministic
@@ -1090,25 +1107,11 @@ def create_spawn_fn(
                     if summary
                     else _deterministic_salvage(child_messages, f"timed out after {timeout}s")
                 )
-                status = "failed"
-            except Exception as e:
-                # _stream_to handles its own salvage internally, so we only
-                # land here for exceptions outside the stream loop itself.
-                result = f"Error: {e}"
-                status = "failed"
-                _logger.warning("Background task %s failed: %s", task_id, e)
             if not result.strip():
                 result = _deterministic_empty_salvage(child_messages)
                 status = "failed"
             if stream_failed or status != "completed":
                 await _emit_visible_child_final(child_io, result)
-            # A steering message can land after the loop drained but before the
-            # task is marked done; it can't be honored now, so surface the drop
-            # instead of silently discarding it on cleanup.
-            if leftover := registry.drain_injections(task_id):
-                _logger.warning(
-                    "Dropped %d steering message(s) for finished background agent %s", len(leftover), task_id
-                )
             try:
                 await _save_child_session(status)
                 await registry.deliver_result(
@@ -1121,6 +1124,7 @@ def create_spawn_fn(
                     parent_tool_call_id=parent_id,
                     agent_type=resolved_agent_type,
                     wait=should_wait,
+                    undelivered_steering=undelivered or None,
                 )
             except Exception:
                 _logger.exception("Background task %s delivery failed", task_id)

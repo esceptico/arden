@@ -371,3 +371,63 @@ def test_sync_session_chat_model_leaves_settled_runs_alone():
 
 def test_sync_session_chat_model_without_a_run_is_a_no_op():
     RunRegistry().sync_session_chat_model("nobody-home", "claude-fable-5")
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_cascades_into_child_sessions():
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    run.status = RunStatus.RUNNING
+    bg = registry.get_background_registry("sess-1")
+    child_task = asyncio.create_task(asyncio.sleep(3600))
+    bg.reserve("agent-A", command="a", limit=16, child_session_id="sess-1::a", parent_run_id=run.run_id)
+    bg.register("agent-A", child_task, command="a")
+    grand = registry.get_background_registry("sess-1::a")
+    grand_task = asyncio.create_task(asyncio.sleep(3600))
+    grand.reserve("agent-B", command="b", limit=16, child_session_id="sess-1::a::b", parent_run_id="child-run")
+    grand.register("agent-B", grand_task, command="b")
+
+    try:
+        result = registry.cancel_run(run.run_id)
+
+        assert result["cancel_requested"] is True
+        assert ("sess-1", "agent-A") in result["cancelled_children"]
+        assert ("sess-1::a", "agent-B") in result["cancelled_children"]
+        with pytest.raises(asyncio.CancelledError):
+            await child_task
+        with pytest.raises(asyncio.CancelledError):
+            await grand_task
+    finally:
+        child_task.cancel()
+        grand_task.cancel()
+        await asyncio.gather(child_task, grand_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stale_cancel_stops_only_its_own_agents():
+    registry = RunRegistry()
+    old = registry.create_run("sess-1")
+    old.status = RunStatus.RUNNING
+    newer = registry.create_run("sess-1")
+    newer.status = RunStatus.RUNNING
+    bg = registry.get_background_registry("sess-1")
+    old_task = asyncio.create_task(asyncio.sleep(3600))
+    bg.reserve("agent-old", command="a", limit=16, parent_run_id=old.run_id)
+    bg.register("agent-old", old_task, command="a")
+    new_task = asyncio.create_task(asyncio.sleep(3600))
+    bg.reserve("agent-new", command="b", limit=16, parent_run_id=newer.run_id)
+    bg.register("agent-new", new_task, command="b")
+
+    try:
+        result = registry.cancel_run(old.run_id)
+
+        assert result["cancel_requested"] is True
+        assert result["cancelled_children"] == [("sess-1", "agent-old")]
+        with pytest.raises(asyncio.CancelledError):
+            await old_task
+        assert not new_task.done()
+        assert registry.get_active_run("sess-1") is newer
+    finally:
+        old_task.cancel()
+        new_task.cancel()
+        await asyncio.gather(old_task, new_task, return_exceptions=True)
