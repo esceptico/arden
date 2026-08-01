@@ -53,6 +53,12 @@ def _parse_skill_md(content: str) -> tuple[dict, str] | None:
 class SkillRegistry:
     def __init__(self):
         self._skills: dict[str, SkillMeta] = {}
+        # Skills advertised by a connected executor device, cached server-side
+        # (name -> (meta, full SKILL.md content)). On name conflicts builtins
+        # win (trusted-code boundary), then the device copy — it is the one
+        # the user actively edits — then server user dirs. Device entries
+        # survive reload() since they do not come from server disk.
+        self._device_skills: dict[str, tuple[SkillMeta, str]] = {}
         self._validation_issues: list[SkillValidationIssue] = []
 
     def load(self, dirs: list[tuple[Path, str]]) -> None:
@@ -140,13 +146,40 @@ class SkillRegistry:
                 kind="workflow" if frontmatter.get("kind") == "workflow" else "skill",
             )
 
+    def set_device_skills(self, entries: list[tuple[SkillMeta, str]]) -> None:
+        self._device_skills = {meta.name: (meta, content) for meta, content in entries}
+        # Surface shadow attempts instead of resolving them silently: a
+        # device skill colliding with a builtin is either an honest mistake
+        # or an attempted override of trusted content — either way, log it.
+        for name in self._device_skills:
+            file_meta = self._skills.get(name)
+            if file_meta is not None and file_meta.location == "builtin":
+                _logger.warning("Device skill '%s' shadows a builtin and is ignored; rename it to use it", name)
+
     def list_all(self) -> list[SkillMeta]:
-        return list(self._skills.values())
+        merged = dict(self._skills)
+        for name, (meta, _) in self._device_skills.items():
+            if merged.get(name) is None or merged[name].location != "builtin":
+                merged[name] = meta
+        return list(merged.values())
+
+    def _device_entry(self, name: str) -> tuple[SkillMeta, str] | None:
+        file_meta = self._skills.get(name)
+        if file_meta is not None and file_meta.location == "builtin":
+            return None
+        return self._device_skills.get(name)
 
     def get(self, name: str) -> SkillMeta | None:
+        entry = self._device_entry(name)
+        if entry:
+            return entry[0]
         return self._skills.get(name)
 
     def load_body(self, name: str) -> str | None:
+        entry = self._device_entry(name)
+        if entry:
+            parsed = _parse_skill_md(entry[1])
+            return parsed[1].strip() if parsed else None
         meta = self._skills.get(name)
         if not meta:
             return None
@@ -184,10 +217,10 @@ class SkillRegistry:
         return content
 
     def to_prompt_xml(self) -> str:
-        if not self._skills:
+        if not self._skills and not self._device_skills:
             return ""
         lines = ["<available_skills>"]
-        for meta in self._skills.values():
+        for meta in self.list_all():
             lines.append("  <skill>")
             lines.append(f"    <name>{meta.name}</name>")
             lines.append(f"    <description>{meta.description}</description>")
@@ -214,13 +247,13 @@ class SkillRegistry:
 
     @property
     def names(self) -> list[str]:
-        return list(self._skills)
+        return [meta.name for meta in self.list_all()]
 
     def __len__(self) -> int:
-        return len(self._skills)
+        return len(self.list_all())
 
     def __bool__(self) -> bool:
-        return bool(self._skills)
+        return bool(self._skills) or bool(self._device_skills)
 
 
 def _optional_string(value: object) -> str | None:

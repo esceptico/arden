@@ -7,6 +7,7 @@
 // answered immediately with a failed result so the server never waits on a
 // capability this executor does not have.
 const sseFrameParserModule = import("./sse-frame-parser.js");
+const { scanDeviceSkills, snapshotFingerprint } = require("./executor-skills.cjs");
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const RECONNECT_BASE_MS = 1_000;
@@ -14,7 +15,15 @@ const RECONNECT_MAX_MS = 30_000;
 
 class StaleLease extends Error {}
 
-function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}, heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS, capabilities = [] }) {
+function createExecutorClient({
+  getConfig,
+  stateStore,
+  fetchImpl,
+  log = () => {},
+  heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
+  capabilities = [],
+  skillsDirs = [],
+}) {
   let disposed = false;
   let abortController = null;
   let heartbeatTimer = null;
@@ -26,6 +35,7 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
   let token = null;
   const handlers = new Map();
   const running = new Map();
+  let advertisedSkillsFingerprint = null;
   const status = { state: "idle", executorId: null, connected: false, lastError: null };
   const statusListeners = new Set();
 
@@ -161,11 +171,39 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
     await persistCursor();
   }
 
+  async function advertiseSkills(config) {
+    if (!skillsDirs.length) return;
+    const skills = await scanDeviceSkills(skillsDirs);
+    const fingerprint = snapshotFingerprint(skills);
+    if (fingerprint === advertisedSkillsFingerprint) return;
+    const response = await post(config, "/executor/skills", {
+      lease_id: leaseId,
+      skills: skills.map(({ name, description, sha256 }) => ({ name, description, sha256 })),
+    });
+    if (!response.ok) {
+      log(`skill advertisement failed: ${response.status}`);
+      return;
+    }
+    advertisedSkillsFingerprint = fingerprint;
+    const { need = [] } = await response.json();
+    if (!need.length) return;
+    const bodies = skills
+      .filter(skill => need.includes(skill.name))
+      .map(({ name, sha256, content }) => ({ name, sha256, body: content }));
+    await post(config, "/executor/skills/bodies", { lease_id: leaseId, skills: bodies });
+    log(`synced ${bodies.length} device skill(s)`);
+  }
+
   function startHeartbeat(config) {
     stopHeartbeat();
     heartbeatTimer = setInterval(async () => {
       try {
         const response = await post(config, "/executor/heartbeat", { lease_id: leaseId, acked_seq: cursor });
+        if (response.ok) {
+          // Cheap rescan each beat: a changed fingerprint re-advertises, so
+          // edits to local skill files reach the server within one interval.
+          await advertiseSkills(config).catch(() => {});
+        }
         if (response.status === 401) {
           // Device was revoked mid-session: drop the credential so the
           // reconnect loop re-enrolls instead of retrying a dead token.
@@ -203,6 +241,12 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
           reconnectDelay = RECONNECT_BASE_MS;
           setStatus({ state: "connected", executorId, connected: true, lastError: null });
           startHeartbeat(config);
+          // New lease — re-advertise even if the fingerprint is unchanged,
+          // so a fresh server (or wiped cache) always gets the snapshot.
+          advertisedSkillsFingerprint = null;
+          void advertiseSkills(config).catch(error => {
+            log(`skill advertisement failed: ${error?.message ?? error}`);
+          });
         } else if (data.kind === "command") {
           await handleCommand(config, data);
         }

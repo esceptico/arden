@@ -1,4 +1,6 @@
 import asyncio
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -19,6 +21,8 @@ from arden.execution import (
 )
 from arden.server.app import app
 from arden.settings import hash_api_key
+from arden.skills.device_store import DeviceSkillStore
+from arden.skills.registry import SkillMeta, SkillRegistry
 
 
 @pytest_asyncio.fixture
@@ -257,9 +261,18 @@ class _Config:
 class _Runtime:
     connected = True
 
-    def __init__(self, gateway):
+    def __init__(self, gateway, device_skills=None):
         self.config = _Config()
         self.executor_gateway = gateway
+        self.stores = SimpleNamespace(device_skills=device_skills) if device_skills else None
+        self.skill_registry = SkillRegistry()
+
+    async def hydrate_device_skills(self):
+        entries = []
+        for skill in await self.stores.device_skills.all_loaded():
+            meta = SkillMeta(name=skill.name, description=skill.description, path=Path(skill.name), location="device")
+            entries.append((meta, skill.body or ""))
+        self.skill_registry.set_device_skills(entries)
 
 
 @pytest.fixture
@@ -274,12 +287,14 @@ def http(tmp_path):
         await commands.init_schema()
         invocations = InvocationStore(conn)
         await invocations.init_schema()
-        return conn, ExecutorGateway(devices, leases, commands, invocations)
+        device_skills = DeviceSkillStore(conn)
+        await device_skills.init_schema()
+        return conn, ExecutorGateway(devices, leases, commands, invocations), device_skills
 
-    conn, http_gateway = asyncio.run(build())
+    conn, http_gateway, device_skills = asyncio.run(build())
     had_runtime = hasattr(app.state, "runtime")
     previous = getattr(app.state, "runtime", None)
-    app.state.runtime = _Runtime(http_gateway)
+    app.state.runtime = _Runtime(http_gateway, device_skills)
     client = TestClient(app)
     yield client, http_gateway
     if had_runtime:
@@ -428,3 +443,75 @@ async def test_revoke_fences_lease_and_terminates_stream_ownership(gateway):
         )
     with pytest.raises(StaleLeaseError):
         await gateway.heartbeat(device, lease.lease_id)
+
+
+def test_skill_advertisement_flow_over_http(http):
+    client, http_gateway = http
+    enroll = client.post(
+        "/executor/enroll",
+        json={"name": "mac", "capabilities": []},
+        headers={"Authorization": "Bearer test-key"},
+    )
+    token = enroll.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    device = asyncio.run(http_gateway.devices.authenticate(token))
+    lease_id = asyncio.run(http_gateway.connect(device)).lease_id
+
+    skill_md = "---\nname: mac-notes\ndescription: Search local notes\n---\n\n# Steps\n"
+    advertised = client.post(
+        "/executor/skills",
+        json={
+            "lease_id": lease_id,
+            "skills": [{"name": "mac-notes", "description": "Search local notes", "sha256": "abc"}],
+        },
+        headers=headers,
+    )
+    assert advertised.status_code == 200
+    assert advertised.json()["need"] == ["mac-notes"]
+
+    stored = client.post(
+        "/executor/skills/bodies",
+        json={"lease_id": lease_id, "skills": [{"name": "mac-notes", "sha256": "abc", "body": skill_md}]},
+        headers=headers,
+    )
+    assert stored.status_code == 200
+    assert stored.json()["stored"] == ["mac-notes"]
+
+    registry = app.state.runtime.skill_registry
+    assert registry.get("mac-notes") is not None
+    assert registry.load_body("mac-notes") == "# Steps"
+
+    # Second advertisement with the same sha needs nothing; removal propagates.
+    again = client.post(
+        "/executor/skills",
+        json={"lease_id": lease_id, "skills": [{"name": "mac-notes", "description": "x", "sha256": "abc"}]},
+        headers=headers,
+    )
+    assert again.json()["need"] == []
+    cleared = client.post(
+        "/executor/skills",
+        json={"lease_id": lease_id, "skills": []},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert app.state.runtime.skill_registry.get("mac-notes") is None
+
+
+def test_skill_advertisement_rejects_stale_lease(http):
+    client, http_gateway = http
+    enroll = client.post(
+        "/executor/enroll",
+        json={"name": "mac", "capabilities": []},
+        headers={"Authorization": "Bearer test-key"},
+    )
+    token = enroll.json()["token"]
+    device = asyncio.run(http_gateway.devices.authenticate(token))
+    old_lease = asyncio.run(http_gateway.connect(device)).lease_id
+    asyncio.run(http_gateway.connect(device))  # supersede
+
+    response = client.post(
+        "/executor/skills",
+        json={"lease_id": old_lease, "skills": []},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403

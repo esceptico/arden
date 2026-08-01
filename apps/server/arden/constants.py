@@ -220,9 +220,7 @@ DETACHED_RUN_MAX_AGE = timedelta(hours=3)
 EXECUTOR_LEASE_TTL_SECONDS = 60
 EXECUTOR_STREAM_KEEPALIVE_SECONDS = 15
 
-# Skill archives uploaded from a device (POST /skills/upload) — one zipped
-# skill directory; the cap keeps a stray upload from filling the server disk.
-SKILL_ARCHIVE_MAX_BYTES = 5 * 1024 * 1024
-# Uncompressed budget for one skill archive (zip bombs: the 5 MiB cap above
-# is on compressed bytes only).
-SKILL_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+# Device-advertised skills (executor protocol): bounds on one snapshot.
+DEVICE_SKILL_MAX_COUNT = 200
+DEVICE_SKILL_MAX_DESCRIPTION_CHARS = 1024
+DEVICE_SKILL_MAX_BODY_BYTES = 512 * 1024

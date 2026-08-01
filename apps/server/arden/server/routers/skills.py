@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 
-from arden.constants import SKILL_ARCHIVE_MAX_BYTES
 from arden.server.deps import require_skill_service
 from arden.server.schemas import InstallRequest
 from arden.skills.service import SkillService
@@ -58,23 +57,6 @@ async def install_skill(request: InstallRequest, svc: SkillService = Depends(req
         "description": meta.description if meta else "",
         "status": "installed",
     }
-
-
-@router.post("/skills/upload")
-async def upload_skill(request: Request, svc: SkillService = Depends(require_skill_service)):
-    """Install one skill from a zipped skill directory (raw request body).
-
-    The device-side path for user-authored skills when the server runs
-    remotely: zip the skill folder, POST it here.
-    """
-    data = await request.body()
-    if len(data) > SKILL_ARCHIVE_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Skill archive too large.")
-    try:
-        meta = svc.install_archive(data)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"name": meta.name, "description": meta.description, "status": "installed"}
 
 
 @router.delete("/skills/{name}")
