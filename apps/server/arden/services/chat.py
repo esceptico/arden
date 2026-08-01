@@ -26,6 +26,7 @@ from arden.core.content import (
 from arden.core.factory import AgentConfig, create_agent
 from arden.core.naming import generate_conversation_name
 from arden.core.prompts import INIT_INSTRUCTION, build_system_blocks
+from arden.core.spawn_spec import SpawnSpec
 from arden.core.usage_tracker import UsageTracker
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import (
@@ -276,6 +277,71 @@ async def _record_run_started(
             if value is not None
         }
         await fn(run_id, session_id, metadata=metadata)
+
+
+@dataclass(frozen=True)
+class _DurableIOCallbacks:
+    """The durable write-through closures an IOBridge (and the child-session
+    io factory) needs. One builder serves both run_chat and the respawn host."""
+
+    record_approval: Callable[..., Awaitable[None]]
+    resolve_approval: Callable[..., Awaitable[None]]
+    record_connection: Callable[..., Awaitable[None]]
+    resolve_connection: Callable[..., Awaitable[None]]
+    get_suspension: Callable[..., Awaitable[dict | None]]
+    consume_suspension: Callable[..., Awaitable[None]]
+    record_suspension: Callable[..., Awaitable[None]]
+    resolve_suspension: Callable[..., Awaitable[None]]
+
+
+def _durable_io_callbacks(session_service: SessionService) -> _DurableIOCallbacks:
+    store = session_service.store
+
+    async def record_approval(**kwargs) -> None:
+        await store.record_tool_approval_requested(**kwargs)
+
+    async def resolve_approval(**kwargs) -> None:
+        if kwargs.get("status") == "expired":
+            kwargs.pop("status", None)
+            await store.expire_tool_approval(**kwargs)
+        else:
+            await store.resolve_tool_approval(**kwargs)
+
+    async def record_connection(**kwargs) -> None:
+        await store.record_integration_connection_requested(**kwargs)
+
+    async def resolve_connection(**kwargs) -> None:
+        await store.resolve_integration_connection(**kwargs)
+
+    async def get_suspension(**kwargs) -> dict | None:
+        return await store.get_run_suspension(**kwargs)
+
+    async def consume_suspension(**kwargs) -> None:
+        await store.mark_run_suspension_consumed(**kwargs)
+
+    async def record_suspension(**kwargs) -> None:
+        await store.record_run_suspension(**kwargs)
+
+    async def resolve_suspension(**kwargs) -> None:
+        await store.resolve_run_suspension(**kwargs)
+
+    return _DurableIOCallbacks(
+        record_approval=record_approval,
+        resolve_approval=resolve_approval,
+        record_connection=record_connection,
+        resolve_connection=resolve_connection,
+        get_suspension=get_suspension,
+        consume_suspension=consume_suspension,
+        record_suspension=record_suspension,
+        resolve_suspension=resolve_suspension,
+    )
+
+
+def _wire_background_registry(bg_registry, session_service: SessionService, session_id: str) -> None:
+    bg_registry.record_event = _background_event_recorder(session_service)
+    bg_registry.read_result = lambda task_id: session_service.store.get_background_agent_result(session_id, task_id)
+    bg_registry.claim_completion = getattr(session_service.store, "claim_background_agent_completion", None)
+    bg_registry.mark_completion_delivered = getattr(session_service.store, "mark_background_completion_delivered", None)
 
 
 def _background_event_recorder(session_service: SessionService):
@@ -968,6 +1034,115 @@ async def resume_suspended_chat_run(
         return {"run_id": run_id, "session_id": session_id, "status": "resumed"}
 
 
+async def respawn_background_agent(
+    run_registry: RunRegistry,
+    build_deps: Callable[[], ChatDeps],
+    buses: BusRegistry,
+    *,
+    session_id: str,
+    task_id: str,
+    session_service: SessionService,
+) -> bool:
+    """Re-dispatch an interrupted DETACHED agent from its stored SpawnSpec.
+
+    Boot-time recovery host: there is no live parent run, so this builds the
+    same agent scaffolding run_chat does (factory ToolContext with spawn_fn,
+    child-session io factory, durable bg-registry wiring) and re-issues the
+    spawn under the original task id. Must no-op cleanly — the outbox event
+    that triggers it completes on dispatch and is never retried for outcome.
+    """
+    row = await session_service.store.get_background_agent_run(session_id, task_id)
+    if row is None or row["status"] != "interrupted" or not row.get("spawn_spec"):
+        return False
+    bg_registry = run_registry.get_background_registry(session_id)
+    if any(pending_id == task_id for pending_id, _ in bg_registry.list_pending()):
+        return False
+    session_data = await session_service.load(session_id)
+    if session_data is None:
+        return False
+    spec = SpawnSpec.from_json(row["spawn_spec"])
+    system_prompt = next((m.get("content") for m in spec.context if m.get("role") == "system"), None)
+    task = next((m.get("content") for m in reversed(spec.context) if m.get("role") == "user"), None)
+    if not isinstance(system_prompt, str) or not isinstance(task, str):
+        return False
+
+    deps = build_deps()
+    await prime_bus_cursor_from_store(buses, session_id, session_service.store)
+    bus = buses.get_or_create(session_id)
+    _wire_background_registry(bg_registry, session_service, session_id)
+
+    host_run = RunState(run_id=f"respawn-{uuid4().hex[:10]}", session_id=session_id)
+
+    async def _on_bg_result(messages: list[dict]) -> None:
+        # No live parent run: run_finished=True so the result always dispatches
+        # a fresh hidden run instead of queueing into a dead injection queue.
+        await _handle_background_result(
+            run=host_run,
+            session_id=session_id,
+            messages=messages,
+            dispatch_session_message=deps.dispatch_session_message,
+            run_finished=True,
+        )
+
+    bg_registry.on_result = _on_bg_result
+
+    callbacks = _durable_io_callbacks(session_service)
+    io = IOBridge(
+        pending_approvals=host_run.pending_approvals,
+        emit=bus.emit,
+        record_approval=callbacks.record_approval,
+        resolve_approval=callbacks.resolve_approval,
+        record_connection=callbacks.record_connection,
+        resolve_connection=callbacks.resolve_connection,
+        get_suspension=callbacks.get_suspension,
+        consume_suspension=callbacks.consume_suspension,
+        record_suspension=callbacks.record_suspension,
+        resolve_suspension=callbacks.resolve_suspension,
+        approval_timeout_seconds=deps.agent_config.approval_timeout_seconds,
+    )
+    child_io_factory = make_child_io_factory(
+        buses,
+        run_registry,
+        record_approval=callbacks.record_approval,
+        resolve_approval=callbacks.resolve_approval,
+        get_suspension=callbacks.get_suspension,
+        consume_suspension=callbacks.consume_suspension,
+        record_suspension=callbacks.record_suspension,
+        resolve_suspension=callbacks.resolve_suspension,
+        approval_timeout_seconds=deps.agent_config.approval_timeout_seconds,
+    )
+    # No area_context: the spec's system prompt already carries the area block
+    # (resolved at the original spawn); a ToolContext area would append it again.
+    host_agent = create_agent(
+        executor=deps.executor,
+        config=deps.agent_config,
+        tools=deps.executor.get_tools(),
+        session_state=session_data.state,
+        run_id=host_run.run_id,
+        io=io,
+        background_tasks=bg_registry,
+        run_registry=run_registry,
+        child_io_factory=child_io_factory,
+    )
+    tool_ctx = host_agent.executor.ctx
+    await tool_ctx.spawn_fn(
+        tool_ctx,
+        task,
+        system_prompt=system_prompt,
+        tools=list(spec.tools),
+        timeout=spec.timeout_seconds,
+        model_override=spec.model,
+        reasoning_effort_override=spec.reasoning_effort,
+        parent_id=spec.parent.tool_call_id,
+        isolation=spec.isolation,
+        wait=False,
+        agent_type=spec.agent_type,
+        kind="background",
+        task_id=task_id,
+    )
+    return True
+
+
 async def _submit_chat_message_locked(
     run_registry: RunRegistry,
     build_deps: Callable[[], ChatDeps],
@@ -1593,43 +1768,9 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         )
 
         bg_registry = ctx.run_registry.get_background_registry(session_state.session_id)
-        bg_registry.record_event = _background_event_recorder(ctx.session_service)
-        bg_registry.read_result = lambda task_id: ctx.session_service.store.get_background_agent_result(
-            session_state.session_id,
-            task_id,
-        )
-        bg_registry.claim_completion = getattr(ctx.session_service.store, "claim_background_agent_completion", None)
-        bg_registry.mark_completion_delivered = getattr(
-            ctx.session_service.store, "mark_background_completion_delivered", None
-        )
+        _wire_background_registry(bg_registry, ctx.session_service, session_state.session_id)
 
-        async def record_approval(**kwargs) -> None:
-            await ctx.session_service.store.record_tool_approval_requested(**kwargs)
-
-        async def resolve_approval(**kwargs) -> None:
-            if kwargs.get("status") == "expired":
-                kwargs.pop("status", None)
-                await ctx.session_service.store.expire_tool_approval(**kwargs)
-            else:
-                await ctx.session_service.store.resolve_tool_approval(**kwargs)
-
-        async def record_connection(**kwargs) -> None:
-            await ctx.session_service.store.record_integration_connection_requested(**kwargs)
-
-        async def resolve_connection(**kwargs) -> None:
-            await ctx.session_service.store.resolve_integration_connection(**kwargs)
-
-        async def get_suspension(**kwargs) -> dict | None:
-            return await ctx.session_service.store.get_run_suspension(**kwargs)
-
-        async def consume_suspension(**kwargs) -> None:
-            await ctx.session_service.store.mark_run_suspension_consumed(**kwargs)
-
-        async def record_suspension(**kwargs) -> None:
-            await ctx.session_service.store.record_run_suspension(**kwargs)
-
-        async def resolve_suspension(**kwargs) -> None:
-            await ctx.session_service.store.resolve_run_suspension(**kwargs)
+        callbacks = _durable_io_callbacks(ctx.session_service)
 
         io = IOBridge(
             pending_approvals=run.pending_approvals,
@@ -1637,14 +1778,14 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             pending_connections=run.pending_connections,
             pending_connection_descriptors=run.pending_connection_descriptors,
             emit=bus.emit,
-            record_approval=record_approval,
-            resolve_approval=resolve_approval,
-            record_connection=record_connection,
-            resolve_connection=resolve_connection,
-            get_suspension=get_suspension,
-            consume_suspension=consume_suspension,
-            record_suspension=record_suspension,
-            resolve_suspension=resolve_suspension,
+            record_approval=callbacks.record_approval,
+            resolve_approval=callbacks.resolve_approval,
+            record_connection=callbacks.record_connection,
+            resolve_connection=callbacks.resolve_connection,
+            get_suspension=callbacks.get_suspension,
+            consume_suspension=callbacks.consume_suspension,
+            record_suspension=callbacks.record_suspension,
+            resolve_suspension=callbacks.resolve_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 
@@ -1655,12 +1796,12 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         child_io_factory = make_child_io_factory(
             buses,
             ctx.run_registry,
-            record_approval=record_approval,
-            resolve_approval=resolve_approval,
-            get_suspension=get_suspension,
-            consume_suspension=consume_suspension,
-            record_suspension=record_suspension,
-            resolve_suspension=resolve_suspension,
+            record_approval=callbacks.record_approval,
+            resolve_approval=callbacks.resolve_approval,
+            get_suspension=callbacks.get_suspension,
+            consume_suspension=callbacks.consume_suspension,
+            record_suspension=callbacks.record_suspension,
+            resolve_suspension=callbacks.resolve_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 

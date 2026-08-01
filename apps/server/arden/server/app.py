@@ -25,6 +25,7 @@ from arden.automation.scheduler import (
     RunSkipped,
     split_manual_flag,
 )
+from arden.constants import BACKGROUND_AGENT_MAX_SPAWN_ATTEMPTS
 from arden.core.tool_result_files import prune_offload_store
 from arden.events.internal import RunFailed
 from arden.events.sse import AreasChangedEvent
@@ -56,7 +57,7 @@ from arden.server.routers.setup import router as setup_router
 from arden.server.routers.skills import router as skills_router
 from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
-from arden.services.chat import resume_suspended_chat_run, submit_chat_message
+from arden.services.chat import respawn_background_agent, resume_suspended_chat_run, submit_chat_message
 from arden.tools.scopes import ScopeKey
 
 _logger = get_logger(__name__)
@@ -147,6 +148,27 @@ async def _recover_interrupted_chat_runs(
                 automation_task_id=automation_task_id,
             )
         )
+
+
+async def _enqueue_background_respawns(session_store, outbox_store) -> None:
+    """Boot pass: re-enqueue interrupted detached agents from their stored
+    SpawnSpec. The attempt counter is incremented durably BEFORE the enqueue so
+    a crash between the two can only under-spawn, never spawn unbounded."""
+    for run_row in await session_store.list_respawnable_background_agent_runs(
+        max_attempts=BACKGROUND_AGENT_MAX_SPAWN_ATTEMPTS,
+    ):
+        try:
+            attempt = await session_store.increment_background_agent_spawn_attempts(
+                run_row["session_id"],
+                run_row["task_id"],
+            )
+            await outbox_store.enqueue_agent_run_requested(
+                session_id=run_row["session_id"],
+                task_id=run_row["task_id"],
+                attempt=attempt,
+            )
+        except Exception:
+            _logger.exception("Failed to enqueue background agent respawn %s", run_row["task_id"])
 
 
 def _install_shutdown_handlers(runtime: Runtime, bus_registry: BusRegistry) -> None:
@@ -483,6 +505,20 @@ async def lifespan(app: FastAPI):
 
     runtime.resume_suspended_chat_run = _resume_suspended_chat_run
 
+    async def _respawn_background_agent(session_id: str, task_id: str) -> None:
+        chat_model = await runtime.resolve_session_chat_model(session_id)
+        await respawn_background_agent(
+            runtime.run_registry,
+            lambda: runtime.build_chat_deps(chat_model=chat_model),
+            bus_registry,
+            session_id=session_id,
+            task_id=task_id,
+            session_service=runtime.session_service,
+        )
+
+    runtime.respawn_background_agent = _respawn_background_agent
+    runtime.outbox_runtime.set_agent_run_handler(_respawn_background_agent)
+
     async def _dispatch_post(automation: Automation, context: str | dict | None = None) -> CompletedAgentRun:
         # Post mode: run the agent fresh (no session history), then write
         # the agent's final text into the target session as an assistant
@@ -596,6 +632,7 @@ async def lifespan(app: FastAPI):
             )
         except Exception:
             _logger.exception("Failed to redeliver background completion %s", completion["completion_id"])
+    await _enqueue_background_respawns(runtime.session_service.store, runtime.stores.outbox)
     app.state.runtime = runtime
     app.state.bus_registry = bus_registry
     _install_shutdown_handlers(runtime, bus_registry)

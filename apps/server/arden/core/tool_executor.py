@@ -58,6 +58,10 @@ class ArdenToolExecutor:
         self._skip_duplicate_reads = skip_duplicate_reads
         self._meta_cache: dict[str, ToolMeta | None] = {}
 
+    @property
+    def ctx(self) -> ToolContext:
+        return self._ctx
+
     def mark_provider_loaded_tools(self, names: set[str]) -> None:
         if self._ctx.run.deferred_tools_enabled:
             self._ctx.run.loaded_tools.update(names)

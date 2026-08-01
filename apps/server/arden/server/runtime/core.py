@@ -117,6 +117,7 @@ class Runtime:
         | None
     )
     resume_suspended_chat_run: Callable[[str, str], Awaitable[object]] | None
+    respawn_background_agent: Callable[[str, str], Awaitable[None]] | None
 
     def __init__(self, config: Config | None = None):
         initial_config = config or get_config()
@@ -136,6 +137,7 @@ class Runtime:
         self.notifier_service: NotifierService | None = None
         self.dispatch_session_message = None
         self.resume_suspended_chat_run = None
+        self.respawn_background_agent = None
         self.app_control: AppControlService | None = None
         self.wiki_repository: ManagedFileRepository | None = None
         self.wiki_service: WikiService | None = None

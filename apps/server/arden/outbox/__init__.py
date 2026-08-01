@@ -1,9 +1,13 @@
 from arden.outbox.events import (
+    OUTBOX_AGENT_RUN_REQUESTED,
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
     OUTBOX_WIKI_PROJECTION_REQUESTED,
+    AgentRunRequested,
     AutomationSettled,
+    agent_run_requested_from_payload,
+    agent_run_requested_payload,
     automation_settled_from_payload,
     automation_settled_payload,
     run_completed_from_payload,
@@ -16,14 +20,18 @@ from arden.outbox.store import OutboxStore
 from arden.outbox.worker import OutboxWorker
 
 __all__ = [
+    "OUTBOX_AGENT_RUN_REQUESTED",
     "OUTBOX_AUTOMATION_SETTLED",
     "OUTBOX_RUN_COMPLETED",
     "OUTBOX_RUN_FAILED",
     "OUTBOX_WIKI_PROJECTION_REQUESTED",
+    "AgentRunRequested",
     "AutomationSettled",
     "OutboxEvent",
     "OutboxStore",
     "OutboxWorker",
+    "agent_run_requested_from_payload",
+    "agent_run_requested_payload",
     "automation_settled_from_payload",
     "automation_settled_payload",
     "run_completed_from_payload",

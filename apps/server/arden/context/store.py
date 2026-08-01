@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS background_agent_runs (
     notified_at TEXT,
     completion_id TEXT,
     spawn_spec TEXT,
+    spawn_attempts INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, task_id)
 );
 
@@ -1458,6 +1459,11 @@ class SessionStore:
             if "spawn_spec" not in columns:
                 await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN spawn_spec TEXT")
                 changed = True
+            if "spawn_attempts" not in columns:
+                await self.conn.execute(
+                    "ALTER TABLE background_agent_runs ADD COLUMN spawn_attempts INTEGER NOT NULL DEFAULT 0"
+                )
+                changed = True
             if changed:
                 await self.conn.commit()
             return
@@ -1493,6 +1499,7 @@ class SessionStore:
                 notified_at TEXT,
                 completion_id TEXT,
                 spawn_spec TEXT,
+                spawn_attempts INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (session_id, task_id)
             )
             """
@@ -3000,6 +3007,66 @@ class SessionStore:
             return None
         value = rows[0]["result_text"]
         return value if isinstance(value, str) else None
+
+    async def get_background_agent_run(self, session_id: str, task_id: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT * FROM background_agent_runs
+            WHERE session_id = ? AND task_id = ?
+            """,
+            (session_id, task_id),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            **self._background_agent_payload(row),
+            "result_text": row["result_text"],
+            "spawn_spec": row["spawn_spec"],
+            "spawn_attempts": int(row["spawn_attempts"]),
+        }
+
+    async def list_respawnable_background_agent_runs(self, *, max_attempts: int) -> list[dict]:
+        """Interrupted detached runs eligible for a boot-time respawn: a stored
+        spec to re-dispatch, no completion to redeliver instead, and a spawn
+        budget left. Awaited children recover via their parent run's resume."""
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT * FROM background_agent_runs
+            WHERE status = 'interrupted'
+              AND wait = 0
+              AND spawn_spec IS NOT NULL
+              AND completion_id IS NULL
+              AND spawn_attempts < ?
+            ORDER BY updated_at ASC
+            """,
+            (max_attempts,),
+        )
+        return [
+            {
+                **self._background_agent_payload(row),
+                "spawn_spec": row["spawn_spec"],
+                "spawn_attempts": int(row["spawn_attempts"]),
+            }
+            for row in rows
+        ]
+
+    async def increment_background_agent_spawn_attempts(self, session_id: str, task_id: str) -> int:
+        now = datetime.now(UTC).isoformat()
+        await self.conn.execute(
+            """
+            UPDATE background_agent_runs
+            SET spawn_attempts = spawn_attempts + 1, updated_at = ?
+            WHERE session_id = ? AND task_id = ?
+            """,
+            (now, session_id, task_id),
+        )
+        await self.conn.commit()
+        rows = await self.conn.execute_fetchall(
+            "SELECT spawn_attempts FROM background_agent_runs WHERE session_id = ? AND task_id = ?",
+            (session_id, task_id),
+        )
+        return int(rows[0]["spawn_attempts"]) if rows else 0
 
     async def list_background_agent_runs(
         self,

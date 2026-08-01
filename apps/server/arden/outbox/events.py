@@ -7,6 +7,7 @@ OUTBOX_RUN_COMPLETED = "run.completed"
 OUTBOX_RUN_FAILED = "run.failed"
 OUTBOX_AUTOMATION_SETTLED = "automation.settled"
 OUTBOX_WIKI_PROJECTION_REQUESTED = "wiki.projection.requested"
+OUTBOX_AGENT_RUN_REQUESTED = "agent.run.requested"
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,12 @@ class AutomationSettled:
     automation_run_id: int
     task_id: str
     success: bool
+
+
+@dataclass(frozen=True)
+class AgentRunRequested:
+    session_id: str
+    task_id: str
 
 
 def run_completed_payload(event: RunCompleted) -> dict:
@@ -77,4 +84,18 @@ def automation_settled_from_payload(payload: dict) -> AutomationSettled:
         automation_run_id=payload["automation_run_id"],
         task_id=payload["task_id"],
         success=payload["success"],
+    )
+
+
+def agent_run_requested_payload(event: AgentRunRequested) -> dict:
+    return {
+        "session_id": event.session_id,
+        "task_id": event.task_id,
+    }
+
+
+def agent_run_requested_from_payload(payload: dict) -> AgentRunRequested:
+    return AgentRunRequested(
+        session_id=payload["session_id"],
+        task_id=payload["task_id"],
     )

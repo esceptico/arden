@@ -5,11 +5,14 @@ import aiosqlite
 
 from arden.events.internal import RunCompleted, RunFailed
 from arden.outbox.events import (
+    OUTBOX_AGENT_RUN_REQUESTED,
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
     OUTBOX_WIKI_PROJECTION_REQUESTED,
+    AgentRunRequested,
     AutomationSettled,
+    agent_run_requested_payload,
     automation_settled_payload,
     run_completed_payload,
     run_failed_payload,
@@ -358,6 +361,19 @@ class OutboxStore:
             aggregate_id=str(automation_run_id),
             payload=automation_settled_payload(event),
             idempotency_key=f"{OUTBOX_AUTOMATION_SETTLED}:{automation_run_id}",
+        )
+
+    async def enqueue_agent_run_requested(self, *, session_id: str, task_id: str, attempt: int) -> bool:
+        # Attempt-scoped idempotency: each boot's enqueue pass increments the
+        # row's spawn_attempts first, so a crash between boots re-enqueues a
+        # fresh key while a duplicate pass within one attempt stays a no-op.
+        event = AgentRunRequested(session_id=session_id, task_id=task_id)
+        return await self.enqueue(
+            event_type=OUTBOX_AGENT_RUN_REQUESTED,
+            aggregate_type="background_agent",
+            aggregate_id=task_id,
+            payload=agent_run_requested_payload(event),
+            idempotency_key=f"{OUTBOX_AGENT_RUN_REQUESTED}:{task_id}:{attempt}",
         )
 
     async def claim_batch(

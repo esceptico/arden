@@ -369,10 +369,14 @@ def create_spawn_fn(
         phase: str | None = None,
         scope: ToolFilter | None = None,
         exclude_tools: frozenset[str] | None = None,
+        task_id: str | None = None,
     ) -> str:
         should_wait = (not background) if wait is None else wait
         background = not should_wait
-        child_run_id = f"agent-{uuid4().hex[:10]}"
+        # Restart recovery re-spawns under the original durable task id so the
+        # background_agent_runs row (and its spawn_attempts budget) stays one
+        # identity across process restarts.
+        child_run_id = task_id or f"agent-{uuid4().hex[:10]}"
         resolved_agent_type = agent_type or kind.replace("-", "_").replace(" ", "_")
         task_summary = task[:120]
         # Durable-await key: one suspension row per awaited child. A research

@@ -57,6 +57,10 @@ RENDER_HTML_MAX_CHARS = 150_000
 # killing a stuck child; tools can override via the spawn `timeout` param.
 SUBAGENT_DEFAULT_TIMEOUT = 1800
 BACKGROUND_AGENT_TIMEOUT = 1800
+# Boot-time respawns per interrupted detached agent. Each restart re-buys the
+# same LLM work, so crash-looping servers must converge: after this many
+# attempts the row stays interrupted.
+BACKGROUND_AGENT_MAX_SPAWN_ATTEMPTS = 2
 COMPACTION_TIMEOUT = 600
 DEFAULT_EXTERNAL_TOOL_TIMEOUT_SECONDS = 120
 
