@@ -193,6 +193,11 @@ class IOBridge:
     resolve_connection: Callable[..., Awaitable[None]] | None = None
     get_suspension: Callable[..., Awaitable[dict | None]] | None = None
     consume_suspension: Callable[..., Awaitable[None]] | None = None
+    # Generic run-suspension writes (kind-agnostic, unlike record_approval /
+    # resolve_approval which bake in kind='tool_approval'). The spawner uses
+    # them to make an awaited child's wait durable (kind='subagent_result').
+    record_suspension: Callable[..., Awaitable[None]] | None = None
+    resolve_suspension: Callable[..., Awaitable[None]] | None = None
     approval_timeout_seconds: int = 300
 
 

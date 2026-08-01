@@ -1461,6 +1461,8 @@ def make_child_io_factory(
     approval_timeout_seconds: int,
     get_suspension: Callable[..., Awaitable[dict | None]] | None = None,
     consume_suspension: Callable[..., Awaitable[None]] | None = None,
+    record_suspension: Callable[..., Awaitable[None]] | None = None,
+    resolve_suspension: Callable[..., Awaitable[None]] | None = None,
 ) -> ChildIOFactory:
     """Build the factory that gives a spawned FULL subagent its OWN session bus,
     framed with the standard run lifecycle so the child session streams live
@@ -1485,6 +1487,8 @@ def make_child_io_factory(
             resolve_approval=resolve_approval,
             get_suspension=get_suspension,
             consume_suspension=consume_suspension,
+            record_suspension=record_suspension,
+            resolve_suspension=resolve_suspension,
             approval_timeout_seconds=approval_timeout_seconds,
         )
         await child_bus.emit(RunStartedEvent(session_id=params.session_id, run_id=params.run_id))
@@ -1612,6 +1616,12 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         async def consume_suspension(**kwargs) -> None:
             await ctx.session_service.store.mark_run_suspension_consumed(**kwargs)
 
+        async def record_suspension(**kwargs) -> None:
+            await ctx.session_service.store.record_run_suspension(**kwargs)
+
+        async def resolve_suspension(**kwargs) -> None:
+            await ctx.session_service.store.resolve_run_suspension(**kwargs)
+
         io = IOBridge(
             pending_approvals=run.pending_approvals,
             pending_inputs=run.pending_inputs,
@@ -1624,6 +1634,8 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             resolve_connection=resolve_connection,
             get_suspension=get_suspension,
             consume_suspension=consume_suspension,
+            record_suspension=record_suspension,
+            resolve_suspension=resolve_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 
@@ -1638,6 +1650,8 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             resolve_approval=resolve_approval,
             get_suspension=get_suspension,
             consume_suspension=consume_suspension,
+            record_suspension=record_suspension,
+            resolve_suspension=resolve_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
         )
 

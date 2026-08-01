@@ -148,6 +148,25 @@ _SALVAGE_TOOL_CHAR_LIMIT = 4000
 _SALVAGE_MAX_TOKENS = 2000
 _SALVAGE_TAIL_RESULTS = 20
 
+# A resumed parent that finds its awaited child dead (pending suspension +
+# interrupted bg row) re-spawns it — but LLM work costs dollars, so repeated
+# restart crashes must not respawn forever.
+_MAX_SUBAGENT_RESPAWNS = 2
+
+
+async def _suspension_callback(callback, label: str, **kwargs) -> None:
+    """Best-effort durable-suspension write: the in-process await is the
+    behavior, the row is the recovery record — a store hiccup must not fail
+    the spawn itself."""
+    if callback is None:
+        return
+    try:
+        await callback(**kwargs)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _logger.exception("Subagent suspension %s failed", label)
+
 
 def _compactor_with_prompt_context(
     compactor: Compactor | None,
@@ -356,6 +375,81 @@ def create_spawn_fn(
         child_run_id = f"agent-{uuid4().hex[:10]}"
         resolved_agent_type = agent_type or kind.replace("-", "_").replace(" ", "_")
         task_summary = task[:120]
+        # Durable-await key: one suspension row per awaited child. A research
+        # call has one child and a tool_call_id that is stable across a run
+        # resume; workflow fan-out shares one tool_call_id across MANY children,
+        # so the per-spawn lifecycle_id keys those instead (workflow ids are
+        # uuid-fresh per exec and workflow runs have no resume — their rows just
+        # resolve on settle and are never replayed).
+        suspension_id = (lifecycle_id or parent_id) if should_wait else None
+        parent_io = calling_ctx.io
+        respawns = 0
+        if suspension_id and parent_io.get_suspension is not None:
+            try:
+                suspension = await parent_io.get_suspension(
+                    run_id=calling_ctx.run.run_id,
+                    suspension_id=suspension_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                suspension = None
+                _logger.exception("Subagent suspension lookup failed")
+            if suspension is not None and suspension.get("kind") == "subagent_result":
+                payload = suspension.get("payload") or {}
+                if suspension.get("status") != "pending":
+                    # A previous process already ran this child to a terminal
+                    # state — hand back the recorded outcome without spawning.
+                    await _suspension_callback(
+                        parent_io.consume_suspension,
+                        "consume",
+                        run_id=calling_ctx.run.run_id,
+                        suspension_id=suspension_id,
+                    )
+                    resolution = suspension.get("resolution") or {}
+                    return SpawnResult(
+                        text=str(resolution.get("result") or ""),
+                        child_run_id=str(payload.get("child_run_id") or ""),
+                        child_session_id=payload.get("child_session_id"),
+                        parent_tool_call_id=parent_id,
+                        agent_type=resolved_agent_type,
+                        wait=True,
+                        status=str(resolution.get("status") or "completed"),
+                    )
+                # Pending row on a fresh lookup = the child died with a previous
+                # process (its bg row was marked interrupted at boot). Re-spawn
+                # from this call's arguments — a replayed tool call carries the
+                # same spawn inputs — but bounded, so crash-looping restarts
+                # can't re-buy the same LLM work forever.
+                respawns = int(payload.get("respawns") or 0) + 1
+                if respawns > _MAX_SUBAGENT_RESPAWNS:
+                    failure = (
+                        f"Sub-agent did not survive {_MAX_SUBAGENT_RESPAWNS + 1} attempts across server "
+                        "restarts — not respawning again. Re-issue the task explicitly if it still matters."
+                    )
+                    await _suspension_callback(
+                        parent_io.resolve_suspension,
+                        "resolve",
+                        run_id=calling_ctx.run.run_id,
+                        suspension_id=suspension_id,
+                        status="failed",
+                        resolution={"status": "failed", "result": failure},
+                    )
+                    await _suspension_callback(
+                        parent_io.consume_suspension,
+                        "consume",
+                        run_id=calling_ctx.run.run_id,
+                        suspension_id=suspension_id,
+                    )
+                    return SpawnResult(
+                        text=failure,
+                        child_run_id=str(payload.get("child_run_id") or ""),
+                        child_session_id=payload.get("child_session_id"),
+                        parent_tool_call_id=parent_id,
+                        agent_type=resolved_agent_type,
+                        wait=True,
+                        status="failed",
+                    )
         # A distinct slug still names parent activity rows immediately, so
         # concurrent sub-agents do not collapse into N generic "Agent" rows.
         agent_slug = generate_slug(2)
@@ -887,6 +981,40 @@ def create_spawn_fn(
             raise
 
         if should_wait:
+            # The in-process await below is still what delivers the result;
+            # this row is what makes the wait durable — a restarted parent run
+            # replays the spawning tool call and picks the outcome (or the
+            # respawn) up from here. No expires_at: the child is bounded by its
+            # own timeout and the row resolves when it settles.
+            if suspension_id:
+                await _suspension_callback(
+                    parent_io.record_suspension,
+                    "record",
+                    run_id=calling_ctx.run.run_id,
+                    session_id=calling_ctx.session_id,
+                    suspension_id=suspension_id,
+                    kind="subagent_result",
+                    payload={
+                        "task": task_summary,
+                        "child_run_id": task_id,
+                        "child_session_id": child_state.session_id if has_child_session else None,
+                        "agent_type": resolved_agent_type,
+                        "respawns": respawns,
+                    },
+                )
+
+            async def _resolve_wait_suspension(status: str, text: str) -> None:
+                if suspension_id is None:
+                    return
+                await _suspension_callback(
+                    parent_io.resolve_suspension,
+                    "resolve",
+                    run_id=calling_ctx.run.run_id,
+                    suspension_id=suspension_id,
+                    status=status,
+                    resolution={"status": status, "result": text},
+                )
+
             label_update_task: asyncio.Task[None] | None = None
 
             async def _emit_agent_label_when_ready() -> None:
@@ -970,6 +1098,7 @@ def create_spawn_fn(
                 await _settle_agent_label_update()
                 await _save_child_session(status)
                 await registry.record_finished(task_id=task_id, status=status, result_text=text)
+                await _resolve_wait_suspension(status, text)
                 await _emit_task_finished(status, summary)
                 if undelivered_steering:
                     # An awaited result returns in-process — there is no delivery
@@ -1044,6 +1173,7 @@ def create_spawn_fn(
                 await _settle_agent_label_update()
                 await _save_child_session("cancelled")
                 await registry.record_finished(task_id=task_id, status="cancelled")
+                await _resolve_wait_suspension("cancelled", "")
                 await _emit_task_finished("cancelled", "cancelled")
                 raise
             finally:
