@@ -537,6 +537,13 @@ function createQuickWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // This window is created once at boot and lives HIDDEN between
+      // summons. With Chromium's default throttling its renderer is
+      // suspended while hidden — which silently stalls Vite's HMR socket,
+      // so in dev the panel kept presenting the code it booted with no
+      // matter what changed on disk. It also lets the summon paint from a
+      // warm renderer instead of a throttled one.
+      backgroundThrottling: false,
     },
   });
 
