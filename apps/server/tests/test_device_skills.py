@@ -91,7 +91,7 @@ def test_registry_merges_device_skills():
     assert bool(registry)
 
 
-def test_directory_skills_win_name_conflicts(tmp_path):
+def test_device_wins_over_server_user_dirs(tmp_path):
     (tmp_path / "mac-notes").mkdir()
     (tmp_path / "mac-notes" / "SKILL.md").write_text(
         "---\nname: mac-notes\ndescription: Server copy\n---\n\n# Server body\n"
@@ -100,8 +100,22 @@ def test_directory_skills_win_name_conflicts(tmp_path):
     registry.load([(tmp_path, "global")])
     registry.set_device_skills([_device_entry("mac-notes", description="Device copy")])
 
-    assert registry.get("mac-notes").description == "Server copy"
-    assert registry.load_body("mac-notes") == "# Server body"
+    assert registry.get("mac-notes").description == "Device copy"
+    assert registry.load_body("mac-notes") == "# Steps\nDo the thing."
+    assert len(registry) == 1
+
+
+def test_builtin_wins_over_device(tmp_path):
+    (tmp_path / "mac-notes").mkdir()
+    (tmp_path / "mac-notes" / "SKILL.md").write_text(
+        "---\nname: mac-notes\ndescription: Builtin copy\n---\n\n# Builtin body\n"
+    )
+    registry = SkillRegistry()
+    registry.load([(tmp_path, "builtin")])
+    registry.set_device_skills([_device_entry("mac-notes", description="Device copy")])
+
+    assert registry.get("mac-notes").description == "Builtin copy"
+    assert registry.load_body("mac-notes") == "# Builtin body"
     assert len(registry) == 1
 
 

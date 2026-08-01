@@ -54,9 +54,10 @@ class SkillRegistry:
     def __init__(self):
         self._skills: dict[str, SkillMeta] = {}
         # Skills advertised by a connected executor device, cached server-side
-        # (name -> (meta, full SKILL.md content)). Directory skills win on
-        # name conflicts; device entries survive reload() since they do not
-        # come from server disk.
+        # (name -> (meta, full SKILL.md content)). On name conflicts builtins
+        # win (trusted-code boundary), then the device copy — it is the one
+        # the user actively edits — then server user dirs. Device entries
+        # survive reload() since they do not come from server disk.
         self._device_skills: dict[str, tuple[SkillMeta, str]] = {}
         self._validation_issues: list[SkillValidationIssue] = []
 
@@ -149,23 +150,31 @@ class SkillRegistry:
         self._device_skills = {meta.name: (meta, content) for meta, content in entries}
 
     def list_all(self) -> list[SkillMeta]:
-        merged = {name: meta for name, (meta, _) in self._device_skills.items()}
-        merged.update(self._skills)
+        merged = dict(self._skills)
+        for name, (meta, _) in self._device_skills.items():
+            if merged.get(name) is None or merged[name].location != "builtin":
+                merged[name] = meta
         return list(merged.values())
 
+    def _device_entry(self, name: str) -> tuple[SkillMeta, str] | None:
+        file_meta = self._skills.get(name)
+        if file_meta is not None and file_meta.location == "builtin":
+            return None
+        return self._device_skills.get(name)
+
     def get(self, name: str) -> SkillMeta | None:
-        if name in self._skills:
-            return self._skills[name]
-        entry = self._device_skills.get(name)
-        return entry[0] if entry else None
+        entry = self._device_entry(name)
+        if entry:
+            return entry[0]
+        return self._skills.get(name)
 
     def load_body(self, name: str) -> str | None:
+        entry = self._device_entry(name)
+        if entry:
+            parsed = _parse_skill_md(entry[1])
+            return parsed[1].strip() if parsed else None
         meta = self._skills.get(name)
         if not meta:
-            entry = self._device_skills.get(name)
-            if entry:
-                parsed = _parse_skill_md(entry[1])
-                return parsed[1].strip() if parsed else None
             return None
         try:
             content = (meta.path / "SKILL.md").read_text()
