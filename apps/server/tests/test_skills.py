@@ -219,3 +219,18 @@ def test_install_archive_rejects_duplicate_and_garbage(tmp_path, monkeypatch):
         service.install_archive(b"not-a-zip")
     with pytest.raises(ValueError, match=r"exactly one SKILL\.md"):
         service.install_archive(_zip_bytes({"a/SKILL.md": "x", "b/SKILL.md": "y"}))
+
+
+def test_install_archive_rejects_decompression_bomb(tmp_path, monkeypatch):
+    service = _archive_service(tmp_path, monkeypatch)
+    monkeypatch.setattr("arden.skills.service.SKILL_ARCHIVE_MAX_UNCOMPRESSED_BYTES", 1024)
+    data = _zip_bytes(
+        {
+            "bomb-skill/SKILL.md": "---\nname: bomb-skill\ndescription: X\n---\n\n# Steps\n",
+            "bomb-skill/payload.txt": "0" * 4096,
+        }
+    )
+
+    with pytest.raises(ValueError, match="decompresses past"):
+        service.install_archive(data)
+    assert not (tmp_path / "skills" / "bomb-skill").exists()

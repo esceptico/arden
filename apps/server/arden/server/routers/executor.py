@@ -69,7 +69,7 @@ async def list_devices(gateway: ExecutorGateway = Depends(require_executor_gatew
 
 @router.post("/devices/{executor_id}/revoke")
 async def revoke_device(executor_id: str, gateway: ExecutorGateway = Depends(require_executor_gateway)):
-    await gateway.devices.revoke(executor_id)
+    await gateway.revoke(executor_id)
     return {"ok": True}
 
 
@@ -103,6 +103,11 @@ async def stream(
             while True:
                 if await request.is_disconnected():
                     return
+                # A revoke or a superseding reconnect clears/replaces the
+                # stream owner; this stream must stop delivering commands
+                # the moment it no longer owns the connection.
+                if gateway.stream_owner(device.executor_id) != lease.lease_id:
+                    return
                 commands = await gateway.pending_commands(device.executor_id, last_seq)
                 for command in commands:
                     yield _sse(
@@ -121,7 +126,7 @@ async def stream(
         except asyncio.CancelledError:
             raise
         finally:
-            gateway.disconnect(device.executor_id)
+            gateway.disconnect(device.executor_id, lease.lease_id)
 
     return SSEStreamingResponse(generate(), media_type="text/event-stream")
 

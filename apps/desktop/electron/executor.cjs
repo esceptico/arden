@@ -86,16 +86,31 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
     await stateStore.save({ executorId, token, cursor });
   }
 
+  const RESULT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+
   async function submitResult(config, invocationId, statusValue, payload, errorCode) {
-    const response = await post(config, "/executor/results", {
-      lease_id: leaseId,
-      invocation_id: invocationId,
-      status: statusValue,
-      result_payload: JSON.stringify(payload),
-      error_code: errorCode ?? null,
-    });
-    if (response.status === 403) throw new StaleLease();
-    return response;
+    // The tool already ran: losing the result would leave the server-side
+    // waiter hanging on work that finished. Results are idempotent by
+    // invocation_id, so retry network failures; only a stale lease (403,
+    // we were fenced) or a recorded conflict (409) ends the attempt.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await post(config, "/executor/results", {
+          lease_id: leaseId,
+          invocation_id: invocationId,
+          status: statusValue,
+          result_payload: JSON.stringify(payload),
+          error_code: errorCode ?? null,
+        });
+        if (response.status === 403) throw new StaleLease();
+        if (response.status < 500) return response;
+        throw new Error(`results POST failed: ${response.status}`);
+      } catch (error) {
+        if (error instanceof StaleLease || disposed || attempt >= RESULT_RETRY_DELAYS_MS.length) throw error;
+        log(`result delivery failed (attempt ${attempt + 1}) — retrying: ${error?.message ?? error}`);
+        await new Promise(resolve => setTimeout(resolve, RESULT_RETRY_DELAYS_MS[attempt]));
+      }
+    }
   }
 
   async function handleExecute(config, command) {
@@ -151,7 +166,15 @@ function createExecutorClient({ getConfig, stateStore, fetchImpl, log = () => {}
     heartbeatTimer = setInterval(async () => {
       try {
         const response = await post(config, "/executor/heartbeat", { lease_id: leaseId, acked_seq: cursor });
-        if (response.status === 403) {
+        if (response.status === 401) {
+          // Device was revoked mid-session: drop the credential so the
+          // reconnect loop re-enrolls instead of retrying a dead token.
+          log("heartbeat rejected: device revoked — re-enrolling");
+          await stateStore.save(null);
+          executorId = null;
+          token = null;
+          restart();
+        } else if (response.status === 403) {
           log("heartbeat rejected: stale lease — reconnecting");
           restart();
         }
