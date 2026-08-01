@@ -1,15 +1,19 @@
+"""File tools are client-placed: behavioral coverage of the device
+implementations lives in apps/desktop/tests/executorDeviceTools.test.ts.
+The server keeps schemas, policy, approvals, and the refusing in-process
+bodies — that is what these tests pin down."""
+
 from datetime import UTC, datetime
-from hashlib import sha256
 
 import pytest
 from pydantic import ValidationError
 
 from arden.context.models import AreaContext, SessionState
 from arden.core.prompts import AREA_BLOCK
-from arden.tools import files as file_tools_module
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, file_revision
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolPlacement
 from arden.tools.deferred import is_deferred_tool
 from arden.tools.executor import ToolExecutor
 from arden.tools.files import (
@@ -24,6 +28,15 @@ from arden.tools.files import (
     write_file_tool,
 )
 
+ALL_FILE_TOOLS = {
+    "read_file": read_file_tool,
+    "list_files": list_files_tool,
+    "find_files": find_files_tool,
+    "search_text": search_text_tool,
+    "write_file": write_file_tool,
+    "edit_file": edit_file_tool,
+}
+
 
 def _make_execution(tool_name: str, *, area_cwd: str | None = None) -> ToolExecution:
     ctx = ToolContext(
@@ -37,58 +50,35 @@ def _make_execution(tool_name: str, *, area_cwd: str | None = None) -> ToolExecu
     return ToolExecution(tool_id="t1", tool_name=tool_name, ctx=ctx)
 
 
-@pytest.mark.asyncio
-async def test_read_file_self_reports_source_refs(tmp_path):
-    note = tmp_path / "q3.md"
-    note.write_text("dashboard notes", encoding="utf-8")
+# --- placement and in-process refusal ---
 
-    execution = _make_execution("read_file")
-    result = await read_file_tool.execute(execution, path=str(note))
 
-    assert not result.is_error
-    assert "sha256" not in result.data
-    assert sha256(b"dashboard notes").hexdigest() not in result.content
-    assert result.data["size"] == len(b"dashboard notes")
-    observation = execution.ctx.run.resource_observation(f"file:{note.resolve()}")
-    assert observation is not None and observation.content_read
-    assert [ref.to_dict() for ref in result.source_refs] == [
-        {
-            "provider": "filesystem",
-            "kind": "file",
-            "ref": str(note.resolve()),
-            "title": "q3.md",
-        }
-    ]
+def test_all_file_tools_are_client_placed():
+    for name, file_tool in ALL_FILE_TOOLS.items():
+        assert file_tool.policy.placement == ToolPlacement.CLIENT, name
 
 
 @pytest.mark.asyncio
-async def test_read_file_missing_is_typed_failure(tmp_path):
-    result = await read_file_tool.execute(
-        _make_execution("read_file"),
-        path=str(tmp_path / "missing.txt"),
-    )
-
+async def test_read_tools_refuse_in_process_execution(tmp_path):
+    result = await read_file_tool.execute(_make_execution("read_file"), path=str(tmp_path / "x.txt"))
     assert result.is_error
-    assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "not_found"
+    assert result.outcome.error.code == "no_client_execution"
+
+    result = await list_files_tool.execute(_make_execution("list_files"), path=str(tmp_path))
+    assert result.is_error
+    assert result.outcome.error.code == "no_client_execution"
 
 
 @pytest.mark.asyncio
-async def test_read_file_does_not_expose_raw_filesystem_errors(tmp_path, monkeypatch):
-    note = tmp_path / "private.md"
-    note.write_text("content", encoding="utf-8")
-
-    def fail_read(_path):
-        raise OSError("secret mount detail")
-
-    monkeypatch.setattr(file_tools_module, "read_file_snapshot", fail_read)
-    result = await read_file_tool.execute(_make_execution("read_file"), path=str(note))
-
+async def test_write_tools_refuse_in_process_execution_without_touching_disk(tmp_path):
+    target = tmp_path / "note.txt"
+    result = await write_file_tool.execute(_make_execution("write_file"), path=str(target), content="hello")
     assert result.is_error
-    assert "secret mount detail" not in result.content
-    assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "read_failed"
-    assert result.outcome.error.recovery_action
+    assert result.outcome.error.code == "no_client_execution"
+    assert not target.exists()
+
+
+# --- atomic compare-and-swap (shared mutation primitive, still server infra) ---
 
 
 def test_atomic_compare_and_swap_preserves_old_file_when_replace_fails(tmp_path, monkeypatch):
@@ -122,6 +112,9 @@ def test_atomic_compare_and_swap_rejects_stale_revision(tmp_path):
     assert target.read_text(encoding="utf-8") == "version B"
 
 
+# --- area prompt contract ---
+
+
 def test_area_prompt_tells_agent_to_use_relative_paths():
     prompt = AREA_BLOCK.render(area=AreaContext(area_id="proj-1", name="Area", default_cwd="/Users/me/src/area"))
 
@@ -129,262 +122,7 @@ def test_area_prompt_tells_agent_to_use_relative_paths():
     assert "Use relative paths from the default cwd" in prompt
 
 
-@pytest.mark.asyncio
-async def test_area_file_tools_display_paths_relative_to_default_cwd(tmp_path):
-    (tmp_path / "README.md").write_text("hello", encoding="utf-8")
-
-    result = await list_files_tool.execute(_make_execution("list_files", area_cwd=str(tmp_path)), path=".")
-
-    assert not result.is_error
-    assert result.content.startswith(". (1 entries)")
-    assert str(tmp_path) not in result.content
-    assert result.data["path"] == "."
-    assert result.data["absolute_path"] == str(tmp_path)
-    assert result.data["entries"][0]["path"] == "README.md"
-    assert result.data["entries"][0]["absolute_path"] == str(tmp_path / "README.md")
-
-
-@pytest.mark.asyncio
-async def test_area_write_and_edit_results_display_relative_paths(tmp_path):
-    execution = _make_execution("write_file", area_cwd=str(tmp_path))
-    write = await write_file_tool.execute(
-        execution,
-        path="notes.txt",
-        content="hello",
-    )
-
-    assert not write.is_error
-    assert "Wrote notes.txt" in write.content
-    assert str(tmp_path) not in write.content
-    assert write.data["path"] == "notes.txt"
-    assert write.data["absolute_path"] == str(tmp_path / "notes.txt")
-
-    edit = await edit_file_tool.execute(
-        _make_execution("edit_file", area_cwd=str(tmp_path)),
-        path="notes.txt",
-        old_text="hello",
-        new_text="bye",
-    )
-
-    assert not edit.is_error
-    assert edit.content == "Edited notes.txt."
-    assert edit.data["path"] == "notes.txt"
-    assert edit.data["absolute_path"] == str(tmp_path / "notes.txt")
-
-
-@pytest.mark.asyncio
-async def test_list_files_returns_directory_entries(tmp_path):
-    (tmp_path / "src").mkdir()
-    (tmp_path / "README.md").write_text("hello", encoding="utf-8")
-
-    result = await list_files_tool.execute(_make_execution("list_files"), path=str(tmp_path))
-
-    assert not result.is_error
-    assert "README.md" in result.content
-    assert "src/" in result.content
-    assert result.data["total"] == 2
-
-
-@pytest.mark.asyncio
-async def test_list_files_returns_deterministic_cursor_pages(tmp_path):
-    for name in ("c.txt", "a.txt", "b.txt"):
-        (tmp_path / name).write_text(name, encoding="utf-8")
-
-    first = await list_files_tool.execute(_make_execution("list_files"), path=str(tmp_path), limit=2)
-    second = await list_files_tool.execute(
-        _make_execution("list_files"),
-        path=str(tmp_path),
-        limit=2,
-        cursor=first.data["next_cursor"],
-    )
-
-    assert [item["name"] for item in first.data["items"]] == ["a.txt", "b.txt"]
-    assert [item["name"] for item in second.data["items"]] == ["c.txt"]
-    assert second.data["has_more"] is False
-
-
-@pytest.mark.asyncio
-async def test_find_files_matches_glob_recursively(tmp_path):
-    (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "app.py").write_text("print('hi')", encoding="utf-8")
-    (tmp_path / "notes.txt").write_text("hi", encoding="utf-8")
-
-    result = await find_files_tool.execute(_make_execution("find_files"), path=str(tmp_path), pattern="*.py")
-
-    assert not result.is_error
-    assert "pkg/app.py" in result.content
-    assert result.data["matches"] == [
-        {"path": str(tmp_path / "pkg" / "app.py"), "relative_path": "pkg/app.py", "size": "11B"}
-    ]
-
-
-@pytest.mark.asyncio
-async def test_find_files_discloses_capped_results(tmp_path):
-    for name in ("c.py", "a.py", "b.py"):
-        (tmp_path / name).write_text(name, encoding="utf-8")
-
-    result = await find_files_tool.execute(_make_execution("find_files"), path=str(tmp_path), pattern="*.py", limit=2)
-
-    assert [item["relative_path"] for item in result.data["matches"]] == ["a.py", "b.py"]
-    assert result.data["has_more"] is True
-    assert "more exist" in result.content
-
-
-@pytest.mark.asyncio
-async def test_find_files_uses_rg_fast_path(tmp_path, monkeypatch):
-    fast_match = {"path": str(tmp_path / "fast.py"), "relative_path": "fast.py", "size": "4B"}
-
-    def fake_rg(root, args):
-        assert root == tmp_path
-        assert args.pattern == "*.py"
-        return [fast_match]
-
-    monkeypatch.setattr(file_tools_module, "_find_files_with_rg", fake_rg)
-
-    result = await find_files_tool.execute(_make_execution("find_files"), path=str(tmp_path), pattern="*.py")
-
-    assert not result.is_error
-    assert result.data["matches"] == [fast_match]
-    assert "fast.py" in result.content
-
-
-@pytest.mark.asyncio
-async def test_find_files_requires_rg(tmp_path, monkeypatch):
-    (tmp_path / "app.py").write_text("print('hi')", encoding="utf-8")
-    monkeypatch.setattr(file_tools_module.shutil, "which", lambda _name: None)
-
-    result = await find_files_tool.execute(_make_execution("find_files"), path=str(tmp_path), pattern="*.py")
-
-    assert result.is_error
-    assert result.data["matches"] == []
-    assert "ripgrep" in result.content
-
-
-@pytest.mark.asyncio
-async def test_search_text_returns_line_matches(tmp_path):
-    (tmp_path / "one.txt").write_text("alpha\nneedle here\n", encoding="utf-8")
-    (tmp_path / "two.txt").write_text("nothing\n", encoding="utf-8")
-
-    result = await search_text_tool.execute(_make_execution("search_text"), path=str(tmp_path), query="needle")
-
-    assert not result.is_error
-    assert "one.txt:2:" in result.content
-    assert result.data["matches"][0]["text"] == "needle here"
-
-
-@pytest.mark.asyncio
-async def test_search_text_discloses_capped_results(tmp_path):
-    (tmp_path / "notes.txt").write_text("needle\nneedle\nneedle\n", encoding="utf-8")
-
-    result = await search_text_tool.execute(_make_execution("search_text"), path=str(tmp_path), query="needle", limit=2)
-
-    assert len(result.data["matches"]) == 2
-    assert result.data["has_more"] is True
-    assert "more exist" in result.content
-
-
-@pytest.mark.asyncio
-async def test_search_text_uses_rg_fast_path(tmp_path, monkeypatch):
-    fast_match = {
-        "path": str(tmp_path / "fast.txt"),
-        "relative_path": "fast.txt",
-        "line": 3,
-        "column": 7,
-        "text": "fast needle",
-    }
-
-    def fake_rg(root, args):
-        assert root == tmp_path
-        assert args.query == "needle"
-        return [fast_match]
-
-    monkeypatch.setattr(file_tools_module, "_search_text_with_rg", fake_rg)
-
-    result = await search_text_tool.execute(_make_execution("search_text"), path=str(tmp_path), query="needle")
-
-    assert not result.is_error
-    assert result.data["matches"] == [fast_match]
-    assert "fast.txt:3:7: fast needle" in result.content
-
-
-@pytest.mark.asyncio
-async def test_search_text_requires_rg(tmp_path, monkeypatch):
-    (tmp_path / "one.txt").write_text("needle here\n", encoding="utf-8")
-    monkeypatch.setattr(file_tools_module.shutil, "which", lambda _name: None)
-
-    result = await search_text_tool.execute(_make_execution("search_text"), path=str(tmp_path), query="needle")
-
-    assert result.is_error
-    assert result.data["matches"] == []
-    assert "ripgrep" in result.content
-
-
-@pytest.mark.asyncio
-async def test_write_file_writes_exact_content(tmp_path):
-    target = tmp_path / "new.txt"
-
-    result = await write_file_tool.execute(
-        _make_execution("write_file"),
-        path=str(target),
-        content="a\nb\n",
-    )
-
-    assert not result.is_error
-    assert target.read_text(encoding="utf-8") == "a\nb\n"
-    assert result.data == {
-        "path": str(target),
-        "lines": 3,
-        "size": 4,
-    }
-    assert result.outcome is not None and result.outcome.effect is not None
-    assert result.outcome.effect.before_ref is None
-    assert result.outcome.effect.after_ref is None
-
-
-@pytest.mark.asyncio
-async def test_write_file_requires_a_fresh_complete_read(tmp_path):
-    target = tmp_path / "note.txt"
-    target.write_text("old\nkeep", encoding="utf-8")
-    execution = _make_execution("write_file")
-
-    missing = await write_file_tool.execute(execution, path=str(target), content="new\nkeep")
-    await read_file_tool.execute(execution, path=str(target), limit=1)
-    partial = await write_file_tool.execute(execution, path=str(target), content="new\nkeep")
-
-    assert missing.is_error and missing.outcome is not None and missing.outcome.error is not None
-    assert missing.outcome.error.code == "fresh_read_required"
-    assert partial.is_error and partial.outcome is not None and partial.outcome.error is not None
-    assert partial.outcome.error.code == "fresh_read_required"
-    assert target.read_text(encoding="utf-8") == "old\nkeep"
-
-
-@pytest.mark.asyncio
-async def test_write_file_rejects_a_read_that_will_be_offloaded(tmp_path):
-    target = tmp_path / "large.txt"
-    target.write_text("x" * 60_000, encoding="utf-8")
-    execution = _make_execution("write_file")
-
-    read = await read_file_tool.execute(execution, path=str(target))
-    result = await write_file_tool.execute(execution, path=str(target), content="replacement")
-
-    assert len(read.content) > 60_000
-    assert result.is_error
-    assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "fresh_read_required"
-    assert target.read_text(encoding="utf-8") == "x" * 60_000
-
-
-@pytest.mark.asyncio
-async def test_write_file_create_retry_is_idempotent(tmp_path):
-    target = tmp_path / "new.txt"
-    execution = _make_execution("write_file")
-
-    created = await write_file_tool.execute(execution, path=str(target), content="hello")
-    retried = await write_file_tool.execute(execution, path=str(target), content="hello")
-
-    assert not created.is_error and not retried.is_error
-    assert retried.preview == "File unchanged"
-    assert target.read_text(encoding="utf-8") == "hello"
+# --- schemas ---
 
 
 def test_file_write_schemas_reject_hash_arguments() -> None:
@@ -395,65 +133,81 @@ def test_file_write_schemas_reject_hash_arguments() -> None:
         WriteFileInput.model_validate({"path": "x", "content": "y", "expected_sha256": "a" * 64})
 
 
+# --- approvals (still built server-side, against the same disk) ---
+
+
 @pytest.mark.asyncio
-async def test_write_file_rejects_change_after_approval(tmp_path):
+async def test_write_approval_builds_diff_without_hashes(tmp_path):
     target = tmp_path / "note.txt"
-    target.write_text("version A", encoding="utf-8")
-    execution = _make_execution("write_file")
-    await read_file_tool.execute(execution, path=str(target))
+    target.write_text("version A\n", encoding="utf-8")
 
     approval = await write_file_tool.approval_info(
-        execution,
+        _make_execution("write_file"),
         path=str(target),
-        content="approved replacement",
-    )
-    target.write_text("version B", encoding="utf-8")
-    result = await write_file_tool.execute(
-        execution,
-        path=str(target),
-        content="approved replacement",
+        content="approved replacement\n",
     )
 
     assert approval is not None
-    assert "sha256" not in (approval.diff or "").lower()
-    assert result.is_error
-    assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "write_conflict"
-    assert "sha256" not in result.content.lower()
-    assert target.read_text(encoding="utf-8") == "version B"
+    assert approval.description.startswith("Replace ")
+    assert approval.diff is not None
+    assert "-version A" in approval.diff
+    assert "+approved replacement" in approval.diff
+    assert "sha256" not in approval.diff.lower()
 
 
 @pytest.mark.asyncio
-async def test_edit_file_replaces_one_exact_block(tmp_path):
-    target = tmp_path / "note.txt"
-    target.write_text("hello old world\n", encoding="utf-8")
-
-    result = await edit_file_tool.execute(
-        _make_execution("edit_file"),
-        path=str(target),
-        old_text="old",
-        new_text="new",
+async def test_write_approval_for_new_file_says_create(tmp_path):
+    approval = await write_file_tool.approval_info(
+        _make_execution("write_file"),
+        path=str(tmp_path / "new.txt"),
+        content="hello",
     )
-
-    assert not result.is_error
-    assert target.read_text(encoding="utf-8") == "hello new world\n"
+    assert approval is not None
+    assert approval.description.startswith("Create ")
 
 
 @pytest.mark.asyncio
-async def test_edit_file_rejects_ambiguous_block(tmp_path):
+async def test_edit_approval_requires_unique_match(tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("same\nsame\n", encoding="utf-8")
 
-    result = await edit_file_tool.execute(
+    approval = await edit_file_tool.approval_info(
         _make_execution("edit_file"),
         path=str(target),
         old_text="same",
         new_text="different",
     )
+    assert approval is None
 
-    assert result.is_error
-    assert "matched 2 times" in result.content
-    assert target.read_text(encoding="utf-8") == "same\nsame\n"
+    target.write_text("hello old world\n", encoding="utf-8")
+    approval = await edit_file_tool.approval_info(
+        _make_execution("edit_file"),
+        path=str(target),
+        old_text="old",
+        new_text="new",
+    )
+    assert approval is not None
+    assert approval.diff is not None
+    assert "+hello new world" in approval.diff
+
+
+@pytest.mark.asyncio
+async def test_area_approvals_display_relative_paths(tmp_path):
+    (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
+
+    approval = await edit_file_tool.approval_info(
+        _make_execution("edit_file", area_cwd=str(tmp_path)),
+        path="notes.txt",
+        old_text="hello",
+        new_text="bye",
+    )
+
+    assert approval is not None
+    assert approval.description == "Edit notes.txt"
+    assert str(tmp_path) not in approval.description
+
+
+# --- registration ---
 
 
 def test_file_tools_are_registered_as_core_tools():

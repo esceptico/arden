@@ -38,7 +38,6 @@ from arden.tools.background import background_tool, cancel_agent_tool
 from arden.tools.bash import bash_tool
 from arden.tools.connections import request_connection_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
-from arden.tools.device import read_device_file_tool
 from arden.tools.directives import get_directives_tool, set_directives_tool
 from arden.tools.fact_maintenance import fact_maintenance_review_tool
 from arden.tools.facts import (
@@ -90,7 +89,6 @@ SYSTEM = Integration(
     tools={
         "bash": bash_tool,
         "read_file": read_file_tool,
-        "read_device_file": read_device_file_tool,
         "list_files": list_files_tool,
         "find_files": find_files_tool,
         "search_text": search_text_tool,
