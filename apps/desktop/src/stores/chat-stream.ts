@@ -292,6 +292,12 @@ function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
         diff: event.diff ?? undefined,
         preview: event.content_preview ?? undefined,
         status: "pending",
+        runId: event.run_id ?? undefined,
+        sessionId: event.session_id ?? undefined,
+        agentType: event.agent_type ?? undefined,
+        agentName: event.agent_name ?? undefined,
+        action: event.action ?? undefined,
+        expiresAt: event.expires_at ?? undefined,
       });
       return;
     case "connection_needed":

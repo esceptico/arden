@@ -111,6 +111,13 @@ export function pendingApprovalsFromRuntime(
     preview: approval.preview ?? undefined,
     diff: approval.diff ?? undefined,
     status: "pending" as const,
+    path: approval.description ?? undefined,
+    runId: approval.run_id ?? undefined,
+    sessionId: approval.session_id ?? undefined,
+    agentType: approval.agent_type ?? undefined,
+    agentName: approval.agent_name ?? undefined,
+    action: approval.action ?? undefined,
+    expiresAt: approval.expires_at ?? undefined,
   }));
 }
 

@@ -466,6 +466,7 @@ async def submit_tool_result(
             tool_call_id=request.tool_id,
             status="approved" if request.approved else "rejected",
             result_feedback=request.result.strip() or None,
+            source="user",
         )
         if not resolved:
             raise HTTPException(status_code=409, detail="Approval already resolved")
@@ -528,6 +529,7 @@ async def submit_tool_result(
             "tool_id": request.tool_id,
             "result": request.result,
             "approved": request.approved,
+            "source": "user",
         }
     )
 
@@ -538,6 +540,7 @@ async def submit_tool_result(
                 tool_call_id=request.tool_id,
                 status="approved" if request.approved else "rejected",
                 result_feedback=request.result.strip() or None,
+                source="user",
             )
         except Exception:
             pass

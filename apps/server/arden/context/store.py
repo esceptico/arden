@@ -2164,6 +2164,21 @@ class SessionStore:
         )
         return [self._tool_approval_payload(row) for row in rows]
 
+    async def list_all_pending_run_suspensions(self, *, kind: str | None = None) -> list[dict]:
+        """Every pending suspension across all sessions — the queryable index
+        of outstanding approvals, so the UI can surface them after a restart
+        or from another session instead of scanning transcripts."""
+        conditions = ["status = 'pending'"]
+        params: list[str] = []
+        if kind is not None:
+            conditions.append("kind = ?")
+            params.append(kind)
+        rows = await self.read_conn.execute_fetchall(
+            f"SELECT * FROM tool_approvals WHERE {' AND '.join(conditions)} ORDER BY requested_at ASC",
+            tuple(params),
+        )
+        return [self._tool_approval_payload(row) for row in rows]
+
     async def record_tool_call_started(
         self,
         *,
@@ -2488,6 +2503,10 @@ class SessionStore:
         preview: str | None = None,
         diff: str | None = None,
         expires_at: str | None = None,
+        description: str | None = None,
+        agent_type: str | None = None,
+        agent_name: str | None = None,
+        parent_session_id: str | None = None,
     ) -> None:
         await self.record_run_suspension(
             run_id=run_id,
@@ -2500,6 +2519,10 @@ class SessionStore:
                 "scope": scope,
                 "preview": preview,
                 "diff": diff,
+                "description": description,
+                "agent_type": agent_type,
+                "agent_name": agent_name,
+                "parent_session_id": parent_session_id,
             },
             expires_at=expires_at,
         )
@@ -2606,12 +2629,16 @@ class SessionStore:
         tool_call_id: str,
         status: str,
         result_feedback: str | None = None,
+        source: str | None = None,
     ) -> bool:
+        resolution = {"approved": status == "approved", "result": result_feedback or ""}
+        if source:
+            resolution["source"] = source
         return await self.resolve_run_suspension(
             run_id=run_id,
             suspension_id=tool_call_id,
             status=status,
-            resolution={"approved": status == "approved", "result": result_feedback or ""},
+            resolution=resolution,
         )
 
     async def resolve_integration_connection(
@@ -2661,12 +2688,14 @@ class SessionStore:
         run_id: str,
         tool_call_id: str,
         result_feedback: str | None = None,
+        source: str | None = None,
     ) -> bool:
         return await self.resolve_tool_approval(
             run_id=run_id,
             tool_call_id=tool_call_id,
             status="expired",
             result_feedback=result_feedback,
+            source=source or "timeout",
         )
 
     async def get_tool_approval(self, *, run_id: str, tool_call_id: str) -> dict | None:

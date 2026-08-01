@@ -43,6 +43,14 @@ export interface RuntimeApprovalSnapshot {
   status: "pending";
   requested_at?: string | null;
   run_id?: string | null;
+  session_id?: string | null;
+  action?: string | null;
+  scope?: string | null;
+  expires_at?: string | null;
+  description?: string | null;
+  agent_type?: string | null;
+  agent_name?: string | null;
+  parent_session_id?: string | null;
 }
 
 export interface RuntimeConnectionSnapshot {
@@ -135,7 +143,7 @@ export type ServerEvent = CommonServerEventFields & (
   | { type: "REASONING_END"; message_id: string; depth?: number }
 
   // ─── arden-specific (non-AG-UI canonical) ───────────────────────────
-  | { type: "approval_needed"; tool_id: string; name: string; path?: string | null; diff?: string | null; content_preview?: string | null }
+  | { type: "approval_needed"; tool_id: string; name: string; path?: string | null; diff?: string | null; content_preview?: string | null; run_id?: string | null; session_id?: string | null; agent_type?: string | null; agent_name?: string | null; action?: string | null; scope?: string | null; expires_at?: string | null }
   | { type: "input_needed"; tool_id: string; name: string; title: string; html: string }
   | { type: "connection_needed"; run_id: string; tool_id: string; integration_id: string; connection_id: string; label: string; reason: ConnectionState; detail: string; capability: string; action: ConnectionAction; settings_tab: string; required_scopes: string[]; source: "recovery" | "suggestion" }
   | {

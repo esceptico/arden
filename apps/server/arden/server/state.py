@@ -184,6 +184,7 @@ class RunState:
                     "tool_id": tool_id,
                     "result": "",
                     "approved": True,
+                    "source": "rule",
                 }
             )
             resolved += 1

@@ -76,6 +76,7 @@ def _runtime_run_from_live(active_run) -> dict | None:
 
 
 def _approval_snapshot(row: dict) -> dict:
+    payload = row.get("payload") or {}
     return {
         "tool_id": row["tool_call_id"],
         "tool_name": row["tool_name"],
@@ -84,6 +85,14 @@ def _approval_snapshot(row: dict) -> dict:
         "status": "pending",
         "requested_at": row.get("requested_at"),
         "run_id": row.get("run_id"),
+        "session_id": row.get("session_id"),
+        "action": row.get("action"),
+        "scope": row.get("scope"),
+        "expires_at": row.get("expires_at"),
+        "description": payload.get("description"),
+        "agent_type": payload.get("agent_type"),
+        "agent_name": payload.get("agent_name"),
+        "parent_session_id": payload.get("parent_session_id"),
     }
 
 
@@ -480,6 +489,16 @@ async def get_session_history(
             "message_count": data.last_message_count if data.last_message_count is not None else len(data.messages),
         },
     }
+
+
+@router.get("/approvals/pending")
+async def list_pending_approvals(
+    svc: SessionService = Depends(require_session_service),
+):
+    """Every outstanding tool approval across all sessions, attributed — the
+    durable index the UI can query after a restart or from any session."""
+    rows = await svc.store.list_all_pending_run_suspensions(kind="tool_approval")
+    return {"approvals": [_approval_snapshot(row) for row in rows]}
 
 
 @router.get("/session/turns")

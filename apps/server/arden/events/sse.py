@@ -354,6 +354,16 @@ class ApprovalNeededEvent(SSEEvent):
     path: str | None = None
     diff: str | None = None
     content_preview: str | None = None
+    # Attribution: which run resolves this approval, which session asked (for
+    # a child agent that is the CHILD session — "agent X wants to run Y"),
+    # and the policy facts the client previously never saw.
+    run_id: str | None = None
+    session_id: str | None = None
+    agent_type: str | None = None
+    agent_name: str | None = None
+    action: str | None = None
+    scope: str | None = None
+    expires_at: str | None = None
 
 
 @dataclass(frozen=True)

@@ -284,6 +284,12 @@ export interface ApprovalState {
   diff?: string;
   preview?: string;
   status: ApprovalStatus;
+  runId?: string;
+  sessionId?: string;
+  agentType?: string;
+  agentName?: string;
+  action?: string;
+  expiresAt?: string;
 }
 
 export interface PendingConnection {

@@ -20,12 +20,18 @@ export async function respondToApproval(
   feedback = "",
 ): Promise<void> {
   const s = getState();
-  if (!s.currentRunId) return;
+  // The approval carries the run that resolves it — for a child agent's card
+  // that is the PARENT run id, which may differ from the session the card was
+  // seen in. The global currentRunId is only the fallback for events recorded
+  // before attribution existed.
+  const approval = s.pendingApprovals.find((a) => a.toolId === toolId);
+  const runId = approval?.runId ?? s.currentRunId;
+  if (!runId) return;
   clearApprovalFeedbackDraft(toolId);
   s.resolvePendingApproval(toolId);
   try {
     await submitToolResult(s.config, {
-      run_id: s.currentRunId,
+      run_id: runId,
       tool_id: toolId,
       result: feedback,
       approved,
@@ -52,7 +58,6 @@ export async function respondToAllApprovals(
   feedback = "",
 ): Promise<void> {
   const s = getState();
-  if (!s.currentRunId) return;
   const pending = [...s.pendingApprovals];
   await Promise.all(pending.map((a) => respondToApproval(a.toolId, approved, feedback)));
 }

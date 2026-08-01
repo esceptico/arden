@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 from uuid import uuid4
 
 from arden.agent import Role, ToolOutcomeStatus, ToolResult
@@ -23,6 +23,9 @@ _logger = get_logger(__name__)
 class ApprovalResponse(TypedDict):
     approved: bool
     result: str
+    # Who decided: "user" (explicit /tools/result), "rule" (skip-approvals /
+    # auto-approve resolving pending futures). Absent means "user".
+    source: NotRequired[str]
 
 
 @dataclass
@@ -854,6 +857,12 @@ class ToolExecution:
         action = tool.policy.action.value if tool else "write"
         scope = tool.policy.scope.value if tool else "internal"
         expires_at = (datetime.now(UTC) + timedelta(seconds=self.ctx.io.approval_timeout_seconds)).isoformat()
+        # Requester attribution: for a child agent this session IS the child
+        # session, so the card can finally say "agent X wants to run Y" and a
+        # cross-session index can group by requester.
+        agent_type = self.ctx.session_state.agent_type
+        agent_name = self.ctx.session_state.name if agent_type else None
+        parent_session_id = self.ctx.session_state.parent_session_id
 
         persistence_error = await _approval_callback_required(
             self.ctx.io.record_approval,
@@ -867,6 +876,10 @@ class ToolExecution:
             preview=preview,
             diff=diff,
             expires_at=expires_at,
+            description=description,
+            agent_type=agent_type,
+            agent_name=agent_name,
+            parent_session_id=parent_session_id,
         )
         if persistence_error:
             return Rejection.persistence_failure(
@@ -900,6 +913,13 @@ class ToolExecution:
                     path=description,
                     diff=diff,
                     content_preview=preview if not diff else None,
+                    run_id=self.ctx.run.run_id,
+                    session_id=self.ctx.session_id,
+                    agent_type=agent_type,
+                    agent_name=agent_name,
+                    action=action,
+                    scope=scope,
+                    expires_at=expires_at,
                 )
             )
             response = await asyncio.wait_for(future, timeout=self.ctx.io.approval_timeout_seconds)
@@ -911,6 +931,7 @@ class ToolExecution:
                 tool_call_id=self.tool_id,
                 status="cancelled",
                 result_feedback="Approval cancelled",
+                source="cancel",
             )
             raise
         except TimeoutError:
@@ -921,11 +942,13 @@ class ToolExecution:
                 tool_call_id=self.tool_id,
                 status="expired",
                 result_feedback="Approval timed out",
+                source="timeout",
             )
             return Rejection(feedback="Approval timed out")
         finally:
             self.ctx.io.pending_approvals.pop(self.tool_id, None)
 
+        decision_source = str(response.get("source") or "user")
         if not response["approved"]:
             feedback = response.get("result", "").strip() or None
             await _approval_callback_best_effort(
@@ -935,6 +958,7 @@ class ToolExecution:
                 tool_call_id=self.tool_id,
                 status="rejected",
                 result_feedback=feedback,
+                source=decision_source,
             )
             return Rejection(feedback=feedback)
 
@@ -945,6 +969,7 @@ class ToolExecution:
             tool_call_id=self.tool_id,
             status="approved",
             result_feedback=response.get("result", "").strip() or None,
+            source=decision_source,
         )
         if persistence_error:
             return Rejection.persistence_failure(

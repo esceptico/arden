@@ -269,6 +269,7 @@ async def test_tools_result_wakes_active_future_when_durable_update_fails():
         "tool_id": "call-1",
         "result": "ok",
         "approved": True,
+        "source": "user",
     }
 
 
@@ -905,6 +906,7 @@ async def test_active_run_auto_message_resolves_pending_approval():
         "tool_id": "tool-x",
         "result": "",
         "approved": True,
+        "source": "rule",
     }
 
 

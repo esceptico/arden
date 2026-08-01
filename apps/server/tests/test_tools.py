@@ -931,6 +931,7 @@ async def test_tool_approval_timeout_expires_pending_request():
             "tool_call_id": "call-1",
             "status": "expired",
             "result_feedback": "Approval timed out",
+            "source": "timeout",
         }
     ]
 
@@ -984,6 +985,7 @@ async def test_tool_approval_cancellation_resolves_pending_request():
             "tool_call_id": "call-1",
             "status": "cancelled",
             "result_feedback": "Approval cancelled",
+            "source": "cancel",
         }
     ]
 
@@ -1892,3 +1894,80 @@ async def test_current_time_uses_configured_timezone(monkeypatch):
     assert result.data["timezone"] == "Asia/Tokyo"
     assert result.content.endswith("+09:00")
     assert result.data["utc"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_child_agent_approval_carries_attribution():
+    async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
+        return ToolResult(content=args.text, preview=args.text)
+
+    async def approve_echo(execution: ToolExecution, args: EchoInput) -> ApprovalInfo:
+        return ApprovalInfo(description="Echo text", preview=args.text, diff=None)
+
+    registry = ToolRegistry()
+    _register_tools(
+        registry,
+        {
+            "echo": tool(
+                description="Echo text.",
+                input_model=EchoInput,
+                execute=echo,
+                policy=WRITE_INTERNAL_APPROVAL_POLICY,
+                approval=approve_echo,
+            )
+        },
+    )
+    emitted = []
+    recorded = []
+    pending: dict[str, asyncio.Future] = {}
+
+    async def emit(event):
+        emitted.append(event)
+        # Resolve immediately so request_approval settles without a timeout.
+        pending["call-1"].set_result({"approved": True, "result": "", "source": "user"})
+
+    async def record_approval(**kwargs):
+        recorded.append(kwargs)
+
+    async def resolve_approval(**kwargs):
+        recorded.append(kwargs)
+
+    child_state = SessionState(session_id="parent::ab12cd34", started_at=datetime.now(UTC))
+    child_state.agent_type = "research"
+    child_state.name = "Scan the docs"
+    child_state.parent_session_id = "parent"
+    ctx = ToolContext(
+        session_state=child_state,
+        registry=registry,
+        run=RunContext(run_id="run-1"),
+        io=IOBridge(
+            emit=emit,
+            pending_approvals=pending,
+            record_approval=record_approval,
+            resolve_approval=resolve_approval,
+        ),
+        background_tasks=BackgroundTaskRegistry(session_id="parent::ab12cd34"),
+    )
+    execution = ToolExecution(tool_id="call-1", tool_name="echo", ctx=ctx)
+
+    rejection = await execution.request_approval("Echo hello", preview="hello")
+
+    assert rejection is None
+    # Durable record carries the requester identity.
+    request = recorded[0]
+    assert request["description"] == "Echo hello"
+    assert request["agent_type"] == "research"
+    assert request["agent_name"] == "Scan the docs"
+    assert request["parent_session_id"] == "parent"
+    # The card event says which run resolves it and which agent asked.
+    event = emitted[0]
+    assert event.run_id == "run-1"
+    assert event.session_id == "parent::ab12cd34"
+    assert event.agent_type == "research"
+    assert event.agent_name == "Scan the docs"
+    assert event.action == "write"
+    assert event.expires_at is not None
+    # The resolution records who decided.
+    resolution = recorded[1]
+    assert resolution["status"] == "approved"
+    assert resolution["source"] == "user"
