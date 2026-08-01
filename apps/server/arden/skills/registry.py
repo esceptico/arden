@@ -148,6 +148,13 @@ class SkillRegistry:
 
     def set_device_skills(self, entries: list[tuple[SkillMeta, str]]) -> None:
         self._device_skills = {meta.name: (meta, content) for meta, content in entries}
+        # Surface shadow attempts instead of resolving them silently: a
+        # device skill colliding with a builtin is either an honest mistake
+        # or an attempted override of trusted content — either way, log it.
+        for name in self._device_skills:
+            file_meta = self._skills.get(name)
+            if file_meta is not None and file_meta.location == "builtin":
+                _logger.warning("Device skill '%s' shadows a builtin and is ignored; rename it to use it", name)
 
     def list_all(self) -> list[SkillMeta]:
         merged = dict(self._skills)
