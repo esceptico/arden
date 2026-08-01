@@ -21,6 +21,7 @@ from arden.integrations.base import IntegrationConnectionError
 from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import ConnectionService
 from arden.tools.core.context import ToolContext, ToolExecution
+from arden.tools.core.execution import ToolInvocation
 from arden.tools.core.types import ToolAction, ToolScope
 from arden.tools.deferred import is_deferred_tool
 from arden.tools.executor import ToolExecutor
@@ -137,12 +138,13 @@ class ArdenToolExecutor:
                 await self._ledger.mark_accessed(access_key(name, args))
 
         execution = ToolExecution(tool_id=tool_call_id, tool_name=name, ctx=self._ctx)
+        invocation = ToolInvocation(invocation_id=tool_call_id, tool_name=name, arguments=args)
         result: ToolResult | None = None
         read_succeeded = False
         finish_status: str | None = None
         finish_preview: str | None = None
         try:
-            execute = self._executor.registry.execute(name, execution, args)
+            execute = self._executor.router.execute(invocation, execution)
             timeout_seconds = _effective_timeout_seconds(tool)
             try:
                 if timeout_seconds is None:
@@ -264,7 +266,8 @@ class ArdenToolExecutor:
             )
 
         try:
-            retry = self._executor.registry.execute(name, execution, args)
+            invocation = ToolInvocation(invocation_id=execution.tool_id, tool_name=name, arguments=args)
+            retry = self._executor.router.execute(invocation, execution)
             if timeout_seconds is None:
                 return await retry
             return await asyncio.wait_for(retry, timeout=timeout_seconds)
