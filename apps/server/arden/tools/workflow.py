@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from arden.events.sse import WorkflowFinishedEvent, WorkflowStartedEvent
 from arden.orchestra.dynamic import run_script
 from arden.orchestra.engine import Orchestra
+from arden.orchestra.journal import WorkflowJournal
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
@@ -140,7 +142,27 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
             )
         )
 
-    orchestra = Orchestra.for_ctx(ctx, parent_id=execution.tool_id, workflow_id=workflow_id, name=title)
+    # workflow_id above is uuid-fresh per execution (UI identity only). The
+    # durable identity of a workflow EXECUTION is its parent tool call: a
+    # restarted run re-executes the same tool_call_id, so the journal is keyed
+    # on it (plus the session for uniqueness and the preset source, so a
+    # changed script falls back to a fresh run instead of replaying stale
+    # results). Replay is implicitly on: a prefix journaled under this key is
+    # served until the first miss; a fresh execution just misses at seq 1.
+    journal = None
+    invocations = ctx.services.get("invocations")
+    if invocations is not None:
+        script_sha = hashlib.sha256(script.encode("utf-8")).hexdigest()[:12]
+        journal = WorkflowJournal(
+            invocations,
+            key=f"{ctx.session_state.session_id}:{execution.tool_id}:{script_sha}",
+            run_id=ctx.run.run_id,
+            session_id=ctx.session_state.session_id,
+            tool_call_id=execution.tool_id,
+        )
+    orchestra = Orchestra.for_ctx(
+        ctx, parent_id=execution.tool_id, workflow_id=workflow_id, name=title, journal=journal
+    )
 
     async def _finish(status: str, summary: str) -> None:
         if emit:

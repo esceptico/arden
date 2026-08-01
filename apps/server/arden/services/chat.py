@@ -87,6 +87,15 @@ async def _recover_durable_tool_calls(
         if not row or row["status"] in {"created", "awaiting"}:
             continue
         if row["status"] == "running":
+            if row["tool_name"] == "workflow":
+                # Journal-backed: re-executing the workflow tool replays its
+                # completed agent spawns from the invocation journal and runs
+                # live from the first miss, so a mid-flight call re-executes
+                # instead of freezing into a synthesized "uncertain" result.
+                # (Its children's subagent_result suspensions are keyed by
+                # per-spawn lifecycle_id, not this tool_call_id, so they never
+                # flip this row to 'awaiting'.)
+                continue
             recovered[tool_call_id] = ToolResult.failure(
                 code="execution_state_uncertain",
                 message=(

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
@@ -10,6 +11,7 @@ from arden.core.llm_client import llm_client
 from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.logging import get_logger
 from arden.observability import observed_trace
+from arden.orchestra.journal import WorkflowJournal, formatter_hash, spawn_hash
 from arden.orchestra.schema import model_from_schema
 from arden.tools.core.scope import ToolFilter
 
@@ -111,13 +113,33 @@ class Orchestra:
     so every unit is wrapped to swallow errors and keep the rest alive.
     """
 
-    def __init__(self, ctx: Any, parent_id: str | None = None, workflow_id: str | None = None, name: str | None = None):
+    def __init__(
+        self,
+        ctx: Any,
+        parent_id: str | None = None,
+        workflow_id: str | None = None,
+        name: str | None = None,
+        journal: WorkflowJournal | None = None,
+    ):
         self.ctx = ctx
         self.parent_id = parent_id
         self.workflow_id = workflow_id
         self.name = name
         self.spawn_count = 0
         self._phase: str | None = None
+        self._journal = journal
+        # Prefix-replay cursor. Seq assignment is synchronous (spawn_count += 1
+        # before any await) so issue order is deterministic across executions;
+        # the journal fetch is async, so parallel()/pipeline() can discover a
+        # cache miss out of issue order. `_replay_stop_seq` records the lowest
+        # missing seq: a miss at M ends replay PERMANENTLY for every call with
+        # seq >= M (each call re-checks after its own fetch), while lower-seq
+        # calls still in flight that hit keep serving from cache — anything
+        # issued before the first miss is by definition the unchanged prefix.
+        # A higher-seq call whose fetch settles before the miss is discovered
+        # can still replay; that race is accepted (its inputs were fixed at
+        # issue time by the deterministic script) per the settled W6 design.
+        self._replay_stop_seq: int | None = None
         # The run's shared RunBudget (same instance as the parent agent + every
         # spawned child), so spent() reflects the whole turn. None when the ctx
         # has no run (test stubs that don't exercise budgeting).
@@ -134,9 +156,21 @@ class Orchestra:
 
     @classmethod
     def for_ctx(
-        cls, ctx: Any, parent_id: str | None = None, workflow_id: str | None = None, name: str | None = None
+        cls,
+        ctx: Any,
+        parent_id: str | None = None,
+        workflow_id: str | None = None,
+        name: str | None = None,
+        journal: WorkflowJournal | None = None,
     ) -> "Orchestra":
-        return cls(ctx=ctx, parent_id=parent_id, workflow_id=workflow_id, name=name)
+        return cls(ctx=ctx, parent_id=parent_id, workflow_id=workflow_id, name=name, journal=journal)
+
+    def _replay_allows(self, seq: int) -> bool:
+        return self._replay_stop_seq is None or seq < self._replay_stop_seq
+
+    def _note_replay_miss(self, seq: int) -> None:
+        if self._replay_stop_seq is None or seq < self._replay_stop_seq:
+            self._replay_stop_seq = seq
 
     def phase(self, title: str) -> None:
         self._phase = title
@@ -167,7 +201,7 @@ class Orchestra:
         label = agent_type or active_phase
 
         if schema is None:
-            return await self._spawn(
+            text, _ = await self._spawn(
                 task,
                 tools,
                 model,
@@ -178,13 +212,14 @@ class Orchestra:
                 type_exclude=type_exclude,
                 extra_tools=type_extra or None,
             )
+            return text
 
         # Structured output is a two-step contract: the worker can use normal
         # tools and return prose; a separate formatter pass uses provider-native
         # response_format. This keeps workflow workers from seeing a fake
         # structured_output tool that can conflict with tool filtering.
         out_model = model_from_schema(schema)
-        worker_answer = await self._spawn(
+        worker_answer, seq = await self._spawn(
             task,
             tools,
             model,
@@ -195,6 +230,26 @@ class Orchestra:
             type_exclude=type_exclude,
             extra_tools=type_extra or None,
         )
+        # Formatter journal slot: content-addressed by (call, worker answer,
+        # schema), so it replays only when the exact same formatting was already
+        # paid for — sound even after prefix replay ends — and misses naturally
+        # when a live re-run produced a different answer. Only VALIDATED output
+        # is ever journaled, so a cached hit skips both LLM passes.
+        fmt_slot = None
+        if self._journal is not None:
+            call_hash = spawn_hash(task, prompt, model or self._default_model, label)
+            schema_json = json.dumps(out_model.model_json_schema(), sort_keys=True, separators=(",", ":"))
+            fmt_hash = formatter_hash(call_hash, worker_answer, schema_json)
+            fmt_slot = await self._journal.begin(
+                seq,
+                fmt_hash,
+                {"kind": "formatter", "prompt_hash": call_hash, "content_hash": fmt_hash},
+                allow_replay=True,
+                formatter=True,
+            )
+            if fmt_slot.cached_text is not None:
+                result = out_model.model_validate_json(fmt_slot.cached_text)
+                return result if out_model is schema else result.model_dump()
         formatted = await self._format_structured(task, worker_answer, out_model, model)
         try:
             result = out_model.model_validate_json(formatted)
@@ -215,6 +270,8 @@ class Orchestra:
                 raise WorkflowStructuredOutputMissing(
                     "workflow formatter did not return valid structured output"
                 ) from repair_exc
+        if fmt_slot is not None and fmt_slot.invocation_id is not None:
+            await self._journal.finish(fmt_slot.invocation_id, formatted)
         # Preserve the contract: a pydantic schema returns the validated instance;
         # a dict schema returns a dict.
         return result if out_model is schema else result.model_dump()
@@ -301,9 +358,10 @@ class Orchestra:
         scope: ToolFilter | None = None,
         type_exclude: frozenset[str] = frozenset(),
         extra_tools: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> tuple[str, int]:
         # Cap + count every real worker spawn here. Schema formatter/repair
-        # passes are internal LLM calls and do not consume spawn slots.
+        # passes are internal LLM calls and do not consume spawn slots. The
+        # guards run before any journaling — an aborted call journals nothing.
         if self.spawn_count >= _MAX_WORKFLOW_SPAWNS:
             raise WorkflowSpawnLimit(f"workflow exceeded {_MAX_WORKFLOW_SPAWNS} agent spawns (runaway guard)")
         # Hard token ceiling: don't start a new agent once the run's shared budget
@@ -317,24 +375,68 @@ class Orchestra:
             raise WorkflowBudgetExceeded(
                 f"workflow output-token budget of {self._budget.total} exhausted ({self._budget.output_tokens} spent)"
             )
+        # seq is assigned synchronously (no await above under the single-threaded
+        # event loop), so issue order — and therefore journal keys — is stable
+        # across executions of the same deterministic script.
         self.spawn_count += 1
+        seq = self.spawn_count
+        invocation_id: str | None = None
+        if self._journal is not None:
+            effective_model = model or self._default_model
+            content_hash = spawn_hash(task, system_prompt, effective_model, agent_type_label)
+            arguments = {
+                "task": task,
+                "system_prompt": system_prompt,
+                "model": effective_model,
+                "agent_type_label": agent_type_label,
+                "phase": phase,
+                "prompt_hash": content_hash,
+            }
+            slot = await self._journal.begin(seq, content_hash, arguments, allow_replay=self._replay_allows(seq))
+            if slot.cached_text is not None and not self._replay_allows(seq):
+                # Replay-race repair: the fetch hit, but a lower-seq miss
+                # surfaced while it was in flight — this call is past the
+                # unchanged prefix now, so re-claim without replay (a
+                # same-execution double-exec record still dedupes).
+                slot = await self._journal.begin(seq, content_hash, arguments, allow_replay=False)
+            if slot.cached_text is not None:
+                # Cache hit inside the unchanged prefix (or a concurrent
+                # double-exec of this same call): serve it — skip the
+                # semaphore, and spend no budget (nothing runs).
+                return slot.cached_text, seq
+            # A live slot means this (seq, hash) was not in the succeeded
+            # prefix: the first such miss ends replay for every later-seq call.
+            self._note_replay_miss(seq)
+            invocation_id = slot.invocation_id
         lifecycle_id = f"{self.parent_id}:{uuid4().hex[:8]}" if self.parent_id else None
-        async with _GLOBAL_SEM:
-            spawn = await self.ctx.spawn_fn(
-                self.ctx,
-                task=task,
-                system_prompt=system_prompt,
-                tools=tools,
-                model_override=model or self._default_model,
-                reasoning_effort_override=self._default_reasoning_effort,
-                parent_id=self.parent_id,
-                isolation=IsolationLevel.FULL,
-                agent_type=agent_type_label or phase or "workflow",
-                lifecycle_id=lifecycle_id,
-                workflow_id=self.workflow_id,
-                phase=phase,
-                scope=scope,
-                exclude_tools=_WORKFLOW_EXCLUDE_TOOLS | type_exclude,
-                extra_tools=extra_tools,
-            )
-        return spawn.text
+        try:
+            async with _GLOBAL_SEM:
+                spawn = await self.ctx.spawn_fn(
+                    self.ctx,
+                    task=task,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    model_override=model or self._default_model,
+                    reasoning_effort_override=self._default_reasoning_effort,
+                    parent_id=self.parent_id,
+                    isolation=IsolationLevel.FULL,
+                    agent_type=agent_type_label or phase or "workflow",
+                    lifecycle_id=lifecycle_id,
+                    workflow_id=self.workflow_id,
+                    phase=phase,
+                    scope=scope,
+                    exclude_tools=_WORKFLOW_EXCLUDE_TOOLS | type_exclude,
+                    extra_tools=extra_tools,
+                )
+        except asyncio.CancelledError:
+            # Leave the slot REQUESTED — a re-execution reclaims it in place.
+            raise
+        except Exception as exc:
+            if invocation_id is not None:
+                # A _safe-degraded None journals as failed and RE-RUNS on
+                # replay — never freeze a transient failure into a hole.
+                await self._journal.fail(invocation_id, str(exc))
+            raise
+        if invocation_id is not None:
+            await self._journal.finish(invocation_id, spawn.text)
+        return spawn.text, seq

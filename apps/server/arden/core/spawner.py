@@ -378,9 +378,10 @@ def create_spawn_fn(
         # Durable-await key: one suspension row per awaited child. A research
         # call has one child and a tool_call_id that is stable across a run
         # resume; workflow fan-out shares one tool_call_id across MANY children,
-        # so the per-spawn lifecycle_id keys those instead (workflow ids are
-        # uuid-fresh per exec and workflow runs have no resume — their rows just
-        # resolve on settle and are never replayed).
+        # so the per-spawn lifecycle_id keys those instead. Workflow recovery
+        # does not go through these rows at all — a re-executed workflow tool
+        # call replays finished spawns from the Orchestra journal and re-spawns
+        # the rest with fresh lifecycle_ids; the old rows just settle inert.
         suspension_id = (lifecycle_id or parent_id) if should_wait else None
         parent_io = calling_ctx.io
         respawns = 0

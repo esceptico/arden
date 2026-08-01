@@ -251,6 +251,9 @@ class Runtime:
                 services["wiki_maintenance"] = self.automation.wiki_maintenance_review
         if self.stores is not None:
             services["area_work"] = self.stores.area_work
+            # The workflow tool journals its agent spawns here so a
+            # re-executed workflow replays its completed prefix.
+            services["invocations"] = self.stores.invocations
         services.update(self.knowledge.tool_services())
         if self.automation_service:
             services["automation"] = self.automation_service

@@ -146,20 +146,48 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
             return [
                 {
                     "tool_call_id": "c1",
+                    "tool_name": "bash",
                     "status": "success",
                     "result_preview": "done",
                     "outcome": {"status": "succeeded"},
                 },
-                {"tool_call_id": "c2", "status": "running", "result_preview": None, "outcome": None},
-                {"tool_call_id": "c3", "status": "created", "result_preview": None, "outcome": None},
-                {"tool_call_id": "c4", "status": "awaiting", "result_preview": None, "outcome": None},
+                {
+                    "tool_call_id": "c2",
+                    "tool_name": "bash",
+                    "status": "running",
+                    "result_preview": None,
+                    "outcome": None,
+                },
+                {
+                    "tool_call_id": "c3",
+                    "tool_name": "bash",
+                    "status": "created",
+                    "result_preview": None,
+                    "outcome": None,
+                },
+                {
+                    "tool_call_id": "c4",
+                    "tool_name": "bash",
+                    "status": "awaiting",
+                    "result_preview": None,
+                    "outcome": None,
+                },
+                # A mid-flight workflow call is journal-backed: it re-executes
+                # (prefix replay) instead of getting a synthesized result.
+                {
+                    "tool_call_id": "c5",
+                    "tool_name": "workflow",
+                    "status": "running",
+                    "result_preview": None,
+                    "outcome": None,
+                },
             ]
 
         async def get_tool_result_for_call(self, *, run_id, tool_call_id):
             assert (run_id, tool_call_id) == ("run-1", "c1")
             return {"content": "durable result"}
 
-    calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 5)]
+    calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 6)]
 
     recovered = await _recover_durable_tool_calls(Store(), "run-1", calls)
 

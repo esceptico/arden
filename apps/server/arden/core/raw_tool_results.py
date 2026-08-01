@@ -91,6 +91,11 @@ def read_raw_tool_result(blob_path: str, *, compression: str = _COMPRESSION) -> 
     return raw.decode("utf-8", errors="replace")
 
 
+def read_raw_tool_result_by_ref(blob_ref: str) -> str:
+    """Read a blob by its `sha256:<hex>` ref — the path is content-derived."""
+    return read_raw_tool_result(str(_blob_path(blob_ref.removeprefix("sha256:"))))
+
+
 def internal_blob_from_data(data: dict | None) -> RawToolResultBlob | None:
     if not isinstance(data, dict):
         return None
