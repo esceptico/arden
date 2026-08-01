@@ -52,7 +52,17 @@ class AuthMiddleware:
             return
 
         public_paths = {"/health"}
-        if request.url.path not in public_paths:
+        # These endpoints authenticate with the enrolled executor-device token
+        # via their own dependency; enrollment and device management still
+        # require the API key.
+        executor_device_paths = {
+            "/executor/stream",
+            "/executor/started",
+            "/executor/results",
+            "/executor/heartbeat",
+        }
+        path = request.url.path
+        if path not in public_paths and path not in executor_device_paths:
             token = _extract_bearer_token(request)
             if not token:
                 detail = "Missing API key. Include Authorization: Bearer <key> header."

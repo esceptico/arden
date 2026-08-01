@@ -4,7 +4,11 @@ import arden.database as database
 from arden.areas.work_store import AreaWorkStore
 from arden.automation.store import AutomationStore
 from arden.config import Config
+from arden.constants import EXECUTOR_LEASE_TTL_SECONDS
 from arden.context.store import SessionStore
+from arden.execution.commands import ExecutorCommandLog
+from arden.execution.devices import ExecutorDeviceStore
+from arden.execution.leases import LeaseStore
 from arden.execution.store import InvocationStore
 from arden.monitor.store import MonitorStateStore
 from arden.notifiers.store import NotifierStore
@@ -35,6 +39,9 @@ class Stores:
         outbox: OutboxStore,
         area_work: AreaWorkStore,
         invocations: InvocationStore,
+        executor_devices: ExecutorDeviceStore,
+        executor_leases: LeaseStore,
+        executor_commands: ExecutorCommandLog,
     ):
         self.conn = conn
         self.automation_settlement_conn = automation_settlement_conn
@@ -47,6 +54,9 @@ class Stores:
         self.outbox = outbox
         self.area_work = area_work
         self.invocations = invocations
+        self.executor_devices = executor_devices
+        self.executor_leases = executor_leases
+        self.executor_commands = executor_commands
 
     @classmethod
     async def connect(cls, config: Config) -> Self:
@@ -87,6 +97,13 @@ class Stores:
         invocations = InvocationStore(conn)
         await invocations.init_schema()
 
+        executor_devices = ExecutorDeviceStore(conn)
+        await executor_devices.init_schema()
+        executor_leases = LeaseStore(conn, ttl_seconds=EXECUTOR_LEASE_TTL_SECONDS)
+        await executor_leases.init_schema()
+        executor_commands = ExecutorCommandLog(conn)
+        await executor_commands.init_schema()
+
         return cls(
             conn=conn,
             automation_settlement_conn=automation_settlement_conn,
@@ -99,6 +116,9 @@ class Stores:
             outbox=outbox,
             area_work=area_work,
             invocations=invocations,
+            executor_devices=executor_devices,
+            executor_leases=executor_leases,
+            executor_commands=executor_commands,
         )
 
     async def close(self) -> None:
