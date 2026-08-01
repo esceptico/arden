@@ -79,9 +79,6 @@ interface Window {
       /** Interactive macOS screen snip (panel hides during selection,
        *  re-presents after). Resolves null when the user cancels. */
       captureScreen: () => Promise<{ media_type: string; data: string } | null>;
-      /** Grow/shrink the quick window (e.g. around the chat picker).
-       *  Height is clamped in the main process; top edge stays fixed. */
-      resize: (height: number) => Promise<void>;
       /** Register a new global shortcut for summoning the quick-capture
        *  window. Pass an empty string to disable. Resolves true on
        *  success, false if the OS refused (another app owns the chord). */

@@ -385,12 +385,12 @@ const DEFAULT_QUICK_SHORTCUT = "CommandOrControl+Shift+Space";
 // The visible sheet is 608px (the system-overlay contract); the transparent
 // window adds the renderer's 24px shadow gutters on both sides.
 const QUICK_WIDTH = 656;
-/** Base height: the resting Spotlight-class bar — 56px input row with
- * inline accessories, plus the renderer's 8px top and 36px bottom shadow
- * gutters. The renderer's ResizeObserver requests taller bounds as the
- * bar grows (draft lines, image chips, destination picker). */
-const QUICK_BASE_HEIGHT = 102;
-const QUICK_MAX_HEIGHT = 560;
+/** Fixed window height. The window is transparent, so it is simply tall
+ * enough for the card at its largest (multi-line draft + image chips +
+ * destination picker); the card bottom-anchors inside it and grows upward
+ * into invisible space. No renderer→main resize protocol — a fixed
+ * oversized window cannot clip the card, ever. */
+const QUICK_HEIGHT = 560;
 const QUICK_VISIBLE_BOTTOM_GUTTER = 36;
 /** The visible bar's bottom edge sits this fraction of the work area up
  * from the bottom (companion-bar placement, not Spotlight's top third). */
@@ -517,7 +517,7 @@ function createQuickWindow() {
     // (24px sides / 36px below) so the shadow can render instead of being
     // clipped at the window edge.
     width: QUICK_WIDTH,
-    height: QUICK_BASE_HEIGHT,
+    height: QUICK_HEIGHT,
     frame: false,
     transparent: true,
     resizable: false,
@@ -537,6 +537,13 @@ function createQuickWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // This window is created once at boot and lives HIDDEN between
+      // summons. With Chromium's default throttling its renderer is
+      // suspended while hidden — which silently stalls Vite's HMR socket,
+      // so in dev the panel kept presenting the code it booted with no
+      // matter what changed on disk. It also lets the summon paint from a
+      // warm renderer instead of a throttled one.
+      backgroundThrottling: false,
     },
   });
 
@@ -607,8 +614,7 @@ function showQuickWindow() {
 function presentQuickWindow(win) {
   // Horizontally centered on the display that currently owns the cursor,
   // riding LOW like a companion bar: the visible card's bottom edge sits
-  // ~15% of the work area up from the bottom. Reset to base size first:
-  // a prior summon may have grown the window for the chat picker.
+  // ~15% of the work area up from the bottom.
   const cursorPoint = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursorPoint);
   const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
@@ -616,8 +622,8 @@ function presentQuickWindow(win) {
   // The renderer's transparent bottom shadow gutter is subtracted so the
   // visible card — not its window — lands on the anchor.
   const visibleBottom = dy + Math.round(dh * (1 - QUICK_BOTTOM_FRACTION));
-  const y = Math.max(dy, visibleBottom - (QUICK_BASE_HEIGHT - QUICK_VISIBLE_BOTTOM_GUTTER));
-  win.setBounds({ x, y, width: QUICK_WIDTH, height: QUICK_BASE_HEIGHT });
+  const y = Math.max(dy, visibleBottom - (QUICK_HEIGHT - QUICK_VISIBLE_BOTTOM_GUTTER));
+  win.setBounds({ x, y, width: QUICK_WIDTH, height: QUICK_HEIGHT });
   win.show();
   win.focus();
   // Non-activating panels become the key window without activating the
@@ -785,18 +791,6 @@ app.whenReady().then(() => {
     }
     if (quickWindow && !quickWindow.isDestroyed()) presentQuickWindow(quickWindow);
     return data ? { media_type: "image/png", data } : null;
-  });
-
-  // The quick renderer grows/shrinks its window around the chat picker.
-  // Top edge stays fixed; the panel expands downward.
-  ipcMain.handle("quick:resize", (event, height) => {
-    assertTrustedSender(event);
-    if (typeof height !== "number" || !Number.isFinite(height)) return;
-    if (!quickWindow || quickWindow.isDestroyed()) return;
-    const clamped = Math.round(Math.min(Math.max(height, QUICK_BASE_HEIGHT), QUICK_MAX_HEIGHT));
-    // Bottom-anchored bar: growth extends upward so the input row stays put.
-    const { x, y, height: current } = quickWindow.getBounds();
-    quickWindow.setBounds({ x, y: y + (current - clamped), width: QUICK_WIDTH, height: clamped });
   });
 
   createWindow({ show: true });
