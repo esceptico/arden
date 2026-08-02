@@ -286,24 +286,26 @@ function AgentRow({
         </span>
       }
     >
-      {/* Content column: name line + progress line, gap-1 to match tool rows. */}
-      <span className="flex min-w-0 flex-col gap-1">
+      {/* Content column IS the click target — a name-only hitbox is too small
+          for a row whose whole surface reads as one step. Stop lives in the
+          node column and stopPropagation-guards itself. */}
+      <button
+        type="button"
+        onClick={() => {
+          if (childSessionId) {
+            void switchSession(childSessionId);
+            return;
+          }
+          onOpen(item);
+        }}
+        title={childSessionId ? "Open agent session" : `${item.kind} — click to inspect`}
+        data-child-session-id={childSessionId}
+        className="flex min-w-0 flex-col gap-1 text-left bg-transparent border-0 p-0 m-0 cursor-pointer"
+      >
       {/* Name line: peer of a tool's label, with status/elapsed/cost trailing.
           Baseline-aligned — the 14px name and the smaller meta share one line. */}
       <span className="flex min-w-0 items-baseline gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            if (childSessionId) {
-              void switchSession(childSessionId);
-              return;
-            }
-            onOpen(item);
-          }}
-          title={childSessionId ? "Open agent session" : `${item.kind} — click to inspect`}
-          data-child-session-id={childSessionId}
-          className="flex min-w-0 items-center gap-1.5 text-left bg-transparent border-0 p-0 m-0"
-        >
+        <span className="flex min-w-0 items-center gap-1.5">
           <span
             className={clsx(
               "truncate font-medium leading-tight transition-colors duration-row ease-out",
@@ -323,7 +325,7 @@ function AgentRow({
               aria-hidden
             />
           )}
-        </button>
+        </span>
         {statusWord && <span className="arden-status">{statusWord}</span>}
         {run.elapsedLabel && (
           <span className="shrink-0 text-2xs tabular-nums text-faint">{run.elapsedLabel}</span>
@@ -336,7 +338,7 @@ function AgentRow({
       {detail && (
         <span className="min-w-0 truncate text-sm text-muted leading-snug">{detail}</span>
       )}
-      </span>
+      </button>
     </ThinkingStep>
   );
 }
