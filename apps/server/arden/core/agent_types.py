@@ -26,8 +26,8 @@ from arden.tools.core.scope import ToolFilter, tools
 _READ = tools.read
 
 SPAWN_SURFACE_GUIDANCE = (
-    "Choose research for an investigation with the research toolkit; background for a plain detached "
-    "one-off task; workflow for a curated multi-agent pipeline; create_automation for recurring "
+    "Choose research for a detached investigation (depth='quick' for simple one-off tasks); "
+    "workflow for a curated multi-agent pipeline; create_automation for recurring "
     "scheduled/event work; create_loop only for adaptive repeated work that stops on a condition.\n"
     "Delegation rubric:\n"
     "- Plan first: identify the critical-path blocker — the thing your very next step depends on. "

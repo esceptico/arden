@@ -42,12 +42,12 @@ def test_user_discovery_rejects_child_only_reserved_names(tmp_path: Path):
 
 def test_user_tools_cannot_shadow_registered_builtins(monkeypatch):
     attempted_shadow = _tool()
-    monkeypatch.setattr(executor_module, "discover_user_tools", lambda: {"background": attempted_shadow})
+    monkeypatch.setattr(executor_module, "discover_user_tools", lambda: {"research": attempted_shadow})
 
     executor = ToolExecutor()
 
-    assert executor.registry.get("background") is not attempted_shadow
-    assert executor.registry.get_source("background") == "_system"
+    assert executor.registry.get("research") is not attempted_shadow
+    assert executor.registry.get_source("research") == "_system"
 
 
 def test_dead_tools_are_not_registered_or_exposed_in_workflow_schema():
@@ -85,7 +85,7 @@ def test_directives_group_exposes_read_before_replace_pair():
 
 def test_shared_spawn_guidance_reaches_each_spawn_surface():
     executor = ToolExecutor()
-    for name in ("research", "background", "workflow", "create_automation", "create_loop"):
+    for name in ("research", "workflow", "create_automation", "create_loop"):
         assert SPAWN_SURFACE_GUIDANCE in executor.registry.get(name).description
 
 

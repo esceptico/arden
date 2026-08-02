@@ -223,7 +223,7 @@ async def test_workflow_agents_exclude_spawn_tools():
     o = Orchestra.for_ctx(ctx, parent_id="t", workflow_id="w")
     await o.agent("do thing")
     assert captured["exclude"] is not None
-    assert {"workflow", "research", "background"} <= set(captured["exclude"])
+    assert {"workflow", "research"} <= set(captured["exclude"])
 
 
 async def test_agent_type_threads_capability_and_persona():

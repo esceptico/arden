@@ -6,11 +6,9 @@ import pytest
 
 import arden.tools.background as background_module
 from arden.context.models import SessionState
-from arden.core.spawner import SpawnResult
 from arden.server.state import RunRegistry
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.core.types import ToolAction
 
 
 def _ctx(registry: BackgroundTaskRegistry, run_registry: RunRegistry | None = None) -> ToolContext:
@@ -41,85 +39,6 @@ async def _live_agent(registry: BackgroundTaskRegistry, task_id: str, child_sess
     await registry.record_started(task_id=task_id, command="scan docs", child_session_id=child_session_id)
     return task
 
-
-@pytest.mark.asyncio
-async def test_background_tool_spawns_detached_background_research_agent():
-    captured = {}
-
-    async def spawn_fn(ctx, task, **kwargs):
-        captured["task"] = task
-        captured.update(kwargs)
-        return SpawnResult(
-            text="Started a background agent to: scan docs",
-            child_run_id="agent-1",
-            child_session_id="test::ab12ef",
-            parent_tool_call_id="background-1",
-            agent_type="background_research",
-            wait=False,
-            status="running",
-        )
-
-    ctx = ToolContext(
-        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
-        registry=ToolRegistry(),
-        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
-        io=IOBridge(),
-        background_tasks=BackgroundTaskRegistry(session_id="test"),
-    )
-    ctx.spawn_fn = spawn_fn
-    execution = ToolExecution(tool_id="background-1", tool_name="background", ctx=ctx)
-
-    result = await background_module.background(
-        execution,
-        background_module.BackgroundInput(task="scan docs"),
-    )
-
-    assert captured["task"] == "scan docs"
-    assert captured["parent_id"] == "background-1"
-    assert captured["agent_type"] == "background_research"
-    assert captured["wait"] is False
-    assert "background" not in captured
-    # The session id is the agent's only agent-facing address; the task id is not.
-    assert "test::ab12ef" in result.content
-    assert "send_message" in result.content
-    assert "read_session" in result.content
-    assert "agent-1" not in result.content
-    assert result.data["child_agent"]["child_run_id"] == "agent-1"
-    assert result.data["child_agent"]["child_session_id"] == "test::ab12ef"
-
-
-@pytest.mark.asyncio
-async def test_background_tool_reports_the_agent_limit_as_a_failure():
-    async def spawn_fn(ctx, task, **kwargs):
-        return SpawnResult(
-            text="Not started — already at the limit of 3 concurrent background agents in this session.",
-            agent_type="background_research",
-            wait=False,
-            status="failed",
-        )
-
-    ctx = ToolContext(
-        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
-        registry=ToolRegistry(),
-        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
-        io=IOBridge(),
-        background_tasks=BackgroundTaskRegistry(session_id="test"),
-    )
-    ctx.spawn_fn = spawn_fn
-
-    result = await background_module.background(
-        ToolExecution(tool_id="background-1", tool_name="background", ctx=ctx),
-        background_module.BackgroundInput(task="scan docs"),
-    )
-
-    assert result.is_error
-    assert result.outcome.error.code == "conflict"
-    assert "limit" in result.content
-
-
-def test_background_tool_is_agent_kind():
-    assert background_module.background_tool.kind == "agent"
-    assert background_module.background_tool.policy.action == ToolAction.EXECUTE
 
 
 def test_background_registry_reservations_count_toward_cap():

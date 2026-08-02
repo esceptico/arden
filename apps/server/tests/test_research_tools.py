@@ -175,7 +175,7 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     # excludes), not a pre-built tool list — the spawner builds the toolset from it.
     assert "tools" not in captured
     assert captured["scope"] == tools.read
-    assert {"background", "workflow"} <= captured["exclude_tools"]
+    assert {"cancel_agent", "workflow"} <= captured["exclude_tools"]
     assert captured["agent_type"] == "research"
     assert captured["wait"] is False
     assert result.data is not None
@@ -274,7 +274,6 @@ def _base_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("read_tool", _action_tool(ToolAction.READ), source="_system")
     registry.register("write_tool", _action_tool(ToolAction.WRITE), source="_system")
-    registry.register("background", _action_tool(ToolAction.READ), source="_system")
     registry.register("workflow", _action_tool(ToolAction.READ), source="_system")
     return registry
 
@@ -318,7 +317,6 @@ async def test_research_profile_builds_read_only_child_toolset(monkeypatch):
     assert {"research_outline", "research_cover"} <= names
     assert names >= HARNESS_TOOL_NAMES
     assert "write_tool" not in names  # WRITE filtered by scope=tools.read
-    assert "background" not in names  # excluded by the research spawn-tool set
     assert "workflow" not in names
 
 

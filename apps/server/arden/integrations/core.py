@@ -35,7 +35,7 @@ from arden.tools.automation import (
     schedule_wakeup_tool,
     update_automation_tool,
 )
-from arden.tools.background import background_tool, cancel_agent_tool
+from arden.tools.background import cancel_agent_tool
 from arden.tools.bash import bash_tool
 from arden.tools.connections import request_connection_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
@@ -99,7 +99,6 @@ SYSTEM = Integration(
         "render_html": render_html_tool,
         "research": research_tool,
         "workflow": workflow_tool,
-        "background": background_tool,
         "request_connection": request_connection_tool,
         "load_tools": load_tools_tool,
         "tool_search": tool_search_tool,

@@ -13,7 +13,6 @@ from arden.memory.facts.completion_renderer import _SYNTHESIS_SYSTEM_PROMPT
 from arden.orchestra.engine import _FORMATTER_PROMPT, WORKFLOW_AGENT_PROMPT
 from arden.server.routers.session import GOAL_PROPOSAL_SYSTEM_PROMPT
 from arden.services.goal_continuation import goal_continuation_prompt
-from arden.tools.background import BACKGROUND_SYSTEM_PROMPT
 from arden.wiki.curation.completion import _SYSTEM as WIKI_CURATION_SYSTEM
 
 
@@ -22,7 +21,6 @@ def test_prompts_that_consume_runtime_data_share_the_untrusted_data_rule():
         BASE_SYSTEM_PROMPT,
         *RESEARCH_PROMPTS.values(),
         AUTOMATION_SUFFIX,
-        BACKGROUND_SYSTEM_PROMPT,
         WORKFLOW_AGENT_PROMPT,
         _FORMATTER_PROMPT,
         AUTOMATION_DESCRIPTION_SYSTEM,

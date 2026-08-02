@@ -565,7 +565,7 @@ RESEARCH_AGENT_TOOLS = {
 RESEARCH_AGENT_TYPE = AgentType(
     name="research",
     scope=tools.read,
-    exclude=frozenset({"background", "cancel_agent", "workflow"}),
+    exclude=frozenset({"cancel_agent", "workflow"}),
     extra_tools=RESEARCH_AGENT_TOOLS,
 )
 register_agent_type(RESEARCH_AGENT_TYPE)

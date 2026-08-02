@@ -29,7 +29,7 @@ _MAX_WORKFLOW_SPAWNS = 200
 # Workflow workers are leaves: deny them the spawn tools so a workflow can't
 # re-enter itself or fan out uncontrolled subagents (least privilege + bounds
 # recursion). A workflow that needs delegation expresses it as another phase.
-_WORKFLOW_EXCLUDE_TOOLS = frozenset({"workflow", "research", "background"})
+_WORKFLOW_EXCLUDE_TOOLS = frozenset({"workflow", "research"})
 
 WORKFLOW_AGENT_PROMPT = (
     "You are a focused worker agent inside a deterministic workflow. "
