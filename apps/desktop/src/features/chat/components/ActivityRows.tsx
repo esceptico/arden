@@ -245,7 +245,12 @@ function AgentRow({
     }
   };
   const detail = running ? run.progress : run.resultPreview;
-  const terminalBad = run.status === "failed" || run.status === "cancelled";
+  const failed = run.status === "failed";
+  // Status words are reserved for states with no other signal: running reads
+  // as the shimmering name, completed as the quiet snippet + usage, failed as
+  // the red name with its reason line. Only cancelled/interrupted still say so.
+  const statusWord =
+    run.status === "cancelled" || run.status === "interrupted" ? agentRunStatusLabel(run.status) : null;
   return (
     <ThinkingStep
       last={last}
@@ -283,8 +288,9 @@ function AgentRow({
     >
       {/* Content column: name line + progress line, gap-1 to match tool rows. */}
       <span className="flex min-w-0 flex-col gap-1">
-      {/* Name line: peer of a tool's label, with status/elapsed/cost trailing. */}
-      <span className="flex min-w-0 items-center gap-2">
+      {/* Name line: peer of a tool's label, with status/elapsed/cost trailing.
+          Baseline-aligned — the 14px name and the smaller meta share one line. */}
+      <span className="flex min-w-0 items-baseline gap-2">
         <button
           type="button"
           onClick={() => {
@@ -300,8 +306,12 @@ function AgentRow({
         >
           <span
             className={clsx(
-              "truncate font-medium leading-tight group-hover/agent:text-ink transition-colors duration-row ease-out",
-              running ? "text-muted" : terminalBad ? "text-bad" : "text-ink",
+              "truncate font-medium leading-tight transition-colors duration-row ease-out",
+              running
+                ? "dp-running-text"
+                : failed
+                  ? "text-bad group-hover/agent:text-ink"
+                  : "text-ink group-hover/agent:text-ink",
             )}
           >
             {run.name}
@@ -309,26 +319,22 @@ function AgentRow({
           {childSessionId && (
             <ArrowUpRight
               size={ICON.XS}
-              className="shrink-0 text-faint opacity-0 transition-opacity duration-row ease-out group-hover/agent:opacity-100"
+              className="shrink-0 self-center text-faint opacity-0 transition-opacity duration-row ease-out group-hover/agent:opacity-100"
               aria-hidden
             />
           )}
         </button>
-        <span className={clsx("arden-status", terminalBad && "text-bad")}>
-          {agentRunStatusLabel(run.status)}
-        </span>
+        {statusWord && <span className="arden-status">{statusWord}</span>}
         {run.elapsedLabel && (
           <span className="shrink-0 text-2xs tabular-nums text-faint">{run.elapsedLabel}</span>
         )}
-        {item.usage && activityItemStatus(item) === "executed" && !detail && (
+        {item.usage && activityItemStatus(item) === "executed" && (
           <AgentUsageSuffix tokens={item.usage.total} cost={item.cost} />
         )}
       </span>
       {/* Progress / result line: the agent's "description". */}
       {detail && (
-        <span className={clsx("min-w-0 truncate text-sm text-muted leading-snug", running && "italic")}>
-          {detail}
-        </span>
+        <span className="min-w-0 truncate text-sm text-muted leading-snug">{detail}</span>
       )}
       </span>
     </ThinkingStep>
