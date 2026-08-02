@@ -1111,6 +1111,7 @@ async def respawn_background_agent(
         record_suspension=callbacks.record_suspension,
         resolve_suspension=callbacks.resolve_suspension,
         approval_timeout_seconds=deps.agent_config.approval_timeout_seconds,
+        dispatch_session_message=deps.dispatch_session_message,
     )
     # No area_context: the spec's system prompt already carries the area block
     # (resolved at the original spawn); a ToolContext area would append it again.
@@ -1649,6 +1650,7 @@ def make_child_io_factory(
     consume_suspension: Callable[..., Awaitable[None]] | None = None,
     record_suspension: Callable[..., Awaitable[None]] | None = None,
     resolve_suspension: Callable[..., Awaitable[None]] | None = None,
+    dispatch_session_message: Callable[..., Awaitable[object]] | None = None,
 ) -> ChildIOFactory:
     """Build the factory that gives a spawned FULL subagent its OWN session bus,
     framed with the standard run lifecycle so the child session streams live
@@ -1690,17 +1692,26 @@ def make_child_io_factory(
         async def _on_child_bg_result(messages: list[dict]) -> None:
             # Nested result delivery: a grandchild's completion surfaces to the
             # CHILD mid-turn by queueing into its steering inbox (drained by its
-            # loop at the next step, Claude Code-style). If the child's inbox is
-            # already closed (agent finished), bubble the messages up the parent
-            # chain instead — each hop is another child inbox until the top
-            # session's registry, whose on_result dispatches into the chat. The
-            # result is never dropped.
+            # loop at the next step, Claude Code-style). If the child's loop has
+            # already ended, RE-INVOKE the child — a hidden continuation run in
+            # its own session with the result as input (Claude Code's idle
+            # re-invocation with codex's parent routing) — so the parent agent
+            # itself decides what its child's report means. Bubbling up the
+            # parent chain is only the terminal fallback when no dispatcher is
+            # wired; the result is never dropped.
             if parent_registry is None or child_task_id is None:
                 _logger.warning("Child background result had no parent registry — dropping")
                 return
             leftovers = [m for m in messages if not parent_registry.queue_injection(child_task_id, m)]
-            if leftovers:
-                await parent_registry.inject(leftovers)
+            if not leftovers:
+                return
+            if dispatch_session_message is not None:
+                for message in leftovers:
+                    content = str(message.get("content") or "")
+                    client_id = message.get("client_id")
+                    await dispatch_session_message(params.session_id, content, client_id, True, None)
+                return
+            await parent_registry.inject(leftovers)
 
         child_registry.on_result = _on_child_bg_result
 
@@ -1831,6 +1842,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             record_suspension=callbacks.record_suspension,
             resolve_suspension=callbacks.resolve_suspension,
             approval_timeout_seconds=ctx.config.approval_timeout_seconds,
+            dispatch_session_message=ctx.dispatch_session_message,
         )
 
         def _new_agent() -> Agent:
