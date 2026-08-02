@@ -2,7 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowUpRight,
-  AiChat02,
+  Bot,
   Bell,
   Brain01,
   CalendarDays,
@@ -266,7 +266,7 @@ function AgentRow({
               canStop && "group-hover/agent:opacity-0",
             )}
           >
-            <AiChat02 size={ICON.XS} />
+            <Bot size={ICON.XS} />
           </span>
           {canStop && (
             <Tooltip label="Stop subagent" side="right">

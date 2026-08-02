@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
-  AiChat02,
+  Bot,
   Folder,
   Maximize2,
   Minimize2,
@@ -159,7 +159,7 @@ function AreaSourceRows({ sources }: { sources: readonly AreaHubSource[] }) {
   );
 }
 
-function HubEmpty({ children, icon = AiChat02 }: { children: ReactNode; icon?: ArdenIcon }) {
+function HubEmpty({ children, icon = Bot }: { children: ReactNode; icon?: ArdenIcon }) {
   return (
     <div className="grid min-h-[120px] place-items-center">
       <EmptyState size="sm" icon={icon}>{children}</EmptyState>
@@ -661,7 +661,7 @@ export function AgentRightSidebar({
                           transition={{ duration: MOTION.panel, ease: EASE_EMPHASIZED }}
                           className="grid min-h-[120px] place-items-center"
                         >
-                          <EmptyState size="sm" icon={AiChat02}>
+                          <EmptyState size="sm" icon={Bot}>
                             No agents yet.
                             <br />
                             Background agents you start appear here.
