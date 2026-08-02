@@ -57,6 +57,24 @@ test("without a display title it falls back to the noun, then the tool name", ()
   ]))).toEqual({ verb: "bash", target: "bun test" });
 });
 
+test("a target that restates the tool name renders once", () => {
+  // Uncategorized tools (no display title, no noun) project their target as
+  // the display name again — bare while args stream, with args once parsed.
+  // Either way the strip must not stutter "ReadSession ReadSession".
+  expect(workingLabel(message([
+    call({ status: "ongoing", kind: "read_session", displayName: "ReadSession", target: "ReadSession" }),
+  ]))).toEqual({ verb: "ReadSession", target: "" });
+
+  expect(workingLabel(message([
+    call({
+      status: "ongoing",
+      kind: "read_session",
+      displayName: "ReadSession",
+      target: 'ReadSession(session_id="abc")',
+    }),
+  ]))).toEqual({ verb: "ReadSession", target: "" });
+});
+
 test("status is inferred when the server omitted it", () => {
   // activityItemStatus treats a result-less call as still running.
   expect(workingLabel(message([

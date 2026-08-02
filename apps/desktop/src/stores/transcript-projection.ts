@@ -213,6 +213,27 @@ export function applyChatEventToTranscript(
       break;
 
     case "message_ingested": {
+      // The server's ack that a client-stamped injection was drained into a
+      // run (possibly a hidden wake run). The desktop-owned dispatch path
+      // normally removes the entry when its POST resolves, but that
+      // continuation can miss — a lost response, or a session switch while
+      // the POST is in flight strands the entry in the queue while the
+      // transcript already shows the ingested bubble. The ack is the
+      // authoritative removal signal; appending is deduped against the
+      // dispatch path, which uses the same client id as the message id.
+      const queued = s.queuedMessages.find((q) => q.clientId === event.client_id);
+      if (!queued) break;
+      s.removeQueuedMessage(event.client_id);
+      if (!s.messages.has(event.client_id)) {
+        s.appendMessage({
+          id: event.client_id,
+          role: "user",
+          content: queued.text,
+          turn: { startedAt: ts, endedAt: null, durationMs: null },
+          images: queued.images,
+          suppressEntryMotion,
+        });
+      }
       break;
     }
 

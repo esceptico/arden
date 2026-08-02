@@ -23,7 +23,13 @@ function labelForItem(item: ActivityItem): WorkingLabel {
   const target = item.target?.trim() ?? "";
   const noun = item.noun?.trim();
   if (noun) return { verb: noun, target };
-  return { verb: item.displayName?.trim() || item.kind, target };
+  const verb = item.displayName?.trim() || item.kind;
+  // For uncategorized tools the projected target is the display name again
+  // (bare, or with the call's args appended) — rendering both stutters:
+  // "ReadSession ReadSession". The verb already names the tool; only a
+  // target that says something new earns the second slot.
+  if (target === verb || target.startsWith(`${verb}(`)) return { verb, target: "" };
+  return { verb, target };
 }
 
 /** The strip reports the call that is *running*, never the last one that

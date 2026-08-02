@@ -2154,43 +2154,98 @@ test("run_cancelled preserves pending server-managed queued messages", () => {
   ]);
 });
 
-test("server ingestion events do not consume the desktop-owned queue", () => {
+test("a server ingestion ack removes the queued entry and renders it once", () => {
+  // The dispatch continuation missed (lost response / session switch mid-POST):
+  // the entry is still queued when the server acks that a run — possibly a
+  // hidden wake run — drained it. The ack is the authoritative removal signal.
   setState({
     currentSessionId: "session-1",
     running: true,
-    currentRunId: "run-error",
+    currentRunId: "run-hidden",
     queuedMessages: [
       {
         clientId: "queued-1",
         text: "carry this forward",
         images: [{ type: "input_image", image_url: "data:image/png;base64,a" }],
-        status: "pending",
+        status: "sending",
         enqueuedAt: 1,
       },
+      { clientId: "queued-2", text: "still waiting", status: "pending", enqueuedAt: 2 },
     ],
   });
 
   handleServerEvent({
-    type: "RUN_ERROR",
-    run_id: "run-error",
-    session_id: "session-1",
-    message: "The run failed",
-    timestamp: 2,
-  });
-
-  expect(getState().running).toBe(false);
-  expect(getState().queuedMessages).toHaveLength(1);
-
-  handleServerEvent({
     type: "message_ingested",
-    run_id: "run-error",
+    run_id: "run-hidden",
     client_id: "queued-1",
     timestamp: 3,
   });
 
   const state = getState();
+  expect(state.queuedMessages).toEqual([
+    { clientId: "queued-2", text: "still waiting", status: "pending", enqueuedAt: 2 },
+  ]);
+  const bubble = state.messages.get("queued-1");
+  expect(bubble?.role).toBe("user");
+  expect(bubble?.content).toBe("carry this forward");
+  expect(state.order.filter((id) => id === "queued-1")).toHaveLength(1);
+});
+
+test("an ingestion ack for an already-rendered dispatch does not duplicate the bubble", () => {
+  // Normal path: dispatchQueuedHead appended the bubble under the client id
+  // and the POST landed in an active run ("queued"). The ack that follows the
+  // drain must only clear the queue entry, never append a second bubble.
+  setState({
+    currentSessionId: "session-1",
+    running: true,
+    currentRunId: "run-hidden",
+    messages: new Map([
+      [
+        "queued-1",
+        {
+          id: "queued-1",
+          role: "user" as const,
+          content: "carry this forward",
+          turn: { startedAt: 1, endedAt: null, durationMs: null },
+        },
+      ],
+    ]),
+    order: ["queued-1"],
+    queuedMessages: [
+      { clientId: "queued-1", text: "carry this forward", status: "sending", enqueuedAt: 1 },
+    ],
+  });
+
+  handleServerEvent({
+    type: "message_ingested",
+    run_id: "run-hidden",
+    client_id: "queued-1",
+    timestamp: 2,
+  });
+
+  const state = getState();
+  expect(state.queuedMessages).toEqual([]);
+  expect(state.order).toEqual(["queued-1"]);
+});
+
+test("an ingestion ack with no matching queue entry is a no-op", () => {
+  setState({
+    currentSessionId: "session-1",
+    queuedMessages: [
+      { clientId: "queued-1", text: "unrelated", status: "pending", enqueuedAt: 1 },
+    ],
+  });
+
+  handleServerEvent({
+    type: "message_ingested",
+    run_id: "run-1",
+    client_id: "goal:12345",
+    timestamp: 2,
+  });
+
+  const state = getState();
   expect(state.queuedMessages).toHaveLength(1);
-  expect(state.messages.get("queued-1")).toBeUndefined();
+  expect(state.messages.get("goal:12345")).toBeUndefined();
 });
 
 test("a live terminal event dispatches exactly one local queue head", async () => {
