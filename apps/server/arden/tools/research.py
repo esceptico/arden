@@ -116,7 +116,7 @@ RESEARCH_SYSTEM_PROMPT = env.from_string("""{{ base_prompt }}
 Today is {{ date }}.
 {% if remaining_depth > 1 %}
 
-DEPTH BUDGET: You can spawn {{ remaining_depth - 1 }} more levels of sub-agents. Use research() to delegate sub-topics — don't try to cover everything yourself. Each research() call returns a receipt immediately and runs detached; the report ARRIVES AS A MESSAGE here at a later step. After spawning, continue other work or end your step and wait for the reports — never poll for them.
+DEPTH BUDGET: You can spawn {{ remaining_depth - 1 }} more levels of sub-agents. Use research() to delegate sub-topics — don't try to cover everything yourself.
 {% elif remaining_depth == 1 %}
 
 DEPTH BUDGET: You are at the last level — no more sub-agents. Do all work directly.

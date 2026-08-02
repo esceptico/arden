@@ -10,6 +10,7 @@ from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
 from arden.skills.tool import create_skill_tool, use_skill_tool
 from arden.tools.app_control import (
     archive_session_tool,
+    followup_task_tool,
     open_in_app_tool,
     rename_session_tool,
     request_attention_tool,
@@ -183,6 +184,7 @@ APP_CONTROL = Integration(
     label="App control",
     tools={
         "send_message": send_message_tool,
+        "followup_task": followup_task_tool,
         "rename_session": rename_session_tool,
         "archive_session": archive_session_tool,
         "request_attention": request_attention_tool,

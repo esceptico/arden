@@ -11,9 +11,7 @@ from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolSco
 
 BACKGROUND_SYSTEM_PROMPT = (
     "You are a background agent. Complete the given task using available read-only tools, "
-    "then return a concise, self-contained report. Be thorough but focused. "
-    "Include any relevant source names, IDs, links, or evidence directly in your final report. "
-    "Do not refer to separate files, hidden messages, or context outside your final report. "
+    "then return a concise report. Be thorough but focused. "
     "You are read-only — report what you find, the caller decides what to do with it. " + UNTRUSTED_DATA_RULE
 )
 

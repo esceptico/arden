@@ -28,10 +28,19 @@ _READ = tools.read
 SPAWN_SURFACE_GUIDANCE = (
     "Choose research for an investigation with the research toolkit; background for a plain detached "
     "one-off task; workflow for a curated multi-agent pipeline; create_automation for recurring "
-    "scheduled/event work; create_loop only for adaptive repeated work that stops on a condition. "
-    "All of these run detached: you get a receipt now and the result arrives as a message later. "
-    "After spawning, do NOT write a summary or answer from the receipts — you have no results yet. "
-    "Briefly say what you started, end your turn, and write the real answer when the reports arrive."
+    "scheduled/event work; create_loop only for adaptive repeated work that stops on a condition.\n"
+    "Delegation rubric:\n"
+    "- Plan first: identify the critical-path blocker — the thing your very next step depends on. "
+    "NEVER delegate it; do it yourself so the critical path keeps moving.\n"
+    "- Delegate sidecar work: concrete, bounded subtasks that advance the goal in parallel without "
+    "blocking your next step.\n"
+    "- Each subtask must be concrete, self-contained, and materially useful; for edits, give agents "
+    "disjoint write sets. Fan out independent subtasks in the same turn.\n"
+    "- Everything runs detached: you get a receipt now and the result arrives as a message later. "
+    "Receipts are not results — never summarize or answer from them.\n"
+    "- After spawning, immediately do meaningful non-overlapping work, or briefly say what you "
+    "started and end the turn. Never poll or wait idle.\n"
+    "- When a report arrives, integrate it — do not redo the child's work."
 )
 
 

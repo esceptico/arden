@@ -59,7 +59,7 @@ from arden.skills.mentions import render_skill_mentions
 from arden.skills.registry import SkillRegistry
 from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import render_connection_catalog
-from arden.tools.core.context import ChildIOFactory, ChildIOParams, ChildSession, IOBridge
+from arden.tools.core.context import BackgroundTaskRegistry, ChildIOFactory, ChildIOParams, ChildSession, IOBridge
 from arden.tools.core.types import ToolAction
 from arden.tools.deferred import (
     build_deferred_tools_prompt_for_schemas,
@@ -1594,14 +1594,26 @@ def _response_input_tokens(response) -> int | None:
     return usage.prompt_tokens + usage.cache_read_tokens + usage.cache_write_tokens
 
 
-def _build_get_pending(bus: SessionBus, run: RunState, session_service: SessionService | None = None):
-    """Closure that drains pending injects and emits message_ingested per client entry."""
+def _build_get_pending(
+    bus: SessionBus,
+    run: RunState,
+    session_service: SessionService | None = None,
+    background_tasks: BackgroundTaskRegistry | None = None,
+):
+    """Closure that drains pending injects and emits message_ingested per client
+    entry. When the session's background registry is wired, a hidden
+    <agent_roster> note rides along whenever the live-agent set changed — the
+    per-run system prompt is frozen at run start, so the pending-messages hook
+    is the one per-step channel that can carry it."""
 
     async def _get_pending() -> list[dict]:
         batch = run.drain_injections()
-        if not batch:
-            return []
-        await _emit_ingested_for_client_entries(batch, bus, run, session_service)
+        if batch:
+            await _emit_ingested_for_client_entries(batch, bus, run, session_service)
+        if background_tasks is not None:
+            roster = background_tasks.roster_note_if_changed()
+            if roster is not None:
+                batch.append(roster)
         return batch
 
     return _get_pending
@@ -1920,7 +1932,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         def _configure_agent(next_agent: Agent) -> Agent:
             next_agent.hooks.on_response = _track_response
             next_agent.hooks.on_step_finish = _checkpoint
-            next_agent.hooks.get_pending_messages = _build_get_pending(bus, run, ctx.session_service)
+            next_agent.hooks.get_pending_messages = _build_get_pending(bus, run, ctx.session_service, bg_registry)
             next_agent.hooks.recover_tool_calls = _recover_tool_calls
             return next_agent
 

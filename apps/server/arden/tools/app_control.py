@@ -54,6 +54,25 @@ class SendMessageInput(BaseModel):
     )
 
 
+class FollowupTaskInput(BaseModel):
+    session_id: str = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "Session id of an agent this session spawned — the id research()/background() "
+            "returned. Must not be the session you are running in."
+        ),
+    )
+    task: str = Field(
+        min_length=1,
+        max_length=20_000,
+        description=(
+            "The new task. The agent keeps its session history, but state the goal, "
+            "targets, and any ids in full — it has none of your later context."
+        ),
+    )
+
+
 class RenameSessionInput(BaseModel):
     session_id: str = Field(min_length=1, max_length=200, description="Session id from list_recent_sessions.")
     name: str = Field(
@@ -235,6 +254,87 @@ async def send_message(execution: ToolExecution, args: SendMessageInput) -> Tool
     )
 
 
+async def approve_followup_task(execution: ToolExecution, args: FollowupTaskInput) -> ApprovalInfo | ApprovalWaived:
+    # Same line send_message draws: queueing into a live agent is free; waking
+    # an idle one starts a fresh run — that costs money, so the user decides.
+    if execution.ctx.background_tasks.task_for_session(args.session_id) is not None:
+        return APPROVAL_WAIVED
+    return ApprovalInfo(
+        description="Wake an idle agent with a new task",
+        preview=f"To: {args.session_id}\n\n{args.task[:_PREVIEW_CHARS]}",
+        diff=None,
+    )
+
+
+async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> ToolResult:
+    ctx = execution.ctx
+    if args.session_id == ctx.session_id:
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message="followup_task cannot target its own session.",
+            preview="Same session",
+            recovery_action="Use create_loop for another turn here, or target an agent session you spawned.",
+        )
+
+    registry = ctx.background_tasks
+    if (task_id := registry.task_for_session(args.session_id)) is not None:
+        if registry.queue_followup(task_id, args.task):
+            return ToolResult(
+                content=(
+                    f"Task queued for the running agent in {args.session_id}; it picks it up at its "
+                    "next step and its report is delivered here automatically."
+                ),
+                preview=f"Tasked {args.session_id}",
+            )
+        # It finished between the approval check and here. Waking it now would
+        # start a run on a waiver granted for a queue, not a dispatch.
+        return ToolResult.failure(
+            code="conflict",
+            message=f"The agent in {args.session_id} finished before the task landed.",
+            preview="Agent finished",
+            recovery_action="Call followup_task again — it will wake the idle agent, with the user's approval.",
+        )
+
+    svc = ctx.services["session"]
+    data = await svc.load(args.session_id)
+    if data is None:
+        return await _unknown_session(execution, args.session_id)
+    if data.state.parent_session_id != ctx.session_id:
+        live = registry.live_child_sessions()
+        listing = "\n".join(f"- {sid}" for sid in live)
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message=(
+                f"{args.session_id} is not an agent of this session."
+                + (f" Your live agents:\n{listing}" if live else " You have no live agents.")
+            ),
+            preview="Not your agent",
+            recovery_action=(
+                "Target a session id research()/background() returned to you; use send_message for any other chat."
+            ),
+        )
+    if await svc.is_archived(args.session_id):
+        return _archived_session(
+            args.session_id,
+            "Spawn a fresh agent instead — background(task=...) or research(task=...).",
+        )
+
+    await ctx.services["app_control"].dispatch(
+        args.session_id,
+        f"<followup_task>\n{args.task}\n</followup_task>",
+        client_id=f"bg:followup:{execution.tool_id}",
+    )
+    label = data.state.name or args.session_id
+    return ToolResult(
+        content=(
+            f"Woke the idle agent {label} ({args.session_id}) with the task. It runs in its own "
+            "session with its prior context; read_session(session_id=...) shows the outcome."
+        ),
+        preview=f"Woke {label}",
+        source_refs=(session_ref(args.session_id, label),),
+    )
+
+
 async def rename_session(execution: ToolExecution, args: RenameSessionInput) -> ToolResult:
     svc = execution.ctx.services["session"]
     data = await svc.load(args.session_id)
@@ -405,6 +505,7 @@ async def open_in_app(execution: ToolExecution, args: OpenInAppInput) -> ToolRes
 
 SEND_MESSAGE_DESCRIPTION = (
     "Deliver a message to a session — the single address for anything you can talk to. "
+    "Delivers guidance promptly; it does NOT wake a finished agent — followup_task does. "
     "Two behaviours, chosen from the target:\n\n"
     "- An agent you spawned that is still running (the session id background() returned): the "
     "message is queued as steering and the agent reads it at its next step. No approval.\n"
@@ -415,6 +516,18 @@ SEND_MESSAGE_DESCRIPTION = (
     "reply lands in that chat; the agent's result is delivered to you automatically when it finishes. "
     "If you need an answer inside this turn, use research() instead.\n\n"
     "Find ids with list_recent_sessions; inspect what a session did with read_session."
+)
+
+FOLLOWUP_TASK_DESCRIPTION = (
+    "Assign a new task to an agent you spawned, addressed by its session id. Works whether the "
+    "agent is running or finished:\n\n"
+    "- Still running: the task is queued as a <followup_task> the agent reads at its next step, "
+    "and its report covers it — delivered here automatically. No approval.\n"
+    "- Finished/idle: the agent is WOKEN — a fresh hidden run starts in its session with the task "
+    "as input, keeping its context. Requires the user's approval, like send_message to a chat.\n\n"
+    "This is the difference from send_message: send_message delivers guidance promptly but never "
+    "wakes a finished agent; followup_task assigns work and wakes an idle one. Fire and forget — "
+    "nothing is waited for here. A woken agent's reply lands in its session; read_session shows it."
 )
 
 RENAME_SESSION_DESCRIPTION = (
@@ -474,6 +587,22 @@ send_message_tool = tool(
     ),
     approval=approve_send_message,
     execute=send_message,
+)
+
+followup_task_tool = tool(
+    display_name="FollowupTask",
+    display_description="Assign a task to one of your agents.",
+    description=FOLLOWUP_TASK_DESCRIPTION,
+    input_model=FollowupTaskInput,
+    policy=ToolPolicy(
+        action=ToolAction.EXECUTE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        allow_approval_bypass=False,
+        permissions=frozenset({"session", "app_control"}),
+    ),
+    approval=approve_followup_task,
+    execute=followup_task,
 )
 
 rename_session_tool = tool(

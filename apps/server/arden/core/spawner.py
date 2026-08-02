@@ -31,7 +31,7 @@ from arden.core.isolation import IsolationLevel
 from arden.core.llm_client import llm_client
 from arden.core.model_context_budget import ToolResultContextBudgetMiddleware
 from arden.core.naming import generate_agent_name
-from arden.core.prompts import AREA_BLOCK
+from arden.core.prompts import AREA_BLOCK, TEAM_CHILD_BLOCK
 from arden.core.spawn_spec import ParentRef, SpawnSpec, WorkflowRef
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.usage_tracker import UsageTracker
@@ -616,8 +616,10 @@ def create_spawn_fn(
             ledger=calling_ctx.ledger,
             skip_duplicate_reads=True,
         )
+        # Every child gets the one team-identity block here — not per surface —
+        # so the envelope names and the delivery contract have a single source.
         child_system_prompt = append_deferred_tools_prompt(
-            _with_area_context(system_prompt, calling_ctx),
+            f"{_with_area_context(system_prompt, calling_ctx)}\n\n{TEAM_CHILD_BLOCK}",
             child_registry,
             frozenset(child_ctx.services),
             filtered_tools,
@@ -896,6 +898,8 @@ def create_spawn_fn(
             limit=None if should_wait else AGENT_MAX_CONCURRENT,
             child_session_id=child_state.session_id if has_child_session else None,
             parent_run_id=calling_ctx.run.run_id,
+            summary=task_summary,
+            agent_type=resolved_agent_type,
         )
         if not reserved:
             return SpawnResult(
@@ -913,9 +917,22 @@ def create_spawn_fn(
         # …); the agent drains them at its next step. `hasattr` guards
         # test-fake agents.
         if hasattr(sub_agent, "hooks"):
+            # Only a child with its OWN registry gets a roster: when it shares
+            # the parent's registry (SHARED isolation / no io factory), that
+            # roster lists the child itself and its siblings — the parent's
+            # team, not this agent's.
+            child_owns_registry = child_background_tasks is not calling_ctx.background_tasks
 
             async def _drain_steering() -> list[dict]:
-                return registry.drain_injections(task_id)
+                batch = registry.drain_injections(task_id)
+                if child_owns_registry:
+                    # The child's own roster — its spawns register through the
+                    # CHILD session's registry — rendered only when the live
+                    # set changed, so it never repeats every step.
+                    roster = child_background_tasks.roster_note_if_changed()
+                    if roster is not None:
+                        batch.append(roster)
+                return batch
 
             sub_agent.hooks.get_pending_messages = _drain_steering
 
