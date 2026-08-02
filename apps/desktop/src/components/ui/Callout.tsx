@@ -57,7 +57,7 @@ export function Callout({ tone = "neutral", icon: Icon, title, children, action,
       {Icon && <Icon size={ICON.SM} strokeWidth={2} className={clsx("mt-0.5 shrink-0", t.fg)} />}
       <div className="grid min-w-0 flex-1 gap-0.5">
         {title && <strong className={clsx("text-sm font-semibold", t.fg)}>{title}</strong>}
-        {children && <span className={clsx("text-sm leading-[1.4]", t.fg)}>{children}</span>}
+        {children && <span className={clsx("text-sm leading-[var(--leading-body)]", t.fg)}>{children}</span>}
       </div>
       {action}
     </motion.div>

@@ -12,7 +12,7 @@ export function LabeledField({
 }) {
   return (
     <div role="group" aria-label={label} className="grid gap-1.5">
-      <span className="text-sm font-medium tracking-[-0.005em] text-ink-soft">{label}</span>
+      <span className="text-sm font-medium tracking-[var(--tracking-tight)] text-ink-soft">{label}</span>
       {children}
     </div>
   );

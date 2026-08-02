@@ -45,7 +45,7 @@ function DefaultFallback({ error, onReset }: { error: Error; onReset: () => void
   return (
     <div className="absolute inset-0 grid place-items-center p-8">
       <div className="surface-panel surface-radius-md max-w-[480px] p-6">
-        <div className="text-lg font-semibold tracking-[-0.012em] text-ink">
+        <div className="text-lg font-semibold tracking-[var(--tracking-heading)] text-ink">
           Something went wrong rendering this view.
         </div>
         <div className="mt-2 text-sm text-muted">

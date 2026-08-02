@@ -19,7 +19,7 @@ export const ToolMessage = memo(function ToolMessage({ id }: { id: string }) {
   return (
     <article
       className={clsx(
-        "board-tool-message grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0 font-mono text-xs leading-[1.45] transition-[background-color,box-shadow] duration-panel",
+        "board-tool-message grid grid-cols-[minmax(0,1fr)] gap-1.5 min-w-0 font-mono text-xs leading-[var(--leading-body)] transition-[background-color,box-shadow] duration-panel",
         entryAnimation(message, "animate-roll-in"),
         sourceFocused && SOURCE_FOCUS_CLASS,
       )}
@@ -36,7 +36,7 @@ export const ToolMessage = memo(function ToolMessage({ id }: { id: string }) {
       {!isRunning && (
         <pre
           className={clsx(
-            "m-0 mt-[3px] ml-[18px] text-faint font-mono text-sm leading-[1.45] whitespace-pre-wrap max-h-[80px] overflow-hidden [mask-image:linear-gradient(180deg,#000_60%,transparent)]",
+            "m-0 mt-[3px] ml-[18px] text-faint font-mono text-sm leading-[var(--leading-body)] whitespace-pre-wrap max-h-[80px] overflow-hidden [mask-image:linear-gradient(180deg,#000_60%,transparent)]",
             entryAnimation(message, "animate-fade-in"),
           )}
         >
@@ -85,7 +85,7 @@ export const ErrorMessage = memo(function ErrorMessage({ id }: { id: string }) {
       data-source-focus={sourceFocused ? "true" : undefined}
       data-source-index={message.sourceIndex}
     >
-      <div role="alert" className="board-error-message__card px-3.5 py-2.5 rounded-[10px] bg-bad-soft border border-bad/15 text-bad text-base leading-[1.45] whitespace-pre-wrap break-words">
+      <div role="alert" className="board-error-message__card px-3.5 py-2.5 rounded-[10px] bg-bad-soft border border-bad/15 text-bad text-base leading-[var(--leading-body)] whitespace-pre-wrap break-words">
         {message.content}
       </div>
     </article>

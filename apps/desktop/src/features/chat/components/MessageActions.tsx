@@ -100,7 +100,7 @@ export function MessageActions({ id, role }: { id: string; role: "user" | "assis
       {timeLabel && (
         <span
           className={clsx(
-            "text-faint tracking-[-0.005em] select-none",
+            "text-faint tracking-[var(--tracking-tight)] select-none",
             role === "user" ? "order-first mr-0.5 text-2xs" : "ml-0.5 text-xs",
           )}
         >

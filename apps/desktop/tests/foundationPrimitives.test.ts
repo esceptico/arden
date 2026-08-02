@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 const tokens = read("../src/design/tokens.css");
 const foundation = read("../src/design/foundation.css");
+const base = read("../src/design/base.css");
+const chat = read("../src/design/chat.css");
 const styles = read("../src/styles.css");
 const motion = read("../src/lib/tokens/motion.ts");
 const palette = read("../src/features/command-palette/components/PaletteBody.tsx");
@@ -91,6 +93,24 @@ test("shared primitives own the exact mock control and overlay contracts", () =>
   expect(motion).toContain("pageSkeletonReveal: 0.22");
   expect(motion).not.toContain("SPRING_THEME_TOGGLE");
   expect(motion).not.toContain("POSE_MODAL");
+});
+
+test("productive typography and chat rhythm use the calibrated density scale", () => {
+  expect(base).toContain("--leading-reading: 1.55;");
+  expect(base).toContain("--leading-body: 1.43;");
+  expect(base).toContain("--leading-label: 1.23;");
+  expect(base).toContain("--leading-metadata: 1.45;");
+  expect(base).toContain("--leading-meta: var(--leading-metadata);");
+  expect(base).toContain("--type-page-title:");
+  expect(base).toContain("--type-rail-item:");
+  expect(tokens).toContain("--leading-reading: 1.55;");
+  expect(tokens).toContain("--leading-body: 1.43;");
+  expect(tokens).toContain("--leading-meta: var(--leading-metadata);");
+  expect(chat).toMatch(/\.board-chat__lane\s*\{[\s\S]*?gap:\s*var\(--space-4\);/);
+  expect(chat).toMatch(/\.board-turn\s*\{\s*gap:\s*var\(--space-4\);\s*\}/);
+  expect(chat).toMatch(/\.board-assistant\s*\{[\s\S]*?row-gap:\s*var\(--space-2\);/);
+  expect(chat).toContain(".board-composer__input-row { min-height: 3.5rem; }");
+  expect(chat).toContain(".board-composer__toolbar { height: 2.5rem; min-height: 2.5rem; flex: none; }");
 });
 
 test("shared controls use named paint layers instead of numeric z utilities", () => {

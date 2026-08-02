@@ -424,7 +424,7 @@ button.app-row:not(:disabled):active,
   font-weight: var(--weight-medium);
   color: var(--color-muted);
   text-transform: lowercase;
-  letter-spacing: 0.01em;
+  letter-spacing: var(--tracking-data);
 }
 .md .code-block-copy {
   margin-left: auto;
@@ -510,7 +510,7 @@ button.app-row:not(:disabled):active,
   color: var(--color-faint);
   white-space: nowrap;
   vertical-align: 0.14em;
-  letter-spacing: 0.01em;
+  letter-spacing: var(--tracking-data);
   user-select: none;
 }
 
@@ -522,7 +522,7 @@ button.app-row:not(:disabled):active,
   margin: 1.25em 0;
   border-collapse: collapse;
   font-size: var(--text-sm);
-  line-height: 1.55;
+  line-height: var(--leading-reading);
 }
 .memory-doc th, .memory-doc td {
   border: 0;
@@ -539,7 +539,7 @@ button.app-row:not(:disabled):active,
   border-bottom-color: var(--color-line);
 }
 .memory-doc tr:last-child > td { border-bottom: 0; }
-.memory-doc :is(th, td) code { font-size: 11.5px; overflow-wrap: anywhere; }
+.memory-doc :is(th, td) code { font-size: var(--text-metadata); overflow-wrap: anywhere; }
 .memory-doc :is(th, td) { hyphens: none; }
 
 /* The composer is a solid panel floating over the message scroll area.
@@ -821,7 +821,7 @@ body.inspect-active {
   color: #9a9aa2;
   font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-caps);
 }
 
 .inspect-panel__row {

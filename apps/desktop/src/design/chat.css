@@ -52,7 +52,7 @@
   color: var(--ink);
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
-  letter-spacing: -.01em;
+  letter-spacing: var(--tracking-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -81,7 +81,7 @@
   margin-inline: auto;
   padding-inline: var(--content-gutter);
   padding-bottom: var(--space-5);
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .board-chat__bottom-fade {
@@ -103,20 +103,20 @@
 
 /* Conversation ----------------------------------------------------------- */
 
-.board-turn { gap: var(--space-5); }
+.board-turn { gap: var(--space-4); }
 
 .board-user { margin-left: auto; }
 
 .board-user__content {
   max-inline-size: 100%;
-  margin-block-end: .875rem;
+  margin-block-end: var(--space-2);
 }
 
 .board-user__content > * + * { margin-block-start: var(--space-1-5); }
 
 .board-user__bubble {
   max-inline-size: min(35rem, 100%);
-  padding: 10px 14px;
+  padding: var(--space-2) 14px;
   border-radius: var(--r-shell);
   background: var(--surface-3);
   box-shadow: var(--shadow-3);
@@ -132,7 +132,7 @@
   max-inline-size: none;
   margin-right: auto;
   grid-template-columns: max-content minmax(0, 1fr);
-  row-gap: .875rem;
+  row-gap: var(--space-2);
 }
 
 .board-assistant__prose {
@@ -149,7 +149,7 @@
    this sheet loads after typeset.css at equal specificity, so a margin here
    silently wins over the whole scale — which is how chat ended up with a
    heading glued to the block above it and no gap at all after a list. */
-.board-assistant .board-assistant__prose :where(h2) { max-inline-size: 40.625rem; letter-spacing: -.012em; }
+.board-assistant .board-assistant__prose :where(h2) { max-inline-size: 40.625rem; letter-spacing: var(--tracking-heading); }
 
 .board-assistant .board-assistant__prose :where(p) { max-inline-size: 40.625rem; color: var(--ink-soft); text-wrap: pretty; }
 
@@ -178,8 +178,8 @@
 .board-message-actions { min-height: 1.5rem; }
 
 .board-message-actions--user {
-  height: 1.625rem;
-  margin: calc(-1 * var(--space-2)) 0 var(--space-2);
+  height: 1.5rem;
+  margin: calc(-1 * var(--space-1)) 0 var(--space-1);
 }
 
 .board-tool-message,
@@ -428,7 +428,7 @@
   outline-offset: 0;
 }
 
-.board-composer__input-row { min-height: 4.125rem; }
+.board-composer__input-row { min-height: 3.5rem; }
 
 .board-composer__input {
   width: 100%;
@@ -440,8 +440,8 @@
   background: transparent;
   box-shadow: none;
   caret-color: var(--accent);
-  font-size: var(--text-md);
-  line-height: var(--leading-reading);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
 }
 
 .board-composer__input:focus {
@@ -500,7 +500,7 @@
   translate: 0 1px;
 }
 
-.board-composer__toolbar { height: 2.625rem; min-height: 2.625rem; flex: none; }
+.board-composer__toolbar { height: 2.5rem; min-height: 2.5rem; flex: none; }
 .board-composer .composer-tool-button { min-height: var(--control-size-large); }
 /* .arden-icon-button's base size (--icon-button-size, 28px) is narrower than
    the 30px this row bumps every control to — width alone was left behind,
@@ -618,7 +618,7 @@
   overflow: hidden;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  letter-spacing: -.01em;
+  letter-spacing: var(--tracking-heading);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -644,7 +644,7 @@
 }
 
 .board-queue-stack__thumbnails > span {
-  font: var(--weight-medium) 11px/1 var(--sans);
+  font: var(--type-meta-strong);
   font-variant-numeric: tabular-nums;
 }
 
@@ -909,7 +909,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-nav, .ri
   margin-left: auto;
   flex: none;
   color: var(--warning);
-  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
+  font: var(--type-data);
   white-space: nowrap;
 }
 
@@ -974,7 +974,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-nav, .ri
 .board-inspector__hub-row-status {
   flex: none;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
+  font: var(--type-data);
   text-transform: capitalize;
 }
 
@@ -1051,7 +1051,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-nav, .ri
   border-radius: var(--r-row);
   color: var(--muted);
   text-align: left;
-  line-height: 1.4;
+  line-height: var(--leading-body);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

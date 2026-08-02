@@ -71,7 +71,7 @@ function TodoEditInput({
         }
       }}
       onBlur={commit}
-      className="min-w-0 flex-1 bg-transparent border-0 p-0 text-xs leading-[1.35] text-ink-soft placeholder:text-muted outline-none"
+      className="min-w-0 flex-1 bg-transparent border-0 p-0 text-xs leading-[var(--leading-label)] text-ink-soft placeholder:text-muted outline-none"
     />
   );
 }
@@ -173,7 +173,7 @@ export function TodoSidebarSection({
                   onClick={() => setEditingKey(item.key)}
                   title="Edit"
                   className={clsx(
-                    "min-w-0 flex-1 break-words text-left text-xs leading-[1.35] transition-colors duration-row ease-out hover:text-ink",
+                    "min-w-0 flex-1 break-words text-left text-xs leading-[var(--leading-label)] transition-colors duration-row ease-out hover:text-ink",
                     item.status === "completed" && "text-faint line-through",
                     item.status === "in_progress" && "font-medium text-ink-soft",
                     item.status === "pending" && "text-muted",

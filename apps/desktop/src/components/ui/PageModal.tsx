@@ -193,7 +193,7 @@ export function PageModal({
               // instead of letting the inner truncate engage.
               <header className="modal-header flex items-start justify-between gap-3 min-w-0">
                 <div className="min-w-0">
-                  <div className="text-lg font-semibold tracking-[-0.012em] text-ink truncate">
+                  <div className="text-lg font-semibold tracking-[var(--tracking-heading)] text-ink truncate">
                     {header.title}
                   </div>
                   {header.subtitle && (

@@ -277,14 +277,14 @@ export function RadioGroupItem({
         <span className="flex min-w-0 flex-col">
           <span
             className={clsx(
-              "text-[13px] leading-snug transition-colors duration-indicator",
+              "text-sm leading-[var(--leading-label)] transition-colors duration-indicator",
               isSelected ? "font-semibold text-ink" : "text-muted group-hover:text-ink",
             )}
           >
             {label}
           </span>
           {description && (
-            <span className="text-[12px] leading-snug text-faint">{description}</span>
+            <span className="text-2xs leading-[var(--leading-metadata)] text-faint">{description}</span>
           )}
         </span>
       )}

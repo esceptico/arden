@@ -161,7 +161,7 @@ function LoopDetailModal({ loop, onClose }: { loop: ServerLoop | null; onClose: 
         <>
         <div className="modal-header flex items-center gap-2">
           <Repeat2 size={ICON.SM} strokeWidth={2} className="text-muted shrink-0" />
-          <div className="text-lg font-semibold tracking-[-0.012em] text-ink">Loop</div>
+          <div className="text-lg font-semibold tracking-[var(--tracking-heading)] text-ink">Loop</div>
           <div className="ml-auto text-xs text-muted whitespace-nowrap">
             Every {loop.every} · next in {formatLoopCountdown(loop.next_run_at ? Date.parse(loop.next_run_at) : Number.POSITIVE_INFINITY)}
           </div>

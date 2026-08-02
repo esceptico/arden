@@ -6,7 +6,7 @@ import { MenuItem } from "@/components/ui/MenuItem";
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="px-2.5 pt-2 pb-1 text-2xs font-[570] leading-none uppercase tracking-[.07em] text-faint">
+    <div className="px-2.5 pt-2 pb-1 text-2xs font-semibold leading-[var(--leading-metadata)] uppercase tracking-[var(--tracking-caps)] text-faint">
       {children}
     </div>
   );
@@ -35,12 +35,12 @@ function RichRow({
       rich
       role="menuitem"
       className="min-h-10 gap-3 rounded-[var(--r-row)] px-2.5 py-2 text-base active:scale-[var(--press-scale)]"
-      trailing={cadence ? <em className="ml-auto shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium leading-none not-italic text-faint">{cadence}</em> : null}
+      trailing={cadence ? <em className="ml-auto shrink-0 whitespace-nowrap font-mono text-2xs font-medium leading-[var(--leading-metadata)] not-italic text-faint tabular-nums">{cadence}</em> : null}
       onClick={onClick}
     >
       <span className="grid min-w-0 gap-0.5">
-        <b className="block text-xs font-[560] leading-[1.55]">{title}</b>
-        <small className="block text-2xs leading-[1.35] text-faint">{description}</small>
+        <b className="block text-xs font-medium leading-[var(--leading-label)]">{title}</b>
+        <small className="block text-2xs leading-[var(--leading-metadata)] text-faint">{description}</small>
       </span>
     </MenuItem>
   );

@@ -256,7 +256,7 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   height: 1rem;
   padding-inline: var(--space-0-5);
   color: var(--faint);
-  font-size: .625rem;
+  font-size: var(--text-metadata);
 }
 
 /* Plain selectors, not :where() — Tailwind's own preflight resets
@@ -349,12 +349,12 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   border-radius: var(--r-house);
   color: var(--ink-soft);
   background: var(--surface-2);
-  font: var(--code-font-size) / 1.6 var(--mono);
+  font: var(--type-code);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .arden-code-well--padded { padding: var(--space-3); }
-.arden-code-well--diff { line-height: 1.65; }
+.arden-code-well--diff { line-height: var(--leading-code); }
 
 .arden-review-summary {
   display: grid;
@@ -497,7 +497,7 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   min-width: 0;
   flex: none;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata) / 1 var(--mono);
+  font: var(--type-data);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -544,42 +544,56 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   .surface-command-palette { top: 2.5rem; max-height: calc(100vh - 5rem); }
 }
 
-/* Type roles ------------------------------------------------------------
-   Four roles for panel and control surfaces, after Vercel's brand foundation.
-   A role fixes size, weight, and colour together; equivalent peers always
-   share all three. Hierarchy is carried by typography first, colour second.
-
-     heading  a group of rows          13   semibold  ink
-     label    names one row            12.5 medium    ink-soft
-     value    the setting itself       12.5 regular   muted
-     meta     explains or timestamps   11   regular   faint
-
-   Label and value share a size on purpose and separate on weight and colour —
-   half a pixel is not a distinction, and it is how Vercel separates its own
-   label and metadata roles. */
-.type-heading {
+/* Semantic type roles ---------------------------------------------------
+   These are complete contracts, not size aliases. Feature surfaces choose a
+   role by meaning; state changes may change tone/fill but never the metrics. */
+.type-page-title {
   color: var(--ink);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
+  font: var(--type-page-title);
+  letter-spacing: var(--tracking-title);
+}
+
+.type-editorial-title {
+  color: var(--ink);
+  font: var(--type-editorial-title);
+  letter-spacing: var(--tracking-editorial);
+}
+
+.type-section-title {
+  color: var(--ink);
+  font: var(--type-section-title);
+  letter-spacing: var(--tracking-heading);
+}
+
+.type-subsection-title {
+  color: var(--ink);
+  font: var(--type-subsection-title);
+  letter-spacing: var(--tracking-heading);
+}
+
+.type-heading,
+.type-section-label {
+  color: var(--ink);
+  font: var(--type-section-label);
 }
 
 .type-label {
   color: var(--ink-soft);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+  font: var(--type-control);
 }
 
 .type-value {
   color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
+  font: var(--type-label);
 }
 
 .type-meta {
   color: var(--faint);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-regular);
+  font: var(--type-meta);
 }
+
+.type-data { font: var(--type-data); font-variant-numeric: tabular-nums; }
+.type-code { font: var(--type-code); }
 
 /* The peek's own geometry, shared. Every peek had been repeating this block in
    its feature stylesheet (.notifier-peek, .settings-key-peek, .area-page-peek),
@@ -617,7 +631,7 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   overflow: hidden;
   color: var(--ink);
   font: var(--weight-semibold) var(--text-base)/1.3 var(--sans);
-  letter-spacing: -.008em;
+  letter-spacing: var(--tracking-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -649,9 +663,7 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
 .arden-peek__body :is(h1, h2, h3, h4) {
   margin-top: var(--space-4);
   color: var(--ink);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-  line-height: 1.35;
+  font: var(--type-section-label);
 }
 
 .arden-peek__foot {
@@ -749,7 +761,7 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
 
 .arden-running-text {
   color: transparent;
-  background: linear-gradient(90deg, var(--muted) 0 40%, var(--ink) 50%, var(--muted) 60% 100%) 100% 0 / 200% 100%;
+  background: linear-gradient(90deg, var(--muted) 0 28%, var(--ink) 46% 54%, var(--muted) 72% 100%) 100% 0 / 200% 100%;
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -1009,7 +1021,7 @@ textarea.arden-field {
   gap: var(--space-1);
   margin-inline-start: var(--space-1);
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   white-space: nowrap;
 }
 .arden-search-clear {
@@ -1108,7 +1120,7 @@ textarea.arden-field {
 .arden-toast__status {
   margin-left: auto;
   color: var(--muted);
-  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
+  font: var(--type-data);
 }
 .arden-toast[data-tone="success"] .arden-toast__status { color: var(--success); }
 .arden-toast[data-tone="warning"] .arden-toast__status { color: var(--warning); }
@@ -1124,7 +1136,7 @@ textarea.arden-field {
   overflow: hidden;
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: 1.4;
+  line-height: var(--leading-body);
 }
 
 .arden-kbd {
@@ -1137,7 +1149,7 @@ textarea.arden-field {
   border-radius: var(--kbd-radius);
   color: var(--muted);
   background: var(--surface-4);
-  font: var(--weight-medium) .75rem/1 var(--sans);
+  font: var(--type-control);
   white-space: nowrap;
   user-select: none;
 }
@@ -1150,7 +1162,7 @@ textarea.arden-field {
    the gaps optically against the capsule curves. */
 .arden-kbd--chord {
   padding-inline: .25rem .375rem;
-  letter-spacing: .08em;
+  letter-spacing: var(--tracking-caps);
 }
 
 .arden-kbd--chord::after {
@@ -1160,7 +1172,7 @@ textarea.arden-field {
 
 .arden-status {
   color: var(--muted);
-  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
+  font: var(--type-data);
 }
 .arden-status[data-tone="success"] { color: var(--success); }
 .arden-status[data-tone="warning"] { color: var(--warning); }
@@ -1170,7 +1182,7 @@ textarea.arden-field {
   margin: 0;
   color: var(--faint);
   font: var(--weight-semibold) var(--text-metadata)/1 var(--sans);
-  letter-spacing: .07em;
+  letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
 }
 

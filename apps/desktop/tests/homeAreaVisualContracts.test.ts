@@ -96,7 +96,7 @@ test("Area room matches the mock's 720px typography and pressure hierarchy", () 
   const title = css.match(/\.board-area-deck__card h2\s*\{([^}]*)\}/)?.[1] ?? "";
   const reason = css.match(/\.board-area-deck__reason\s*\{([^}]*)\}/)?.[1] ?? "";
 
-  expect(answer).toContain("font: var(--weight-semibold) var(--text-3xl)/1.2 var(--sans);");
+  expect(answer).toContain("font: var(--type-editorial-title);");
   expect(subtitle).toContain("font: var(--weight-heading) var(--text-sm)/1.5 var(--sans);");
   expect(title).toContain("font: var(--weight-semibold) var(--text-2xl)/1.3 var(--sans);");
   expect(title).not.toContain("max-width:");
@@ -184,11 +184,11 @@ test("Settings navigation uses the mock sidebar geometry and moving highlight", 
   expect(tabs).toContain('"sidebar"');
   expect(settings).toContain('variant="sidebar"');
   expect(settings).toContain('indicatorClassName="settings-nav-highlight"');
-  expect(css).toMatch(/\.settings-nav-group \+ \.settings-nav-group\s*\{\s*margin-top:\s*var\(--space-2\);/);
-  expect(css).toMatch(/\.settings-nav-group-label\s*\{[\s\S]*?height:\s*1\.75rem;[\s\S]*?font-size:\s*var\(--text-xs\);[\s\S]*?font-weight:\s*var\(--weight-semibold\);/);
+  expect(css).toMatch(/\.settings-nav-group \+ \.settings-nav-group\s*\{\s*margin-top:\s*var\(--space-3\);/);
+  expect(css).toMatch(/\.settings-nav-group-label\s*\{[\s\S]*?height:\s*1\.75rem;[\s\S]*?font:\s*var\(--type-rail-group\);/);
   expect(css).toMatch(/\.settings-nav-highlight\s*\{[\s\S]*?background:\s*var\(--state-selected-bg\);[\s\S]*?box-shadow:\s*inset 0 0 0 1px/);
-  expect(css).toMatch(/\.board-settings \.settings-nav-row\s*\{[\s\S]*?height:\s*1\.875rem;[\s\S]*?font-weight:\s*var\(--weight-regular\);/);
-  expect(css).toMatch(/\.board-settings \.settings-nav-row\[data-active="true"\]\s*\{[\s\S]*?font-weight:\s*var\(--weight-medium\);[\s\S]*?background:\s*transparent;/);
+  expect(css).toMatch(/\.board-settings \.settings-nav-row\s*\{[\s\S]*?height:\s*1\.875rem;[\s\S]*?font:\s*var\(--type-rail-item\);/);
+  expect(css).toMatch(/\.board-settings \.settings-nav-row\[data-active="true"\]\s*\{[\s\S]*?background:\s*transparent;/);
 });
 
 test("Home, Chat, and Area use the mock's exact visible icon variants", () => {
@@ -207,7 +207,7 @@ test("Home, Chat, and Area use the mock's exact visible icon variants", () => {
   expect(reasoning).toContain("Brain01");
   expect(assistant).toContain("BookOpen01");
   expect(actions).toContain("PencilEdit02");
-  for (const variant of ["Globe02", "File01", "PencilEdit02", "LeftToRightListBullet", "AiChat02", "Stop"]) {
+  for (const variant of ["Globe02", "File01", "PencilEdit02", "LeftToRightListBullet", "Bot", "Stop"]) {
     expect(trace).toContain(variant);
   }
   // The inspector's glyph now lives in the shared SidebarToggle, which swaps

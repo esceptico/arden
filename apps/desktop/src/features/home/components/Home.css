@@ -44,8 +44,8 @@
 .mission-control__connection h1 {
   margin: 0;
   color: var(--ink);
-  font: var(--weight-semibold) var(--text-3xl)/1.2 var(--sans);
-  letter-spacing: -.021em;
+  font: var(--type-editorial-title);
+  letter-spacing: var(--tracking-editorial);
   text-wrap: balance;
 }
 
@@ -128,7 +128,7 @@
 
 .mission-control__capture-hint-label {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
 }
 
 /* Docked results — an extension of the field, not a popover: it shares the
@@ -264,7 +264,7 @@
 
 .mission-control__deck-chrome > span {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
 }
 
@@ -339,7 +339,7 @@
   overflow: hidden;
   color: var(--ink);
   font: var(--weight-semibold) var(--text-2xl)/1.3 var(--sans);
-  letter-spacing: -.018em;
+  letter-spacing: var(--tracking-heading);
   text-wrap: balance;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -394,7 +394,7 @@
 
 .mission-control__focus-action-more {
   color: var(--accent);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--sans);
+  font: var(--type-meta-strong);
 }
 
 .mission-control__focus-next {
@@ -486,7 +486,7 @@
 .mission-control__reply-hint {
   flex: none;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   white-space: nowrap;
 }
 
@@ -717,7 +717,7 @@
 .mission-control__ambient-row-meta {
   align-self: baseline;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.25 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }

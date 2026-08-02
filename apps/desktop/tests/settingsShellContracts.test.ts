@@ -46,7 +46,7 @@ test("settings takeover keeps the shared rail geometry and entrance targets", ()
   expect(styles).toMatch(/\.board-settings\s*\{[\s\S]*?height:\s*100%;/);
   expect(styles).toMatch(/\.board-settings \.settings-sidebar-card\s*\{[\s\S]*?padding:\s*48px 10px 12px;/);
   expect(styles).toMatch(/\.settings-sidebar-title\s*\{[\s\S]*?height:\s*30px;[\s\S]*?padding:\s*0 var\(--space-2\);/);
-  expect(styles).toMatch(/\.settings-sidebar-title h2\s*\{[\s\S]*?font-size:\s*var\(--text-xl\);[\s\S]*?line-height:\s*1;[\s\S]*?letter-spacing:\s*-.014em;/);
+  expect(styles).toMatch(/\.settings-sidebar-title h2\s*\{[\s\S]*?font-size:\s*var\(--text-xl\);[\s\S]*?line-height:\s*1;[\s\S]*?letter-spacing:\s*var\(--tracking-heading\);/);
   expect(styles).toMatch(/\.settings-nav-scroll\s*\{[\s\S]*?flex:\s*1;[\s\S]*?padding:\s*var\(--space-2\) 0;[\s\S]*?scrollbar-width:\s*none;/);
   expect(styles).toMatch(/\.settings-page-head\s*\{[\s\S]*?max-width:\s*38\.75rem;/);
   expect(styles).toMatch(/\.settings-page-intro\s*\{[\s\S]*?max-width:\s*36\.25rem;/);
@@ -256,6 +256,6 @@ test("setup assistant keeps the mock's fixed sheet contract", () => {
   expect(styles).toMatch(/\.setup-sheet \.step-num\s*\{[\s\S]*?width:\s*20px;[\s\S]*?height:\s*20px;[\s\S]*?background:\s*var\(--panel-soft\);/);
   expect(styles).toMatch(/\.setup-sheet \.sheet-field label\s*\{[\s\S]*?margin-bottom:\s*7px;[\s\S]*?font-size:\s*var\(--text-label\);/);
   expect(styles).toMatch(/\.setup-sheet \.sheet-field \.dp-field\s*\{\s*height:\s*38px;/);
-  expect(styles).toMatch(/\.setup-sheet \.scope-list\s*\{[\s\S]*?padding:\s*11px 12px;[\s\S]*?background:\s*var\(--surface-7\);[\s\S]*?line-height:\s*1\.7;/);
+  expect(styles).toMatch(/\.setup-sheet \.scope-list\s*\{[\s\S]*?padding:\s*11px 12px;[\s\S]*?background:\s*var\(--surface-7\);[\s\S]*?line-height:\s*var\(--leading-reading\);/);
   expect(styles).toMatch(/@media \(max-width: 46\.25rem\)[\s\S]*?\.setup-sheet\s*\{[\s\S]*?left:\s*var\(--floating-edge\);[\s\S]*?width:\s*auto;/);
 });

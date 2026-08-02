@@ -7,12 +7,13 @@ export interface TypographyPrefs {
   fontSmoothing: boolean;
 }
 
-/** Applies the user's typography prefs to <html> as CSS custom-property
- *  overrides. An empty font string removes the override so the stylesheet
- *  default (--sans) resolves; code sizing follows automatically since
- *  --code-font-size derives from --ui-font-size in base.css. Font
- *  smoothing stamps only the non-default state, mirroring the CSS
- *  override rule. */
+const DEFAULT_UI_FONT_SIZE = 14;
+const MIN_GEOMETRY_FONT_SIZE = 12;
+
+/** Applies the user's typography prefs to <html>. The explicit px token sizes
+ * text; the proportional root size scales rem-based rows, gaps, icons, and
+ * controls with it, so accessibility sizing does not strand larger glyphs in
+ * frozen geometry. */
 export function applyTypography(prefs: TypographyPrefs): void {
   const root = document.documentElement;
 
@@ -20,6 +21,8 @@ export function applyTypography(prefs: TypographyPrefs): void {
   else root.style.removeProperty("--sans");
 
   root.style.setProperty("--ui-font-size", `${prefs.uiFontSize}px`);
+  const geometryFontSize = Math.max(prefs.uiFontSize, MIN_GEOMETRY_FONT_SIZE);
+  root.style.fontSize = `${(geometryFontSize / DEFAULT_UI_FONT_SIZE) * 100}%`;
 
   if (prefs.fontSmoothing) delete root.dataset.fontSmoothing;
   else root.dataset.fontSmoothing = "native";

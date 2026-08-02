@@ -137,7 +137,7 @@ function MemoryEffects({
             )}
           >
             <div className={clsx(
-              "text-2xs font-semibold uppercase tracking-[0.07em]",
+              "text-2xs font-semibold uppercase tracking-[var(--tracking-caps)]",
               operation.kind === "ASK" ? "text-warn" : "text-muted",
             )}>
               {OPERATION_LABEL[operation.kind]}
@@ -282,7 +282,7 @@ export function DiffReview({
 
       {!hideFooter && <footer className="flex flex-wrap items-center gap-2 border-t border-line-soft bg-surface px-3 py-2.5">
         {operations !== undefined && (
-          <span className="text-2xs text-faint">
+          <span className="text-2xs text-faint tabular-nums">
             {operations.length} memory effect{operations.length === 1 ? "" : "s"}
             {unresolved > 0 ? ` · ${unresolved} decision${unresolved === 1 ? "" : "s"} required` : ""}
           </span>

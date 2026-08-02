@@ -270,14 +270,14 @@ export function AgentRunContent({
             title="Open agent session"
             data-child-session-id={run.childSessionId}
             className={clsx(
-              "min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left text-sm tracking-[-0.005em]",
+              "min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left text-sm tracking-[var(--tracking-tight)]",
               active ? "text-ink" : "text-ink-soft hover:text-ink",
             )}
           >
             {run.name}
           </button>
         ) : (
-          <span className="min-w-0 flex-1 truncate text-sm text-ink-soft tracking-[-0.005em]">
+          <span className="min-w-0 flex-1 truncate text-sm text-ink-soft tracking-[var(--tracking-tight)]">
             {run.name}
           </span>
         )}

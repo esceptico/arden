@@ -120,7 +120,7 @@ function ActivityTreeNode({
           </span>
         )}
         {running && (
-          <span className="text-2xs uppercase tracking-[0.08em] text-faint shrink-0">
+          <span className="text-2xs uppercase tracking-[var(--tracking-caps)] text-faint shrink-0">
             running
           </span>
         )}

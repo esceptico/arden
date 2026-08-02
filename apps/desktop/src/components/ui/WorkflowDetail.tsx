@@ -76,7 +76,7 @@ function parseScript(args: string | undefined): string | null {
 }
 
 const SOURCE_PRE_CLASS =
-  "hljs mt-1 mx-1.5 mb-0.5 p-2.5 rounded-[var(--r-house)] bg-code-bg border border-line-soft text-xs leading-[1.55] " +
+  "hljs mt-1 mx-1.5 mb-0.5 p-2.5 rounded-[var(--r-house)] bg-code-bg border border-line-soft text-xs leading-[var(--leading-reading)] " +
   "text-ink-soft font-mono whitespace-pre max-h-[40vh] min-w-0 max-w-full overflow-auto scroll-thin";
 
 // A collapsible "Source" disclosure that reveals the exact Python the agent
@@ -257,7 +257,7 @@ function PhaseGroup({
             the same weight as their own children and the two levels merged. */}
         <span
           className={clsx(
-            "min-w-0 flex-1 truncate text-xs font-semibold tracking-[-0.005em] transition-colors duration-trace ease-out",
+            "min-w-0 flex-1 truncate text-xs font-semibold tracking-[var(--tracking-tight)] transition-colors duration-trace ease-out",
             phase.status === "failed"
               ? "text-bad"
               : phase.status === "running"

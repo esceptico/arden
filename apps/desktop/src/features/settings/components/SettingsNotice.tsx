@@ -11,7 +11,7 @@ export function SettingsConnectionHint({
   return (
     <div className="rounded-[12px] border border-line-soft bg-surface px-3.5 py-3">
       <div className="text-base font-medium text-ink">{title}</div>
-      <div className="mt-1 text-sm text-muted leading-[1.45]">{detail}</div>
+      <div className="mt-1 text-sm text-muted leading-[var(--leading-body)]">{detail}</div>
     </div>
   );
 }

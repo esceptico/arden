@@ -81,7 +81,7 @@ export function ListError({
       <AlertCircle size={ICON.SM} strokeWidth={2} className="mt-px shrink-0 text-bad" />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-bad">{title}</div>
-        <div className="mt-0.5 text-sm leading-[1.4] text-bad">{message}</div>
+        <div className="mt-0.5 text-sm leading-[var(--leading-body)] text-bad">{message}</div>
         {onRetry && (
           <Button variant="danger" size="sm" onClick={onRetry} className="mt-2">
             Retry

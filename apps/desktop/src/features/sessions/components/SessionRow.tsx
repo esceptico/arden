@@ -67,7 +67,9 @@ export function SessionRow({
     return (
       <div
         className="workspace-rail__session workspace-rail__session--rename grid grid-cols-[minmax(0,1fr)] items-center gap-2 w-full px-2 py-0.5 text-ink"
-        style={depth > 0 ? { paddingLeft: 8 + depth * 16 } : undefined}
+        style={depth > 0 ? {
+          paddingLeft: `calc(var(--interactive-row-inline-padding) + var(--workspace-rail-icon-lane) + var(--space-2) + ${depth * 16}px)`,
+        } : undefined}
       >
         <input
           ref={inputRef}
@@ -83,7 +85,7 @@ export function SessionRow({
               onCancelRename();
             }
           }}
-          className="min-w-0 w-full bg-transparent border-0 p-0 text-base tracking-[-0.005em] text-ink outline-none"
+          className="min-w-0 w-full bg-transparent border-0 p-0 text-base text-ink outline-none"
         />
       </div>
     );
@@ -132,12 +134,14 @@ export function SessionRow({
       data-active={active ? "true" : undefined}
       aria-current={active ? "page" : undefined}
       data-depth={depth || undefined}
-      style={depth > 0 ? { paddingLeft: 8 + depth * 16 } : undefined}
+      style={depth > 0 ? {
+        paddingLeft: `calc(var(--interactive-row-inline-padding) + var(--workspace-rail-icon-lane) + var(--space-2) + ${depth * 16}px)`,
+      } : undefined}
       className="workspace-rail__session arden-row app-row session-row group/row relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 w-full px-2 py-0.5 text-ink-soft text-left"
     >
       <span
         title={name || "untitled"}
-        className="workspace-rail__session-title session-row-title min-w-0 truncate text-base tracking-[-0.005em]"
+        className="workspace-rail__session-title session-row-title min-w-0 truncate text-base"
       >
         {name || "untitled"}
       </span>

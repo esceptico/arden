@@ -122,7 +122,7 @@ export function ServerForm({
         )}
       </div>
 
-      <h3 className="m-0 text-lg font-semibold tracking-[-0.012em] text-ink">
+      <h3 className="m-0 text-lg font-semibold tracking-[var(--tracking-heading)] text-ink">
         {mode === "add" ? "Connect to a custom MCP" : `Update ${server?.name} MCP`}
       </h3>
 

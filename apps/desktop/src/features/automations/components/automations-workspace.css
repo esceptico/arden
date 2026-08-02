@@ -53,7 +53,7 @@
   margin: 0;
   color: var(--ink);
   font: var(--weight-semibold) var(--text-section)/1 var(--sans);
-  letter-spacing: -0.014em;
+  letter-spacing: var(--tracking-heading);
 }
 
 .automation-workspace__rail-header > .arden-button {
@@ -100,7 +100,7 @@
 
 .automation-workspace__search kbd {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
 }
 
 .automation-rail__groups {
@@ -114,7 +114,7 @@
 /* Tight like the chat sidebar's groups — the headings' own height and hover
    pill provide the separation. */
 .automation-rail__groups section + section {
-  margin-top: var(--space-0-5);
+  margin-top: var(--space-3);
 }
 
 /* Collapsible heading — the chat sidebar's group interaction: click toggles,
@@ -130,7 +130,7 @@
   /* Eyebrow at the "Areas" section-title spec (590/muted) — one step above
      the rows' faint metadata so the category reads as structure. */
   color: var(--muted);
-  font: var(--weight-semibold) var(--text-xs)/1 var(--sans);
+  font: var(--type-rail-group);
   text-align: left;
   transition:
     color var(--motion-feedback) var(--smooth-out),
@@ -145,10 +145,13 @@
 .automation-rail__group-label > span:first-child {
   min-width: 0;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .automation-rail__group-count {
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
 }
 
@@ -168,13 +171,13 @@
 .automation-rail__rows,
 .automation-rail__loading {
   display: grid;
-  gap: var(--space-1);
+  gap: var(--space-0-5);
 }
 
 /* The heading keeps the rail's standard row gap to its rows, matching the
    chat sidebar — adjacent hover fills must never touch. */
 .automation-rail__rows {
-  margin-top: var(--interactive-row-gap);
+  margin-top: var(--space-0-5);
 }
 
 .automation-rail__loading {
@@ -228,10 +231,7 @@
 
 .automation-rail__identity b {
   color: var(--ink-soft);
-  font-size: var(--text-sm);
-  /* Regular-ish: the 590 group eyebrows own the structural weight; names
-     read as content (matches chat session rows). */
-  font-weight: var(--weight-medium);
+  font: var(--type-rail-item);
 }
 
 .automation-rail__identity small {
@@ -363,8 +363,8 @@
 .automation-detail__crumb {
   margin-bottom: var(--space-2);
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
-  letter-spacing: .075em;
+  font: var(--type-data);
+  letter-spacing: var(--tracking-caps);
   text-transform: lowercase;
 }
 
@@ -376,8 +376,8 @@
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font: var(--weight-semibold) var(--text-display)/1.2 var(--sans);
-  letter-spacing: -0.025em;
+  font: var(--type-page-title);
+  letter-spacing: var(--tracking-title);
 }
 
 .automation-detail__title::placeholder,
@@ -390,7 +390,7 @@
   margin: .375rem 0 0;
   color: var(--muted);
   font-size: var(--text-sm);
-  line-height: 1.45;
+  line-height: var(--leading-body);
 }
 
 .automation-detail__scroll {
@@ -427,13 +427,12 @@
 .automation-detail__section-heading h2 {
   margin: 0;
   color: var(--ink-soft);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
+  font: var(--type-section-label);
 }
 
 .automation-detail__section-heading span {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
 }
 
 .automation-detail__prompt {
@@ -663,7 +662,7 @@
 .automation-detail__run time,
 .automation-detail__run > span:last-of-type {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -718,7 +717,7 @@
   min-width: 7rem;
   opacity: 0;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   transition: opacity var(--motion-feedback) var(--ease-out);
 }
 
@@ -767,7 +766,7 @@
   color: var(--ink);
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.014em;
+  letter-spacing: var(--tracking-heading);
 }
 
 .automation-delete-dialog p {
@@ -803,7 +802,7 @@
   color: var(--ink);
   font-size: var(--text-xl);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-heading);
 }
 
 .automation-workspace__empty p {
@@ -1060,7 +1059,7 @@
   color: var(--faint);
   background: var(--panel-soft);
   cursor: help;
-  font: var(--weight-medium) .625rem/1 var(--mono);
+  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
   transition: color var(--motion-feedback) var(--ease-out), background var(--motion-feedback) var(--ease-out);
 }
 
@@ -1074,7 +1073,7 @@
 .automation-trigger-editor__runs-per-day {
   margin-left: auto;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1093,7 +1092,7 @@
   padding-inline: .375rem;
   border-radius: var(--r-control);
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   transition: color var(--motion-feedback) var(--ease-out), background var(--motion-feedback) var(--ease-out);
 }
 
@@ -1406,7 +1405,7 @@
   color: var(--ink);
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.014em;
+  letter-spacing: var(--tracking-heading);
 }
 
 .automation-discard-dialog p {

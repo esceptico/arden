@@ -91,7 +91,7 @@ function Version({
   const label = side === "before" ? "Before changes" : "After changes";
   return (
     <section aria-label={label} className="min-w-0 px-4 py-4">
-      <h2 className="mb-3 text-2xs font-semibold uppercase tracking-[0.08em] text-faint">
+      <h2 className="mb-3 text-2xs font-semibold uppercase tracking-[var(--tracking-caps)] text-faint">
         {side === "before" ? "Before" : "After"}
       </h2>
       <ChangeSummary side={side} pairs={pairs} />

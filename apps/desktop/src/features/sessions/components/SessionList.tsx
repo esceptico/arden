@@ -262,25 +262,23 @@ export function SessionList() {
                   {!isCollapsed && (
                     <motion.div
                       key="rows"
+                      className="workspace-rail__session-body"
                       initial={{ opacity: 0, y: -4, filter: "blur(2px)" }}
                       animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                       exit={{ opacity: 0, transition: { duration: MOTION.fast, ease: EASE_OUT } }}
                       transition={{ duration: MOTION.row, ease: EASE_OUT }}
                     >
-                      {/* px-2.5 puts the rows' 16px icon column on the same
-                          rail as the header glyph, so chat titles align with
-                          the group name — hierarchy from the glyph, not a
-                          second indent level. */}
                       <div
                         role="list"
                         aria-label={group.label}
-                        className="workspace-rail__session-group px-2.5 flex flex-col gap-0"
+                        className="workspace-rail__session-group"
                       >
                         {head.map(renderRow)}
                         <AnimatePresence initial={false}>
                           {rest.length > 0 && (
                             <motion.div
                               key="more"
+                              className="workspace-rail__session-rest"
                               initial={{ opacity: 0, y: -4, filter: "blur(2px)" }}
                               animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                               exit={{ opacity: 0, transition: { duration: MOTION.fast, ease: EASE_OUT } }}

@@ -349,7 +349,7 @@ export function Composer() {
               e.target.value = ""; // allow picking the same file again later
             }}
           />
-          <div className="board-composer__input-row flex min-h-[66px] items-start gap-2 px-4 pt-[13px] pb-1">
+          <div className="board-composer__input-row flex min-h-14 items-start gap-2 px-4 pt-2 pb-1">
             <div
                 ref={inputRef}
                 id="message-input"
@@ -507,7 +507,7 @@ export function Composer() {
                   const text = e.clipboardData.getData("text/plain");
                   if (text) document.execCommand("insertText", false, text);
                 }}
-                className="board-composer__input board-composer__editor min-h-[44px] max-h-[220px] min-w-0 flex-1 border-0 bg-transparent p-0 text-md leading-[1.5] text-ink outline-none tracking-[-0.005em]"
+                className="board-composer__input board-composer__editor min-h-[44px] max-h-[220px] min-w-0 flex-1 border-0 bg-transparent p-0 text-[var(--text-body)] leading-[var(--leading-body)] text-ink outline-none"
             />
           </div>
           <ComposerToolbar

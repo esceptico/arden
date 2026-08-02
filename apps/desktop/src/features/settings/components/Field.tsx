@@ -39,7 +39,7 @@ export function Field({
         aria-describedby={helpId}
       />
       {help && (
-        <span id={helpId} className="text-xs leading-[1.4] text-faint">
+        <span id={helpId} className="text-xs leading-[var(--leading-body)] text-faint">
           {help}
         </span>
       )}
@@ -84,7 +84,7 @@ export function NumberField({
         formatValue={format}
         onChange={onChange}
       />
-      {help && <span className="text-xs leading-[1.4] text-faint">{help}</span>}
+      {help && <span className="text-xs leading-[var(--leading-body)] text-faint">{help}</span>}
     </div>
   );
 }
@@ -122,7 +122,7 @@ export function PercentField({
         formatValue={(v) => `${v}%`}
         onChange={(n) => onChange(n / 100)}
       />
-      {help && <span className="text-xs leading-[1.4] text-faint">{help}</span>}
+      {help && <span className="text-xs leading-[var(--leading-body)] text-faint">{help}</span>}
     </div>
   );
 }

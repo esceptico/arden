@@ -46,18 +46,18 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   return (
     <div className="grid gap-1.5">
       {label && (
-        <label htmlFor={fieldId} className="text-sm font-medium tracking-[-0.005em] text-ink-soft">
+        <label htmlFor={fieldId} className="text-sm font-medium tracking-[var(--tracking-tight)] text-ink-soft">
           {label}
         </label>
       )}
       {help && !error && (
-        <span id={msgId} className="text-xs leading-[1.4] text-faint">
+        <span id={msgId} className="text-xs leading-[var(--leading-body)] text-faint">
           {help}
         </span>
       )}
       {field}
       {error && (
-        <span id={msgId} className="text-xs leading-[1.4] text-bad">
+        <span id={msgId} className="text-xs leading-[var(--leading-body)] text-bad">
           {error}
         </span>
       )}

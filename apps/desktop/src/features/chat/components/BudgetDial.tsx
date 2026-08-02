@@ -142,7 +142,7 @@ export function BudgetDial() {
                 style={{ transition: "stroke-dashoffset var(--duration-panel) var(--ease-out-soft), stroke var(--duration-panel) var(--ease-out-soft)" }}
               />
             </svg>
-            <span className="tracking-[-0.005em]">
+            <span className="tracking-[var(--tracking-tight)]">
               <RollingToken value={compactLabel} mono />
             </span>
           </button>

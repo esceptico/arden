@@ -37,7 +37,7 @@ export function ComposerToolbar({
       ? "Queue message · ⌘Enter to steer"
       : actionLabel;
   return (
-    <div className="board-composer__toolbar flex items-center gap-1.5 px-2 pt-1.5 pb-2">
+    <div className="board-composer__toolbar flex items-center gap-1.5 px-2 py-1">
       <IconButton
         shape="circle"
         className="composer-tool-button composer-toolbar-control"

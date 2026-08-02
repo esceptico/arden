@@ -117,9 +117,9 @@ test("Markdown sheets and automation results opt into the shared typeset", () =>
   expect(automations).not.toContain("text-md leading-[1.6] text-ink");
 });
 
-test("Chat user bubbles keep the mock's reading size and padding", () => {
+test("Chat user bubbles keep reading typography with productive padding", () => {
   const bubble = chat.match(/\.board-user__bubble\s*\{([^}]*)\}/)?.[1] ?? "";
-  expect(bubble).toContain("padding: 10px 14px");
+  expect(bubble).toContain("padding: var(--space-2) 14px");
   // The bubble is chrome — geometry and surface only. Its type comes from
   // typeset.css like every other prose surface, so a prompt and the answer
   // below it read at the same size instead of the bubble running a step ahead.
@@ -130,14 +130,14 @@ test("Chat user bubbles keep the mock's reading size and padding", () => {
   expect(user).not.toContain('leading-[1.5]');
 });
 
-test("Chat user metadata clears the bubble by the mock's final 6px gap", () => {
+test("Chat user metadata uses a compact 4px relationship to its bubble", () => {
   const content = chat.match(/\.board-user__content\s*\{([^}]*)\}/)?.[1] ?? "";
   const metadata = chat.match(/\.board-message-actions--user\s*\{([^}]*)\}/)?.[1] ?? "";
 
   expect(user).toContain('className="board-user__content flex max-w-full flex-col items-end"');
-  expect(content).toContain("margin-block-end: .875rem");
-  expect(metadata).toContain("height: 1.625rem");
-  expect(metadata).toContain("margin: calc(-1 * var(--space-2)) 0 var(--space-2)");
+  expect(content).toContain("margin-block-end: var(--space-2)");
+  expect(metadata).toContain("height: 1.5rem");
+  expect(metadata).toContain("margin: calc(-1 * var(--space-1)) 0 var(--space-1)");
   expect(actions).toContain('"board-message-actions flex items-center gap-1"');
   expect(actions).not.toContain('size="sm"');
   expect(actions).toContain('role === "user" ? "order-first mr-0.5 text-2xs"');
@@ -165,12 +165,12 @@ test("Chat keeps the compact budget control and shared model picker classes", ()
   expect(modelPickers).not.toContain(".board-composer .model-picker");
 });
 
-test("Chat composer keeps the mock's 66px input and 42px toolbar geometry", () => {
-  expect(composer).toContain("board-composer__input-row flex min-h-[66px]");
+test("Chat composer uses compact 56px input and 40px toolbar geometry", () => {
+  expect(composer).toContain("board-composer__input-row flex min-h-14");
   expect(composerToolbar).toContain('className="composer-tool-button composer-toolbar-control"');
   expect(composerToolbar).toContain('className="composer-tool-button composer-toolbar-control composer-mode-button"');
-  expect(chat).toContain(".board-composer__input-row { min-height: 4.125rem; }");
-  expect(chat).toContain(".board-composer__toolbar { height: 2.625rem; min-height: 2.625rem; flex: none; }");
+  expect(chat).toContain(".board-composer__input-row { min-height: 3.5rem; }");
+  expect(chat).toContain(".board-composer__toolbar { height: 2.5rem; min-height: 2.5rem; flex: none; }");
   expect(chat).toContain(".board-composer .composer-tool-button { min-height: var(--control-size-large); }");
 });
 

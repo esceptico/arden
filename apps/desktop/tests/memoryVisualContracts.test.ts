@@ -306,7 +306,7 @@ test("Memory is a route with its own rail, not a dialog", () => {
 test("memory note typography and properties copy match the active mockup", () => {
   const memoryCss = read("../src/design/memory.css");
   const memoryProperties = read("../src/features/memory/components/MemoryProperties.tsx");
-  expect(memoryCss).toMatch(/\.memory-surface \.mw-prose\s*\{[^}]*line-height:\s*1\.6;/s);
+  expect(memoryCss).toMatch(/\.memory-surface \.mw-prose\s*\{[^}]*line-height:\s*var\(--leading-reading\);/s);
   expect(memoryProperties).toContain('properties <span className="mw-props-count">');
 });
 

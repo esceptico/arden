@@ -34,12 +34,12 @@ export const TodoMessage = memo(function TodoMessage({ id }: { id: string }) {
         <div className="flex items-center justify-between gap-3">
           <div className="inline-flex items-center gap-2 min-w-0">
             <ListChecks size={ICON.SM} strokeWidth={2} className="text-muted shrink-0" />
-            <span className="text-sm font-medium leading-[1.35] text-ink">Tasks</span>
+            <span className="text-sm font-medium leading-[var(--leading-label)] text-ink">Tasks</span>
           </div>
           <span className="shrink-0 text-xs tabular-nums text-muted">{completed}/{items.length}</span>
         </div>
         {message.todo.explanation && (
-          <div className="mt-1.5 text-xs leading-[1.4] text-muted break-words">
+          <div className="mt-1.5 text-xs leading-[var(--leading-body)] text-muted break-words">
             {message.todo.explanation}
           </div>
         )}
@@ -51,7 +51,7 @@ export const TodoMessage = memo(function TodoMessage({ id }: { id: string }) {
               </BlurSwap>
               <span
                 className={clsx(
-                  "min-w-0 flex-1 text-sm leading-[1.4] break-words transition-colors duration-trace ease-out",
+                  "min-w-0 flex-1 text-sm leading-[var(--leading-body)] break-words transition-colors duration-trace ease-out",
                   item.status === "completed" && "text-faint line-through",
                   item.status === "in_progress" && "text-ink font-medium",
                   item.status === "pending" && "text-muted",

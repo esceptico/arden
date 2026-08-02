@@ -34,8 +34,8 @@
 .board-area-header h1 {
   margin: 0;
   color: var(--ink);
-  font: var(--weight-semibold) var(--text-3xl)/1.2 var(--sans);
-  letter-spacing: -.021em;
+  font: var(--type-editorial-title);
+  letter-spacing: var(--tracking-editorial);
   text-wrap: balance;
 }
 
@@ -118,7 +118,7 @@
   overflow-wrap: anywhere;
   color: var(--ink);
   font: var(--weight-semibold) var(--text-2xl)/1.3 var(--sans);
-  letter-spacing: -.018em;
+  letter-spacing: var(--tracking-heading);
   text-wrap: balance;
 }
 
@@ -174,7 +174,7 @@
 
 .board-area-deck__action-more {
   color: var(--accent);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--sans);
+  font: var(--type-meta-strong);
 }
 
 .board-area-deck__actions {
@@ -211,7 +211,7 @@
 
 .board-area-deck__chrome > span {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
 }
 
@@ -463,7 +463,7 @@
   align-items: center;
   margin: 0;
   color: var(--ink-soft);
-  font: var(--weight-semibold) var(--text-sm)/1.2 var(--sans);
+  font: var(--type-section-label);
 }
 
 .area-settings__section {
@@ -499,7 +499,7 @@
   display: block;
   color: var(--faint);
   font-size: var(--text-xs);
-  line-height: 1.45;
+  line-height: var(--leading-body);
   text-wrap: pretty;
 }
 
@@ -598,7 +598,7 @@
   overflow: hidden;
   color: var(--ink);
   font: var(--weight-semibold) var(--text-base)/1.3 var(--sans);
-  letter-spacing: -.008em;
+  letter-spacing: var(--tracking-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -629,9 +629,7 @@
 .area-page-peek__body :is(h1, h2, h3, h4) {
   margin-top: var(--space-4);
   color: var(--ink);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-  line-height: 1.35;
+  font: var(--type-section-label);
 }
 
 .area-page-peek__body > :first-child { margin-top: 0; }
@@ -659,7 +657,6 @@
   margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: var(--text-xs);
-  line-height: 1.5;
+  line-height: var(--leading-reading);
   text-wrap: pretty;
 }
-

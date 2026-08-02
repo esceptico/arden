@@ -229,8 +229,8 @@ test("New automation menu keeps the template popover contract", () => {
   expect(menu).toContain('className="w-[320px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-auto !bg-[var(--surface-5)] p-[5px] !shadow-[var(--shadow-3)]"');
   expect(menu).toContain("<SectionLabel>Templates</SectionLabel>");
   expect(menu).toContain("description={t.blurb}");
-  expect(menu).toContain("text-xs font-[560] leading-[1.55]");
-  expect(menu).toContain("text-2xs leading-[1.35] text-faint");
+  expect(menu).toContain("text-xs font-medium leading-[var(--leading-label)]");
+  expect(menu).toContain("text-2xs leading-[var(--leading-metadata)] text-faint");
   expect(menu).toContain("Start from scratch");
   expect(menu).not.toContain("Start from scratch…");
   expect(menu).not.toContain("leading={<t.icon");

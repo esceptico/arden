@@ -158,17 +158,18 @@ test("hidden-sidebar Chat reserves the native chrome lane for its title", () => 
   expect(foundation).not.toMatch(/\.shell-control\s*\{[^}]*border-radius/);
 });
 
-test("shared rail geometry keeps app rows and Chat hierarchy on their mock heights", () => {
-  expect(shell).toMatch(/\.workspace-rail\s*\{[\s\S]*?--workspace-rail-row-height:\s*1\.875rem;/);
-  // One row height for the whole rail (board-app-rail.css: nav-row AND area-row are 30px).
+test("shared rail geometry separates navigation, groups, and repeated Chat rows", () => {
+  expect(shell).toMatch(/\.workspace-rail\s*\{[\s\S]*?--workspace-rail-nav-row-height:\s*1\.875rem;/);
+  expect(shell).toMatch(/\.workspace-rail\s*\{[\s\S]*?--workspace-rail-group-row-height:\s*1\.625rem;/);
+  expect(shell).toMatch(/\.workspace-rail\s*\{[\s\S]*?--workspace-rail-session-row-height:\s*1\.75rem;/);
   expect(shell).not.toContain("--workspace-chat-row-height");
-  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__nav-row\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
-  expect(shell).toMatch(/\.home-area-list__row\s*\{[\s\S]*?min-height:\s*var\(--workspace-rail-row-height\);[\s\S]*?padding-inline:\s*var\(--interactive-row-inline-padding\);/);
-  expect(shell).toMatch(/\.home-area-list__row small\s*\{[\s\S]*?font:\s*var\(--weight-medium\) var\(--text-2xs\)\/1 var\(--sans\);/);
-  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
-  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?grid-template-columns:\s*var\(--icon-size\) minmax\(0, 1fr\) \.75rem;/);
-  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__session\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
-  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__show-more\s*\{[\s\S]*?height:\s*var\(--workspace-rail-row-height\);/);
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__nav-row\s*\{[\s\S]*?height:\s*var\(--workspace-rail-nav-row-height\);/);
+  expect(shell).toMatch(/\.home-area-list__row\s*\{[\s\S]*?min-height:\s*var\(--workspace-rail-nav-row-height\);[\s\S]*?padding-inline:\s*var\(--interactive-row-inline-padding\);/);
+  expect(shell).toMatch(/\.home-area-list__row small\s*\{[\s\S]*?font:\s*var\(--weight-medium\) var\(--workspace-rail-meta-size\)\/var\(--workspace-rail-meta-leading\) var\(--sans\);/);
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?height:\s*var\(--workspace-rail-group-row-height\);/);
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__group-heading\s*\{[\s\S]*?grid-template-columns:\s*var\(--workspace-rail-icon-lane\) minmax\(0, 1fr\) \.75rem;/);
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__session\s*\{[\s\S]*?height:\s*var\(--workspace-rail-session-row-height\);/);
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__show-more\s*\{[\s\S]*?height:\s*var\(--workspace-rail-session-row-height\);/);
 
   // The hovered title dissolves at ITS OWN trailing edge. The title and the
   // time + pin + archive cluster are flex siblings, so revealing the cluster

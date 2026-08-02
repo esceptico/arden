@@ -23,7 +23,7 @@ export function Caption({
   return (
     <Tag
       className={clsx(
-        "m-0 text-2xs font-medium uppercase tracking-[0.08em]",
+        "m-0 text-2xs font-medium uppercase tracking-[var(--tracking-caps)]",
         tone === "muted" ? "text-muted" : "text-faint",
         className,
       )}

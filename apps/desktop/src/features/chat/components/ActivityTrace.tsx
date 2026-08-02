@@ -34,7 +34,7 @@ const TRACE_ROW_REDUCED_TRANSITION = { duration: MOTION.reduced } as const;
 
 export function ActivityTrace({ children }: { children: ReactNode }) {
   return (
-    <div className="board-activity-trace font-sans text-sm leading-[1.4] text-muted">{children}</div>
+    <div className="board-activity-trace font-sans text-sm leading-[var(--leading-body)] text-muted">{children}</div>
   );
 }
 

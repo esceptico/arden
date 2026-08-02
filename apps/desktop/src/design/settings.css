@@ -50,7 +50,7 @@
   font-size: var(--text-xl);
   font-weight: var(--weight-semibold);
   line-height: 1;
-  letter-spacing: -.014em;
+  letter-spacing: var(--tracking-heading);
   color: var(--ink);
 }
 
@@ -71,7 +71,7 @@
 }
 
 .settings-nav-group + .settings-nav-group {
-  margin-top: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .settings-nav-group-label {
@@ -80,8 +80,7 @@
   display: flex;
   align-items: center;
   color: var(--faint);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  font: var(--type-rail-group);
 }
 
 .settings-nav-highlight {
@@ -96,9 +95,7 @@
   padding: 0 var(--space-3);
   border-radius: var(--r-row);
   color: var(--muted);
-  font-size: var(--text-base);
-  font-weight: var(--weight-regular);
-  letter-spacing: -.005em;
+  font: var(--type-rail-item);
   text-align: left;
   transition: color var(--motion-feedback) var(--smooth-out), transform var(--motion-press) var(--smooth-out);
 }
@@ -118,14 +115,13 @@
 
 .board-settings .settings-nav-row[data-active="true"] {
   color: var(--ink);
-  font-weight: var(--weight-medium);
   background: transparent;
   box-shadow: none;
 }
 
 .settings-nav-meta {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
 }
 
@@ -174,8 +170,8 @@
 .settings-crumb {
   margin-bottom: 13px;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
-  letter-spacing: .075em;
+  font: var(--type-data);
+  letter-spacing: var(--tracking-caps);
 }
 
 .settings-crumb strong {
@@ -193,10 +189,8 @@
   min-width: 0;
   margin: 0;
   color: var(--ink);
-  font-size: var(--text-display);
-  font-weight: var(--weight-semibold);
-  letter-spacing: -.025em;
-  line-height: 1.2;
+  font: var(--type-page-title);
+  letter-spacing: var(--tracking-title);
   text-wrap: balance;
 }
 
@@ -276,15 +270,13 @@
 .settings-section-head h2 {
   margin: 0;
   color: var(--ink);
-  font-size: var(--text-body);
-  font-weight: var(--weight-semibold);
-  letter-spacing: -.006em;
+  font: var(--type-section-label);
 }
 
 .settings-section-detail {
   margin-left: auto;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   font-variant-numeric: tabular-nums;
 }
 
@@ -344,7 +336,7 @@
   color: var(--ink);
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
-  letter-spacing: -.006em;
+  letter-spacing: var(--tracking-tight);
 }
 
 .settings-setting-hint {
@@ -352,7 +344,7 @@
   margin-top: 4px;
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: 1.45;
+  line-height: var(--leading-body);
 }
 
 .settings-setting-hint .arden-kbd {
@@ -421,7 +413,7 @@
   color: var(--ink);
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.014em;
+  letter-spacing: var(--tracking-heading);
 }
 
 .settings-embedding-dialog p {
@@ -486,7 +478,7 @@
   font-size: var(--text-label);
   font-weight: var(--weight-medium);
   line-height: var(--leading-body);
-  letter-spacing: -.005em;
+  letter-spacing: var(--tracking-tight);
   font-variant-numeric: tabular-nums;
   transition:
     color var(--motion-feedback) var(--smooth-out),
@@ -524,7 +516,7 @@
   margin-top: var(--space-2-5);
   padding: 0 2px;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.5 var(--mono);
+  font: var(--type-data);
 }
 
 .settings-section-actions {
@@ -559,14 +551,14 @@
   color: var(--ink);
   font-size: var(--text-body);
   font-weight: var(--weight-semibold);
-  letter-spacing: -.006em;
+  letter-spacing: var(--tracking-tight);
 }
 
 .settings-summary-copy {
   margin-top: 3px;
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: 1.45;
+  line-height: var(--leading-body);
 }
 
 .settings-summary-value {
@@ -581,7 +573,7 @@
 .settings-summary-meta {
   margin-top: 4px;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.2 var(--mono);
+  font: var(--type-data);
 }
 
 .settings-data-row {
@@ -620,7 +612,7 @@
   margin-top: 4px;
   overflow: hidden;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.35 var(--mono);
+  font: var(--type-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -628,7 +620,7 @@
 .settings-data-row-copy {
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: 1.45;
+  line-height: var(--leading-body);
 }
 
 .settings-data-row-end {
@@ -642,7 +634,7 @@
 
 .settings-provider-status {
   color: var(--accent-ink);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
 }
 
 /* Shell = padded data row + its full-width disclosure, stacked. Row dividers
@@ -698,7 +690,7 @@
 }
 
 .settings-mcp-status {
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
 }
 
 .settings-mcp-status[data-tone="ok"] { color: var(--accent-ink); }
@@ -735,7 +727,7 @@
   color: var(--ink);
   font-size: var(--text-body);
   font-weight: var(--weight-medium);
-  letter-spacing: -.005em;
+  letter-spacing: var(--tracking-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -744,7 +736,7 @@
   margin-top: 4px;
   overflow: hidden;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.3 var(--mono);
+  font: var(--type-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -797,7 +789,7 @@
   margin-top: 4px;
   overflow: hidden;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.35 var(--mono);
+  font: var(--type-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -806,7 +798,7 @@
   min-width: 0;
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: 1.4;
+  line-height: var(--leading-body);
 }
 
 .settings-integration-state strong,
@@ -983,7 +975,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font: var(--weight-medium) var(--text-metadata)/1.35 var(--mono);
+  font: var(--type-data);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1002,7 +994,7 @@
   justify-content: space-between;
   border-top: 1px solid var(--line);
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1.35 var(--mono);
+  font: var(--type-data);
 }
 
 /* Setup stays in the Settings workspace as a fixed L5 sheet. The assistant
@@ -1046,20 +1038,20 @@
 }
 .setup-sheet .sheet-kicker {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata) / 1 var(--mono);
-  letter-spacing: .08em;
+  font: var(--type-data);
+  letter-spacing: var(--tracking-caps);
 }
 .setup-sheet .dp-sheet-body h3 {
   margin: 12px 0 7px;
   color: var(--ink);
   font-size: var(--text-2xl);
-  letter-spacing: -.02em;
+  letter-spacing: var(--tracking-heading);
 }
 .setup-sheet .dp-sheet-body > p {
   margin: 0;
   color: var(--muted);
   font-size: var(--text-body);
-  line-height: 1.55;
+  line-height: var(--leading-reading);
 }
 .setup-sheet .dp-sheet-footer {
   min-height: 3.75rem;
@@ -1085,7 +1077,7 @@
   place-items: center;
   border-radius: var(--r-circle);
   background: var(--panel-soft);
-  font: var(--weight-medium) var(--text-metadata) / 1 var(--mono);
+  font: var(--type-data);
 }
 .setup-sheet .sheet-field { margin-top: 10px; }
 .setup-sheet .sheet-field label {
@@ -1102,7 +1094,7 @@
   background: var(--surface-7);
   color: var(--muted);
   font-size: var(--text-label);
-  line-height: 1.7;
+  line-height: var(--leading-reading);
 }
 .setup-sheet .scope-list b {
   color: var(--ink-soft);
@@ -1112,7 +1104,7 @@
   margin: 10px 0 0;
   color: var(--danger);
   font-size: var(--text-label);
-  line-height: 1.45;
+  line-height: var(--leading-body);
 }
 
 @media (max-width: 61.25rem) {
@@ -1384,5 +1376,5 @@
 .notifier-peek textarea.arden-field {
   font-family: var(--mono);
   font-size: var(--text-xs);
-  line-height: 1.6;
+  line-height: var(--leading-code);
 }

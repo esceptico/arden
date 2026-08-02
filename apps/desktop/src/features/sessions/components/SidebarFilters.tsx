@@ -95,7 +95,7 @@ export function SidebarFilters() {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2.5 pt-1 pb-0.5 text-2xs font-medium uppercase tracking-[0.06em] text-muted select-none">
+    <div className="px-2.5 pt-1 pb-0.5 text-2xs font-medium uppercase tracking-[var(--tracking-caps)] text-muted select-none">
       {children}
     </div>
   );

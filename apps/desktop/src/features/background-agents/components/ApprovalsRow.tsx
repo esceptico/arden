@@ -78,7 +78,7 @@ export function ApprovalsRow({ approvals: scopedApprovals, variant = "compact" }
             onClick={(e) => review(first.toolId, originFromEvent(e.currentTarget))}
             className="flex w-full items-center gap-2 rounded-[8px] bg-warn/10 px-2.5 py-2 text-left transition-[background-color,scale] duration-row ease-out hover:bg-warn/15 active:scale-[0.985]"
           >
-            <span className="flex-1 text-xs text-ink-soft">
+            <span className="flex-1 text-xs text-ink-soft tabular-nums">
               {approvals.length} awaiting approval
             </span>
             <span className="shrink-0 text-2xs text-warn">Review →</span>

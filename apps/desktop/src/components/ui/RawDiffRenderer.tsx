@@ -49,7 +49,7 @@ function RawCell({
       data-placeholder={placeholder ? side : undefined}
       aria-label={placeholder ? `No ${side} line` : undefined}
       className={clsx(
-        "grid h-full min-h-[19px] min-w-0 grid-cols-[4ch_minmax(0,1fr)] font-mono text-[length:var(--code-font-size)] leading-[19px]",
+        "grid h-full min-h-[19px] min-w-0 grid-cols-[4ch_minmax(0,1fr)] font-mono text-[length:var(--code-font-size)] leading-[var(--leading-code)]",
         change === "removed" && "bg-bad-soft",
         change === "added" && "bg-ok-soft",
         placeholder && "bg-surface-soft/35",
@@ -172,8 +172,8 @@ function SplitComparison({ groups, expanded, onToggle }: {
   return (
     <section role="table" aria-label="Split raw Markdown comparison" className="min-w-0 bg-bg-main">
       <div role="row" className="sticky top-0 z-[var(--z-sticky)] grid grid-cols-2 divide-x divide-line-soft border-b border-line-soft bg-surface">
-        <div role="columnheader" aria-label="Before raw Markdown" className="px-3 py-2 text-2xs font-semibold uppercase tracking-[0.08em] text-faint">Before</div>
-        <div role="columnheader" aria-label="After raw Markdown" className="px-3 py-2 text-2xs font-semibold uppercase tracking-[0.08em] text-faint">After</div>
+        <div role="columnheader" aria-label="Before raw Markdown" className="px-3 py-2 text-2xs font-semibold uppercase tracking-[var(--tracking-caps)] text-faint">Before</div>
+        <div role="columnheader" aria-label="After raw Markdown" className="px-3 py-2 text-2xs font-semibold uppercase tracking-[var(--tracking-caps)] text-faint">After</div>
       </div>
       <div role="rowgroup" data-raw-diff-lines>
         {groups.map((group) => (
@@ -237,7 +237,7 @@ function StackedPane({ side, groups, expanded, onToggle }: {
   const label = side === "before" ? "Before raw Markdown" : "After raw Markdown";
   return (
     <section role="table" aria-label={label} className="min-w-0 bg-bg-main">
-      <h2 className="sticky top-0 z-[var(--z-sticky)] border-b border-line-soft bg-surface px-3 py-2 text-2xs font-semibold uppercase tracking-[0.08em] text-faint">
+      <h2 className="sticky top-0 z-[var(--z-sticky)] border-b border-line-soft bg-surface px-3 py-2 text-2xs font-semibold uppercase tracking-[var(--tracking-caps)] text-faint">
         {side === "before" ? "Before" : "After"}
       </h2>
       <div role="rowgroup" data-raw-diff-lines>
@@ -257,7 +257,7 @@ function StackedPane({ side, groups, expanded, onToggle }: {
 
 function UnifiedPatch({ patch }: { patch: string }) {
   return (
-    <section role="table" aria-label="Unified raw file diff" className="min-w-max bg-bg-main py-1 font-mono text-[length:var(--code-font-size)] leading-[19px]">
+    <section role="table" aria-label="Unified raw file diff" className="min-w-max bg-bg-main py-1 font-mono text-[length:var(--code-font-size)] leading-[var(--leading-code)]">
       <div role="rowgroup" data-raw-diff-lines>
         {patch.split("\n").map((line, index) => {
           const header = line.startsWith("---") || line.startsWith("+++") || line.startsWith("@@");

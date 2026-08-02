@@ -40,7 +40,7 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className={clsx("board-reasoning__head self-start inline-flex items-center gap-1.5 text-xs leading-[1.45] font-medium text-muted hover:text-ink-soft transition-colors select-none", isStreaming && "is-streaming")}
+        className={clsx("board-reasoning__head self-start inline-flex items-center gap-1.5 text-xs leading-[var(--leading-body)] font-medium text-muted hover:text-ink-soft transition-colors select-none", isStreaming && "is-streaming")}
       >
         <Brain01 size={ICON.XS} />
         <span>{message.title || "Reasoning"}</span>

@@ -154,7 +154,7 @@
   --font-geist: var(--sans);
   --font-geist-mono: var(--mono);
   --ui-font-size: 14px;
-  --code-font-size: calc(var(--ui-font-size) - 1px);
+  --code-font-size: max(11px, calc(var(--ui-font-size) - 1px));
   /* The mechanical ladder. Tailwind generates `text-xs`, `text-sm`… from these
      exact names, so they stay — but they are not the vocabulary. Reach for the
      roles below, which say what a size is FOR.
@@ -162,9 +162,9 @@
      Three pairs used to sit half a pixel apart (10.5/11, 12.5/13, 16.5/18).
      Half a pixel is not a tier: it gave the same decision two answers and made
      "which size is this" unanswerable. Each pair is now one step. */
-  --text-2xs: calc(var(--ui-font-size) - 3px);      /* 11 */
-  --text-xs: var(--text-sm);                        /* was 12.5 — merged */
-  --text-sm: calc(var(--ui-font-size) - 1px);       /* 13 */
+  --text-2xs: max(10px, calc(var(--ui-font-size) - 3px)); /* 11; 10px floor */
+  --text-xs: var(--text-sm);                        /* merged */
+  --text-sm: max(12px, calc(var(--ui-font-size) - 1px));  /* 13; 12px floor */
   --text-base: var(--ui-font-size);                  /* 14 */
   --text-md: calc(var(--ui-font-size) + 1px);       /* 15 */
   --text-lg: var(--text-xl);                        /* was 16.5 — merged */
@@ -193,9 +193,46 @@
   --weight-medium: 500;
   --weight-semibold: 600;
 
-  --leading-reading: 1.65;
-  --leading-body: 1.55;
-  --leading-meta: 1.4;
+  /* Role metrics. Product chrome uses these complete contracts instead of
+     recombining size, leading, weight, and tracking per feature. */
+  --leading-title: 1.2;
+  --leading-section: 1.25;
+  --leading-subsection: 1.3;
+  --leading-lede: 1.55;
+  --leading-reading: 1.55;
+  --leading-body: 1.43;
+  --leading-label: 1.23;
+  --leading-metadata: 1.45;
+  --leading-code: 1.46;
+  --leading-meta: var(--leading-metadata);
+  --tracking-title: -.025em;
+  --tracking-editorial: -.021em;
+  --tracking-heading: -.012em;
+  --tracking-tight: -.005em;
+  --tracking-caps: .07em;
+  --tracking-data: .02em;
+  --tracking-badge: .005em;
+
+  --type-page-title: var(--weight-semibold) var(--text-title)/var(--leading-title) var(--sans);
+  --type-editorial-title: var(--weight-semibold) var(--text-3xl)/var(--leading-title) var(--sans);
+  --type-section-title: var(--weight-semibold) var(--text-section)/var(--leading-section) var(--sans);
+  --type-subsection-title: var(--weight-semibold) var(--text-subsection)/var(--leading-subsection) var(--sans);
+  --type-section-label: var(--weight-semibold) var(--text-label)/var(--leading-label) var(--sans);
+  --type-lede: var(--weight-heading) var(--text-lede)/var(--leading-lede) var(--sans);
+  --type-body: var(--weight-regular) var(--text-body)/var(--leading-body) var(--sans);
+  --type-control: var(--weight-medium) var(--text-label)/var(--leading-label) var(--sans);
+  --type-label: var(--weight-regular) var(--text-label)/var(--leading-label) var(--sans);
+  --type-meta: var(--weight-regular) var(--text-metadata)/var(--leading-metadata) var(--sans);
+  --type-meta-strong: var(--weight-medium) var(--text-metadata)/var(--leading-metadata) var(--sans);
+  --type-data: var(--weight-medium) var(--text-metadata)/var(--leading-metadata) var(--mono);
+  --type-code: var(--weight-regular) var(--code-font-size)/var(--leading-code) var(--mono);
+  --type-rail-group: var(--weight-medium) var(--text-label)/var(--leading-label) var(--sans);
+  --type-rail-item: var(--weight-regular) var(--text-label)/var(--leading-label) var(--sans);
+  /* Relative editorial ladder shared by every rich-text renderer. */
+  --reading-h1-size: 1.6em;
+  --reading-h2-size: 1.45em;
+  --reading-h3-size: 1.3em;
+  --reading-h4-size: 1.15em;
   --icon-size: 1rem;
   --kbd-size: 1.25rem;
   --kbd-gap: var(--space-1);
@@ -426,7 +463,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   border-radius: var(--kbd-radius);
   color: var(--muted);
   background: var(--surface-4);
-  font: var(--weight-medium) .75rem/1 var(--sans);
+  font: var(--type-control);
   vertical-align: middle;
   white-space: nowrap;
   user-select: none;
@@ -457,7 +494,7 @@ svg { display: block; fill: none; }
 /* Canonical live-running treatment shared by chat, helpers, and agents. */
 .dp-running-text {
   color: transparent;
-  background: linear-gradient(90deg, var(--muted) 0 40%, var(--ink) 50%, var(--muted) 60% 100%) 100% 0 / 200% 100%;
+  background: linear-gradient(90deg, var(--muted) 0 28%, var(--ink) 46% 54%, var(--muted) 72% 100%) 100% 0 / 200% 100%;
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -474,7 +511,7 @@ svg { display: block; fill: none; }
 }
 
 /* Review-only navigation shared by every standalone Board plate. */
-.dp-review-nav { position: fixed; z-index: var(--z-demo); left: .75rem; bottom: .75rem; color: var(--ink); font: var(--weight-medium) var(--text-metadata)/1 var(--sans); }
+.dp-review-nav { position: fixed; z-index: var(--z-demo); left: .75rem; bottom: .75rem; color: var(--ink); font: var(--type-meta-strong); }
 .dp-review-nav summary { min-height: var(--control-size); padding: 0 .625rem; display: flex; align-items: center; border: var(--border-width) solid var(--edge); border-radius: var(--r-control); background: var(--surface-3); box-shadow: var(--shadow-3); cursor: pointer; list-style: none; user-select: none; }
 .dp-review-nav summary::-webkit-details-marker { display: none; }
 .dp-review-nav nav { position: absolute; left: 0; bottom: calc(100% + .375rem); width: 10rem; max-height: calc(100vh - 4rem); padding: .25rem; display: grid; overflow: auto; border: var(--border-width) solid var(--edge); border-radius: var(--r-house); background: var(--surface-3); box-shadow: var(--shadow-5); }
@@ -504,7 +541,7 @@ body.dp-guides-on { cursor: crosshair; }
 .dp-layout-inspected-box, .dp-layout-parent-box { position: fixed; display: block; box-sizing: border-box; }
 .dp-layout-inspected-box { border: 1px solid var(--guide-color, #168cff); background: color-mix(in oklab, var(--guide-color, #168cff) 7%, transparent); }
 .dp-layout-parent-box { border: 1px dashed color-mix(in oklab, var(--guide-color, #8b5cf6) 72%, transparent); }
-.dp-layout-measure { position: fixed; max-width: min(26rem, calc(100vw - 1rem)); padding: .25rem .375rem; border-radius: var(--r-tag); color: #fff; background: #168cff; box-shadow: var(--shadow-2); font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono); white-space: nowrap; }
+.dp-layout-measure { position: fixed; max-width: min(26rem, calc(100vw - 1rem)); padding: .25rem .375rem; border-radius: var(--r-tag); color: #fff; background: #168cff; box-shadow: var(--shadow-2); font: var(--type-data); white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -796,7 +833,7 @@ body.dp-guides-on { cursor: crosshair; }
   justify-self: end;
   margin-inline-start: var(--space-1);
   color: var(--faint);
-  font: var(--weight-medium) var(--text-metadata)/1 var(--mono);
+  font: var(--type-data);
   white-space: nowrap;
 }
 
@@ -849,7 +886,7 @@ body.dp-guides-on { cursor: crosshair; }
 .dp-segmented > button[aria-selected="true"],
 .dp-segmented > button[aria-pressed="true"] { color: var(--ink); }
 
-.dp-status { color: var(--muted); font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono); }
+.dp-status { color: var(--muted); font: var(--type-data); }
 .dp-status[data-tone="success"] { color: var(--success); }
 .dp-status[data-tone="warning"] { color: var(--warning); }
 .dp-status[data-tone="danger"] { color: var(--danger); }
@@ -881,12 +918,12 @@ body.dp-guides-on { cursor: crosshair; }
 .dp-sonner-status {
   margin-left: auto;
   color: var(--muted);
-  font: var(--weight-medium) var(--text-metadata)/var(--leading-meta) var(--mono);
+  font: var(--type-data);
 }
 .dp-sonner-card[data-tone="success"] .dp-sonner-status { color: var(--success); }
 .dp-sonner-card[data-tone="warning"] .dp-sonner-status { color: var(--warning); }
 .dp-sonner-card[data-tone="danger"] .dp-sonner-status { color: var(--danger); }
-.dp-sonner-description { margin: .125rem 0 0; color: var(--muted); font-size: var(--text-label); line-height: 1.4; }
+.dp-sonner-description { margin: .125rem 0 0; color: var(--muted); font: var(--type-label); }
 
 .dp-peek {
   position: fixed;
@@ -980,8 +1017,8 @@ body.dp-guides-on { cursor: crosshair; }
 }
 
 .dp-menu { min-width: 10rem; padding: .3125rem; overflow: auto; border-radius: var(--r-menu); color: var(--ink); background: var(--surface-5); box-shadow: var(--shadow-3); }
-.dp-section-label { margin: 0; color: var(--faint); font: var(--weight-semibold) var(--text-metadata)/1 var(--sans); letter-spacing: .07em; text-transform: uppercase; }
-.dp-menu-label { padding: .5rem .625rem .25rem; color: var(--faint); font: var(--weight-semibold) var(--text-metadata)/1 var(--sans); letter-spacing: .07em; text-transform: uppercase; }
+.dp-section-label { margin: 0; color: var(--faint); font: var(--weight-semibold) var(--text-metadata)/1 var(--sans); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.dp-menu-label { padding: .5rem .625rem .25rem; color: var(--faint); font: var(--weight-semibold) var(--text-metadata)/1 var(--sans); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
 .dp-menu-item { width: 100%; min-height: 2.5rem; padding: .5rem .625rem; display: flex; align-items: center; gap: var(--space-3); border-radius: var(--r-row); color: var(--ink-soft); text-align: left; }
 .dp-menu-item:is(:hover, :focus-visible) { background: var(--state-hover-bg); outline: 0; }
 .dp-menu-item:is([aria-selected="true"], [aria-checked="true"]) { color: var(--ink); background: var(--state-selected-bg); }
@@ -1012,7 +1049,7 @@ body.dp-guides-on { cursor: crosshair; }
 .dp-context-menu .dp-menu-item[data-tone="danger"]:is(:hover, :focus-visible) { color: var(--danger); background: color-mix(in oklab, var(--danger) 10%, transparent); }
 .dp-menu-shortcut { margin-left: auto; padding-left: var(--space-3); display: inline-flex; align-items: center; }
 /* menu rows are 28px — keycaps step down so they read as hints, not controls */
-.dp-menu-shortcut .dp-kbd { min-width: 1rem; height: 1rem; padding-inline: var(--space-0-5); font-size: .625rem; color: var(--faint); }
+.dp-menu-shortcut .dp-kbd { min-width: 1rem; height: 1rem; padding-inline: var(--space-0-5); font-size: var(--text-metadata); color: var(--faint); }
 
 .dp-row-stack { display: grid; gap: var(--interactive-row-gap); }
 .dp-dense-row { border-radius: var(--r-dense-row); }
@@ -1048,7 +1085,7 @@ body.dp-guides-on { cursor: crosshair; }
   font-size: var(--text-section);
   line-height: 1;
   font-weight: var(--weight-semibold);
-  letter-spacing: -.014em;
+  letter-spacing: var(--tracking-heading);
 }
 .dp-sidebar-nav {
   position: relative;

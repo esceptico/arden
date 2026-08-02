@@ -1,10 +1,10 @@
 /*
  * Workspace shell primitives
  * --------------------------
- * The Board rail has one visual grammar: a floating 18rem shell, one 30px
- * row height for every rail row (board-app-rail.css: nav-row AND area-row),
- * and terse textual state. Feature components only provide content and
- * behavior; this file owns their shared geometry, state, and motion.
+ * The Board rail has one visual grammar: a floating 18rem shell, a shallow
+ * type ladder, compact sibling rows, and larger semantic group breaks.
+ * Feature components only provide content and behavior; this file owns their
+ * shared geometry, state, and motion.
  */
 
 /* All primary workspaces occupy the same shell slot. At the pressure point,
@@ -31,7 +31,23 @@
 }
 
 .workspace-rail {
-  --workspace-rail-row-height: 1.875rem;
+  --workspace-rail-nav-row-height: 1.875rem;
+  --workspace-rail-group-row-height: 1.625rem;
+  --workspace-rail-session-row-height: 1.75rem;
+  --workspace-rail-sibling-gap: var(--space-0-5);
+  --workspace-rail-group-gap: var(--space-3);
+  --workspace-rail-row-radius: 6px;
+  --workspace-rail-icon-lane: 1.25rem;
+  /* Shallow product-UI type ladder: color and proximity do more work than
+     size, so hierarchy stays legible without making the rail noisy. */
+  --workspace-rail-section-size: var(--text-label);
+  --workspace-rail-section-leading: var(--leading-label);
+  --workspace-rail-label-size: var(--text-label);
+  --workspace-rail-label-leading: var(--leading-label);
+  --workspace-rail-meta-size: var(--text-2xs);
+  --workspace-rail-meta-leading: var(--leading-metadata);
+  --workspace-rail-hover-bg: color-mix(in oklab, var(--ink) 2%, transparent);
+  --workspace-rail-selected-bg: color-mix(in oklab, var(--ink) 4%, transparent);
   --workspace-rail-top-inset: 3rem;
 
   position: relative;
@@ -60,22 +76,23 @@
 .workspace-rail__nav {
   display: grid;
   flex: none;
-  gap: var(--interactive-row-gap);
+  gap: var(--workspace-rail-sibling-gap);
 }
 
 .workspace-rail .workspace-rail__nav-row {
   display: grid;
   width: 100%;
   min-width: 0;
-  height: var(--workspace-rail-row-height);
-  grid-template-columns: var(--icon-size) minmax(0, 1fr) auto;
+  height: var(--workspace-rail-nav-row-height);
+  grid-template-columns: var(--workspace-rail-icon-lane) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--interactive-row-inline-padding);
-  border-radius: var(--r-row);
+  border-radius: var(--workspace-rail-row-radius);
   color: var(--ink-soft);
-  font-size: var(--text-base);
-  line-height: 1;
+  font-size: var(--workspace-rail-label-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--workspace-rail-label-leading);
   text-align: left;
 }
 
@@ -85,15 +102,20 @@
   color: var(--muted);
 }
 
+.workspace-rail .workspace-rail__nav-row > span:first-child {
+  width: var(--workspace-rail-icon-lane);
+  height: var(--workspace-rail-icon-lane);
+}
+
 .workspace-rail .workspace-rail__nav-row:hover,
 .workspace-rail .workspace-rail__nav-row[data-active="true"] {
   color: var(--ink);
-  background: var(--state-hover-bg);
+  background: var(--workspace-rail-hover-bg);
   box-shadow: none;
 }
 
 .workspace-rail .workspace-rail__nav-row[data-active="true"] {
-  background: var(--state-selected-bg);
+  background: var(--workspace-rail-selected-bg);
 }
 
 .workspace-rail .workspace-rail__nav-row:focus-visible,
@@ -106,7 +128,7 @@
 
 .workspace-rail__row-meta {
   color: var(--faint);
-  font-size: var(--text-2xs);
+  font: var(--weight-medium) var(--workspace-rail-meta-size)/var(--workspace-rail-meta-leading) var(--sans);
   font-variant-numeric: tabular-nums;
 }
 
@@ -137,7 +159,7 @@
   overflow: hidden;
   color: var(--ink);
   font: var(--weight-semibold) var(--text-body)/1.2 var(--sans);
-  letter-spacing: -.006em;
+  letter-spacing: var(--tracking-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -146,7 +168,7 @@
   display: grid;
   min-height: 0;
   overflow-y: auto;
-  gap: var(--interactive-row-gap);
+  gap: var(--workspace-rail-sibling-gap);
   scrollbar-width: none;
 }
 
@@ -159,24 +181,25 @@
 .home-area-list__row {
   display: grid;
   width: 100%;
-  min-height: var(--workspace-rail-row-height);
+  min-height: var(--workspace-rail-nav-row-height);
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   padding-inline: var(--interactive-row-inline-padding);
-  border-radius: var(--r-row);
+  border-radius: var(--workspace-rail-row-radius);
   color: var(--ink-soft);
-  font-size: var(--text-base);
+  font-size: var(--workspace-rail-label-size);
+  line-height: var(--workspace-rail-label-leading);
   text-align: left;
 }
 
 .home-area-list__row:hover,
 .home-area-list__row[data-active="true"] {
   color: var(--ink);
-  background: var(--state-hover-bg);
+  background: var(--workspace-rail-hover-bg);
 }
 
-.home-area-list__row[data-active="true"] { background: var(--state-selected-bg); }
+.home-area-list__row[data-active="true"] { background: var(--workspace-rail-selected-bg); }
 
 .home-area-list__row > span {
   overflow: hidden;
@@ -186,7 +209,7 @@
 
 .home-area-list__row small {
   color: var(--faint);
-  font: var(--weight-medium) var(--text-2xs)/1 var(--sans);
+  font: var(--weight-medium) var(--workspace-rail-meta-size)/var(--workspace-rail-meta-leading) var(--sans);
   white-space: nowrap;
 }
 
@@ -195,18 +218,18 @@
 
 .workspace-rail__section-header {
   display: flex;
-  height: 2rem;
+  height: 1.75rem;
   flex: none;
   align-items: center;
   justify-content: space-between;
-  margin-top: var(--space-2-5);
+  margin: var(--space-3) 0 var(--space-1);
   padding: 0 var(--space-1) 0 var(--interactive-row-inline-padding);
 }
 
 .workspace-rail__section-title {
   margin: 0;
   color: var(--muted);
-  font: var(--weight-semibold) var(--text-xs)/1 var(--sans);
+  font: var(--weight-heading) var(--workspace-rail-section-size)/var(--workspace-rail-section-leading) var(--sans);
 }
 
 .workspace-rail__section-actions {
@@ -235,38 +258,39 @@
 }
 
 .workspace-rail__group + .workspace-rail__group {
-  margin-top: var(--space-0-5);
+  margin-top: var(--workspace-rail-group-gap);
 }
 
 .workspace-rail .workspace-rail__group-heading {
   display: grid;
   width: 100%;
   min-width: 0;
-  height: var(--workspace-rail-row-height);
-  grid-template-columns: var(--icon-size) minmax(0, 1fr) .75rem;
+  height: var(--workspace-rail-group-row-height);
+  grid-template-columns: var(--workspace-rail-icon-lane) minmax(0, 1fr) .75rem;
   align-items: center;
   gap: var(--space-2);
   /* Same inline padding as nav rows — every sidebar icon shares ONE
      centerline (the "Areas" label sits on the same axis). */
   padding: 0 var(--interactive-row-inline-padding);
-  border-radius: var(--r-row);
-  color: var(--muted);
-  font-size: var(--text-base);
+  border-radius: var(--workspace-rail-row-radius);
+  color: var(--ink-soft);
+  font-size: var(--workspace-rail-label-size);
   /* Headers separate from session rows by WEIGHT at full size (the mock's
      source-group-title precedent) — never by shrinking the font. */
-  font-weight: var(--weight-semibold);
-  line-height: 1;
+  font-weight: var(--weight-medium);
+  line-height: var(--workspace-rail-label-leading);
   text-align: left;
 }
 
 .workspace-rail .workspace-rail__group-heading:hover {
   color: var(--ink);
-  background: var(--state-hover-bg);
+  background: var(--workspace-rail-hover-bg);
 }
 
 .workspace-rail__group-heading > span:first-child {
   display: grid;
-  width: var(--icon-size);
+  width: var(--workspace-rail-icon-lane);
+  height: var(--workspace-rail-icon-lane);
   place-items: center;
   color: var(--muted);
 }
@@ -298,10 +322,19 @@
 .workspace-rail__session-group {
   display: flex;
   flex-direction: column;
-  /* Rows breathe with the rail's standard gap (board-app-rail.css rail-nav /
-     area-list) so adjacent hover fills never touch. */
-  gap: var(--interactive-row-gap);
+  /* Keep repeated rows compact; larger section spacing carries the hierarchy. */
+  gap: var(--workspace-rail-sibling-gap);
   padding: 0;
+}
+
+.workspace-rail__session-body {
+  margin-top: var(--space-0-5);
+}
+
+.workspace-rail__session-rest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--workspace-rail-sibling-gap);
 }
 
 .workspace-rail .workspace-rail__session {
@@ -309,29 +342,30 @@
   display: grid;
   width: 100%;
   min-width: 0;
-  height: var(--workspace-rail-row-height);
+  height: var(--workspace-rail-session-row-height);
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   /* Indent = row inline padding + the heading's icon column + its gap, so
      session titles align with their group's label text. */
-  padding: 0 var(--interactive-row-inline-padding) 0 calc(var(--interactive-row-inline-padding) + var(--icon-size) + var(--space-2));
-  border-radius: var(--r-row);
+  padding: 0 var(--interactive-row-inline-padding) 0 calc(var(--interactive-row-inline-padding) + var(--workspace-rail-icon-lane) + var(--space-2));
+  border-radius: var(--workspace-rail-row-radius);
   color: var(--ink-soft);
-  font-size: var(--text-base);
-  line-height: 1;
+  font-size: var(--workspace-rail-label-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--workspace-rail-label-leading);
   text-align: left;
 }
 
 .workspace-rail .workspace-rail__session:hover,
 .workspace-rail .workspace-rail__session[data-active="true"] {
   color: var(--ink);
-  background: var(--state-hover-bg);
+  background: var(--workspace-rail-hover-bg);
   box-shadow: none;
 }
 
 .workspace-rail .workspace-rail__session[data-active="true"] {
-  background: var(--state-selected-bg);
+  background: var(--workspace-rail-selected-bg);
 }
 
 .workspace-rail .workspace-rail__session-title {
@@ -424,7 +458,7 @@
 .workspace-rail__status {
   min-width: 0;
   color: var(--faint);
-  font: var(--weight-medium) var(--text-2xs)/1 var(--sans);
+  font: var(--weight-medium) var(--workspace-rail-meta-size)/var(--workspace-rail-meta-leading) var(--sans);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -439,26 +473,27 @@
 .workspace-rail .workspace-rail__session--rename {
   grid-template-columns: minmax(0, 1fr);
   color: var(--ink);
-  background: var(--state-selected-bg);
+  background: var(--workspace-rail-selected-bg);
 }
 
 .workspace-rail .workspace-rail__show-more {
   display: grid;
   width: 100%;
   min-width: 0;
-  height: var(--workspace-rail-row-height);
+  height: var(--workspace-rail-session-row-height);
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  padding: 0 var(--interactive-row-inline-padding) 0 calc(var(--interactive-row-inline-padding) + var(--icon-size) + var(--space-2));
-  border-radius: var(--r-row);
+  padding: 0 var(--interactive-row-inline-padding) 0 calc(var(--interactive-row-inline-padding) + var(--workspace-rail-icon-lane) + var(--space-2));
+  border-radius: var(--workspace-rail-row-radius);
   color: var(--faint);
-  font-size: var(--text-base);
+  font-size: var(--workspace-rail-label-size);
+  line-height: var(--workspace-rail-label-leading);
   text-align: left;
 }
 
 .workspace-rail .workspace-rail__show-more:hover {
   color: var(--ink);
-  background: var(--state-hover-bg);
+  background: var(--workspace-rail-hover-bg);
 }
 
 .workspace-rail__footer {
@@ -481,7 +516,7 @@
    corner radius and (now) the same padding. Both need this rule. */
 .workspace-rail__theme-toggle {
   display: grid;
-  /* Global token (not --workspace-rail-row-height, which is scoped inside
+  /* Global token (not the --workspace-rail-*-row-height tokens, which are scoped inside
      .workspace-rail and missing in .automation-workspace__rail's subtree).
      Same size as every other rail icon button (the Areas filter), and the
      space-1 margin lands its center on the filter's vertical axis. */

@@ -270,7 +270,7 @@ function ApprovalCard({
       className="board-approval-card surface-panel surface-radius-md overflow-hidden"
     >
       <header className="px-4 pt-3 pb-2 flex items-baseline gap-2">
-        <h3 className="m-0 text-md font-medium text-ink tracking-[-0.005em]">
+        <h3 className="m-0 text-md font-medium text-ink tracking-[var(--tracking-tight)]">
           {structured
             ? "Approve action"
             : <>Approve <span className="font-mono">{toolName}</span>?</>}
@@ -296,7 +296,7 @@ function ApprovalCard({
           </dl>
           {structured.body && structured.body.text && (
             <div className="grid gap-1">
-              <div className="text-xs font-medium uppercase tracking-[0.06em] text-faint">
+              <div className="text-xs font-medium uppercase tracking-[var(--tracking-caps)] text-faint">
                 {structured.body.label}
               </div>
               <pre

@@ -246,7 +246,7 @@ function PanelInner({
         </header>
       ) : (
         <header className="flex items-center justify-between gap-2 py-1.5 pl-3 pr-2.5 border-b border-line-soft bg-surface">
-          <div className="text-xs font-medium uppercase tracking-[0.08em] text-faint">Diagram</div>
+          <div className="text-xs font-medium uppercase tracking-[var(--tracking-caps)] text-faint">Diagram</div>
           <div className="flex items-center gap-0.5">
             <ToolbarButton
               label="Zoom out"
