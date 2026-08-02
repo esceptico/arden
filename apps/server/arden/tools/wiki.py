@@ -505,6 +505,7 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
                 "More entries exist, but the result budget cannot fit the next entry. List a narrower directory."
             )
     label = "/" if not directory else f"/{directory}/"
+    lines.append("Cite pages to the user as markdown links with these exact paths: [Title](path.md).")
     return ToolResult(
         content=f"Wiki {label}\n" + "\n".join(lines),
         preview=f"{len(visible)} wiki entries" + (" (capped)" if has_more else ""),

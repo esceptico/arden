@@ -21,6 +21,7 @@ import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
 import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
+import { MemoryPeekLink } from "@/components/ui/MemoryLinkPeek";
 import { Mermaid } from "@/components/ui/Mermaid";
 import { ICON } from "@/lib/icons";
 import { useTimeoutFlag } from "@/lib/hooks";
@@ -205,6 +206,23 @@ function Anchor({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnch
   }
   const artifact = href ? parseMemoryArtifactHref(href) : null;
   if (wiki && artifact && (wiki.existsInline ?? wiki.exists)(artifact.path)) {
+    const navigate = () => {
+      if (wiki.onNavigateInline) wiki.onNavigateInline(artifact.path, artifact.anchor);
+      else wiki.onNavigate(artifact.path);
+    };
+    if (wiki.peek) {
+      return (
+        <MemoryPeekLink
+          path={artifact.path}
+          anchor={artifact.anchor}
+          href={href}
+          className={rest.className}
+          onOpen={navigate}
+        >
+          {children}
+        </MemoryPeekLink>
+      );
+    }
     return (
       <a
         href={href}
@@ -213,8 +231,7 @@ function Anchor({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnch
         data-memory-anchor={artifact.anchor ?? undefined}
         onClick={(event) => {
           event.preventDefault();
-          if (wiki.onNavigateInline) wiki.onNavigateInline(artifact.path, artifact.anchor);
-          else wiki.onNavigate(artifact.path);
+          navigate();
         }}
       >
         {children}
@@ -272,6 +289,17 @@ function InlineCode({ className, children, ...rest }: React.HTMLAttributes<HTMLE
   const isInline = !className || (!className.includes("language-") && !className.includes("hljs"));
   if (wiki && isInline && text && (wiki.existsInline ?? wiki.exists)(text.trim())) {
     const target = text.trim();
+    if (wiki.peek) {
+      return (
+        <MemoryPeekLink
+          path={target}
+          href="#wikilink"
+          onOpen={() => (wiki.onNavigateInline ?? wiki.onNavigate)(target)}
+        >
+          {children}
+        </MemoryPeekLink>
+      );
+    }
     return (
       <a
         href="#wikilink"

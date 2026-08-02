@@ -284,6 +284,7 @@ export const useStore = create<State & Actions>((set) => ({
   compacting: false,
   memoryOpen: false,
   memoryTargetPath: null,
+  memoryTargetAnchor: null,
   memoryCurrentPath: null,
   automationCurrentId: null,
   sourceFocus: null,
@@ -629,6 +630,7 @@ export const useStore = create<State & Actions>((set) => ({
       automationTargetRun: null,
       memoryOpen: false,
       memoryTargetPath: null,
+      memoryTargetAnchor: null,
       memoryCurrentPath: null,
   automationCurrentId: null,
       settingsTab: tab ?? null,
@@ -862,6 +864,7 @@ export const useStore = create<State & Actions>((set) => ({
       settingsOpen: false,
       memoryOpen: false,
       memoryTargetPath: null,
+      memoryTargetAnchor: null,
       memoryCurrentPath: null,
   automationCurrentId: null,
       automationTargetId: taskId ?? null,
@@ -918,19 +921,21 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setArchivedSessions: (archivedSessions) => set({ archivedSessions }),
   setCompacting: (compacting) => set({ compacting }),
-  openMemory: (targetPath) =>
+  openMemory: (targetPath, anchor) =>
     set({
       memoryOpen: true,
       memoryTargetPath: targetPath ?? null,
+      memoryTargetAnchor: (targetPath && anchor) || null,
       settingsOpen: false,
       automationsOpen: false,
       automationTargetId: null,
       modalOrigin: null,
     }),
-  clearMemoryTarget: () => set({ memoryTargetPath: null }),
+  clearMemoryTarget: () => set({ memoryTargetPath: null, memoryTargetAnchor: null }),
   setMemoryCurrentPath: (memoryCurrentPath) => set({ memoryCurrentPath }),
   setAutomationCurrentId: (automationCurrentId) => set({ automationCurrentId }),
-  closeMemory: () => set({ memoryOpen: false, memoryTargetPath: null, memoryCurrentPath: null }),
+  closeMemory: () =>
+    set({ memoryOpen: false, memoryTargetPath: null, memoryTargetAnchor: null, memoryCurrentPath: null }),
   setSourceFocus: (sourceFocus) => set({ sourceFocus }),
   setRightInspectorTab: (rightInspectorTab) =>
     set({

@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { BookOpen01 } from "@/components/icons";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
+import { ChatWikiLinks } from "@/features/chat/components/ChatWikiLinks";
 import { useSmoothStreamedContent } from "@/features/chat/hooks/useSmoothStream";
 import { MessageActions } from "@/features/chat/components/MessageActions";
 import {
@@ -49,13 +50,15 @@ export const AssistantMessage = memo(function AssistantMessage({
       data-source-focus={sourceFocused ? "true" : undefined}
       data-source-index={message.sourceIndex}
     >
-      <Markdown
-        content={smoothContent}
-        streaming={isStreaming}
-        externalLinkFavicons
-        codeChrome={false}
-        className="board-assistant__prose text-base leading-[var(--leading-reading)] text-ink break-words"
-      />
+      <ChatWikiLinks>
+        <Markdown
+          content={smoothContent}
+          streaming={isStreaming}
+          externalLinkFavicons
+          codeChrome={false}
+          className="board-assistant__prose text-base leading-[var(--leading-reading)] text-ink break-words"
+        />
+      </ChatWikiLinks>
       {isFinal && sourceTurnId && sourceCount > 0 && (
         <button
           type="button"

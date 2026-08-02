@@ -514,6 +514,51 @@ button.app-row:not(:disabled):active,
   user-select: none;
 }
 
+/* Memory-link hover peek — chat's preview card for agent-cited wiki pages.
+   A glance, not a reading surface: title, path, plain-text excerpt. The
+   AnchoredPopover shell owns width, placement, and chrome. */
+.memory-peek {
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+.memory-peek__head {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.memory-peek__head b {
+  overflow: hidden;
+  color: var(--ink);
+  font: var(--weight-semibold) var(--text-base)/1.3 var(--sans);
+  letter-spacing: var(--tracking-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-peek__head small {
+  overflow: hidden;
+  color: var(--faint);
+  font: var(--weight-medium) var(--text-2xs)/1.4 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-peek__excerpt {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+.memory-peek__state {
+  margin: 0;
+  color: var(--muted);
+  font: var(--weight-heading) var(--text-sm)/1.5 var(--sans);
+  text-wrap: pretty;
+}
+
 /* Memory notes render document tables as hairline-row instruments — no cell
    boxes, no header fill (tone over lines; the chat grid style stays as-is). */
 .memory-doc table {

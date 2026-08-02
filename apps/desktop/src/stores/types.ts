@@ -456,6 +456,9 @@ export interface State {
   /** Page path Memory should land on when it opens, instead of its usual
    *  restored/README fallback. Cleared once Memory has honoured it. */
   memoryTargetPath: string | null;
+  /** Optional heading within the target page — a chat citation's `#anchor`.
+   *  Rides with memoryTargetPath and is cleared with it. */
+  memoryTargetAnchor: string | null;
   /** The wiki page Memory is showing right now, published so the shell can
    *  put it in the route trail. Memory owns the value; nothing else sets it. */
   memoryCurrentPath: string | null;
@@ -681,7 +684,7 @@ export interface Actions {
   setPendingGoalProposal: (proposal: PendingGoalProposal | null) => void;
   setArchivedSessions: (sessions: ArchivedSession[] | null) => void;
   setCompacting: (compacting: boolean) => void;
-  openMemory: (targetPath?: string) => void;
+  openMemory: (targetPath?: string, anchor?: string) => void;
   clearMemoryTarget: () => void;
   setMemoryCurrentPath: (path: string | null) => void;
   setAutomationCurrentId: (taskId: string | null) => void;

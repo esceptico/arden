@@ -258,6 +258,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const [directories, setDirectories] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const memoryTargetPath = useStore((state) => state.memoryTargetPath);
+  const memoryTargetAnchor = useStore((state) => state.memoryTargetAnchor);
   const clearMemoryTarget = useStore((state) => state.clearMemoryTarget);
   const setMemoryCurrentPath = useStore((state) => state.setMemoryCurrentPath);
   const [activeDetail, setActiveDetail] = useState<MemoryArtifactDetail | null>(null);
@@ -701,9 +702,11 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (loading || !memoryTargetPath) return;
     if (!navigableArtifacts.some((artifact) => artifact.path === memoryTargetPath)) return;
     clearMemoryTarget();
-    if (selected === memoryTargetPath) return;
-    navigateTo(memoryTargetPath);
-  }, [clearMemoryTarget, loading, memoryTargetPath, navigableArtifacts, navigateTo, selected]);
+    // An anchored target navigates even when already on the page — the anchor
+    // names a position within it; a plain target has nothing new to say.
+    if (selected === memoryTargetPath && !memoryTargetAnchor) return;
+    navigateTo(memoryTargetPath, memoryTargetAnchor);
+  }, [clearMemoryTarget, loading, memoryTargetAnchor, memoryTargetPath, navigableArtifacts, navigateTo, selected]);
 
   const selectFile = useCallback((path: string, direction: number) => {
     navigateTo(path, null, direction);

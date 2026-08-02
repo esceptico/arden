@@ -89,6 +89,9 @@ export type WikiLinkHandlers = {
    * wikilink aliases remain server-resolved. */
   existsInline?: (target: string) => boolean;
   onNavigateInline?: (target: string, anchor?: string | null) => void;
+  /** Render inline path links with the hover preview card (chat opts in;
+   *  the memory view is already the full page, so it stays plain). */
+  peek?: boolean;
 };
 
 /** Resolution handlers for [[Subject]] clicks. Default undefined so wikilinks
