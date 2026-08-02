@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useShallow } from "zustand/react/shallow";
-import { useStore } from "@/stores";
+import { useStore, type ActivityItem } from "@/stores";
+import { isAgent } from "@/lib/agent";
 import { Message } from "@/features/chat/components/Message";
 import { ActivityHeader } from "@/features/chat/components/ActivityHeader";
+import { ItemButton } from "@/features/chat/components/ActivityRows";
 import { turnLayout } from "@/features/chat/lib/turnLayout";
 import { turnHeaderLabel } from "@/features/chat/lib/turnHeader";
 import { turnHasActiveChildAgent } from "@/features/chat/lib/turnActiveAgents";
@@ -104,6 +106,32 @@ export function TurnGroup({
   );
 
   const showInterim = !isDone || expanded;
+  // Agents are deliverables, not plumbing: when the settled turn collapses
+  // into "Worked", their rows stay visible below the header instead of
+  // vanishing with the tool calls. Only when collapsed — expanded shows them
+  // in place inside the trace. Signature selector (stable primitive) + a
+  // getState() memo, same pattern as sourceCount above.
+  const setViewingTool = useStore((s) => s.setViewingTool);
+  const agentItemsSig = useStore((s) => {
+    if (showInterim) return "";
+    let sig = "";
+    for (const id of childIds) {
+      for (const item of s.messages.get(id)?.activity?.items ?? []) {
+        if (isAgent(item)) sig += `${item.id}:${item.taskStatus ?? ""};`;
+      }
+    }
+    return sig;
+  });
+  const agentItems = useMemo(() => {
+    if (!agentItemsSig) return [];
+    const items: ActivityItem[] = [];
+    for (const id of childIds) {
+      for (const item of useStore.getState().messages.get(id)?.activity?.items ?? []) {
+        if (isAgent(item)) items.push(item);
+      }
+    }
+    return items;
+  }, [agentItemsSig, childIds]);
   const interimList = (
     <div className="board-trace__list">
       {layout.workIds.map((id) => (
@@ -125,6 +153,19 @@ export function TurnGroup({
           setExpanded((value) => !value);
         }}
       />
+
+      {agentItems.length > 0 && (
+        <div className="board-trace__list mt-1">
+          {agentItems.map((item, i) => (
+            <ItemButton
+              key={item.id}
+              item={item}
+              onOpen={setViewingTool}
+              last={i === agentItems.length - 1}
+            />
+          ))}
+        </div>
+      )}
 
       {isDone ? (
         <AnimatePresence initial={false}>
