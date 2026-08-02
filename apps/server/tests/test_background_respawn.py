@@ -232,3 +232,57 @@ async def test_agent_worker_completes_the_event_on_dispatch(outbox_store: Outbox
     release.set()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_respawn_host_failure_settles_row_and_notifies(store: SessionStore):
+    """The E2E-caught silent-loss bug: if the host blows up after the no-op
+    guards, the row must settle failed and the session must be told — never an
+    interrupted row the roster believes is alive."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from arden.context.models import SessionState
+
+    run_registry = RunRegistry()
+    buses = BusRegistry()
+    await _start_detached(store, "bg-crash", spawn_spec=_spec())
+    await store.mark_interrupted_background_agent_runs()
+
+    dispatched: list[tuple] = []
+
+    async def dispatch(session_id, content, client_id, is_meta, extra):
+        dispatched.append((session_id, content, client_id, is_meta))
+        return {"run_id": "hidden-run"}
+
+    class _ExplodingExecutor:
+        def get_tools(self, **kwargs):
+            raise RuntimeError("boom: executor misconfigured")
+
+    session = SimpleNamespace(state=SessionState(session_id="sess-1", started_at=datetime.now(UTC)))
+    session_service = _FakeSessionService(store, session=session)
+    deps = SimpleNamespace(
+        executor=_ExplodingExecutor(),
+        agent_config=SimpleNamespace(approval_timeout_seconds=300),
+        dispatch_session_message=dispatch,
+    )
+
+    result = await respawn_background_agent(
+        run_registry,
+        lambda: deps,
+        buses,
+        session_id="sess-1",
+        task_id="bg-crash",
+        session_service=session_service,
+    )
+
+    assert result is False
+    row = await store.get_background_agent_run("sess-1", "bg-crash")
+    assert row["status"] == "failed"
+    assert "[respawn failed]" in (row["result_text"] or "")
+    assert dispatched, "the session must be told the agent is gone"
+    _sid, content, client_id, is_meta = dispatched[0]
+    assert 'status="failed"' in content
+    assert "followup_task" in content
+    assert client_id == "bg:bg-crash:respawn-failed"
+    assert is_meta is True

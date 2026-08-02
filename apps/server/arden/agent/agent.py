@@ -155,6 +155,12 @@ class Agent:
         self._usage = Usage()
         self._cost = 0.0
 
+    @property
+    def executor(self):
+        """The tool executor this agent runs against. Hosts that build an agent
+        only to reach its wired ToolContext (respawn) read it here."""
+        return self._executor
+
     async def stream(self, messages: list[dict]) -> AsyncGenerator[AgentEvent]:
         if self.current_depth >= self.max_depth:
             yield self._result("", StopReason.MAX_DEPTH, 0)

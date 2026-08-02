@@ -1324,3 +1324,11 @@ async def test_agent_mutates_caller_messages_list_in_place():
     assert len(messages) > original_len
     assert any(m["role"] == "assistant" for m in messages)
     assert any(m["role"] == "tool" for m in messages)
+
+
+def test_agent_exposes_its_executor():
+    # The respawn host reads agent.executor.ctx to reach the wired ToolContext;
+    # a private-only executor was the E2E-caught respawn crash.
+    executor = FakeExecutor({})
+    agent = Agent(client=FakeLLM([]), executor=executor, tools=[], model="test")
+    assert agent.executor is executor

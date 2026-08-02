@@ -1115,33 +1115,65 @@ async def respawn_background_agent(
     )
     # No area_context: the spec's system prompt already carries the area block
     # (resolved at the original spawn); a ToolContext area would append it again.
-    host_agent = create_agent(
-        executor=deps.executor,
-        config=deps.agent_config,
-        tools=deps.executor.get_tools(),
-        session_state=session_data.state,
-        run_id=host_run.run_id,
-        io=io,
-        background_tasks=bg_registry,
-        run_registry=run_registry,
-        child_io_factory=child_io_factory,
-    )
-    tool_ctx = host_agent.executor.ctx
-    await tool_ctx.spawn_fn(
-        tool_ctx,
-        task,
-        system_prompt=system_prompt,
-        tools=list(spec.tools),
-        timeout=spec.timeout_seconds,
-        model_override=spec.model,
-        reasoning_effort_override=spec.reasoning_effort,
-        parent_id=spec.parent.tool_call_id,
-        isolation=spec.isolation,
-        wait=False,
-        agent_type=spec.agent_type,
-        kind="background",
-        task_id=task_id,
-    )
+    try:
+        host_agent = create_agent(
+            executor=deps.executor,
+            config=deps.agent_config,
+            tools=deps.executor.get_tools(),
+            session_state=session_data.state,
+            run_id=host_run.run_id,
+            io=io,
+            background_tasks=bg_registry,
+            run_registry=run_registry,
+            child_io_factory=child_io_factory,
+        )
+        tool_ctx = host_agent.executor.ctx
+        await tool_ctx.spawn_fn(
+            tool_ctx,
+            task,
+            system_prompt=system_prompt,
+            tools=list(spec.tools),
+            timeout=spec.timeout_seconds,
+            model_override=spec.model,
+            reasoning_effort_override=spec.reasoning_effort,
+            parent_id=spec.parent.tool_call_id,
+            isolation=spec.isolation,
+            wait=False,
+            agent_type=spec.agent_type,
+            kind="background",
+            task_id=task_id,
+        )
+    except Exception as exc:
+        # A respawn that dies here would otherwise be silent: the outbox event
+        # completed on dispatch, and the row would sit "interrupted" forever
+        # while the roster claims the agent exists. Settle the row as failed
+        # and tell the session, shaped like any other failed agent report.
+        _logger.exception("Background agent respawn host failed", session_id=session_id, task_id=task_id)
+        failure = f"[respawn failed] {exc}"
+        await session_service.store.record_background_agent_finished(
+            task_id=task_id,
+            session_id=session_id,
+            status="failed",
+            result_text=failure,
+        )
+        if deps.dispatch_session_message is not None:
+            notification = (
+                f'<background_agent_result session_id="{row.get("child_session_id") or ""}" status="failed">\n'
+                "This is a hidden completion event. The user cannot see this message.\n"
+                f"The agent could not be restarted after a server restart: {failure}\n"
+                'This agent\'s run failed. If you still need this work, assign a follow-up with '
+                'followup_task(session_id="...") or spawn a fresh agent.\n'
+                "</background_agent_result>"
+            )
+            await deps.dispatch_session_message(
+                session_id, notification, f"bg:{task_id}:respawn-failed", True, None
+            )
+            await session_service.store.mark_background_completion_delivered(
+                session_id=session_id,
+                task_id=task_id,
+                completion_id=f"bg:{task_id}:failed",
+            )
+        return False
     return True
 
 
