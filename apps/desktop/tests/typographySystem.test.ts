@@ -58,3 +58,13 @@ test("the chat composer matches conversation body typography", () => {
   expect(composer).not.toContain("text-md leading-[var(--leading-reading)]");
   expect(chat).toMatch(/\.board-composer__input\s*\{[^}]*font-size:\s*var\(--text-body\);[^}]*line-height:\s*var\(--leading-body\);/s);
 });
+
+test("chat names inherit the same rail typography as Settings", () => {
+  const sessionRow = read("../src/features/sessions/components/SessionRow.tsx");
+  const shell = read("../src/design/shell.css");
+
+  expect(sessionRow).toContain('className="workspace-rail__session-title session-row-title min-w-0 truncate"');
+  expect(sessionRow).not.toContain("workspace-rail__session-title session-row-title min-w-0 truncate text-base");
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__nav-row\s*\{[^}]*font-size:\s*var\(--workspace-rail-label-size\);/s);
+  expect(shell).toMatch(/\.workspace-rail \.workspace-rail__session\s*\{[^}]*font-size:\s*var\(--workspace-rail-label-size\);/s);
+});

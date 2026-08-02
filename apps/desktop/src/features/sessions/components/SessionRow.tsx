@@ -141,7 +141,7 @@ export function SessionRow({
     >
       <span
         title={name || "untitled"}
-        className="workspace-rail__session-title session-row-title min-w-0 truncate text-base"
+        className="workspace-rail__session-title session-row-title min-w-0 truncate"
       >
         {name || "untitled"}
       </span>
