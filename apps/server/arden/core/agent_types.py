@@ -26,9 +26,12 @@ from arden.tools.core.scope import ToolFilter, tools
 _READ = tools.read
 
 SPAWN_SURFACE_GUIDANCE = (
-    "Choose research for one awaited investigation; background for a detached one-off investigation; "
-    "workflow for a curated multi-agent pipeline; create_automation for recurring scheduled/event work; "
-    "create_loop only for adaptive repeated work that stops on a condition."
+    "Choose research for an investigation with the research toolkit; background for a plain detached "
+    "one-off task; workflow for a curated multi-agent pipeline; create_automation for recurring "
+    "scheduled/event work; create_loop only for adaptive repeated work that stops on a condition. "
+    "All of these run detached: you get a receipt now and the result arrives as a message later. "
+    "After spawning, do NOT write a summary or answer from the receipts — you have no results yet. "
+    "Briefly say what you started, end your turn, and write the real answer when the reports arrive."
 )
 
 

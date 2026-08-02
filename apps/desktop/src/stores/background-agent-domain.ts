@@ -164,7 +164,7 @@ export function normalizeBackgroundAgentStatus(
   ) {
     return status;
   }
-  return status === "running" || status === "activity" ? "running" : "interrupted";
+  return status === "running" || status === "activity" || status === "started" ? "running" : "interrupted";
 }
 
 /** The roster row backing a transcript agent item — matched exactly the way

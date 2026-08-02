@@ -55,8 +55,8 @@ RENDER_HTML_MAX_CHARS = 150_000
 # many tool calls per LLM step, which the per-step iteration cap doesn't catch) is
 # bounded here regardless. 30 min is generous for deep research while still
 # killing a stuck child; tools can override via the spawn `timeout` param.
-SUBAGENT_DEFAULT_TIMEOUT = 1800
-BACKGROUND_AGENT_TIMEOUT = 1800
+SUBAGENT_DEFAULT_TIMEOUT = 7200
+BACKGROUND_AGENT_TIMEOUT = 7200
 # Boot-time respawns per interrupted detached agent. Each restart re-buys the
 # same LLM work, so crash-looping servers must converge: after this many
 # attempts the row stays interrupted.

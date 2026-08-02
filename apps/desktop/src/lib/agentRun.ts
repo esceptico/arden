@@ -205,7 +205,7 @@ function resolveActivityStatus(item: ActivityItem): AgentRunStatus {
   }
   // An unrecognized child status must not read "running" forever — settle it
   // as interrupted, matching normalizeBackgroundAgentStatus.
-  if (childStatus && childStatus !== "running" && childStatus !== "activity") {
+  if (childStatus && childStatus !== "running" && childStatus !== "activity" && childStatus !== "started") {
     return "interrupted";
   }
   return activityItemStatus(item) === "ongoing" ? "running" : "completed";
