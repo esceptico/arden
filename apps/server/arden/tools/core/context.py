@@ -213,6 +213,12 @@ class ChildIOParams:
     session_id: str
     run_id: str
     pending_approvals: dict[str, Any]
+    # The spawn's identity in the PARENT session's registry, plus that registry
+    # itself — the factory wires the CHILD session's own registry so grandchild
+    # results are queued into this child's steering inbox (or bubbled up the
+    # parent chain when the child already finished).
+    task_id: str | None = None
+    parent_background_tasks: "BackgroundTaskRegistry | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +231,11 @@ class ChildSession:
     io: IOBridge
     finish: Callable[[str], Awaitable[None]]
     aclose: Callable[[], Awaitable[None]]
+    # The child session's OWN registry, wired for durable rows + nested result
+    # delivery. The spawner installs it as the child ToolContext's
+    # background_tasks so the child's spawns record through its session, not
+    # the parent's — the topology cancel_subtree walks.
+    background_tasks: "BackgroundTaskRegistry | None" = None
 
 
 ChildIOFactory = Callable[[ChildIOParams], Awaitable[ChildSession]]
@@ -399,6 +410,11 @@ class BackgroundTaskRegistry:
         return self.queue_injection(
             task_id, {"role": "user", "content": f"<steering_message>\n{text}\n</steering_message>"}
         )
+
+    def task(self, task_id: str) -> asyncio.Task | None:
+        """The live asyncio task for a registered spawn — for callers that must
+        block on a detached agent (the MCP research surface)."""
+        return self._tasks.get(task_id)
 
     def register(self, task_id: str, task: asyncio.Task, command: str) -> None:
         self._reserved.discard(task_id)

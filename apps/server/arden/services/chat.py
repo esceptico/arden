@@ -1103,6 +1103,7 @@ async def respawn_background_agent(
     child_io_factory = make_child_io_factory(
         buses,
         run_registry,
+        session_service,
         record_approval=callbacks.record_approval,
         resolve_approval=callbacks.resolve_approval,
         get_suspension=callbacks.get_suspension,
@@ -1639,6 +1640,7 @@ async def _handle_background_result(
 def make_child_io_factory(
     buses: BusRegistry,
     run_registry: RunRegistry,
+    session_service: SessionService,
     *,
     record_approval: Callable[..., Awaitable[None]],
     resolve_approval: Callable[..., Awaitable[None]],
@@ -1677,6 +1679,31 @@ def make_child_io_factory(
         )
         await child_bus.emit(RunStartedEvent(session_id=params.session_id, run_id=params.run_id))
 
+        # The child session's OWN registry: its spawns (grandchildren) reserve,
+        # record durable rows, and deliver through it — the per-session topology
+        # cancel_subtree walks. Durable wiring is identical to the top session's.
+        child_registry = run_registry.get_background_registry(params.session_id)
+        _wire_background_registry(child_registry, session_service, params.session_id)
+        parent_registry = params.parent_background_tasks
+        child_task_id = params.task_id
+
+        async def _on_child_bg_result(messages: list[dict]) -> None:
+            # Nested result delivery: a grandchild's completion surfaces to the
+            # CHILD mid-turn by queueing into its steering inbox (drained by its
+            # loop at the next step, Claude Code-style). If the child's inbox is
+            # already closed (agent finished), bubble the messages up the parent
+            # chain instead — each hop is another child inbox until the top
+            # session's registry, whose on_result dispatches into the chat. The
+            # result is never dropped.
+            if parent_registry is None or child_task_id is None:
+                _logger.warning("Child background result had no parent registry — dropping")
+                return
+            leftovers = [m for m in messages if not parent_registry.queue_injection(child_task_id, m)]
+            if leftovers:
+                await parent_registry.inject(leftovers)
+
+        child_registry.on_result = _on_child_bg_result
+
         finished = False
 
         async def _finish(status: str) -> None:
@@ -1700,7 +1727,7 @@ def make_child_io_factory(
                 is_active=lambda: run_registry.get_active_run(params.session_id) is not None,
             )
 
-        return ChildSession(io=child_io, finish=_finish, aclose=_aclose)
+        return ChildSession(io=child_io, finish=_finish, aclose=_aclose, background_tasks=child_registry)
 
     return _child_io_factory
 
@@ -1796,6 +1823,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
         child_io_factory = make_child_io_factory(
             buses,
             ctx.run_registry,
+            ctx.session_service,
             record_approval=callbacks.record_approval,
             resolve_approval=callbacks.resolve_approval,
             get_suspension=callbacks.get_suspension,

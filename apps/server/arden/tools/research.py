@@ -16,7 +16,6 @@ from arden.agent.ledger import (
     VerificationRecord,
     WorkspaceQuestion,
 )
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE, AgentType, apply_profile, register_agent_type
 from arden.core.isolation import IsolationLevel
 from arden.core.prompts import RESEARCH_PROMPTS, current_date_formatted, env
@@ -29,7 +28,6 @@ from arden.tools.research_artifacts import (
     append_research_artifact_tool,
     artifact_scope_dir,
     list_research_artifacts_tool,
-    list_scope_artifacts,
     read_research_artifact_tool,
     write_research_artifact_tool,
     write_scope_artifact,
@@ -118,7 +116,7 @@ RESEARCH_SYSTEM_PROMPT = env.from_string("""{{ base_prompt }}
 Today is {{ date }}.
 {% if remaining_depth > 1 %}
 
-DEPTH BUDGET: You can spawn {{ remaining_depth - 1 }} more levels of sub-agents. Use research() to delegate sub-topics — don't try to cover everything yourself.
+DEPTH BUDGET: You can spawn {{ remaining_depth - 1 }} more levels of sub-agents. Use research() to delegate sub-topics — don't try to cover everything yourself. Each research() call returns a receipt immediately and runs detached; the report ARRIVES AS A MESSAGE here at a later step. After spawning, continue other work or end your step and wait for the reports — never poll for them.
 {% elif remaining_depth == 1 %}
 
 DEPTH BUDGET: You are at the last level — no more sub-agents. Do all work directly.
@@ -154,8 +152,10 @@ SCRATCHPAD (for long output):
 - Keep your final answer a concise, distilled summary; the caller automatically sees the artifact manifest.""")
 
 RESEARCH_DESCRIPTION = (
-    "Spawn a research agent with access to all read-only tools. "
-    "Can run in parallel (call multiple in one turn) and nest recursively. "
+    "Spawn a detached research agent with access to all read-only tools. "
+    "It runs independently and its report is delivered to this conversation "
+    "automatically when done — do not poll or wait for it; finish your turn. "
+    "Can fan out (call multiple in one turn) and nest recursively. "
     "Use depth='deep' for thorough research, 'quick' for fast lookups."
     f" {SPAWN_SURFACE_GUIDANCE}"
 )
@@ -285,7 +285,7 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
             parent_id=execution.tool_id,
             isolation=IsolationLevel.FULL,
             agent_type="research",
-            wait=True,
+            wait=False,
             kind="research",
             compaction_prompt_context="research",
             include_tool_messages_in_compaction=True,
@@ -293,24 +293,29 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
             **profile,
         )
     finally:
+        # The ledger scope is no longer occupied by an awaited call — the spawn
+        # is detached, so completing at spawn-receipt is what keeps sibling
+        # dedup working: concurrent research calls see the topic claimed, not
+        # perpetually "active" for an agent this caller never awaits.
         if ctx.ledger:
             await ctx.ledger.complete(research_scope_id)
 
-    # Carry the subagent's own usage + cost out via `data` so the desktop
-    # can render a per-agent budget breakdown on its trace row. The cost
-    # has already rolled into the caller's tracker inside spawn_fn.
+    if spawn.status == "failed":
+        # The only failure the detached path returns is the per-session concurrency cap.
+        return ToolResult.failure(
+            code="conflict",
+            message=spawn.text,
+            preview="At the agent limit",
+            recovery_action="Wait for a running agent to finish, then spawn again.",
+        )
+
     data: dict = spawn.child_agent_data()
     data["research_scope_id"] = research_scope_id
     data["research_tool_call_id"] = execution.tool_id
     data["artifact_dir"] = str(artifact_scope_dir(research_scope_id))
-    if spawn.usage is not None:
-        data["usage"] = spawn.usage
-        data["cost"] = spawn.cost
-    workspace = None
-    if ctx.ledger:
-        workspace = ctx.ledger.workspace_summary(scope=research_scope_id, max_items=12)
-        if workspace:
-            data["research_workspace"] = workspace
+    # Spawn-time provenance only. The agent has not run yet, so there is no
+    # usage/cost, no workspace, no artifacts, and no child tool_call_ids — the
+    # completed picture lives in the child session and the delivered report.
     provenance = {
         "query": args.task[:4_096],
         "window": {
@@ -321,52 +326,29 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
         "derivation": {
             "research_tool_call_id": execution.tool_id,
             "child_run_id": spawn.child_run_id,
-            "child_tool_call_ids": list(spawn.tool_call_ids),
         },
     }
     workspace_path = "_provenance.json"
     await write_scope_artifact(
         research_scope_id,
         workspace_path,
-        json.dumps({**provenance, "workspace": workspace}, ensure_ascii=False, sort_keys=True),
+        json.dumps(provenance, ensure_ascii=False, sort_keys=True),
     )
     provenance["workspace_ref"] = f"{research_scope_id}:{workspace_path}"
     data["provenance"] = provenance
 
-    artifacts = await _list_scope_artifacts(research_scope_id)
-    if artifacts:
-        data["artifacts"] = artifacts
-    artifact_refs = (
-        ToolSourceRef(
-            provider="research",
-            kind="artifact",
-            ref=f"{research_scope_id}:{artifact['path']}",
-            title=f"Research artifact {artifact['path']}",
-        )
-        for artifact in artifacts
+    content = (
+        f"Started a {args.depth} research agent on: {args.task}\n"
+        f"Its session is {spawn.child_session_id} — steer it with send_message(session_id=...), "
+        "inspect its work with read_session(session_id=...). "
+        "The research report is delivered here automatically when done — do not poll for it; "
+        "continue other work or end your turn and wait."
     )
-    source_refs = normalize_source_refs((*spawn.source_refs, *artifact_refs))
     return ToolResult(
-        content=spawn.text,
-        preview=f"Researched ({args.depth})",
+        content=content,
+        preview=f"Research started ({args.depth})",
         data=data or None,
-        source_refs=source_refs,
     )
-
-
-async def _list_scope_artifacts(scope_id: str) -> list[dict]:
-    rows = await list_scope_artifacts(scope_id)
-    return [
-        {
-            "path": r["path"],
-            "bytes": r["byte_len"],
-            "preview": r["preview"],
-            "fs_path": r.get("fs_path"),
-            "artifact_dir": str(artifact_scope_dir(scope_id)),
-            "scope_id": scope_id,
-        }
-        for r in rows
-    ]
 
 
 async def research_outline(execution: ToolExecution, args: ResearchOutlineInput) -> ToolResult:

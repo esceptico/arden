@@ -556,17 +556,25 @@ def create_spawn_fn(
         child_io: IOBridge | None = None
         child_io_close = None
         child_io_finish = None
+        # A FULL child's OWN spawns record through the CHILD session's registry
+        # (provided by the io factory, wired for durable rows + nested result
+        # delivery); everything else keeps sharing the caller's registry.
+        child_background_tasks = calling_ctx.background_tasks
         if has_child_session and calling_ctx.run.child_io_factory is not None:
             child_session = await calling_ctx.run.child_io_factory(
                 ChildIOParams(
                     session_id=child_state.session_id,
                     run_id=calling_ctx.run.run_id,
                     pending_approvals=calling_ctx.io.pending_approvals or {},
+                    task_id=child_run_id,
+                    parent_background_tasks=calling_ctx.background_tasks,
                 )
             )
             child_io = child_session.io
             child_io_close = child_session.aclose
             child_io_finish = child_session.finish
+            if child_session.background_tasks is not None:
+                child_background_tasks = child_session.background_tasks
             bg_io = child_io
             if calling_ctx.run_registry is not None:
                 calling_ctx.run_registry.mark_session_active(child_state.session_id, calling_ctx.run.run_id)
@@ -583,7 +591,7 @@ def create_spawn_fn(
             services=calling_ctx.services,
             area=calling_ctx.area,
             ledger=calling_ctx.ledger,
-            background_tasks=calling_ctx.background_tasks,
+            background_tasks=child_background_tasks,
             run_registry=calling_ctx.run_registry,
         )
         child_ctx.spawn_fn = create_spawn_fn(

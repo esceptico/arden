@@ -7,12 +7,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from arden.events.sse import WorkflowFinishedEvent, WorkflowStartedEvent
+from arden.logging import get_logger
 from arden.orchestra.dynamic import run_script
 from arden.orchestra.engine import Orchestra
 from arden.orchestra.journal import WorkflowJournal
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+
+_logger = get_logger(__name__)
 
 
 class WorkflowInput(BaseModel):
@@ -128,6 +131,34 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
 
     workflow_id = f"wf-{uuid4().hex[:10]}"
     title = args.title or args.name or "workflow"
+    label = f"Workflow: {title}"
+    bg_registry = ctx.background_tasks
+    # Uncapped, like awaited spawns: a workflow is ONE curated pipeline bounded
+    # by the Orchestra global semaphore; the detached-agent cap exists to bound
+    # runaway background() fan-out, not curated presets. workflow_id is
+    # uuid-fresh, so reserve can only fail on an impossible duplicate.
+    if not bg_registry.reserve(workflow_id, command=label, limit=None, parent_run_id=ctx.run.run_id):
+        return ToolResult.failure(
+            code="conflict",
+            message=f"Workflow id {workflow_id} is already registered.",
+            preview="Workflow conflict",
+            recovery_action="Retry the workflow call.",
+        )
+    try:
+        # Durable roster row up front: deliver_result's completion claim needs
+        # it, and the sidebar can show the running workflow like any agent. No
+        # spawn_spec — a workflow is not respawned from the outbox on restart.
+        await bg_registry.record_started(
+            task_id=workflow_id,
+            command=label,
+            parent_run_id=ctx.run.run_id,
+            parent_tool_call_id=execution.tool_id,
+            agent_type="workflow",
+            wait=False,
+        )
+    except BaseException:
+        bg_registry.release(workflow_id)
+        raise
     emit = ctx.io.emit
     if emit:
         await emit(
@@ -177,37 +208,65 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
                 )
             )
 
-    try:
-        result = await run_script(orchestra, script, args.args)
-    except asyncio.CancelledError:
-        # User stopped the run. CancelledError is a BaseException, so without this
-        # it would skip both excepts below and never settle the workflow row —
-        # leaving it "running" with a free-running clock. Shield the settle so a
-        # second cancellation mid-emit can't drop the terminal event, then re-raise
-        # so the tool executor still sees the cancellation.
-        await asyncio.shield(_finish("cancelled", "stopped by user"))
-        raise
-    except SyntaxError:
-        await _finish("failed", "script did not compile")
-        return ToolResult.failure(
-            code="workflow_invalid",
-            message="The curated workflow preset did not compile.",
-            preview="Script error",
-            recovery_action="Report the broken built-in preset; do not retry it unchanged.",
-        )
-    except Exception:
-        await _finish("failed", "workflow execution failed")
-        return ToolResult.failure(
-            code="workflow_failed",
-            message="The curated workflow preset failed during execution.",
-            preview="Workflow failed",
-            recovery_action="Inspect the workflow run trace or report the broken preset; do not retry blindly.",
-        )
+    async def _deliver(status: str, result_text: str) -> None:
+        try:
+            await bg_registry.deliver_result(
+                task_id=workflow_id,
+                result=result_text,
+                label=label,
+                status=status,
+                emit=emit,
+                parent_tool_call_id=execution.tool_id,
+                agent_type="workflow",
+                wait=False,
+            )
+        except Exception:
+            _logger.exception("Workflow %s result delivery failed", workflow_id)
 
-    await _finish("completed", "")
+    async def _run_detached() -> None:
+        # The whole orchestra runs inside this registry task: cancelling it
+        # (registry.cancel / the cancel cascade) cancels run_script, whose
+        # TaskGroup tears down every in-flight awaited worker spawn.
+        try:
+            result = await run_script(orchestra, script, args.args)
+        except asyncio.CancelledError:
+            # Shield the settle + delivery so a second cancellation mid-emit
+            # can't drop the terminal event, then re-raise so the registry task
+            # settles as cancelled.
+            await asyncio.shield(_finish("cancelled", "stopped by user"))
+            await asyncio.shield(_deliver("cancelled", f"Workflow '{title}' was cancelled before finishing."))
+            raise
+        except SyntaxError:
+            await _finish("failed", "script did not compile")
+            await _deliver(
+                "failed",
+                f"Workflow '{title}' failed: the curated preset did not compile. "
+                "Report the broken built-in preset; do not retry it unchanged.",
+            )
+            return
+        except Exception:
+            _logger.exception("Workflow %s failed during execution", workflow_id)
+            await _finish("failed", "workflow execution failed")
+            await _deliver(
+                "failed",
+                f"Workflow '{title}' failed during execution. "
+                "Inspect the workflow run trace or report the broken preset; do not retry blindly.",
+            )
+            return
+        await _finish("completed", "")
+        await _deliver("completed", _render(result))
+
+    task = asyncio.create_task(_run_detached())
+    bg_registry.register(workflow_id, task, command=label)
+
+    content = (
+        f"Started workflow '{title}' ({workflow_id}). It runs detached: progress streams to the "
+        "workflow card, and the final result is delivered to this conversation automatically when "
+        "done — do not poll for it; continue other work or end your turn and wait."
+    )
     return ToolResult(
-        content=_render(result),
-        preview=f"Ran workflow: {title}",
+        content=content,
+        preview=f"Workflow started: {title}",
         data={"workflow": title, "workflow_id": workflow_id},
     )
 
@@ -217,7 +276,9 @@ WORKFLOW_DESCRIPTION = (
 Run a curated built-in multi-agent workflow by `name`, passing its parameters through `args`.
 Available presets include `audit`, `investigate`, `panel`, and `implement`. Example:
 workflow(name="audit", args={"target": "apps/server", "depth": "normal"}).
-Inline and user-authored Python workflows are disabled. """
+The workflow runs detached: this call returns a receipt immediately, progress streams to the
+workflow card, and the final result is delivered to this conversation automatically — do not
+poll or wait for it. Inline and user-authored Python workflows are disabled. """
     + SPAWN_SURFACE_GUIDANCE
 )
 

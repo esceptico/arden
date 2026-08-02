@@ -1,5 +1,6 @@
+import asyncio
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Annotated, Literal, Protocol
 
@@ -119,12 +120,29 @@ class RuntimeResearchRunner:
             budget=run.budget,
         )
 
+        # research() is detached now; MCP stays a blocking surface. Swallow the
+        # in-process delivery (there is no chat to inject into) and read the
+        # result the delivery wrote instead, after the registry task settles.
+        async def _swallow(_messages: list[dict]) -> None:
+            return None
+
+        background_tasks.on_result = _swallow
+
         result = await research_module.research(
             ToolExecution(tool_id=run_id, tool_name="arden_research", ctx=ctx),
             research_module.ResearchInput(task=task, depth=depth),
         )
+        answer = result.content
+        child = (result.data or {}).get("child_agent") or {}
+        task_id = child.get("child_run_id")
+        if task_id and (spawn_task := background_tasks.task(task_id)) is not None:
+            with suppress(asyncio.CancelledError):
+                await spawn_task
+            delivered = await background_tasks.read_background_result(task_id)
+            if delivered:
+                answer = delivered
         ledger.add_coverage_gap_notes(scope=run_id)
-        return _research_output(run_id, result.content, ledger)
+        return _research_output(run_id, answer, ledger)
 
 
 class RuntimeResearchRunnerContext:

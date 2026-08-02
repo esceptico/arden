@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 from contextlib import suppress
@@ -666,6 +667,18 @@ async def test_full_subagent_tool_calls_stay_on_child_bus(monkeypatch):
     assert child_finished == ["completed"]
 
 
+def _fake_run_registry(get_active_run=lambda _sid: None):
+    registries: dict[str, BackgroundTaskRegistry] = {}
+    return SimpleNamespace(
+        get_active_run=get_active_run,
+        get_background_registry=lambda sid: registries.setdefault(sid, BackgroundTaskRegistry(session_id=sid)),
+    )
+
+
+def _fake_session_service():
+    return SimpleNamespace(store=SimpleNamespace())
+
+
 @pytest.mark.asyncio
 async def test_child_io_factory_frames_full_run_lifecycle_on_child_bus():
     """The production contract: a spawned child session's OWN bus carries the
@@ -681,7 +694,8 @@ async def test_child_io_factory_frames_full_run_lifecycle_on_child_bus():
     buses = BusRegistry()
     factory = make_child_io_factory(
         buses,
-        SimpleNamespace(get_active_run=lambda _sid: None),
+        _fake_run_registry(),
+        _fake_session_service(),
         record_approval=AsyncMock(),
         resolve_approval=AsyncMock(),
         approval_timeout_seconds=300,
@@ -714,7 +728,8 @@ async def test_child_io_factory_emits_run_cancelled_on_cancel():
     buses = BusRegistry()
     factory = make_child_io_factory(
         buses,
-        SimpleNamespace(get_active_run=lambda _sid: None),
+        _fake_run_registry(),
+        _fake_session_service(),
         record_approval=AsyncMock(),
         resolve_approval=AsyncMock(),
         approval_timeout_seconds=300,
@@ -739,7 +754,8 @@ async def test_child_io_factory_aclose_keeps_bus_while_run_active():
     buses = BusRegistry()
     factory = make_child_io_factory(
         buses,
-        SimpleNamespace(get_active_run=lambda _sid: object() if active["on"] else None),
+        _fake_run_registry(get_active_run=lambda _sid: object() if active["on"] else None),
+        _fake_session_service(),
         record_approval=AsyncMock(),
         resolve_approval=AsyncMock(),
         approval_timeout_seconds=300,
@@ -753,6 +769,106 @@ async def test_child_io_factory_aclose_keeps_bus_while_run_active():
     active["on"] = False
     await child.aclose()  # run done, no subscribers → bus evicted
     assert buses.get("p::live") is None
+
+
+async def _live_parent_registry(task_id: str, child_session_id: str) -> tuple[BackgroundTaskRegistry, asyncio.Task]:
+    registry = BackgroundTaskRegistry(session_id="top")
+    registry.reserve(task_id, command="Agent", limit=16, child_session_id=child_session_id)
+    task = asyncio.create_task(asyncio.sleep(30))
+    registry.register(task_id, task, command="Agent")
+    return registry, task
+
+
+@pytest.mark.asyncio
+async def test_child_io_factory_wires_grandchild_results_into_child_inbox():
+    """The keystone of nested delivery: the factory wires the CHILD session's
+    own registry so a grandchild's completion is queued into the child's
+    steering inbox (the child's loop drains it at its next step) instead of
+    being dropped on an on_result=None registry."""
+    from unittest.mock import AsyncMock
+
+    from arden.services.chat import make_child_io_factory
+    from arden.tools.core.context import ChildIOParams
+
+    buses = BusRegistry()
+    run_registry = _fake_run_registry()
+    factory = make_child_io_factory(
+        buses,
+        run_registry,
+        _fake_session_service(),
+        record_approval=AsyncMock(),
+        resolve_approval=AsyncMock(),
+        approval_timeout_seconds=300,
+    )
+    parent_registry, live_task = await _live_parent_registry("agent-child", "top::c")
+    try:
+        child = await factory(
+            ChildIOParams(
+                session_id="top::c",
+                run_id="r1",
+                pending_approvals={},
+                task_id="agent-child",
+                parent_background_tasks=parent_registry,
+            )
+        )
+        # The spawner installs this registry as the child ToolContext's
+        # background_tasks — grandchild spawns record and deliver through it.
+        child_registry = run_registry.get_background_registry("top::c")
+        assert child.background_tasks is child_registry
+
+        message = {"role": "user", "content": "<background_agent_result>grandchild</background_agent_result>"}
+        await child_registry.inject([message])
+
+        assert parent_registry.drain_injections("agent-child") == [message]
+    finally:
+        live_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await live_task
+
+
+@pytest.mark.asyncio
+async def test_child_io_factory_bubbles_grandchild_results_when_child_finished():
+    """Closed-inbox fallback: when the child agent already finished, its inbox
+    refuses the injection — the messages bubble up the parent chain via the
+    parent registry's inject, so the result is never dropped."""
+    from unittest.mock import AsyncMock
+
+    from arden.services.chat import make_child_io_factory
+    from arden.tools.core.context import ChildIOParams
+
+    buses = BusRegistry()
+    run_registry = _fake_run_registry()
+    factory = make_child_io_factory(
+        buses,
+        run_registry,
+        _fake_session_service(),
+        record_approval=AsyncMock(),
+        resolve_approval=AsyncMock(),
+        approval_timeout_seconds=300,
+    )
+    bubbled: list[dict] = []
+    parent_registry = BackgroundTaskRegistry(session_id="top")
+
+    async def _capture(messages: list[dict]) -> None:
+        bubbled.extend(messages)
+
+    parent_registry.on_result = _capture
+    # No live task for "agent-child": queue_injection returns False.
+    child = await factory(
+        ChildIOParams(
+            session_id="top::c",
+            run_id="r1",
+            pending_approvals={},
+            task_id="agent-child",
+            parent_background_tasks=parent_registry,
+        )
+    )
+    assert child.background_tasks is not None
+
+    message = {"role": "user", "content": "late grandchild result"}
+    await run_registry.get_background_registry("top::c").inject([message])
+
+    assert bubbled == [message]
 
 
 @pytest.mark.asyncio
