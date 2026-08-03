@@ -1,3 +1,4 @@
+import ctypes
 import fcntl
 import gzip
 import hashlib
@@ -5,6 +6,7 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import uuid
 from contextlib import contextmanager
@@ -142,7 +144,21 @@ def _offline_lock(database: Path):
         yield
 
 
-def _copy_database(source: Path, destination: Path) -> None:
+def _supports_clonefile() -> bool:
+    return sys.platform == "darwin" and getattr(ctypes.CDLL(None), "clonefile", None) is not None
+
+
+def _copy_database(source: Path, destination: Path) -> str:
+    if _supports_clonefile():
+        libc = ctypes.CDLL(None, use_errno=True)
+        clonefile = libc.clonefile
+        clonefile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+        clonefile.restype = ctypes.c_int
+        if clonefile(os.fsencode(source), os.fsencode(destination), 0) == 0:
+            return "apfs-clone"
+        clone_error = OSError(ctypes.get_errno(), "clonefile failed")
+        if shutil.disk_usage(source.parent).free < source.stat().st_size + 64 * 1024 * 1024:
+            raise clone_error
     uri = f"file:{quote(str(source.resolve()))}?mode=ro&immutable=1"
     source_connection = sqlite3.connect(uri, uri=True)
     destination_connection = sqlite3.connect(destination)
@@ -151,6 +167,7 @@ def _copy_database(source: Path, destination: Path) -> None:
     finally:
         destination_connection.close()
         source_connection.close()
+    return "sqlite-backup"
 
 
 def _ensure_tool_results_schema(connection: sqlite3.Connection) -> None:
@@ -551,7 +568,8 @@ def compact_legacy_database(
     estimated_reclaim = _estimated_reclaim_bytes(database, event_keep, archived_event_keep)
     source_bytes = database.stat().st_size
     estimated_candidate = max(64 * 1024 * 1024, source_bytes - int(estimated_reclaim * 0.75))
-    required_free = source_bytes + estimated_candidate + 64 * 1024 * 1024
+    copy_overhead = source_bytes // 4 if _supports_clonefile() else source_bytes
+    required_free = copy_overhead + estimated_candidate + 64 * 1024 * 1024
     if shutil.disk_usage(database.parent).free < required_free:
         raise RuntimeError(f"insufficient free space; need at least {required_free} bytes")
     if output is not None and output.exists():
@@ -566,9 +584,10 @@ def compact_legacy_database(
             else output.resolve()
         )
         assert candidate is not None
-        _copy_database(database, working)
+        copy_method = _copy_database(database, working)
         connection = sqlite3.connect(working)
         connection.row_factory = sqlite3.Row
+        vacuum_complete = False
         try:
             source_counts = _counts(connection)
             source_prose = _prose_digest(connection)
@@ -597,8 +616,12 @@ def compact_legacy_database(
                 raise FileExistsError(candidate)
             escaped = str(candidate).replace("'", "''")
             connection.execute(f"VACUUM INTO '{escaped}'")
+            vacuum_complete = True
         finally:
             connection.close()
+            if not vacuum_complete:
+                candidate.unlink(missing_ok=True)
+                Path(f"{candidate}-journal").unlink(missing_ok=True)
         compacted = sqlite3.connect(candidate)
         try:
             if compacted.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
@@ -639,6 +662,7 @@ def compact_legacy_database(
             "preflight": {
                 "estimated_reclaim_bytes": estimated_reclaim,
                 "required_free_bytes": required_free,
+                "copy_method": copy_method,
             },
             "inline_limit": inline_limit,
             "outbox_retention_days": outbox_retention_days,
