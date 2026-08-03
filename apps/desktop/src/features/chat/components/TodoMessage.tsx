@@ -46,7 +46,7 @@ export const TodoMessage = memo(function TodoMessage({ id }: { id: string }) {
         <ul className="mt-2.5 flex flex-col gap-1.5">
           {items.map((item, index) => (
             <li key={`${index}-${item.content}`} className="flex items-start gap-2 min-w-0">
-              <BlurSwap swapKey={item.status} blur={3} className="mt-[1px] shrink-0">
+              <BlurSwap swapKey={item.status} blur={3} className="h-[1lh] shrink-0">
                 <TodoIcon status={item.status} />
               </BlurSwap>
               <span

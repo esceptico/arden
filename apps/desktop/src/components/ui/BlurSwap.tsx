@@ -29,14 +29,19 @@ export function BlurSwap({ swapKey, children, blur = BLUR.contentSwap, className
     ? TEXT_SWAP_EXIT
     : { ...TEXT_SWAP_EXIT, filter: `blur(${blur}px)` };
 
-  if (reducedMotion) return <span className={clsx("inline-block", className)}>{children}</span>;
+  // inline-flex, not inline-block: an inline-block box sits on the text
+  // baseline, so an icon child reserves descender space below it (a 16px glyph
+  // measures a 19px box) and every flex-centered parent then renders the glyph
+  // 1.5px high. Flex wrappers hug their content and keep first-line baseline
+  // alignment for text, so both content shapes center honestly.
+  if (reducedMotion) return <span className={clsx("inline-flex items-center", className)}>{children}</span>;
 
   return (
-    <span className={clsx("inline-block", className)}>
+    <span className={clsx("inline-flex items-center", className)}>
       <AnimatePresence mode="wait" initial={false}>
         <motion.span
           key={swapKey}
-          className="inline-block"
+          className="inline-flex items-center"
           style={{ willChange: "transform, filter, opacity" }}
           initial={enter}
           animate={TEXT_SWAP_VISIBLE}
