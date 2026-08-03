@@ -207,13 +207,6 @@ export interface ServiceConnection {
   from_env: boolean;
 }
 
-export interface GmailAccount {
-  email: string | null;
-  token_file: string;
-  has_send_scope?: boolean;
-  error?: string;
-}
-
 export type GoogleIntegrationId = "gmail" | "calendar" | "google_drive";
 
 export interface GoogleAccountSummary {
@@ -222,69 +215,6 @@ export interface GoogleAccountSummary {
   services: GoogleIntegrationId[];
   scopes: string[];
   error?: string | null;
-}
-
-// ─── Setup assistant contracts ─────────────────────────────────────────
-
-export type GoogleServiceChoice = "email" | "email_calendar" | "calendar" | "all";
-
-export interface GoogleCredentialsStatus {
-  path: string;
-  exists: boolean;
-  valid: boolean;
-  client_id: string | null;
-  client_type: string | null;
-  error: string | null;
-}
-
-export interface ToolProviderConnection {
-  id: string;
-  label: string;
-  kind: "native" | "mcp";
-  status: "connected" | "error" | "not_configured";
-  detail: string | null;
-  tool_count: number;
-}
-
-export interface CalendarTokenStatus {
-  token_file: string;
-  has_calendar_scope: boolean;
-  error?: string | null;
-}
-
-export interface SetupStatus {
-  google: {
-    enabled: boolean;
-    credentials: GoogleCredentialsStatus;
-    accounts: GmailAccount[];
-    google_accounts: GoogleAccountSummary[];
-    calendar_tokens: CalendarTokenStatus[];
-    provider_statuses: ToolProviderConnection[];
-  };
-  slack: {
-    services: ServiceConnection[];
-    provider_status: ToolProviderConnection | null;
-  };
-  mcp: {
-    servers: MCPServer[];
-    provider_statuses: ToolProviderConnection[];
-  };
-}
-
-export interface GooglePreflightResponse {
-  ok: boolean;
-  credentials: GoogleCredentialsStatus;
-  scopes: string[];
-  warnings: string[];
-}
-
-export interface SlackVerifyResponse {
-  ok: boolean;
-  token_kind: "bot" | "user";
-  team?: string | null;
-  team_id?: string | null;
-  user?: string | null;
-  bot_id?: string | null;
 }
 
 export interface CreateCustomModelPayload {
@@ -341,45 +271,6 @@ export async function disconnectGoogleServiceApi(
 ): Promise<void> {
   await apiWithConfig(config, `/google/${integrationId}/accounts/${encodeURIComponent(accountId)}`, {
     method: "DELETE",
-  });
-}
-
-export async function removeGoogleAccountApi(config: AppConfig, accountId: string): Promise<void> {
-  await apiWithConfig(config, `/google/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
-}
-
-export async function getSetupStatusApi(config: AppConfig): Promise<SetupStatus> {
-  return apiWithConfig<SetupStatus>(config, "/setup/status");
-}
-
-export async function saveGoogleCredentialsApi(
-  config: AppConfig,
-  payload: { path?: string; json?: unknown },
-): Promise<{ status: string; credentials: GoogleCredentialsStatus }> {
-  return apiWithConfig<{ status: string; credentials: GoogleCredentialsStatus }>(config, "/setup/google/credentials", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function preflightGoogleSetupApi(
-  config: AppConfig,
-  integrationId: GoogleIntegrationId,
-): Promise<GooglePreflightResponse> {
-  return apiWithConfig<GooglePreflightResponse>(config, "/setup/google/preflight", {
-    method: "POST",
-    body: JSON.stringify({ integration_id: integrationId }),
-  });
-}
-
-export async function verifySlackTokenApi(
-  config: AppConfig,
-  serviceId: "slack_bot_token" | "slack_user_token",
-  apiKey: string,
-): Promise<SlackVerifyResponse> {
-  return apiWithConfig<SlackVerifyResponse>(config, "/setup/slack/verify", {
-    method: "POST",
-    body: JSON.stringify({ service_id: serviceId, api_key: apiKey }),
   });
 }
 
