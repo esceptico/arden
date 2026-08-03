@@ -33,7 +33,7 @@ import {
   emptyForm,
   formFromAutomation,
   formFromPreset,
-  scheduleLabel,
+  triggerSummary,
   splitKeywords,
   type FormState,
   type Schedule,
@@ -554,9 +554,9 @@ export function AutomationDetail({
                 * automation knows. */}
               <span
                 className="automation-detail__control-value"
-                title={scheduleLabel(form.schedule, automation?.next_run_at)}
+                title={triggerSummary(form.schedule, automation?.next_run_at)}
               >
-                {scheduleLabel(form.schedule, automation?.next_run_at)}
+                {triggerSummary(form.schedule, automation?.next_run_at)}
               </span>
               <ChevronDown className="automation-detail__row-chevron" size={12} aria-hidden />
             </button>

@@ -41,7 +41,7 @@ export function automationStatusWord(automation: Automation): string {
 function scheduleLabel(automation: Automation): string {
   const trigger = automation.triggers[0];
   if (isChannelAutomation(automation) || trigger?.type === "message") return "on message";
-  if (trigger) return formatTrigger(trigger);
+  if (trigger) return automation.triggers.map((t) => formatTrigger(t)).join(" · ");
   if (automation.next_run_at) return `next ${formatRelative(automation.next_run_at)}`;
   return "No trigger";
 }

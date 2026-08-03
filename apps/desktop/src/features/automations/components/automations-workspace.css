@@ -928,6 +928,116 @@
   margin: calc(var(--space-3) + var(--space-0-5)) calc(var(--space-3) + var(--space-0-5)) 0;
 }
 
+.automation-trigger-peek__rows {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3) calc(var(--space-3) + var(--space-0-5));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* Same grouped-list material as the detail's control list. min-width: 0
+ * matters: the collapsed rows keep their editors mounted for height
+ * measurement, and without it their min-content width stretches the list
+ * past the peek and shears the rounded corners. */
+.automation-trigger-peek__list {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+}
+
+.automation-trigger-peek__row ~ .automation-trigger-peek__row {
+  border-top: 1px solid var(--edge);
+}
+
+.automation-trigger-peek__row-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: .875rem;
+  transition: background-color var(--motion-feedback) var(--ease-out);
+}
+
+.automation-trigger-peek__row-head:hover {
+  background: var(--state-hover-bg);
+}
+
+.automation-trigger-peek__row-label {
+  min-width: 0;
+  min-height: 2.5rem;
+  overflow: hidden;
+  padding: .625rem .875rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.automation-trigger-peek__row-label:focus-visible {
+  position: relative;
+  z-index: var(--z-raised);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.automation-trigger-peek__row-head:focus-within {
+  background: var(--state-hover-bg);
+}
+
+.automation-trigger-peek__row-head:focus-within .automation-trigger-peek__row-remove {
+  opacity: 1;
+}
+
+.automation-trigger-peek__row[data-open] .automation-trigger-peek__row-label {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.automation-trigger-peek__row-remove {
+  opacity: 0;
+  transition: opacity var(--motion-feedback) var(--ease-out);
+}
+
+.automation-trigger-peek__row-head:hover .automation-trigger-peek__row-remove,
+.automation-trigger-peek__row-remove:focus-visible {
+  opacity: 1;
+}
+
+.automation-trigger-peek__row-chevron {
+  color: var(--faint);
+  transform: rotate(-90deg);
+  transition: transform var(--motion-feedback) var(--ease-out);
+}
+
+.automation-trigger-peek__row[data-open] .automation-trigger-peek__row-chevron {
+  transform: rotate(0deg);
+}
+
+/* The editor body carries its own insets; the wrapper only draws the rule. */
+.automation-trigger-peek__row-editor {
+  border-top: 1px solid var(--edge);
+}
+
+.automation-trigger-peek__row-editor .automation-trigger-editor__tabs {
+  margin-top: var(--space-3);
+}
+
+.automation-trigger-peek__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .automation-trigger-editor__body {
   min-height: 0;
   padding: calc(var(--space-4) + var(--space-0-5)) calc(var(--space-3) + var(--space-0-5));
@@ -1261,49 +1371,8 @@
 .automation-trigger-peek__actions {
   min-width: 0;
   padding: var(--space-3) calc(var(--space-3) + var(--space-0-5));
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: var(--space-3);
-}
-
-.automation-trigger-peek__summary,
-.automation-trigger-peek__receipt {
-  min-width: 0;
-  display: grid;
-}
-
-.automation-trigger-peek__summary {
-  gap: var(--space-1);
-}
-
-.automation-trigger-peek__summary > span {
-  color: var(--faint);
-  font-size: var(--text-2xs);
-}
-
-.automation-trigger-peek__receipt {
-  gap: var(--space-0-5);
-}
-
-.automation-trigger-peek__receipt b {
-  overflow: hidden;
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.automation-trigger-peek__receipt span {
-  overflow: hidden;
-  display: -webkit-box;
-  color: var(--muted);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-meta);
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .automation-trigger-peek__footer {

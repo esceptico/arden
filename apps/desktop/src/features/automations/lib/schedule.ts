@@ -1,10 +1,11 @@
 import type { Automation, AutomationTrigger, CreateAutomationPayload } from "@/api/types";
+import { formatTrigger } from "@/lib/agentRun";
 
 export type EditorSeed =
   | { kind: "create"; preset?: CreateAutomationPayload }
   | { kind: "edit"; automation: Automation };
 
-export type ScheduleKind = "at" | "every" | "event" | "message";
+export type ScheduleKind = "at" | "every" | "event" | "message" | "idle" | "count";
 export type EventType = "starts" | "ends" | "approaching";
 
 export interface Schedule {
@@ -22,6 +23,13 @@ export interface Schedule {
   fromUser: string;
   /** Raw comma-separated keywords; split into a `contains` any-of list on save. */
   keywords: string;
+  /** Activity triggers: fire on inactivity (idle) or per N chat turns (count). */
+  idleMinutes: string;
+  everyN: string;
+  /** Triggers beyond the first, preserved verbatim on save. The editor edits
+   *  only the first trigger; without this a save would silently rewrite a
+   *  multi-trigger automation into a single trigger. */
+  otherTriggers: AutomationTrigger[];
 }
 
 const DEFAULT_SCHEDULE: Schedule = {
@@ -36,6 +44,9 @@ const DEFAULT_SCHEDULE: Schedule = {
   channel: "",
   fromUser: "",
   keywords: "",
+  idleMinutes: "10",
+  everyN: "10",
+  otherTriggers: [],
 };
 
 export function splitKeywords(raw: string): string[] {
@@ -111,6 +122,42 @@ export function formFromPreset(p: CreateAutomationPayload): FormState {
   return f;
 }
 
+/** One stored trigger opened as an editable schedule (otherTriggers empty —
+ *  the peek owns list membership; this maps a single row). */
+export function scheduleFromTrigger(t: AutomationTrigger): Schedule {
+  const base = { ...DEFAULT_SCHEDULE };
+  if (t.type === "time" && t.every) {
+    return { ...base, kind: "every", every: t.every, days: t.days ?? "", start: t.start ?? "", end: t.end ?? "" };
+  }
+  if (t.type === "time" && t.at) {
+    return { ...base, kind: "at", at: t.at, days: t.days ?? "" };
+  }
+  if (t.type === "event") {
+    return {
+      ...base,
+      kind: "event",
+      event: (t.event_type as EventType) ?? "approaching",
+      lead: t.lead_minutes != null ? String(t.lead_minutes) : base.lead,
+    };
+  }
+  if (t.type === "message") {
+    return {
+      ...base,
+      kind: "message",
+      channel: channelsToInput(t.channels),
+      fromUser: t.from_user_name ?? t.from_user ?? "",
+      keywords: (t.contains ?? []).join(", "),
+    };
+  }
+  if (t.type === "idle") {
+    return { ...base, kind: "idle", idleMinutes: t.idle_minutes != null ? String(t.idle_minutes) : base.idleMinutes };
+  }
+  if (t.type === "count") {
+    return { ...base, kind: "count", everyN: t.every_n != null ? String(t.every_n) : base.everyN };
+  }
+  return base;
+}
+
 export function formFromAutomation(a: Automation): FormState {
   const t = a.triggers[0];
   const f = emptyForm();
@@ -120,34 +167,39 @@ export function formFromAutomation(a: Automation): FormState {
   f.auto_approve = a.auto_approve;
   f.model = a.model;
   if (!t) return f;
-  if (t.type === "time" && t.every) {
-    f.schedule = {
-      ...f.schedule,
-      kind: "every",
-      every: t.every,
-      days: t.days ?? "",
-      start: t.start ?? "",
-      end: t.end ?? "",
-    };
-  } else if (t.type === "time" && t.at) {
-    f.schedule = { ...f.schedule, kind: "at", at: t.at, days: t.days ?? "" };
-  } else if (t.type === "event") {
-    f.schedule = {
-      ...f.schedule,
-      kind: "event",
-      event: (t.event_type as EventType) ?? "approaching",
-      lead: t.lead_minutes != null ? String(t.lead_minutes) : f.schedule.lead,
-    };
-  } else if (t.type === "message") {
-    f.schedule = {
-      ...f.schedule,
-      kind: "message",
-      channel: channelsToInput(t.channels),
-      fromUser: t.from_user_name ?? t.from_user ?? "",
-      keywords: (t.contains ?? []).join(", "),
-    };
-  }
+  f.schedule = { ...scheduleFromTrigger(t), otherTriggers: a.triggers.slice(1) };
   return f;
+}
+
+/** The stored form of one editable schedule row. */
+export function triggerFromSchedule(s: Schedule): AutomationTrigger {
+  if (s.kind === "idle") return { type: "idle", idle_minutes: Number(s.idleMinutes) };
+  if (s.kind === "count") return { type: "count", every_n: Number(s.everyN) };
+  if (s.kind === "message") {
+    const trigger: AutomationTrigger = { type: "message", source: "slack", channels: splitKeywords(s.channel) };
+    const fromUser = s.fromUser.trim();
+    if (fromUser) trigger.from_user = fromUser;
+    const contains = splitKeywords(s.keywords);
+    if (contains.length) trigger.contains = contains;
+    return trigger;
+  }
+  if (s.kind === "event") {
+    const trigger: AutomationTrigger = { type: "event", event_type: s.event };
+    const lead = s.lead.trim();
+    if (lead) trigger.lead_minutes = Number(lead);
+    return trigger;
+  }
+  const trigger: AutomationTrigger = { type: "time" };
+  const days = s.days.trim();
+  if (days) trigger.days = days;
+  if (s.kind === "every") {
+    trigger.every = s.every.trim();
+    if (s.start) trigger.start = s.start;
+    if (s.end) trigger.end = s.end;
+  } else {
+    trigger.at = s.at;
+  }
+  return trigger;
 }
 
 export function buildPayload(
@@ -163,6 +215,22 @@ export function buildPayload(
   const description = f.description?.trim();
   if (includeDescription && description) p.description = description;
   const s = f.schedule;
+  if (s.otherTriggers.length > 0) {
+    // Multi-trigger automation: replace the full list so the untouched
+    // triggers survive the save instead of being collapsed into one.
+    p.triggers = [triggerFromSchedule(s), ...s.otherTriggers];
+    return p;
+  }
+  if (s.kind === "idle") {
+    p.trigger_type = "idle";
+    p.idle_minutes = Number(s.idleMinutes);
+    return p;
+  }
+  if (s.kind === "count") {
+    p.trigger_type = "count";
+    p.every_n = Number(s.everyN);
+    return p;
+  }
   if (s.kind === "at") {
     p.trigger_type = "time";
     p.at = s.at;
@@ -215,6 +283,8 @@ function relativeDay(iso: string, now: Date): string | null {
  *  disables the automation afterwards — so calling it "Daily" claimed the
  *  opposite of what the schedule commits to. */
 export function scheduleLabel(s: Schedule, nextRunAt?: string | null): string {
+  if (s.kind === "idle") return `After ${s.idleMinutes}m idle`;
+  if (s.kind === "count") return `Every ${s.everyN} turns`;
   if (s.kind === "message") {
     const chans = splitKeywords(s.channel);
     if (!chans.length) return "On Slack message";
@@ -236,6 +306,21 @@ export function scheduleLabel(s: Schedule, nextRunAt?: string | null): string {
   }
   const lead = s.event === "approaching" && s.lead ? ` (${s.lead}m)` : "";
   return `On event ${s.event}${lead}`;
+}
+
+/** Whether one schedule row is complete enough to save. */
+export function scheduleValid(s: Schedule): boolean {
+  if (s.kind === "message") return splitKeywords(s.channel).length > 0;
+  if (s.kind === "idle") return /^\d+$/.test(s.idleMinutes.trim()) && Number(s.idleMinutes) >= 1;
+  if (s.kind === "count") return /^\d+$/.test(s.everyN.trim()) && Number(s.everyN) >= 1;
+  return true;
+}
+
+/** Every trigger spelled out — never a "+N" the reader has to guess at. */
+export function triggerSummary(s: Schedule, nextRunAt?: string | null): string {
+  const first = scheduleLabel(s, nextRunAt);
+  if (s.otherTriggers.length === 0) return first;
+  return [first, ...s.otherTriggers.map((t) => formatTrigger(t))].join(" · ");
 }
 
 export function humanDays(days: string): string {

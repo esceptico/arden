@@ -54,6 +54,9 @@ const AT_SCHEDULE = (over: Partial<Schedule> = {}): Schedule => ({
   channel: "",
   fromUser: "",
   keywords: "",
+  idleMinutes: "10",
+  everyN: "10",
+  otherTriggers: [],
   ...over,
 });
 

@@ -59,9 +59,9 @@ test("Automations carries the redesign master-detail hierarchy into production",
   expect(triggerPeek).toContain("<PeekSurface");
   expect(triggerPeek).toContain('ariaLabel="Edit trigger"');
   expect(triggerPeek).toContain("Save trigger");
-  expect(triggerPeek).toContain("visibleSchedule");
+  expect(triggerPeek).toContain("rowsFromDraft");
   expect(triggerPeek).toContain('variant="quiet" size="md" onClick={onClose}>Cancel</Button>');
-  expect(triggerPeek).toContain('variant="primary" size="md" disabled={!valid}');
+  expect(triggerPeek).toContain("disabled={!valid}");
   expect(triggerPeek).toContain("closeOnOutsidePointerDown");
   expect(detail).toContain("data-trigger-peek-owner");
   expect(detail).toContain("data-run-peek-owner");
@@ -87,7 +87,7 @@ test("Automations carries the redesign master-detail hierarchy into production",
   expect(css).toContain(".automation-workspace:has(.automation-trigger-peek) .automation-workspace__main");
   const triggerActions = css.match(/\.automation-trigger-peek__actions\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
   expect(triggerActions).toContain("padding: var(--space-3) calc(var(--space-3) + var(--space-0-5))");
-  expect(triggerActions).toContain("grid-template-columns: minmax(0, 1fr) auto");
+  expect(triggerActions).toContain("justify-content: flex-end");
   expect(css).toContain(".automation-result-peek__body");
   expect(css).toContain("padding: var(--space-4)");
   expect(css).toContain("translateX(calc(-1 * var(--motion-distance-sidebar-hide)))");

@@ -95,9 +95,16 @@ export function ScheduleEditor({
     schedule.kind === "every" ? "every" : "at",
   );
   if (schedule.kind === "at" || schedule.kind === "every") lastScheduleKind.current = schedule.kind;
+  // Same memory for the Activity tab's idle/count split.
+  const lastActivityKind = useRef<"idle" | "count">(schedule.kind === "count" ? "count" : "idle");
+  if (schedule.kind === "idle" || schedule.kind === "count") lastActivityKind.current = schedule.kind;
 
-  const segment = schedule.kind === "message" ? "message" : schedule.kind === "event" ? "event" : "schedule";
-  const segmentDirection = useTabDirection(["schedule", "message", "event"], segment);
+  const segment =
+    schedule.kind === "message" ? "message"
+    : schedule.kind === "event" ? "event"
+    : schedule.kind === "idle" || schedule.kind === "count" ? "activity"
+    : "schedule";
+  const segmentDirection = useTabDirection(["schedule", "message", "event", "activity"], segment);
 
   return (
     <div className={clsx("automation-trigger-editor", className)}>
@@ -112,6 +119,8 @@ export function ScheduleEditor({
             kind:
               value === "message" ? "message"
               : value === "event" ? "event"
+              : value === "activity"
+                ? (schedule.kind === "idle" || schedule.kind === "count" ? schedule.kind : lastActivityKind.current)
               : schedule.kind === "at" || schedule.kind === "every" ? schedule.kind
               : lastScheduleKind.current,
           })
@@ -120,6 +129,7 @@ export function ScheduleEditor({
         <Tab value="schedule">Schedule</Tab>
         <Tab value="message">Message</Tab>
         <Tab value="event">Event</Tab>
+        <Tab value="activity">Activity</Tab>
       </Tabs>
 
       <div className="automation-trigger-editor__body">
@@ -220,6 +230,40 @@ export function ScheduleEditor({
                 placeholder="15"
                 inputMode="numeric"
               />
+            </div>
+          )}
+
+          {segment === "activity" && (
+            <div className="automation-trigger-editor__form">
+              <TriggerField label="Activity">
+                <Select
+                  value={schedule.kind === "count" ? "count" : "idle"}
+                  onChange={(value) => set({ kind: value as ScheduleKind })}
+                  options={[
+                    { value: "idle", label: "After inactivity" },
+                    { value: "count", label: "Every N chat turns" },
+                  ]}
+                  aria-label="Activity trigger"
+                  className="automation-trigger-editor__select"
+                />
+              </TriggerField>
+              {schedule.kind === "count" ? (
+                <TriggerInputField
+                  label="Turns"
+                  value={schedule.everyN}
+                  onChange={(value) => set({ everyN: value })}
+                  placeholder="10"
+                  inputMode="numeric"
+                />
+              ) : (
+                <TriggerInputField
+                  label="Idle minutes"
+                  value={schedule.idleMinutes}
+                  onChange={(value) => set({ idleMinutes: value })}
+                  placeholder="10"
+                  inputMode="numeric"
+                />
+              )}
             </div>
           )}
         </TabPanels>
