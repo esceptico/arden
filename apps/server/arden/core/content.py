@@ -64,8 +64,6 @@ ContentBlock = Annotated[
     Field(discriminator="type"),
 ]
 
-MessageContent = str | list[ContentBlock]
-
 _BLOCK_MAP: dict[str, type[BaseModel]] = {
     "text": TextContent,
     "image": ImageContent,

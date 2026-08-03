@@ -320,14 +320,6 @@ class FactLedger:
 
         return self.read_snapshot().known_scopes
 
-    def validate_initialized(self) -> str:
-        """Fully validate an initialized ledger and return its current head."""
-
-        head = self.revision
-        if head is None:
-            raise FactLedgerCorruptionError("fact ledger is not initialized")
-        return head
-
     def due_reviews(self, *, now: datetime | None = None) -> tuple[DueReviewCandidate, ...]:
         return self.due_review_snapshot(now=now)[2]
 

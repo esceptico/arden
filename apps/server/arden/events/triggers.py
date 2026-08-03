@@ -95,6 +95,3 @@ class MessageReceived:
             user_name=self.user_name,
             text=self.text,
         )
-
-
-TRIGGER_EVENT_TYPES: tuple[type[TriggerEvent], ...] = (EventApproaching, MessageReceived)

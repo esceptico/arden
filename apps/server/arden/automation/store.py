@@ -413,10 +413,6 @@ SET next_run_at = ?,
 WHERE task_id = ? AND enabled = 1
 """
 
-_SQL_SET_LAST_RESULT = """
-UPDATE scheduled_tasks SET last_result = ? WHERE task_id = ?
-"""
-
 _SQL_TRY_MARK_RUNNING = """
 UPDATE scheduled_tasks
 SET running_since = ?
@@ -515,14 +511,6 @@ WHERE claim_id = ?
 """
 
 _SQL_SET_ENABLED = "UPDATE scheduled_tasks SET enabled = ? WHERE task_id = ?"
-_SQL_SET_ENABLED_IF_CLAIM = """
-UPDATE scheduled_tasks
-SET enabled = ?
-WHERE task_id = ?
-  AND enabled = ?
-  AND idempotency_key = ?
-  AND idempotency_scope = 'global'
-"""
 _SQL_DISABLE_AND_CLEAR_NEXT_RUN = "UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL WHERE task_id = ?"
 
 _SQL_DISABLE_BY_PARENT = """
@@ -1880,21 +1868,6 @@ class AutomationStore:
         await self.conn.execute(_SQL_SET_ENABLED, (int(enabled), task_id))
         await self.conn.commit()
 
-    async def set_enabled_if_claim(
-        self,
-        task_id: str,
-        claim_key: str,
-        *,
-        expected: bool,
-        enabled: bool,
-    ) -> bool:
-        cursor = await self.conn.execute(
-            _SQL_SET_ENABLED_IF_CLAIM,
-            (int(enabled), task_id, int(expected), claim_key),
-        )
-        await self.conn.commit()
-        return cursor.rowcount > 0
-
     async def disable_and_clear_next_run(self, task_id: str) -> None:
         await self.conn.execute(_SQL_DISABLE_AND_CLEAR_NEXT_RUN, (task_id,))
         await self.conn.commit()
@@ -2000,12 +1973,6 @@ class AutomationStore:
         )
         await self.conn.commit()
         return cursor.rowcount > 0
-
-    async def set_last_result(self, task_id: str, result: str | None) -> None:
-        # Bound the stored text so a chatty run can't bloat the row.
-        clipped = result if result is None or len(result) <= 4000 else result[:4000] + "…"
-        await self.conn.execute(_SQL_SET_LAST_RESULT, (clipped, task_id))
-        await self.conn.commit()
 
     async def claim_and_enqueue_event(
         self,
@@ -2207,10 +2174,6 @@ class AutomationStore:
             await self.conn.commit()
             if cursor.rowcount > 0:
                 return queue_id, context, attempt_count
-
-    async def complete_event(self, queue_id: int) -> None:
-        await self.conn.execute(_SQL_COMPLETE_EVENT, (queue_id,))
-        await self.conn.commit()
 
     async def get_claimed_event(self, task_id: str) -> tuple[int, int] | None:
         rows = await self.conn.execute_fetchall(_SQL_GET_CLAIMED_EVENT, (task_id,))
