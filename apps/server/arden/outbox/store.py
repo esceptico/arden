@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime
 
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     locked_at TEXT,
     locked_by TEXT,
     last_error TEXT,
+    receipt_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -103,10 +105,13 @@ WHERE id = ?
 _SQL_COMPLETE = """
 UPDATE outbox_events
 SET status = 'completed',
+    payload = ?,
+    receipt_at = ?,
     locked_at = NULL,
     locked_by = NULL,
     updated_at = ?
 WHERE id = ?
+  AND status = 'running'
 """
 
 _SQL_FAIL = """
@@ -248,6 +253,9 @@ class OutboxStore:
 
     async def init_schema(self) -> None:
         await self.conn.executescript(_SCHEMA)
+        columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(outbox_events)")}
+        if "receipt_at" not in columns:
+            await self.conn.execute("ALTER TABLE outbox_events ADD COLUMN receipt_at TEXT")
         await self.conn.commit()
 
     async def enqueue(
@@ -434,8 +442,57 @@ class OutboxStore:
 
     async def mark_completed(self, event_id: int) -> None:
         now = _now()
-        await self.conn.execute(_SQL_COMPLETE, (_format_dt(now), event_id))
+        rows = await self.conn.execute_fetchall(
+            "SELECT payload FROM outbox_events WHERE id = ? AND status = 'running'",
+            (event_id,),
+        )
+        if not rows:
+            return
+        payload = rows[0]["payload"]
+        receipt = json.dumps(
+            {
+                "receipt_version": 1,
+                "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                "payload_bytes": len(payload.encode("utf-8")),
+            },
+            separators=(",", ":"),
+        )
+        timestamp = _format_dt(now)
+        await self.conn.execute(_SQL_COMPLETE, (receipt, timestamp, timestamp, event_id))
         await self.conn.commit()
+
+    async def compact_completed_payloads(self, *, limit: int) -> int:
+        """Replace legacy completed payloads with verifiable compact receipts."""
+
+        rows = await self.conn.execute_fetchall(
+            """
+            SELECT id, payload
+            FROM outbox_events
+            WHERE status = 'completed' AND receipt_at IS NULL
+            ORDER BY updated_at ASC, id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        if not rows:
+            return 0
+        now = _format_dt(_now())
+        for row in rows:
+            payload = row["payload"]
+            receipt = json.dumps(
+                {
+                    "receipt_version": 1,
+                    "payload_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                    "payload_bytes": len(payload.encode("utf-8")),
+                },
+                separators=(",", ":"),
+            )
+            await self.conn.execute(
+                "UPDATE outbox_events SET payload = ?, receipt_at = ? WHERE id = ? AND receipt_at IS NULL",
+                (receipt, now, row["id"]),
+            )
+        await self.conn.commit()
+        return len(rows)
 
     async def mark_failed(
         self,

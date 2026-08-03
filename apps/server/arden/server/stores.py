@@ -62,7 +62,7 @@ class Stores:
         self.device_skills = device_skills
 
     @classmethod
-    async def connect(cls, config: Config) -> Self:
+    async def connect(cls, config: Config, *, defer_recovery: bool = False) -> Self:
         config.db_dir.mkdir(exist_ok=True)
         conn = await database.connect(config.sessions_db_path)
         automation_settlement_conn = await database.connect(config.sessions_db_path)
@@ -71,11 +71,8 @@ class Stores:
 
         session_store = SessionStore(conn, read_conn, chat_completion_conn)
         await session_store.init_schema()
-        await session_store.mark_interrupted_chat_runs()
-        await session_store.mark_interrupted_chat_queued_messages_retryable()
-        await session_store.prune_expired_chat_idempotency_keys()
-        await session_store.mark_interrupted_background_agent_runs()
-        await session_store.mark_interrupted_agent_sessions()
+        if not defer_recovery:
+            await cls._reconcile_session_store(session_store)
 
         outbox = OutboxStore(conn)
         await outbox.init_schema()
@@ -126,6 +123,19 @@ class Stores:
             executor_commands=executor_commands,
             device_skills=device_skills,
         )
+
+    @staticmethod
+    async def _reconcile_session_store(session_store: SessionStore) -> None:
+        await session_store.ensure_startup_recovery_indexes()
+        await session_store.reconcile_due_session_event_retention()
+        await session_store.mark_interrupted_chat_runs()
+        await session_store.mark_interrupted_chat_queued_messages_retryable()
+        await session_store.prune_expired_chat_idempotency_keys()
+        await session_store.mark_interrupted_background_agent_runs()
+        await session_store.mark_interrupted_agent_sessions()
+
+    async def reconcile_interrupted_state(self) -> None:
+        await self._reconcile_session_store(self.sessions.store)
 
     async def close(self) -> None:
         await self.read_conn.close()

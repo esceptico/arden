@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib.metadata import version
+from time import perf_counter
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +58,7 @@ from arden.server.routers.setup import router as setup_router
 from arden.server.routers.skills import router as skills_router
 from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
+from arden.server.startup import startup_phase
 from arden.services.chat import respawn_background_agent, resume_suspended_chat_run, submit_chat_message
 from arden.tools.scopes import ScopeKey
 from arden.wiki.migrate import migrate_title_links
@@ -172,6 +174,126 @@ async def _enqueue_background_respawns(session_store, outbox_store) -> None:
             _logger.exception("Failed to enqueue background agent respawn %s", run_row["task_id"])
 
 
+async def _redeliver_background_completions(
+    runtime: Runtime,
+    bus_registry: BusRegistry,
+    dispatch_session_message: Callable[..., Awaitable[object]],
+) -> None:
+    for completion in await runtime.session_service.store.list_undelivered_background_completions():
+        try:
+            session_id = completion["session_id"]
+            registry = runtime.run_registry.get_background_registry(session_id)
+            registry.claim_completion = runtime.session_service.store.claim_background_agent_completion
+            registry.mark_completion_delivered = runtime.session_service.store.mark_background_completion_delivered
+
+            async def _redeliver(messages: list[dict], target_session_id: str = session_id) -> None:
+                saved = await runtime.session_service.load(target_session_id)
+                saved_client_ids = {
+                    message.get("client_id")
+                    for message in (saved.messages if saved else [])
+                    if message.get("client_id")
+                }
+                for message in messages:
+                    client_id = message.get("client_id")
+                    if client_id in saved_client_ids:
+                        continue
+                    content = message.get("content")
+                    if isinstance(content, str) and content:
+                        await dispatch_session_message(
+                            target_session_id,
+                            content,
+                            client_id if isinstance(client_id, str) else None,
+                            True,
+                        )
+
+            registry.on_result = _redeliver
+            await prime_bus_cursor_from_store(bus_registry, session_id, runtime.session_service.store)
+            await registry.deliver_result(
+                task_id=completion["task_id"],
+                result=completion.get("result_text") or "",
+                label=completion["command"],
+                status=completion["status"],
+                emit=bus_registry.get_or_create(session_id).emit,
+                child_session_id=completion.get("child_session_id"),
+                parent_tool_call_id=completion.get("parent_tool_call_id"),
+                agent_type=completion.get("agent_type"),
+                wait=completion.get("wait"),
+            )
+        except Exception:
+            _logger.exception("Failed to redeliver background completion %s", completion["completion_id"])
+
+
+async def _run_post_ready_warmup(
+    runtime: Runtime,
+    bus_registry: BusRegistry,
+    resume_suspended_run: Callable[[str, str], Awaitable[object]],
+    dispatch_session_message: Callable[..., Awaitable[object]],
+    refresh_model_catalog: Callable[[], Awaitable[bool]] = refresh_codex_models,
+) -> None:
+    """Run recoverable startup work without owning HTTP availability."""
+
+    runtime.begin_warmup()
+    try:
+        runtime.set_warmup_phase("model_catalog")
+        with startup_phase(_logger, "warmup.model_catalog"):
+            await refresh_model_catalog()
+        runtime.set_warmup_capability("model_catalog")
+
+        await runtime.complete_deferred_runtime_warmup()
+
+        runtime.set_warmup_phase("tool_result_prune")
+        try:
+            with startup_phase(_logger, "warmup.tool_result_prune"):
+                await asyncio.to_thread(prune_offload_store)
+        except Exception:
+            _logger.warning("tool-result store prune failed during warmup; continuing", exc_info=True)
+
+        runtime.set_warmup_phase("wiki_title_migration")
+        if runtime.wiki_service is not None:
+            try:
+                with startup_phase(_logger, "warmup.wiki_title_migration"):
+                    await asyncio.to_thread(migrate_title_links, runtime.wiki_service)
+            except Exception:
+                _logger.warning("wiki title-link migration failed during warmup; continuing", exc_info=True)
+
+        runtime.set_warmup_phase("chat_recovery")
+        with startup_phase(_logger, "warmup.chat_recovery"):
+            await _recover_interrupted_chat_runs(runtime, resume_suspended_run)
+
+        runtime.set_warmup_phase("wiki_projection_enqueue")
+        with startup_phase(_logger, "warmup.wiki_projection_enqueue"):
+            await runtime.enqueue_startup_wiki_projection()
+
+        runtime.set_warmup_phase("scheduler_start")
+        with startup_phase(_logger, "warmup.scheduler_start"):
+            await runtime.start_scheduler()
+
+        runtime.set_warmup_phase("monitor_start")
+        with startup_phase(_logger, "warmup.monitor_start"):
+            runtime.start_monitor()
+
+        runtime.set_warmup_phase("completion_redelivery")
+        with startup_phase(_logger, "warmup.completion_redelivery"):
+            await _redeliver_background_completions(runtime, bus_registry, dispatch_session_message)
+
+        runtime.set_warmup_phase("background_respawns")
+        with startup_phase(_logger, "warmup.background_respawns"):
+            await _enqueue_background_respawns(runtime.session_service.store, runtime.stores.outbox)
+
+        runtime.set_warmup_phase("storage_maintenance")
+        with startup_phase(_logger, "warmup.storage_maintenance"):
+            await runtime.run_storage_maintenance_once()
+            runtime.start_storage_maintenance()
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        runtime.fail_warmup(error)
+        _logger.exception("Server warmup failed; core API remains available")
+    else:
+        runtime.complete_warmup()
+        _logger.info("Server warmup complete")
+
+
 def _install_shutdown_handlers(runtime: Runtime, bus_registry: BusRegistry) -> None:
     """Intercept SIGINT/SIGTERM to close SSE streams before uvicorn's timeout.
 
@@ -194,25 +316,14 @@ def _install_shutdown_handlers(runtime: Runtime, bus_registry: BusRegistry) -> N
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await refresh_codex_models()
+    startup_started = perf_counter()
     runtime = Runtime()
-    await runtime.connect()
-    # Bound the durable tool-result store on startup: prune offloaded results past
-    # the retention window so it can't accumulate across sessions (it had grown to
-    # ~5GB, which made an agent grepping it never converge — the CPU runaway).
-    # Best-effort: a store-permission/IO error must not block serving requests.
-    try:
-        await asyncio.to_thread(prune_offload_store)
-    except Exception:
-        _logger.warning("tool-result store prune failed on startup; continuing", exc_info=True)
-    # Titles are display-only now; stored title-style wikilinks become path links once.
-    if runtime.wiki_service is not None:
-        try:
-            await asyncio.to_thread(migrate_title_links, runtime.wiki_service)
-        except Exception:
-            _logger.warning("wiki title-link migration failed on startup; continuing", exc_info=True)
-    bus_registry = await _create_bus_registry(runtime)
+    with startup_phase(_logger, "app.runtime_connect"):
+        await runtime.connect(defer_warmup=True)
+    with startup_phase(_logger, "app.bus_registry"):
+        bus_registry = await _create_bus_registry(runtime)
     runtime.scheduler.set_bus_registry(bus_registry)
+    wiring_started = perf_counter()
 
     # Route session lifecycle events (SESSION_CREATED / SESSION_ACTIVITY)
     # onto the global automation stream so the sidebar reflects sessions
@@ -594,63 +705,41 @@ async def lifespan(app: FastAPI):
         return active is None
 
     runtime.scheduler.set_loop_fire_gate(_loop_can_fire)
-    await _recover_interrupted_chat_runs(runtime, _resume_suspended_chat_run)
-    await runtime.start_scheduler()
-    runtime.start_monitor()
-    for completion in await runtime.session_service.store.list_undelivered_background_completions():
-        try:
-            session_id = completion["session_id"]
-            registry = runtime.run_registry.get_background_registry(session_id)
-            registry.claim_completion = runtime.session_service.store.claim_background_agent_completion
-            registry.mark_completion_delivered = runtime.session_service.store.mark_background_completion_delivered
-
-            async def _redeliver(messages: list[dict], target_session_id: str = session_id) -> None:
-                saved = await runtime.session_service.load(target_session_id)
-                saved_client_ids = {
-                    message.get("client_id")
-                    for message in (saved.messages if saved else [])
-                    if message.get("client_id")
-                }
-                for message in messages:
-                    client_id = message.get("client_id")
-                    if client_id in saved_client_ids:
-                        continue
-                    content = message.get("content")
-                    if isinstance(content, str) and content:
-                        await _dispatch_session_message(
-                            target_session_id,
-                            content,
-                            client_id if isinstance(client_id, str) else None,
-                            True,
-                        )
-
-            registry.on_result = _redeliver
-            await prime_bus_cursor_from_store(bus_registry, session_id, runtime.session_service.store)
-            await registry.deliver_result(
-                task_id=completion["task_id"],
-                result=completion.get("result_text") or "",
-                label=completion["command"],
-                status=completion["status"],
-                emit=bus_registry.get_or_create(session_id).emit,
-                child_session_id=completion.get("child_session_id"),
-                parent_tool_call_id=completion.get("parent_tool_call_id"),
-                agent_type=completion.get("agent_type"),
-                wait=completion.get("wait"),
-            )
-        except Exception:
-            _logger.exception("Failed to redeliver background completion %s", completion["completion_id"])
-    await _enqueue_background_respawns(runtime.session_service.store, runtime.stores.outbox)
+    _logger.info(
+        "Startup phase complete",
+        startup_phase="app.wiring",
+        outcome="ok",
+        elapsed_ms=round((perf_counter() - wiring_started) * 1000, 1),
+    )
     app.state.runtime = runtime
     app.state.bus_registry = bus_registry
     _install_shutdown_handlers(runtime, bus_registry)
+    warmup_task = asyncio.create_task(
+        _run_post_ready_warmup(runtime, bus_registry, _resume_suspended_chat_run, _dispatch_session_message),
+        name="arden-server-warmup",
+    )
+    app.state.warmup_task = warmup_task
+    _logger.info(
+        "API ready",
+        startup_phase="app.total",
+        outcome="ok",
+        elapsed_ms=round((perf_counter() - startup_started) * 1000, 1),
+    )
 
     try:
-        yield
-    except asyncio.CancelledError:
-        pass
-
-    await bus_registry.close_all()
-    await runtime.close()
+        try:
+            yield
+        except asyncio.CancelledError:
+            pass
+    finally:
+        if not warmup_task.done():
+            warmup_task.cancel()
+        try:
+            await warmup_task
+        except asyncio.CancelledError:
+            pass
+        await bus_registry.close_all()
+        await runtime.close()
 
 
 app = FastAPI(

@@ -421,6 +421,7 @@ export interface State {
   /** Per-session UI state preserved across `setCurrentSession` swaps. */
   sessionCache: Map<string, CachedSessionState>;
   connected: boolean;
+  serverWarmup: import("@/api/core").WarmupHealth | null;
   running: boolean;
   error: string | null;
   draft: string;
@@ -547,6 +548,7 @@ export interface Actions {
   upsertTodoList: (message: UiMessage, beforeId?: string | null) => void;
   truncateFrom: (id: string) => void;
   setConnected: (connected: boolean) => void;
+  setServerWarmup: (warmup: import("@/api/core").WarmupHealth | null) => void;
   setError: (error: string | null) => void;
   setDraft: (draft: string) => void;
   setEditingId: (id: string | null) => void;

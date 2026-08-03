@@ -25,6 +25,31 @@ class _Runtime:
             "config_loaded_at": "2026-04-28T00:00:00+00:00",
         }
 
+    def warmup_status(self):
+        return {
+            "status": "running",
+            "phase": "runtime.index_sync",
+            "error": None,
+            "capabilities": {
+                "core": True,
+                "search": False,
+                "wiki_health": False,
+                "automations": False,
+            },
+        }
+
+    def storage_status(self):
+        return {
+            "status": "ok",
+            "total_bytes": 100,
+            "reclaimable_bytes": 0,
+            "protected_bytes": 100,
+            "reclaimed_bytes": 0,
+            "max_bytes": 1000,
+            "target_bytes": 850,
+            "checked_at": "2026-04-28T00:00:00+00:00",
+        }
+
     async def get_outbox_health(self):
         return {
             "worker_running": True,
@@ -107,6 +132,11 @@ def test_health_includes_outbox_summary():
         "running": 0,
         "dead": 1,
     }
+    assert data["status"] == "ok"
+    assert data["warmup"]["status"] == "running"
+    assert data["warmup"]["capabilities"]["core"] is True
+    assert data["storage"]["protected_bytes"] == 100
+    assert data["warmup"]["capabilities"]["automations"] is False
 
 
 def test_outbox_status_endpoint_returns_detailed_state():

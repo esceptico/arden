@@ -79,6 +79,26 @@ async def _noop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_config_service_persists_and_clears_storage_budget(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted: dict = {}
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    service = ConfigService(on_config_change=_noop)
+
+    await service.update(max_space_gb=12.5)
+    assert persisted == {"max_space_gb": 12.5}
+    await service.update(max_space_gb=None)
+    assert persisted == {}
+
+
+@pytest.mark.asyncio
 async def test_config_service_creates_custom_model_and_stores_api_key(monkeypatch):
     import arden.services.config as config_module
 

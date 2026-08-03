@@ -27,6 +27,8 @@ async def health(request: Request, runtime: Runtime = Depends(get_runtime)):
         "version": request.app.version,
         "has_providers": runtime.config.has_any_model,
         "outbox": await runtime.get_outbox_health(),
+        "warmup": runtime.warmup_status(),
+        "storage": runtime.storage_status(),
         **runtime.config_status(),
     }
     token = _extract_bearer_token(request)
@@ -50,7 +52,7 @@ async def replay_outbox_dead_events(
 
 @router.delete("/outbox/completed", response_model=OutboxPruneResponse)
 async def prune_outbox_completed(
-    older_than_days: int = Query(default=7, ge=1, le=3650),
+    older_than_days: int = Query(default=1, ge=1, le=3650),
     limit: int = Query(default=1000, ge=1, le=10000),
     automation: AutomationRuntime = Depends(require_automation_runtime),
 ):
@@ -62,6 +64,16 @@ async def prune_outbox_completed(
 @router.get("/index/status")
 async def get_index_status(runtime: Runtime = Depends(get_runtime)):
     return await runtime.get_index_status()
+
+
+@router.get("/storage/status")
+async def get_storage_status(runtime: Runtime = Depends(get_runtime)):
+    return runtime.storage_status()
+
+
+@router.post("/storage/maintain")
+async def maintain_storage(runtime: Runtime = Depends(get_runtime)):
+    return await runtime.run_storage_maintenance_once()
 
 
 @router.post("/index/start")

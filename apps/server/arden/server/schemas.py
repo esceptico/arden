@@ -194,11 +194,32 @@ class OutboxHealthResponse(BaseModel):
     dead: int
 
 
+class WarmupHealthResponse(BaseModel):
+    status: Literal["pending", "running", "ready", "error"]
+    phase: str | None = None
+    error: str | None = None
+    capabilities: dict[str, bool]
+
+
+class StorageHealthResponse(BaseModel):
+    status: Literal["pending", "disabled", "ok", "reclaimed", "quota_blocked", "error"]
+    total_bytes: int
+    reclaimable_bytes: int
+    protected_bytes: int
+    reclaimed_bytes: int
+    max_bytes: int | None = None
+    target_bytes: int | None = None
+    checked_at: str | None = None
+    error: str | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
     has_providers: bool
     outbox: OutboxHealthResponse
+    warmup: WarmupHealthResponse
+    storage: StorageHealthResponse
     config_version: int
     config_loaded_at: str
     auth: bool | None = None
@@ -522,6 +543,7 @@ class UpdateConfigRequest(BaseModel):
     max_messages: int | None = Field(default=None, ge=10, le=1000)
     compression_keep_ratio: float | None = Field(default=None, ge=0, le=1)
     summary_max_tokens: int | None = Field(default=None, ge=256, le=8000)
+    max_space_gb: float | None = Field(default=None, ge=0.1)
     web_search: Literal["auto", "exa", "ddgs", "none"] | None = None
     tool_overrides: dict[str, ToolOverrideDecision] | None = None
     integrations: IntegrationToggles | None = None

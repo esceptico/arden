@@ -127,6 +127,7 @@ def _config_response(rt: Runtime) -> dict:
         "max_messages": config.max_messages,
         "compression_keep_ratio": config.compression_keep_ratio,
         "summary_max_tokens": config.summary_max_tokens,
+        "max_space_gb": config.max_space_gb,
         "memory_enabled": memory_connected,
         "integrations": integrations,
         "tool_overrides": {name: decision.value for name, decision in config.tool_overrides.items()},

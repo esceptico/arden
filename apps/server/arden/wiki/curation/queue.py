@@ -12,6 +12,11 @@ import aiosqlite
 from arden.database import connect
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS wiki_edit_curator_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS wiki_edit_curator_jobs (
     commit_id TEXT PRIMARY KEY,
     status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'done')),
@@ -169,6 +174,31 @@ class WikiEditCuratorQueueStore:
             (commit_id, now, now, now),
         )
         return cursor.rowcount == 1
+
+    async def get_reconciliation_revision(self) -> str | None:
+        rows = await self._conn.execute_fetchall(
+            "SELECT value FROM wiki_edit_curator_meta WHERE key = 'reconciliation_revision'"
+        )
+        if not rows:
+            return None
+        return _revision(rows[0]["value"])
+
+    async def record_reconciliation_revision(self, *, expected: str | None, revision: str) -> None:
+        if expected is not None:
+            expected = _revision(expected)
+        revision = _revision(revision)
+        async with self._lock:
+            current = await self.get_reconciliation_revision()
+            if current != expected:
+                raise WikiEditCuratorQueueConflictError("wiki curator reconciliation revision changed")
+            await self._conn.execute(
+                """
+                INSERT INTO wiki_edit_curator_meta(key, value)
+                VALUES('reconciliation_revision', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (revision,),
+            )
 
     async def get(self, commit_id: str) -> WikiEditCuratorJob | None:
         commit_id = _revision(commit_id)

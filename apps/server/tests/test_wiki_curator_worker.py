@@ -8,6 +8,7 @@ from arden.wiki.curation.engine import WikiEditCuratorResult
 from arden.wiki.curation.queue import (
     WikiEditCuratorJobOutcome,
     WikiEditCuratorJobStatus,
+    WikiEditCuratorQueueConflictError,
     WikiEditCuratorQueueStore,
 )
 from arden.wiki.curation.worker import SYSTEM_OWNER_ID, WikiEditCuratorWorker
@@ -82,6 +83,23 @@ async def test_queue_enqueue_is_idempotent_and_durable(tmp_path: Path) -> None:
         assert job.attempts == 0
     finally:
         await reopened.close()
+
+
+async def test_reconciliation_revision_is_durable_and_compare_and_swap(tmp_path: Path) -> None:
+    path = tmp_path / "memory.sqlite"
+    first = _commit("1")
+    second = _commit("2")
+    store = await WikiEditCuratorQueueStore.open(path)
+    try:
+        assert await store.get_reconciliation_revision() is None
+        await store.record_reconciliation_revision(expected=None, revision=first)
+        assert await store.get_reconciliation_revision() == first
+        await store.record_reconciliation_revision(expected=first, revision=second)
+        assert await store.get_reconciliation_revision() == second
+        with pytest.raises(WikiEditCuratorQueueConflictError, match="reconciliation revision changed"):
+            await store.record_reconciliation_revision(expected=first, revision=_commit("3"))
+    finally:
+        await store.close()
 
 
 async def test_worker_drains_startup_and_new_enqueues_with_system_scopes(tmp_path: Path) -> None:

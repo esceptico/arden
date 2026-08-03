@@ -32,6 +32,8 @@ from arden.server.bus import StreamRecord
 
 _logger = get_logger(__name__)
 
+_SESSION_SCHEMA_VERSION = 1
+
 LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
 # Hard bound on the string handed to the FTS5 MATCH parser. A very long query
 # makes the parser run super-linearly and peg a core for minutes WITHOUT raising
@@ -51,6 +53,11 @@ _DURABLE_TOOL_RESULT_DATA_KEYS = (
 )
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS session_store_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS areas (
     area_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -275,6 +282,11 @@ CREATE INDEX IF NOT EXISTS idx_session_events_session_seq
 CREATE INDEX IF NOT EXISTS idx_session_events_run
     ON session_events(run_id);
 
+CREATE TABLE IF NOT EXISTS session_event_retention_state (
+    session_id TEXT PRIMARY KEY,
+    writes_since_prune INTEGER NOT NULL DEFAULT 0 CHECK(writes_since_prune >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS chat_compactions (
     compaction_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -486,8 +498,6 @@ class SessionStore:
         self._background_event_lock = asyncio.Lock()
         self._session_locks_guard = asyncio.Lock()
         self._session_write_locks: dict[str, asyncio.Lock] = {}
-        # Durable-event writes per session since the last retention prune.
-        self._events_since_prune: dict[str, int] = {}
 
     async def _session_write_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
@@ -732,6 +742,12 @@ class SessionStore:
     async def init_schema(self) -> None:
         await self._pre_migrate_tool_results_schema()
         await self.conn.executescript(SCHEMA)
+        version = await self._session_schema_version()
+        if version >= _SESSION_SCHEMA_VERSION:
+            # Keep the trigger contract self-healing without repeating table
+            # scans or destructive column rewrites on every process start.
+            await self._migrate_session_messages_fts()
+            return
         for col in (
             "name TEXT",
             "archived_at TEXT",
@@ -798,7 +814,20 @@ class SessionStore:
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_chat_idempotency_expires ON chat_idempotency_keys(expires_at)"
         )
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+            (str(_SESSION_SCHEMA_VERSION),),
+        )
         await self.conn.commit()
+
+    async def _session_schema_version(self) -> int:
+        rows = await self.conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+        if not rows:
+            return 0
+        try:
+            return int(rows[0]["value"])
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("persisted session schema version is invalid") from error
 
     async def _pre_migrate_tool_results_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_results)")
@@ -820,6 +849,30 @@ class SessionStore:
             suffix += 1
 
         await self.conn.execute(f"ALTER TABLE tool_results RENAME TO {legacy_name}")
+        await self.conn.commit()
+
+    async def ensure_startup_recovery_indexes(self) -> None:
+        """Build recovery-only indexes after core API readiness."""
+
+        await self.conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_chat_runs_recovery_status
+                ON chat_runs(status)
+                WHERE status IN ('pending', 'running', 'backgrounded', 'interrupted');
+            CREATE INDEX IF NOT EXISTS idx_chat_queued_messages_recovery_status_run
+                ON chat_queued_messages(status, run_id)
+                WHERE status IN ('queued', 'failed_retryable');
+            CREATE INDEX IF NOT EXISTS idx_background_agent_runs_recovery_status
+                ON background_agent_runs(status, updated_at)
+                WHERE status IN ('running', 'activity', 'cancel_requested', 'interrupted');
+            CREATE INDEX IF NOT EXISTS idx_background_agent_runs_undelivered
+                ON background_agent_runs(ended_at)
+                WHERE completion_id IS NOT NULL AND notified_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_sessions_agent_recovery
+                ON sessions(agent_status)
+                WHERE session_type = 'agent' AND agent_status = 'running';
+            """
+        )
         await self.conn.commit()
 
     async def create_area(
@@ -1261,19 +1314,31 @@ class SessionStore:
         write path stays correct. Indexes the flattened text projection
         (search_text), not the JSON envelope.
 
-        Ordering matters: triggers are dropped before the column backfill so
-        the AFTER UPDATE trigger can't issue a 'delete' against rows that were
-        never indexed (which corrupts an external-content index). The index is
-        rebuilt from content after, and a corrupt pre-existing index is healed
-        rather than crashing boot."""
-        # 1. Ensure the search_text column (CREATE TABLE only adds it fresh).
+        Healthy databases take only catalog reads plus idempotent trigger DDL.
+        Large legacy backfills and removal of the briefly-shipped
+        ``file_search_text`` column belong to explicit offline maintenance."""
         cols = await self.conn.execute_fetchall("PRAGMA table_info(session_messages)")
-        if "search_text" not in {c["name"] for c in cols}:
+        added_search_text = "search_text" not in {c["name"] for c in cols}
+        if added_search_text:
             await self.conn.execute("ALTER TABLE session_messages ADD COLUMN search_text TEXT")
             await self.conn.commit()
 
-        # 2. Drop sync triggers so the backfill below runs without touching a
-        #    half-built or corrupt FTS index.
+        existed = bool(
+            await self.conn.execute_fetchall(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_messages_fts'"
+            )
+        )
+        trigger_rows = await self.conn.execute_fetchall(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'session_messages_a_'"
+        )
+        canonical_triggers = len(trigger_rows) == 3 and all(
+            "search_text" in (row["sql"] or "") and "file_search_text" not in (row["sql"] or "") for row in trigger_rows
+        )
+        if existed and canonical_triggers and not added_search_text:
+            return
+
+        # Replacing trigger definitions is O(1) and repairs the briefly-shipped
+        # file_search_text trigger bug without rewriting the large content table.
         await self.conn.executescript(
             """
             DROP TRIGGER IF EXISTS session_messages_ai;
@@ -1283,48 +1348,7 @@ class SessionStore:
         )
         await self.conn.commit()
 
-        # A briefly-shipped rename (2026-08-03) mistook this column for the
-        # file_search_text tool and left a stray column plus triggers pointing
-        # at it on any database that booted that build. Triggers are already
-        # dropped above; remove the stray column so the schema is canonical.
-        if "file_search_text" in {c["name"] for c in cols}:
-            await self.conn.execute("ALTER TABLE session_messages DROP COLUMN file_search_text")
-            await self.conn.commit()
-
-        # 3. Backfill flattened text for legacy rows (no triggers active).
-        legacy = await self.conn.execute_fetchall(
-            "SELECT rowid, message_json FROM session_messages WHERE search_text IS NULL"
-        )
-        for row in legacy:
-            try:
-                msg = json.loads(row["message_json"])
-            except Exception:
-                msg = {}
-            await self.conn.execute(
-                "UPDATE session_messages SET search_text = ? WHERE rowid = ?",
-                (self._flatten_message_text(msg), row["rowid"]),
-            )
-        if legacy:
-            await self.conn.commit()
-
-        # 4. Create the FTS table if absent; heal it if a prior run left it
-        #    corrupt. Either path rebuilds from content.
-        existed = bool(
-            await self.conn.execute_fetchall(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_messages_fts'"
-            )
-        )
-        needs_rebuild = bool(legacy) or not existed
-        if existed:
-            try:
-                await self.conn.execute(
-                    "INSERT INTO session_messages_fts(session_messages_fts) VALUES('integrity-check')"
-                )
-            except Exception:
-                await self.conn.execute("DROP TABLE IF EXISTS session_messages_fts")
-                await self.conn.commit()
-                existed = False
-                needs_rebuild = True
+        needs_rebuild = not existed
         if not existed:
             await self.conn.execute(
                 """
@@ -1336,7 +1360,19 @@ class SessionStore:
                 """
             )
 
-        # 5. Recreate triggers, then rebuild the index from content if needed.
+        if needs_rebuild:
+            legacy = await self.conn.execute_fetchall(
+                "SELECT rowid, message_json FROM session_messages WHERE search_text IS NULL"
+            )
+            for row in legacy:
+                try:
+                    msg = json.loads(row["message_json"])
+                except Exception:
+                    msg = {}
+                await self.conn.execute(
+                    "UPDATE session_messages SET search_text = ? WHERE rowid = ?",
+                    (self._flatten_message_text(msg), row["rowid"]),
+                )
         await self.conn.executescript(self._FTS_TRIGGERS)
         if needs_rebuild:
             await self.conn.execute("INSERT INTO session_messages_fts(session_messages_fts) VALUES('rebuild')")
@@ -2490,6 +2526,10 @@ class SessionStore:
         content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
         return self._tool_result_payload(row, content=content)
 
+    async def list_tool_result_content_hashes(self) -> set[str]:
+        rows = await self.read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
+        return {row["content_sha256"] for row in rows}
+
     async def get_tool_result_for_call(self, *, run_id: str, tool_call_id: str) -> dict | None:
         rows = await self.read_conn.execute_fetchall(
             """
@@ -3496,18 +3536,28 @@ class SessionStore:
             """,
             rows,
         )
+        await self.conn.executemany(
+            """
+            INSERT INTO session_event_retention_state(session_id, writes_since_prune)
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                writes_since_prune = writes_since_prune + excluded.writes_since_prune
+            """,
+            tuple(per_session.items()),
+        )
         await self.conn.commit()
 
-        # Amortized retention: cap each session's durable event log to the
-        # newest N rows. Trimming the oldest never touches an active run's
-        # tail (its events are the newest), so no checkpoint guard is needed.
-        for session_id, n in per_session.items():
-            count = self._events_since_prune.get(session_id, 0) + n
-            if count >= SESSION_EVENT_PRUNE_INTERVAL:
-                self._events_since_prune[session_id] = 0
-                await self.prune_session_events(session_id, SESSION_EVENT_DURABLE_RETENTION)
-            else:
-                self._events_since_prune[session_id] = count
+        due = await self.read_conn.execute_fetchall(
+            f"""
+            SELECT session_id
+            FROM session_event_retention_state
+            WHERE session_id IN ({",".join("?" for _ in per_session)})
+              AND writes_since_prune >= ?
+            """,
+            (*per_session, SESSION_EVENT_PRUNE_INTERVAL),
+        )
+        for row in due:
+            await self.prune_session_events(row["session_id"], SESSION_EVENT_DURABLE_RETENTION)
 
     async def prune_session_events(self, session_id: str, keep: int = SESSION_EVENT_DURABLE_RETENTION) -> int:
         """Keep only the newest `keep` durable events for a session, deleting
@@ -3527,8 +3577,33 @@ class SessionStore:
             """,
             (session_id, session_id, keep),
         )
+        await self.conn.execute(
+            """
+            INSERT INTO session_event_retention_state(session_id, writes_since_prune)
+            VALUES (?, 0)
+            ON CONFLICT(session_id) DO UPDATE SET writes_since_prune = 0
+            """,
+            (session_id,),
+        )
         await self.conn.commit()
         return cursor.rowcount
+
+    async def reconcile_due_session_event_retention(self) -> int:
+        """Resume persisted amortized retention after a process restart."""
+
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT session_id
+            FROM session_event_retention_state
+            WHERE writes_since_prune >= ?
+            ORDER BY session_id
+            """,
+            (SESSION_EVENT_PRUNE_INTERVAL,),
+        )
+        deleted = 0
+        for row in rows:
+            deleted += await self.prune_session_events(row["session_id"], SESSION_EVENT_DURABLE_RETENTION)
+        return deleted
 
     async def list_session_events(
         self,

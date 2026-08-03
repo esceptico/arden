@@ -59,6 +59,7 @@ export async function refresh(): Promise<void> {
       throw new Error(health.version ? "Invalid API key" : "Could not reach Arden server");
     }
     s.setConnected(true);
+    s.setServerWarmup(health.warmup);
     s.setError(null);
 
     const [areas, sessions] = await Promise.all([
@@ -80,7 +81,17 @@ export async function refresh(): Promise<void> {
 }
 
 export async function pollServerConnectionOnce(refreshFn: () => Promise<void> = refresh): Promise<void> {
-  if (getState().connected) return;
+  const state = getState();
+  if (state.connected && ["pending", "running"].includes(state.serverWarmup?.status ?? "")) {
+    const health = await checkHealth(state.config);
+    if (!health.ok) {
+      state.setConnected(false);
+      return;
+    }
+    state.setServerWarmup(health.warmup);
+    return;
+  }
+  if (state.connected) return;
   await refreshFn();
 }
 

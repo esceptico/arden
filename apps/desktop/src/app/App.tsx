@@ -139,6 +139,8 @@ export function App() {
   usePreloadTakeovers();
   const hash = useHash();
   const currentSessionId = useStore((s) => s.currentSessionId);
+  const connected = useStore((s) => s.connected);
+  const serverWarmup = useStore((s) => s.serverWarmup);
   const sidebarHidden = useStore((s) => s.prefs.sidebarHidden);
   const rightPanelCollapsed = useStore((s) => s.prefs.rightPanelCollapsed);
   const rightPanelDocked = useStore((s) => s.prefs.rightPanelDocked);
@@ -407,6 +409,16 @@ export function App() {
         />
       )}
       {!settingsOpen && <ShellNav />}
+      {connected && serverWarmup && serverWarmup.status !== "ready" && (
+        <div
+          className="pointer-events-none fixed left-1/2 top-3 z-[var(--z-toast)] -translate-x-1/2 rounded-full border border-line-soft bg-surface/95 px-3 py-1.5 text-xs text-muted shadow-sm backdrop-blur"
+          role={serverWarmup.status === "error" ? "alert" : "status"}
+        >
+          {serverWarmup.status === "error"
+            ? "Arden is online, but background warmup needs attention."
+            : `Arden is online · warming up ${serverWarmup.phase?.replaceAll("_", " ") ?? "background services"}`}
+        </div>
+      )}
       <ErrorBoundary>
         <main
           data-workspace={workspaceKind}

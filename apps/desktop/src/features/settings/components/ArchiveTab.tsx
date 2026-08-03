@@ -12,14 +12,56 @@ import { ICON } from "@/lib/icons";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { SettingsSection, SettingsSurface } from "@/features/settings/components/SettingsPage";
+import { Button } from "@/components/ui/Button";
+import { getStorageStatusApi, maintainStorageApi } from "@/api/settings";
+import type { StorageStatus } from "@/api/types";
+import { updateServerConfig } from "@/actions/server";
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
 
 export function ArchiveTab() {
   const archived = useStore((s) => s.archivedSessions);
+  const config = useStore((s) => s.config);
+  const serverConfig = useStore((s) => s.serverConfig);
   const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(serverConfig?.max_space_gb?.toString() ?? "");
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchArchivedSessions();
   }, []);
+
+  useEffect(() => {
+    void getStorageStatusApi(config).then(setStorage).catch(() => {});
+  }, [config]);
+
+  useEffect(() => {
+    setLimit(serverConfig?.max_space_gb?.toString() ?? "");
+  }, [serverConfig?.max_space_gb]);
+
+  const saveLimit = async () => {
+    const parsed = limit.trim() === "" ? null : Number(limit);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0.1)) {
+      setStorageError("Enter at least 0.1 GB, or leave blank for no limit.");
+      return;
+    }
+    setStorageBusy(true);
+    setStorageError(null);
+    try {
+      await updateServerConfig({ max_space_gb: parsed });
+      setStorage(await maintainStorageApi(config));
+    } catch (cause) {
+      setStorageError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setStorageBusy(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     if (!archived) return null;
@@ -32,6 +74,35 @@ export function ArchiveTab() {
 
   return (
     <>
+      <SettingsSection title="Storage budget" detail={storage ? formatBytes(storage.total_bytes) : "measuring"}>
+        <SettingsSurface className="p-3.5">
+          <div className="flex items-end gap-3">
+            <label className="min-w-0 flex-1 text-xs text-muted">
+              Maximum Arden space (GB)
+              <input
+                className="mt-1 h-9 w-full rounded-[var(--r-control)] border border-line-soft bg-surface px-2.5 text-sm text-ink outline-none focus:border-line-strong"
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={limit}
+                placeholder="No limit"
+                onChange={(event) => setLimit(event.target.value)}
+              />
+            </label>
+            <Button size="sm" disabled={storageBusy} onClick={() => void saveLimit()}>
+              {storageBusy ? "Checking…" : "Save"}
+            </Button>
+          </div>
+          {storage && (
+            <p className="mt-2 text-xs text-faint">
+              {formatBytes(storage.protected_bytes)} protected · {formatBytes(storage.reclaimable_bytes)} reclaimable
+              {storage.status === "quota_blocked" ? " · quota blocked by protected data" : ""}
+            </p>
+          )}
+          {storageError && <p role="alert" className="mt-2 text-xs text-bad">{storageError}</p>}
+        </SettingsSurface>
+      </SettingsSection>
+
       {archivedCount > 0 && (
         <div className="settings-list-toolbar">
           <SearchInput

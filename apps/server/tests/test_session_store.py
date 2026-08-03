@@ -2155,6 +2155,46 @@ async def test_prune_session_events_noop_when_under_cap(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_event_retention_counter_survives_restart(tmp_path: Path, monkeypatch):
+    import arden.context.store as store_module
+
+    monkeypatch.setattr(store_module, "SESSION_EVENT_PRUNE_INTERVAL", 3)
+    monkeypatch.setattr(store_module, "SESSION_EVENT_DURABLE_RETENTION", 2)
+    db = tmp_path / "retention.db"
+
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    first = SessionStore(conn, read_conn)
+    await first.init_schema()
+    for seq in (1, 2):
+        await first.record_session_event(
+            StreamRecord(seq=seq, session_id="restart-session", event=ThinkingEvent(status=f"s{seq}"))
+        )
+    await read_conn.close()
+    await conn.close()
+
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    restarted = SessionStore(conn, read_conn)
+    await restarted.init_schema()
+    await restarted.record_session_event(
+        StreamRecord(seq=3, session_id="restart-session", event=ThinkingEvent(status="s3"))
+    )
+
+    rows = await read_conn.execute_fetchall(
+        "SELECT seq FROM session_events WHERE session_id = 'restart-session' ORDER BY seq"
+    )
+    assert [row["seq"] for row in rows] == [2, 3]
+    state = await read_conn.execute_fetchall(
+        "SELECT writes_since_prune FROM session_event_retention_state WHERE session_id = 'restart-session'"
+    )
+    assert state[0]["writes_since_prune"] == 0
+
+    await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_latest_session_messages_expand_past_meta_only_turns(store: SessionStore):
     # Channel / automation sessions drive their turns with meta user messages
     # (loop:/bg:/goal:), so a tool-heavy active run leaves the newest window

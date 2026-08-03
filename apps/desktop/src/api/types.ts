@@ -133,9 +133,22 @@ export interface ServerConfig {
   max_messages: number;
   compression_keep_ratio: number;
   summary_max_tokens: number;
+  max_space_gb: number | null;
   memory_enabled: boolean;
   integrations: Record<string, Record<string, unknown>>;
   tool_overrides: Record<string, ToolOverrideDecision>;
+}
+
+export interface StorageStatus {
+  status: "pending" | "disabled" | "ok" | "reclaimed" | "quota_blocked" | "error";
+  total_bytes: number;
+  reclaimable_bytes: number;
+  protected_bytes: number;
+  reclaimed_bytes: number;
+  max_bytes: number | null;
+  target_bytes: number | null;
+  checked_at: string | null;
+  error?: string | null;
 }
 
 export interface RoleModelSetup {

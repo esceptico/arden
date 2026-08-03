@@ -251,6 +251,7 @@ export const useStore = create<State & Actions>((set) => ({
   unreadDoneSessionIds: new Set(),
   sessionCache: new Map(),
   connected: false,
+  serverWarmup: null,
   running: false,
   error: null,
   draft: "",
@@ -589,6 +590,7 @@ export const useStore = create<State & Actions>((set) => ({
     }),
 
   setConnected: (connected) => set({ connected }),
+  setServerWarmup: (serverWarmup) => set({ serverWarmup }),
   setError: (error) => set({ error }),
   setDraft: (draft) => set({ draft }),
   setEditingId: (editingId) => set({ editingId }),

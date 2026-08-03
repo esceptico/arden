@@ -217,7 +217,19 @@ async def test_backfill_indexes_preexisting_messages(tmp_path: Path):
     await conn.commit()
     assert len((await store.search_messages("backfill"))["hits"]) == 0
 
-    await store.init_schema()  # backfills search_text + rebuilds the index
+    # Model a pre-versioned database that never had the transcript FTS
+    # projection. Versioned healthy databases intentionally do not rescan all
+    # messages on every startup.
+    await conn.executescript(
+        """
+        DELETE FROM session_store_meta WHERE key = 'schema_version';
+        DROP TRIGGER IF EXISTS session_messages_ai;
+        DROP TRIGGER IF EXISTS session_messages_ad;
+        DROP TRIGGER IF EXISTS session_messages_au;
+        DROP TABLE session_messages_fts;
+        """
+    )
+    await store.init_schema()  # backfills search_text + builds the missing index
     res = await store.search_messages("backfill")
     assert len(res["hits"]) == 1
     assert res["hits"][0]["session_id"] == "s1"
@@ -244,7 +256,17 @@ async def test_migration_survives_legacy_rows_with_triggers_active(tmp_path: Pat
     await conn.execute("UPDATE session_messages SET search_text = NULL")
     await conn.commit()
 
-    # Two consecutive migrations must both succeed (idempotent + no corruption).
+    await conn.executescript(
+        """
+        DELETE FROM session_store_meta WHERE key = 'schema_version';
+        DROP TRIGGER IF EXISTS session_messages_ai;
+        DROP TRIGGER IF EXISTS session_messages_ad;
+        DROP TRIGGER IF EXISTS session_messages_au;
+        DROP TABLE session_messages_fts;
+        """
+    )
+
+    # The legacy migration succeeds; the next versioned startup is O(1).
     await store.init_schema()
     await store.init_schema()
 
@@ -264,8 +286,9 @@ async def test_migration_heals_stray_file_search_text_column(tmp_path: Path):
     """Regression for the briefly-shipped 2026-08-03 rename that mistook the
     search_text column for the file_search_text tool. A database that booted
     that build has a stray file_search_text column and FTS triggers pointing
-    at it, so every message write failed. Booting the fixed build must drop
-    the stray column, restore correct triggers, and accept writes again."""
+    at it, so every message write failed. Booting the fixed build repairs the
+    triggers without rewriting the large table; offline maintenance may remove
+    the harmless legacy column later."""
     db = tmp_path / "damaged.db"
     conn = await database.connect(db)
     read_conn = await database.connect(db, readonly=True)
@@ -292,9 +315,35 @@ async def test_migration_heals_stray_file_search_text_column(tmp_path: Path):
     await store.init_schema()
 
     cols = {c["name"] for c in await conn.execute_fetchall("PRAGMA table_info(session_messages)")}
-    assert "file_search_text" not in cols
+    assert "file_search_text" in cols
+    triggers = await conn.execute_fetchall(
+        "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'session_messages_a_'"
+    )
+    assert len(triggers) == 3
+    assert all("file_search_text" not in row["sql"] for row in triggers)
     await _seed(store, "s2", ["post-heal token"])
     assert len((await store.search_messages("post-heal"))["hits"]) == 1
+
+    await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_versioned_startup_skips_legacy_table_migrations(tmp_path: Path, monkeypatch):
+    db = tmp_path / "versioned.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    store = SessionStore(conn, read_conn)
+    await store.init_schema()
+
+    async def unexpected() -> None:
+        raise AssertionError("versioned startup repeated a legacy migration")
+
+    monkeypatch.setattr(store, "_migrate_tool_calls_schema", unexpected)
+    monkeypatch.setattr(store, "_migrate_background_agent_runs_schema", unexpected)
+    monkeypatch.setattr(store, "_migrate_drop_command_sidecar_sessions", unexpected)
+
+    await store.init_schema()
 
     await read_conn.close()
     await conn.close()

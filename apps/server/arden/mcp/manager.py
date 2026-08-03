@@ -1,3 +1,5 @@
+import asyncio
+
 from arden.integrations.base import IntegrationHealth, ToolProviderStatus
 from arden.logging import get_logger
 from arden.mcp.errors import describe_mcp_error
@@ -52,6 +54,12 @@ class MCPManager:
                         )
                     )
                 _logger.info("MCP server %r connected", name, tools=len(session.tools))
+            except asyncio.CancelledError:
+                try:
+                    await session.close()
+                except BaseException:
+                    pass
+                raise
             except BaseException as e:
                 detail = describe_mcp_error(e)
                 _logger.warning("Failed to connect MCP server %r: %s", name, detail)

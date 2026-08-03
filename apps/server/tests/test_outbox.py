@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -63,6 +64,15 @@ async def test_enqueue_run_completed_is_idempotent_and_claims_payload(outbox_sto
 
     await outbox_store.mark_completed(claimed[0].id)
     assert await outbox_store.claim_batch(worker_id="test-worker", limit=10) == []
+    rows = await outbox_store.conn.execute_fetchall(
+        "SELECT payload, receipt_at FROM outbox_events WHERE id = ?",
+        (claimed[0].id,),
+    )
+    receipt = json.loads(rows[0]["payload"])
+    assert receipt["receipt_version"] == 1
+    assert receipt["payload_bytes"] > 0
+    assert len(receipt["payload_sha256"]) == 64
+    assert rows[0]["receipt_at"] is not None
 
 
 @pytest.mark.asyncio
@@ -247,6 +257,31 @@ async def test_prune_completed_deletes_only_old_completed_rows_up_to_limit(outbo
     assert await outbox_store.prune_completed(before=cutoff, limit=10) == 1
     rows = await outbox_store.conn.execute_fetchall("SELECT aggregate_id FROM outbox_events ORDER BY aggregate_id")
     assert [row["aggregate_id"] for row in rows] == ["new-1"]
+
+
+@pytest.mark.asyncio
+async def test_compact_completed_payloads_backfills_legacy_rows_only(outbox_store: OutboxStore):
+    await outbox_store.enqueue_run_completed(_run_completed("completed"))
+    completed = (await outbox_store.claim_batch(worker_id="test-worker", limit=1))[0]
+    await outbox_store.conn.execute(
+        "UPDATE outbox_events SET status = 'completed', locked_at = NULL, locked_by = NULL WHERE id = ?",
+        (completed.id,),
+    )
+    await outbox_store.enqueue_run_completed(_run_completed("dead"))
+    dead = (await outbox_store.claim_batch(worker_id="test-worker", limit=1))[0]
+    await outbox_store.mark_failed(dead.id, error="keep me", retry_at=None, dead=True)
+    await outbox_store.conn.commit()
+
+    assert await outbox_store.compact_completed_payloads(limit=10) == 1
+
+    rows = await outbox_store.conn.execute_fetchall(
+        "SELECT aggregate_id, payload, receipt_at FROM outbox_events ORDER BY aggregate_id"
+    )
+    completed_row, dead_row = rows
+    assert json.loads(completed_row["payload"])["receipt_version"] == 1
+    assert completed_row["receipt_at"] is not None
+    assert "messages" in json.loads(dead_row["payload"])
+    assert dead_row["receipt_at"] is None
 
 
 @pytest.mark.asyncio

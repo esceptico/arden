@@ -126,7 +126,18 @@ class OutboxWorker:
             return
         self._next_prune_at = now + timedelta(seconds=self.prune_interval_seconds)
 
-        if self.completed_retention_days <= 0 or self.prune_batch_size <= 0:
+        if self.prune_batch_size <= 0:
+            return
+
+        try:
+            compacted = await self.store.compact_completed_payloads(limit=self.prune_batch_size)
+        except Exception:
+            _logger.exception("Failed to compact completed outbox payloads")
+        else:
+            if compacted:
+                _logger.info("Compacted completed outbox payloads", count=compacted)
+
+        if self.completed_retention_days <= 0:
             return
 
         cutoff = now - timedelta(days=self.completed_retention_days)

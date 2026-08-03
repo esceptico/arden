@@ -114,6 +114,7 @@ PERSIST_KEYS = frozenset(
         "max_messages",
         "compression_keep_ratio",
         "summary_max_tokens",
+        "max_space_gb",
         "mcp_servers",
         "tool_overrides",
         "agent_max_iterations",
@@ -213,6 +214,9 @@ class Config(BaseSettings):
     # Server
     host: str = "127.0.0.1"
     port: int = 6877
+
+    # Managed storage. None reports usage without enforcing a quota.
+    max_space_gb: float | None = Field(default=None, ge=0.1)
 
     # API authentication
     api_key_hash: str | None = None

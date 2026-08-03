@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException, Request
@@ -58,12 +58,14 @@ from arden.server.indexer import IndexProgress, IndexStatus
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.knowledge import KnowledgeRuntime
+from arden.server.startup import startup_phase
 from arden.server.state import RunRegistry
 from arden.server.stores import Stores
 from arden.server.wiki_health import dangling_fact_citation_issues
 from arden.services.session import SessionService
 from arden.skills.registry import SkillMeta, SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
+from arden.storage_budget import enforce_storage_budget
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki.approval_store import WikiRenameApprovalStore
@@ -162,6 +164,29 @@ class Runtime:
 
         self._connected = False
         self._closing = False
+        self._warmup_status = "pending"
+        self._warmup_phase: str | None = None
+        self._warmup_error: str | None = None
+        self._warmup_capabilities = {
+            "core": False,
+            "model_catalog": False,
+            "mcp": False,
+            "search": False,
+            "wiki_health": False,
+            "automations": False,
+            "storage": False,
+        }
+        self._storage_maintenance_task: asyncio.Task[None] | None = None
+        self._storage_status: dict = {
+            "status": "pending",
+            "total_bytes": 0,
+            "reclaimable_bytes": 0,
+            "protected_bytes": 0,
+            "reclaimed_bytes": 0,
+            "max_bytes": None,
+            "target_bytes": None,
+            "checked_at": None,
+        }
         self._index_lock = asyncio.Lock()
         self._index_task: asyncio.Task[None] | None = None
         self._index_progress = IndexProgress(status=IndexStatus.PENDING)
@@ -192,6 +217,41 @@ class Runtime:
 
     def config_status(self) -> dict[str, int | str]:
         return self.config_runtime.status()
+
+    def warmup_status(self) -> dict:
+        return {
+            "status": self._warmup_status,
+            "phase": self._warmup_phase,
+            "error": self._warmup_error,
+            "capabilities": dict(self._warmup_capabilities),
+        }
+
+    def storage_status(self) -> dict:
+        return dict(self._storage_status)
+
+    def begin_warmup(self) -> None:
+        self._warmup_status = "running"
+        self._warmup_phase = "starting"
+        self._warmup_error = None
+
+    def set_warmup_phase(self, phase: str) -> None:
+        self._warmup_phase = phase
+
+    def set_warmup_capability(self, capability: str, ready: bool = True) -> None:
+        self._warmup_capabilities[capability] = ready
+
+    def complete_warmup(self) -> None:
+        self._warmup_status = "ready"
+        self._warmup_phase = None
+        self._warmup_error = None
+
+    def fail_warmup(self, error: BaseException) -> None:
+        self._warmup_status = "error"
+        self._warmup_phase = None
+        self._warmup_error = f"{type(error).__name__}: {error}"
+
+    def _set_warmup_capability(self, capability: str, ready: bool = True) -> None:
+        self.set_warmup_capability(capability, ready)
 
     def auxiliary_completion(self) -> tuple[CompletionClient, str, str | None]:
         model = self.config.auxiliary_model
@@ -467,99 +527,119 @@ class Runtime:
 
     # --- Connect / close ---
 
-    async def connect(self) -> None:
+    async def connect(self, *, defer_warmup: bool = False) -> None:
         if self._connected:
             return
 
-        fact_ledger = FactLedger(self.config.memory_artifacts_dir / "facts") if self.config.memory else None
-        init_tracing()
-        llm_init(self.config)
-        self.stores = await Stores.connect(self.config)
-        self.executor_gateway = ExecutorGateway(
-            self.stores.executor_devices,
-            self.stores.executor_leases,
-            self.stores.executor_commands,
-            self.stores.invocations,
-        )
-        await self.executor_gateway.reconcile_open_invocations()
-        if self.config.memory:
-            await self._init_wiki()
-        await self._init_facts(fact_ledger)
-        await self._init_wiki_curator()
-        await self.knowledge.connect(self.stores)
-        rebuild_pending = (
-            self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
-        )
-        if self.fact_service is not None:
-            fact_projection = FactIndexProjection(self.fact_service, lambda: self.search_index)
-            self.fact_index_projection = fact_projection
-            if not rebuild_pending:
-                try:
-                    await fact_projection.sync(raise_on_error=self.config.embedding is not None)
-                except Exception:
-                    _logger.warning("initial fact index sync failed", exc_info=True)
-        if self.fact_service is not None and self.wiki_service is not None:
-            projection = WikiPageIndexProjection(
-                self.wiki_service,
-                lambda: self.search_index,
-                self.fact_service.revision,
-                on_state_change=lambda _state: self.project_wiki_health(),
+        with startup_phase(_logger, "runtime.tracing_llm"):
+            fact_ledger = FactLedger(self.config.memory_artifacts_dir / "facts") if self.config.memory else None
+            init_tracing()
+            llm_init(self.config)
+
+        with startup_phase(_logger, "runtime.stores_schema"):
+            self.stores = await Stores.connect(self.config, defer_recovery=defer_warmup)
+
+        with startup_phase(_logger, "runtime.invocation_recovery"):
+            self.executor_gateway = ExecutorGateway(
+                self.stores.executor_devices,
+                self.stores.executor_leases,
+                self.stores.executor_commands,
+                self.stores.invocations,
             )
-            self.wiki_page_projection = projection
-            self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
-            if not rebuild_pending:
-                try:
-                    await projection.sync(raise_on_error=self.config.embedding is not None)
-                except Exception:
-                    _logger.warning("initial wiki index sync failed", exc_info=True)
-        if self.config.embedding is None:
-            self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
-        elif rebuild_pending:
-            self._index_progress = IndexProgress(status=IndexStatus.PENDING)
-        elif self.indexer.vector_enabled:
-            failed_projection = next(
-                (
-                    projection.last_state
-                    for projection in (self.fact_index_projection, self.wiki_page_projection)
-                    if projection is not None and projection.last_state.status != "ready"
-                ),
-                None,
+            await self.executor_gateway.reconcile_open_invocations()
+
+        with startup_phase(_logger, "runtime.wiki_facts"):
+            if self.config.memory:
+                await self._init_wiki()
+            await self._init_facts(fact_ledger)
+            await self._init_wiki_curator(reconcile_history=not defer_warmup)
+            await self.knowledge.connect(self.stores)
+
+        with startup_phase(_logger, "runtime.index_sync"):
+            rebuild_pending = (
+                self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
             )
-            if failed_projection is None:
-                self._index_progress = IndexProgress(status=IndexStatus.DONE)
+            if self.fact_service is not None:
+                fact_projection = FactIndexProjection(self.fact_service, lambda: self.search_index)
+                self.fact_index_projection = fact_projection
+                if not rebuild_pending and not defer_warmup:
+                    try:
+                        await fact_projection.sync(raise_on_error=self.config.embedding is not None)
+                    except Exception:
+                        _logger.warning("initial fact index sync failed", exc_info=True)
+            if self.fact_service is not None and self.wiki_service is not None:
+                projection = WikiPageIndexProjection(
+                    self.wiki_service,
+                    lambda: self.search_index,
+                    self.fact_service.revision,
+                    on_state_change=lambda _state: self.project_wiki_health(),
+                )
+                self.wiki_page_projection = projection
+                self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
+                if not rebuild_pending and not defer_warmup:
+                    try:
+                        await projection.sync(raise_on_error=self.config.embedding is not None)
+                    except Exception:
+                        _logger.warning("initial wiki index sync failed", exc_info=True)
+            if defer_warmup:
+                self._index_progress = IndexProgress(status=IndexStatus.PENDING)
+            elif self.config.embedding is None:
+                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
+            elif rebuild_pending:
+                self._index_progress = IndexProgress(status=IndexStatus.PENDING)
+            elif self.indexer.vector_enabled:
+                failed_projection = next(
+                    (
+                        projection.last_state
+                        for projection in (self.fact_index_projection, self.wiki_page_projection)
+                        if projection is not None and projection.last_state.status != "ready"
+                    ),
+                    None,
+                )
+                if failed_projection is None:
+                    self._index_progress = IndexProgress(status=IndexStatus.DONE)
+                else:
+                    self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                    self._index_error = failed_projection.detail or "Initial index rebuild did not complete"
             else:
                 self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                self._index_error = failed_projection.detail or "Initial index rebuild did not complete"
-        else:
-            self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-            self._index_error = "Vector index is unavailable; full-text search remains available"
-        if self._wiki_maintenance_store is not None:
-            self._wiki_change_head = await self._wiki_maintenance_store.get_projection_revision()
-        self._init_skills()
-        if self.stores:
-            await self.hydrate_device_skills()
-        await self._init_notifiers()
-        self._init_automation()
-        await self.project_wiki_health()
-        if (
-            self.wiki_service is not None
-            and self._wiki_maintenance_store is not None
-            and self._wiki_change_head is None
-            and self.wiki_service.repository.head is not None
-        ):
-            self._wiki_change_head = self.wiki_service.repository.head
-            await self._wiki_maintenance_store.record_projection_revision(
-                expected_revision=None,
-                revision=self._wiki_change_head,
-            )
-        await self._init_mcp()
-        self._init_tools()
-        if self.wiki_curator_worker is not None:
-            self.wiki_curator_worker.start()
+                self._index_error = "Vector index is unavailable; full-text search remains available"
+            if self._wiki_maintenance_store is not None:
+                self._wiki_change_head = await self._wiki_maintenance_store.get_projection_revision()
+
+        with startup_phase(_logger, "runtime.skills"):
+            self._init_skills()
+            if self.stores:
+                await self.hydrate_device_skills()
+
+        with startup_phase(_logger, "runtime.notifiers_automation"):
+            await self._init_notifiers()
+            self._init_automation()
+
+        if not defer_warmup:
+            with startup_phase(_logger, "runtime.wiki_health"):
+                await self._project_initial_wiki_health()
+
+        with startup_phase(_logger, "runtime.mcp_tools"):
+            if not defer_warmup:
+                await self._init_mcp()
+            self._init_tools()
+            if not defer_warmup:
+                self._set_warmup_capability("mcp")
+
+        if not defer_warmup:
+            with startup_phase(_logger, "runtime.workers"):
+                if self.wiki_curator_worker is not None:
+                    self.wiki_curator_worker.start()
 
         self._connected = True
-        if rebuild_pending:
-            await self.start_indexing()
+        self._set_warmup_capability("core")
+        with startup_phase(_logger, "runtime.index_rebuild_start"):
+            if rebuild_pending and not defer_warmup:
+                await self.start_indexing()
+        if not defer_warmup:
+            self._set_warmup_capability("search")
+            self._set_warmup_capability("wiki_health")
         _logger.info(
             "Runtime ready",
             integrations=len(self.integrations.clients),
@@ -638,16 +718,14 @@ class Runtime:
         self.fact_service = FactService(ledger, plans, post_commit=self._after_fact_commit)
         self.knowledge.set_fact_service(self.fact_service)
 
-    async def _init_wiki_curator(self) -> None:
+    async def _init_wiki_curator(self, *, reconcile_history: bool = True) -> None:
         if self.fact_service is None or self.wiki_service is None:
             return
         store = await WikiEditCuratorQueueStore.open(self.config.memory_db_path)
         self._wiki_curator_store = store
         try:
-            commits = await asyncio.to_thread(self.wiki_service.repository.history)
-            for commit in reversed(commits):
-                if (commit.actor, commit.origin) == ("user:desktop", "desktop"):
-                    await store.enqueue(commit.commit_id)
+            if reconcile_history:
+                await self._reconcile_wiki_curator_history()
 
             model = self.config.memory_model
             if not model:
@@ -666,6 +744,155 @@ class Runtime:
             await store.close()
             self._wiki_curator_store = None
             raise
+
+    async def _reconcile_wiki_curator_history(self) -> None:
+        if self._wiki_curator_store is None or self.wiki_service is None:
+            return
+        watermark = await self._wiki_curator_store.get_reconciliation_revision()
+        expected_watermark = watermark
+        head = self.wiki_service.repository.head
+        if head is None or head == watermark:
+            return
+        try:
+            commits = await asyncio.to_thread(
+                self.wiki_service.repository.history,
+                start=head,
+                stop_before=watermark,
+            )
+        except KeyError:
+            _logger.warning("wiki curator watermark is unreachable; replaying reachable history", watermark=watermark)
+            commits = await asyncio.to_thread(self.wiki_service.repository.history, start=head)
+        for commit in reversed(commits):
+            if (commit.actor, commit.origin) == ("user:desktop", "desktop"):
+                await self._wiki_curator_store.enqueue(commit.commit_id)
+        await self._wiki_curator_store.record_reconciliation_revision(expected=expected_watermark, revision=head)
+
+    async def _project_initial_wiki_health(self) -> None:
+        await self.project_wiki_health()
+        if (
+            self.wiki_service is not None
+            and self._wiki_maintenance_store is not None
+            and self._wiki_change_head is None
+            and self.wiki_service.repository.head is not None
+        ):
+            self._wiki_change_head = self.wiki_service.repository.head
+            await self._wiki_maintenance_store.record_projection_revision(
+                expected_revision=None,
+                revision=self._wiki_change_head,
+            )
+
+    async def complete_deferred_runtime_warmup(self) -> None:
+        """Finish rebuildable initialization after the API is already live."""
+
+        self.set_warmup_phase("runtime.interrupted_state_recovery")
+        with startup_phase(_logger, "warmup.runtime.interrupted_state_recovery"):
+            await self.stores.reconcile_interrupted_state()
+
+        self.set_warmup_phase("runtime.curator_reconciliation")
+        with startup_phase(_logger, "warmup.runtime.curator_reconciliation"):
+            await self._reconcile_wiki_curator_history()
+
+        rebuild_pending = (
+            self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
+        )
+        self.set_warmup_phase("runtime.index_sync")
+        with startup_phase(_logger, "warmup.runtime.index_sync"):
+            if rebuild_pending:
+                self._index_progress = IndexProgress(status=IndexStatus.PENDING)
+            else:
+                for projection, label in (
+                    (self.fact_index_projection, "fact"),
+                    (self.wiki_page_projection, "wiki"),
+                ):
+                    if projection is None:
+                        continue
+                    try:
+                        await projection.sync(raise_on_error=self.config.embedding is not None)
+                    except Exception:
+                        _logger.warning("initial %s index sync failed", label, exc_info=True)
+                if self.config.embedding is None:
+                    self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
+                elif self.indexer.vector_enabled:
+                    failed_projection = next(
+                        (
+                            projection.last_state
+                            for projection in (self.fact_index_projection, self.wiki_page_projection)
+                            if projection is not None and projection.last_state.status != "ready"
+                        ),
+                        None,
+                    )
+                    if failed_projection is None:
+                        self._index_progress = IndexProgress(status=IndexStatus.DONE)
+                    else:
+                        self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                        self._index_error = failed_projection.detail or "Initial index rebuild did not complete"
+                else:
+                    self._index_progress = IndexProgress(status=IndexStatus.ERROR)
+                    self._index_error = "Vector index is unavailable; full-text search remains available"
+        self._set_warmup_capability("search")
+
+        self.set_warmup_phase("runtime.wiki_health")
+        with startup_phase(_logger, "warmup.runtime.wiki_health"):
+            await self._project_initial_wiki_health()
+        self._set_warmup_capability("wiki_health")
+
+        if rebuild_pending:
+            self.set_warmup_phase("runtime.index_rebuild_start")
+            with startup_phase(_logger, "warmup.runtime.index_rebuild_start"):
+                await self.start_indexing()
+
+        self.set_warmup_phase("runtime.workers")
+        with startup_phase(_logger, "warmup.runtime.workers"):
+            if self.wiki_curator_worker is not None:
+                self.wiki_curator_worker.start()
+
+        self.set_warmup_phase("runtime.mcp")
+        with startup_phase(_logger, "warmup.runtime.mcp"):
+            await self.sync_mcp()
+        self._set_warmup_capability("mcp")
+
+    async def run_storage_maintenance_once(self) -> dict:
+        try:
+            referenced = await self.session_service.store.list_tool_result_content_hashes()
+            report = await asyncio.to_thread(
+                enforce_storage_budget,
+                self.config.arden_dir,
+                max_space_gb=self.config.max_space_gb,
+                referenced_tool_result_hashes=referenced,
+            )
+            self._storage_status = report.to_dict()
+        except Exception as error:
+            self._storage_status = {
+                **self._storage_status,
+                "status": "error",
+                "error": f"{type(error).__name__}: {error}",
+                "checked_at": datetime.now(UTC).isoformat(),
+            }
+            _logger.exception("Storage budget maintenance failed")
+        self._set_warmup_capability("storage")
+        return self.storage_status()
+
+    def start_storage_maintenance(self, *, interval_seconds: float = 3600) -> None:
+        if self._storage_maintenance_task is not None:
+            return
+
+        async def _loop() -> None:
+            while True:
+                await asyncio.sleep(interval_seconds)
+                await self.run_storage_maintenance_once()
+
+        self._storage_maintenance_task = asyncio.create_task(_loop(), name="arden-storage-maintenance")
+
+    async def _stop_storage_maintenance(self) -> None:
+        task = self._storage_maintenance_task
+        if task is None:
+            return
+        self._storage_maintenance_task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     async def enqueue_wiki_user_edit(self, commit_id: str) -> None:
         """Durably enqueue one exact user wiki commit for background curation."""
@@ -959,6 +1186,16 @@ class Runtime:
             return False
         return True
 
+    async def enqueue_startup_wiki_projection(self) -> bool:
+        """Queue the current wiki head before catch-up automations may mutate it."""
+
+        if self.stores is None or self.wiki_service is None:
+            return False
+        revision = self.wiki_service.repository.head
+        if revision is None:
+            return False
+        return await self.stores.outbox.enqueue_wiki_projection(revision)
+
     async def project_wiki_change(self) -> None:
         """Publish one canonical wiki-head transition to every derived consumer."""
 
@@ -1130,6 +1367,7 @@ class Runtime:
 
         # Phase 2: stop background services
         await self._cancel_indexing()
+        await self._stop_storage_maintenance()
         if self.automation:
             await self.automation.stop()
         if self.wiki_curator_worker:
@@ -1233,8 +1471,7 @@ class Runtime:
         if not self.automation:
             raise RuntimeError("Automation runtime is not initialized")
         await self.automation.start_scheduler()
-        if self.wiki_service is not None:
-            await self.project_wiki_state()
+        self._set_warmup_capability("automations")
 
     def start_monitor(self) -> None:
         if not self.automation:

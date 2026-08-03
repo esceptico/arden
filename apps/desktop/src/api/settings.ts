@@ -5,6 +5,7 @@ import type {
   ToolMetadata,
   ToolOverrideDecision,
   ToolPolicyMetadata,
+  StorageStatus,
 } from "@/api/types";
 
 // ─── MCP servers ──────────────────────────────────────────────────────
@@ -381,6 +382,7 @@ export type ServerConfigPatch = Partial<{
   max_messages: number;
   compression_keep_ratio: number;
   summary_max_tokens: number;
+  max_space_gb: number | null;
   web_search: "auto" | "exa" | "ddgs" | "none";
   tool_overrides: Record<string, ToolOverrideDecision>;
   integrations: Partial<Record<GoogleIntegrationId, boolean | null>> & {
@@ -388,6 +390,14 @@ export type ServerConfigPatch = Partial<{
     memory?: boolean | null;
   };
 }>;
+
+export async function getStorageStatusApi(config: AppConfig): Promise<StorageStatus> {
+  return apiWithConfig<StorageStatus>(config, "/storage/status");
+}
+
+export async function maintainStorageApi(config: AppConfig): Promise<StorageStatus> {
+  return apiWithConfig<StorageStatus>(config, "/storage/maintain", { method: "POST" });
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

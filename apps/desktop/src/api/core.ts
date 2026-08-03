@@ -30,6 +30,14 @@ export interface HealthCheck {
   ok: boolean;
   version: string | null;
   hasProviders: boolean;
+  warmup: WarmupHealth | null;
+}
+
+export interface WarmupHealth {
+  status: "pending" | "running" | "ready" | "error";
+  phase: string | null;
+  error: string | null;
+  capabilities: Record<string, boolean>;
 }
 
 export const STORAGE_KEY = "arden.desktop.config";
@@ -149,14 +157,16 @@ export async function checkHealth(config: AppConfig): Promise<HealthCheck> {
       auth?: boolean;
       version?: string;
       has_providers?: boolean;
+      warmup?: WarmupHealth;
     }>(config, "/health", { timeout: 5000 } as RequestInit & { timeout: number });
     return {
       ok: health.auth !== false,
       version: health.version ?? null,
       hasProviders: health.has_providers ?? true,
+      warmup: health.warmup ?? null,
     };
   } catch {
-    return { ok: false, version: null, hasProviders: true };
+    return { ok: false, version: null, hasProviders: true, warmup: null };
   }
 }
 
