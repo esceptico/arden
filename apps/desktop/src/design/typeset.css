@@ -132,9 +132,6 @@
 .md.typeset :where(figcaption, caption) { margin-block-start: calc(.75em / .875); color: var(--typeset-muted); font-size: .875em; text-align: center; }
 .md.typeset :where(caption) { caption-side: bottom; }
 .md.typeset :where(table) { display: table; max-width: 100%; margin-block: var(--typeset-block-flow) 0; overflow: visible; border-collapse: separate; border-spacing: 0; border-block-end: 1px solid var(--typeset-rule); font-size: 1em; line-height: 1.5; font-variant-numeric: tabular-nums; }
-.md.typeset :where(.typeset-scroll) { margin-block-start: var(--typeset-block-flow); overflow-x: auto; }
-.md.typeset :where(.typeset-scroll > *) { margin-block-start: 0; }
-.md.typeset :where(.typeset-scroll table) { width: max-content; max-width: none; }
 .md.typeset :where(thead th) { padding: .65em 1em; border: 0; background: transparent; font-weight: var(--weight-medium); text-align: start; white-space: nowrap; }
 .md.typeset :where(:is(tbody, tfoot) :is(td, th)) { padding: .75em 1em; border: 0; border-block-start: 1px solid var(--typeset-rule); text-align: start; vertical-align: top; }
 .md.typeset :where(tbody th, tfoot th) { font-weight: var(--weight-medium); }
@@ -144,7 +141,7 @@
 /* Prose resuming after a block owes it the same wider gap it opened with —
    without this the closing edge is quieter than the opening one, and a list
    reads as if it swallowed the sentence that follows it. */
-.md.typeset > :where(ul, ol, pre, blockquote, table, figure, details, dl, .typeset-scroll, math[display="block"]) + :where(:not(:is(h1, h2, h3, h4, h5, h6))) { margin-block-start: var(--typeset-block-flow); }
+.md.typeset > :where(ul, ol, pre, blockquote, table, figure, details, dl, math[display="block"]) + :where(:not(:is(h1, h2, h3, h4, h5, h6))) { margin-block-start: var(--typeset-block-flow); }
 
 .md.typeset :where(li > blockquote, li > table, li > figure) { margin-block-start: .5em; }
 .md.typeset :where(li > pre) { margin-block-start: calc(.5em / .875); }

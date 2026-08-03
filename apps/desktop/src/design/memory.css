@@ -1655,7 +1655,6 @@ body.memory-diff-receded #app {
 
 @media (max-width: 520px) {
   .memory-surface .mw-doc-tab { min-width: 4.25rem; }
-  .memory-surface .mw-edit-hint { display: none; }
   .memory-surface .mw-page { padding-inline: var(--space-4); }
   .memory-surface .mw-prop-row,
   .memory-surface .mw-prop-add-row { grid-template-columns: 1rem 6rem minmax(0, 1fr); gap: var(--space-2); }
@@ -1667,7 +1666,6 @@ body.memory-diff-receded #app {
   .memory-surface .mw-context-plane,
   .memory-surface .mw-instrument-items,
   .memory-surface .mw-instrument-collapse svg,
-  .memory-surface .mw-edit-hint,
   .memory-surface .mw-props-head svg { transition-duration: 1ms; }
   .memory-surface .memory-focus-cache,
   .memory-surface .memory-focus-plane { transition-duration: 1ms; }

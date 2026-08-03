@@ -680,8 +680,7 @@ button.app-row:not(:disabled):active,
   box-shadow: var(--shadow-7);
 }
 /* Cards and detached furniture share the same resting material. */
-.surface-card,
-.surface-floating {
+.surface-card {
   --surface-radius: var(--r-panel);
   border-radius: var(--surface-radius);
   background: var(--surface-3);

@@ -239,21 +239,18 @@
   font-size: var(--text-2xs);
 }
 
-.automation-rail__state,
-.automation-status {
+.automation-rail__state {
   white-space: nowrap;
   font: var(--weight-medium) var(--text-2xs)/1 var(--mono);
   color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
 
-.automation-rail__row[data-state="running"] .automation-rail__state,
-.automation-status[data-status="running"] {
+.automation-rail__row[data-state="running"] .automation-rail__state {
   color: var(--accent-ink);
 }
 
-.automation-rail__row[data-state="failed"] .automation-rail__state,
-.automation-status[data-status="failed"] {
+.automation-rail__row[data-state="failed"] .automation-rail__state {
   color: var(--danger);
 }
 
