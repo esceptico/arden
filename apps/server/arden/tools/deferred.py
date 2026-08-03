@@ -93,7 +93,7 @@ Connected MCP servers:
 </deferred_tool_group>
 {% endif %}""")
 
-_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools are deferred to reduce prompt noise. Use native tool search by exact tool name before calling these tools. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
+_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools are deferred to reduce prompt noise. Use native tool search by exact tool name before calling these tools. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, sessions, fact history or corrections, skills, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
 MANDATORY PREREQUISITE: call `tool_search(query="select:<tool_name>")` before calling a listed deferred tool. Loading tools does not execute them; it only makes selected tools callable on the next model step. Do not use filesystem/time/no-op tool calls to discover or unlock deferred tools.
 
 {% for group in groups %}
