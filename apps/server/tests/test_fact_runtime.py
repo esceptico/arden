@@ -37,6 +37,7 @@ from arden.revisions.models import CollectionReport
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
 from arden.tools.facts import FACT_SERVICE
+from arden.wiki.exceptions import WikiSnapshotChangedError
 from arden.wiki.maintenance.runner import WikiMaintenanceResult
 from arden.wiki.maintenance.store import WikiMaintenanceStore
 
@@ -95,6 +96,13 @@ def _wiki_producer() -> Automation:
         read_history=True,
         tool_scope="wiki_producer",
     )
+
+
+def _async_return(value):
+    async def _call(*args, **kwargs):
+        return value
+
+    return _call
 
 
 @pytest.mark.asyncio
@@ -1240,3 +1248,73 @@ async def test_memory_capture_captures_chat_facts_end_to_end(tmp_path, monkeypat
         assert idle == "fact capture idle"
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_contended_wiki_projection_defers_instead_of_raising(tmp_path, monkeypatch) -> None:
+    """A wiki write that outruns the projection is normal operation, not a fault.
+
+    The writer that won the race queues its own projection, so this pass steps
+    aside quietly and leaves the watermark for the next one to replay."""
+    runtime = Runtime(_config(tmp_path))
+
+    class _Repository:
+        # Never equals what the health projection reports, so every attempt is
+        # contended — as if writes kept landing throughout.
+        head = "moving-head"
+
+        def history(self, *, start, stop_before):
+            raise AssertionError("a superseded projection must not notify consumers")
+
+    class _Projection:
+        last_state = SimpleNamespace(wiki_head="old-head")
+
+        async def sync(self) -> None:
+            return None
+
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            raise AssertionError("a superseded projection must not advance the watermark")
+
+    attempts = 0
+
+    async def contended_health() -> str | None:
+        nonlocal attempts
+        attempts += 1
+        return None
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
+    runtime.wiki_page_projection = _Projection()
+    runtime._wiki_change_head = "old-head"
+    runtime._wiki_maintenance_store = _Watermarks()
+    monkeypatch.setattr(runtime, "project_wiki_health", contended_health)
+
+    await runtime.project_wiki_change()  # must not raise
+
+    assert runtime._wiki_change_head == "old-head"
+    assert attempts > 0
+
+
+@pytest.mark.asyncio
+async def test_health_projection_reports_contention_without_raising(tmp_path, monkeypatch) -> None:
+    """Losing the head race twice returns "nothing projected", not an exception."""
+    runtime = Runtime(_config(tmp_path))
+
+    class _Repository:
+        head = "moving-head"
+
+    def contended(*args, **kwargs):
+        raise WikiSnapshotChangedError("wiki changed while building a change feed")
+
+    runtime.wiki_service = SimpleNamespace(repository=_Repository(), changes_since=contended)
+    runtime.wiki_page_projection = SimpleNamespace(last_state=SimpleNamespace(wiki_head="old-head"))
+    runtime._fact_ledger = SimpleNamespace(due_review_snapshot=lambda: ("rev", None, ()))
+    runtime.fact_service = SimpleNamespace(revision=_async_return("rev"))
+    runtime._fact_consumer_store = SimpleNamespace(
+        get=_async_return(None),
+        get_retention_checkpoint=_async_return(None),
+    )
+    runtime._wiki_maintenance_store = SimpleNamespace(get_watermark=_async_return(None))
+    runtime.stores = SimpleNamespace(automations=SimpleNamespace(latest_completed_runs=_async_return({})))
+
+    assert await runtime.project_wiki_health() is None

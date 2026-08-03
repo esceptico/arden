@@ -1051,7 +1051,15 @@ class Runtime:
         return watermark is not None and watermark.revision == before
 
     async def project_wiki_health(self) -> str | None:
-        """Refresh the derived health page and surface projection failures."""
+        """Refresh the derived health page and surface projection failures.
+
+        Returns the projected revision, or None when nothing was projected —
+        the subsystem is unavailable, or a concurrent write superseded this
+        attempt. Losing a race is normal operation, not a failure: the writer
+        that won it queues its own projection, so the health page converges on
+        the next pass. Real faults (a corrupt repository, a domain violation)
+        still raise.
+        """
 
         if (
             self._fact_ledger is None
@@ -1088,7 +1096,7 @@ class Runtime:
                     if await self.fact_service.revision() != fact_revision:
                         if attempt == 0:
                             continue
-                        raise RevisionConflictError("fact ledger changed during both wiki health projection attempts")
+                        return self._superseded_wiki_health("fact ledger changed while reading it")
 
                     observed = self._semantic_wiki_revision(report)
                     maintenance_revision, maintenance_revision_known = self._semantic_wiki_revision_at(
@@ -1158,12 +1166,21 @@ class Runtime:
                     if await self.fact_service.revision() != fact_revision:
                         if attempt == 0:
                             continue
-                        raise RevisionConflictError("fact ledger changed during both wiki health projection attempts")
+                        return self._superseded_wiki_health("fact ledger changed while publishing")
                     return report.through_revision if result.commit is None else result.commit.commit_id
-                except RevisionConflictError:
+                except RevisionConflictError as exc:
+                    # WikiSnapshotChangedError subclasses this: both mean another
+                    # writer moved the head mid-projection.
                     if attempt == 0:
                         continue
-                    raise
+                    return self._superseded_wiki_health(str(exc))
+        return None
+
+    def _superseded_wiki_health(self, detail: str) -> None:
+        """A concurrent wiki write outran this projection; the next one wins."""
+
+        _logger.info("Wiki health projection superseded by a concurrent write", detail=detail)
+        return None
 
     async def project_wiki_state(self) -> None:
         await self.project_wiki_change()
@@ -1215,7 +1232,15 @@ class Runtime:
                 if self.wiki_service.repository.head == final_head:
                     break
             else:
-                raise RevisionConflictError("wiki changed during every projection attempt")
+                # Steady contention, not a fault: the writes that outran us each
+                # queued their own projection. Leave the watermark where it is so
+                # the next pass replays this whole range.
+                _logger.info(
+                    "Wiki projection superseded by concurrent writes; deferring to the queued projection",
+                    previous_head=previous_head,
+                    head=self.wiki_service.repository.head,
+                )
+                return
 
             if final_head == previous_head:
                 return

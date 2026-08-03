@@ -69,9 +69,10 @@ def _sha256_file(path: Path) -> str:
 
 
 def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-    ).fetchone() is not None
+    return (
+        connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+        is not None
+    )
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
@@ -446,7 +447,7 @@ def _prune_events(connection: sqlite3.Connection, keep: int, archived_keep: int)
             ) WHERE rank > ?
         )
         """,
-        (keep,),
+            (keep,),
         )
     if _table_exists(connection, "session_event_retention_state"):
         connection.execute("UPDATE session_event_retention_state SET writes_since_prune = 0")
@@ -501,7 +502,9 @@ def _estimated_reclaim_bytes(database: Path, event_keep: int, archived_event_kee
             connection, "session_messages"
         ):
             reclaim += int(
-                connection.execute("SELECT COALESCE(SUM(length(file_search_text)), 0) FROM session_messages").fetchone()[0]
+                connection.execute(
+                    "SELECT COALESCE(SUM(length(file_search_text)), 0) FROM session_messages"
+                ).fetchone()[0]
             )
         return reclaim
     finally:
@@ -579,9 +582,7 @@ def compact_legacy_database(
         temporary_root = Path(temporary_dir)
         working = temporary_root / "working.db"
         candidate = (
-            database.with_name(f".{database.name}.compacted-{uuid.uuid4().hex}.db")
-            if apply
-            else output.resolve()
+            database.with_name(f".{database.name}.compacted-{uuid.uuid4().hex}.db") if apply else output.resolve()
         )
         assert candidate is not None
         copy_method = _copy_database(database, working)
@@ -600,9 +601,7 @@ def compact_legacy_database(
             connection.commit()
             if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise RuntimeError("working database failed integrity_check")
-            verified_blobs, missing_blobs = _verify_blobs(
-                connection, allow_missing=allow_existing_missing_blobs
-            )
+            verified_blobs, missing_blobs = _verify_blobs(connection, allow_missing=allow_existing_missing_blobs)
             if not missing_blobs <= existing_missing_blobs:
                 raise RuntimeError("migration introduced new missing blob references")
             final_counts = _counts(connection)

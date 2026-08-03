@@ -354,8 +354,7 @@ def _prose_digest(rows: list[TranscriptRow]) -> str:
     prose = [
         [str(row.message.get("role") or row.role), _text(row.message.get("content"))]
         for row in rows
-        if str(row.message.get("role") or row.role) in {"user", "assistant"}
-        and _text(row.message.get("content"))
+        if str(row.message.get("role") or row.role) in {"user", "assistant"} and _text(row.message.get("content"))
     ]
     return _sha256(_canonical_json(prose))
 
