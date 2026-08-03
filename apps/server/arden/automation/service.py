@@ -156,10 +156,6 @@ class AutomationService:
             contains=payload.get("contains") or [],
         )
 
-    async def resolve_message_trigger(self, payload: dict) -> MessageTrigger:
-        """Resolve a producer trigger before any durable producer state is written."""
-        return await self._resolve_message_trigger(payload)
-
     @staticmethod
     def normalize_model(model: str | None) -> str | None:
         """Validate the model before callers begin multi-store provisioning."""

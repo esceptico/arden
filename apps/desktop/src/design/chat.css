@@ -1086,8 +1086,7 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-nav, .ri
 @container (max-width: 32.5rem) {
   .board-composer__toolbar { gap: var(--space-1); }
   .board-composer .composer-chip-label,
-  .board-composer .composer-loop-label,
-  .board-composer .composer-model-label { display: none; }
+  .board-composer .composer-loop-label { display: none; }
 }
 
 @container (max-width: 26.25rem) {
@@ -1144,11 +1143,6 @@ body:has(.board-inspector[data-mode="hub"]) :is(.sidebar-toggle, .shell-nav, .ri
     width: var(--icon-button-size);
     padding: 0;
     justify-content: center;
-  }
-
-  .board-queue-card {
-    right: 12px;
-    left: 12px;
   }
 
 }

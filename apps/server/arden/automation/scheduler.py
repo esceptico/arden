@@ -8,7 +8,6 @@ from arden.automation.event_dispatch import (
     enqueue_matching_events,
     event_retry_at,
     failure_retry_at,
-    matching_event_automations,
     matching_message_automations,
     message_trigger_passes,
     retry_delay_seconds,
@@ -26,7 +25,6 @@ from arden.automation.run_execution import (
     RunSkipped,
     execute_and_settle,
     run_agent_execution,
-    run_handler,
     run_session_bound,
     split_manual_flag,
 )
@@ -65,7 +63,6 @@ __all__ = (
 # Builtin daily memory maintenance phases. When one is overdue after
 # sleep/offline time, catch it up on boot.
 _CATCH_UP_HANDLERS = {"memory_maintenance"}
-_CATCH_UP_CADENCE = timedelta(hours=24)
 _MEMORY_RETENTION_BACKSTOP = TimeTrigger(at=MEMORY_RETENTION_AT, days="daily")
 _FACT_SYNTHESIS_BACKSTOP = TimeTrigger(every="6h")
 _WIKI_MAINTENANCE_BACKSTOP = TimeTrigger(every="6h")
@@ -816,13 +813,6 @@ class Scheduler:
         if outcome.failure_message is None:
             _logger.info("Completed automation %s", automation.task_id)
 
-    async def _run_handler(
-        self,
-        automation: Automation,
-        context: str | dict | None = None,
-    ) -> str | None:
-        return await run_handler(automation, context, self._handlers)
-
     async def _run_agent(self, automation: Automation, context: str | dict | None = None) -> CompletedAgentRun:
         return await run_agent_execution(
             automation,
@@ -854,9 +844,6 @@ class Scheduler:
         for task_id in await enqueue_matching_events(self.store, event, now):
             _logger.info("Event %s matched automation %s (%s)", event.event_type, task_id, event.event_key)
             await self._start_next_queued_event_if_idle(task_id)
-
-    async def _matching_event_automations(self, event: TriggerEvent) -> list[Automation]:
-        return await matching_event_automations(self.store, event)
 
     async def _matching_message_automations(self, event: MessageReceived) -> list[Automation]:
         return await matching_message_automations(self.store, event)

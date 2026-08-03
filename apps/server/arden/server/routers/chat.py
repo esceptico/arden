@@ -653,16 +653,6 @@ async def cancel_run(
     return {"status": "cancelling", "run_id": run_id, **result}
 
 
-def _resolve_run_id(request: CancelRequest, run_registry: RunRegistry) -> str:
-    run_id = request.run_id
-    if not run_id and request.session_id:
-        active = run_registry.get_active_run(request.session_id)
-        run_id = active.run_id if active else None
-    if not run_id:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return run_id
-
-
 @router.post("/chat/subagents/{tool_call_id}/cancel", status_code=202)
 async def cancel_subagent(
     tool_call_id: str,

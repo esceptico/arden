@@ -18,7 +18,7 @@ Props live in each file (kept here as a map, not a spec, so it can't go stale).
 - settings forms: **Field** wraps Input; **NumberField / PercentField** (in `features/settings`) are **SliderComfortable** rows.
 
 ## Feedback & status
-- **Callout** — alert/notice box (`tone bad|warn|ok|neutral`, icon/title/action). **Badge** / **Chip** — labels/tags. **Skeleton** — loading. **EmptyState** — icon + copy + action (the store-wired home screen lives at `features/home/components/Home.tsx`, not here — not generic). **EmptyNote** — compact inline "list is empty" italic note for sub-lists (settings tabs, MCP servers), not the full icon-chip state.
+- **Callout** — alert/notice box (`tone bad|warn|ok|neutral`, icon/title/action). **Badge** / **Chip** — labels/tags. **Skeleton** — loading. **EmptyState** — icon + copy + action (the store-wired home screen lives at `features/home/components/Home.tsx`, not here — not generic).
 
 ## Overlays & menus
 - **PageModal** — portal+scrim+panel modal shell (`origin`, `elevated`, `grid`, `header`). **AnchoredPopover** — cursor/trigger-anchored popover (`variant menu|popover`). **HoverPopover** / **Tooltip** — hover surfaces. **MenuItem** — one menu/popover row.

@@ -85,7 +85,3 @@ def tool_result_from_payload(record: InvocationRecord, payload: dict) -> ToolRes
             else "Retry once the device executor is available."
         ),
     )
-
-
-def tool_result_from_record(record: InvocationRecord) -> ToolResult:
-    return tool_result_from_payload(record, result_payload(record))

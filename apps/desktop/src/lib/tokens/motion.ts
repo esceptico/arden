@@ -42,9 +42,6 @@ const SHEET_ENTRY_SAMPLES = [
   0.97403, 0.98099, 0.98616, 0.98998, 0.99279, 0.99484, 0.99633, 0.99741,
   0.99818, 0.99873, 0.99912, 0.9994, 0.99959, 0.99972, 1,
 ] as const;
-/** Deterministic 360/32/.75 sample used by every default blocking sheet. */
-export const SHEET_ENTRY_LINEAR_CSS =
-  "linear(0.00000, 0.04373, 0.14239, 0.26222, 0.38373, 0.49652, 0.59580, 0.68011, 0.74985, 0.80640, 0.85153, 0.88706, 0.91472, 0.93605, 0.95236, 0.96472, 0.97403, 0.98099, 0.98616, 0.98998, 0.99279, 0.99484, 0.99633, 0.99741, 0.99818, 0.99873, 0.99912, 0.99940, 0.99959, 0.99972, 1.00000)";
 export const SHEET_ENTRY_EASING = sampledEase(SHEET_ENTRY_SAMPLES);
 const SHEET_CLEANUP_SAMPLES = [
   0, 0.01595, 0.05654, 0.11293, 0.17854, 0.24856, 0.31951, 0.38898,
@@ -86,8 +83,6 @@ export const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 export const EASE_DISSOLVE = [0.23, 1, 0.32, 1] as const;
 /** Directional content leaves on this curve before the successor settles. */
 export const EASE_ACCELERATE = [0.4, 0, 1, 1] as const;
-/** Brief in-place blur dissolves use the mock's blur curve. */
-export const EASE_BLUR = [0.2, 0.8, 0.2, 1] as const;
 /** Sequential inline text swaps use the browser's `ease-in-out` curve. */
 export const EASE_IN_OUT = [0.42, 0, 0.58, 1] as const;
 /** Constant-speed state indicators: progress sweeps and indeterminate spinners. */
@@ -221,9 +216,6 @@ const TABS_LAYOUT_SAMPLES = [
   0.87979, 0.90391, 0.92417, 0.94102, 0.95491, 0.96624, 0.9754, 0.9827,
   0.98845, 0.99292, 0.99633, 0.99887, 1.00071, 1.002, 1,
 ] as const;
-/** `springEasing(spring.layout, 300, 30)` from board-motion.js. */
-export const TABS_LAYOUT_LINEAR_CSS =
-  "linear(0.00000, 0.01697, 0.06061, 0.12184, 0.19362, 0.27061, 0.34882, 0.42541, 0.49837, 0.56641, 0.62876, 0.68507, 0.73525, 0.77948, 0.81804, 0.85132, 0.87979, 0.90391, 0.92417, 0.94102, 0.95491, 0.96624, 0.97540, 0.98270, 0.98845, 0.99292, 0.99633, 0.99887, 1.00071, 1.00200, 1.00000)";
 export const TABS_LAYOUT_EASING = sampledEase(TABS_LAYOUT_SAMPLES);
 
 const TRACE_ROW_SAMPLES = [
@@ -233,9 +225,6 @@ const TRACE_ROW_SAMPLES = [
   0.90637, 0.91638, 0.92531, 0.93329, 0.94042, 0.94679, 0.95248, 0.95756,
   0.96209, 0.96615, 0.96977, 0.973, 1,
 ] as const;
-/** `springEasing(spring.traceRow, 360, 36)` from board-motion.js. */
-export const TRACE_ROW_LINEAR_CSS =
-  "linear(0.00000, 0.01858, 0.06351, 0.12289, 0.18899, 0.25691, 0.32359, 0.38724, 0.44686, 0.50200, 0.55253, 0.59853, 0.64020, 0.67781, 0.71168, 0.74211, 0.76942, 0.79389, 0.81580, 0.83541, 0.85295, 0.86863, 0.88265, 0.89518, 0.90637, 0.91638, 0.92531, 0.93329, 0.94042, 0.94679, 0.95248, 0.95756, 0.96209, 0.96615, 0.96977, 0.97300, 1.00000)";
 export const TRACE_ROW_EASING = sampledEase(TRACE_ROW_SAMPLES);
 export const TRACE_ROW_ENTER = {
   opacity: 0,
@@ -305,7 +294,6 @@ export const CONVERSATION_RAIL = {
 } as const;
 
 export const DURATION_POPOVER = MOTION.palette;
-export const DURATION_PANEL = MOTION.panel;
 /** CSS-equivalent popover entrance; use for portaled overlays. */
 export const POPOVER_ENTER_TRANSITION = {
   duration: MOTION.popover,
@@ -386,28 +374,6 @@ export const RISE_IN = {
 export const RISE_SETTLED = { opacity: 1, y: 0, filter: "blur(0px)" } as const;
 /** Exit pose for sections/banners/popunders — quicker, dissolving. */
 export const DISSOLVE_OUT = { opacity: 0, scale: 0.97, filter: "blur(3px)" } as const;
-/** Inline disclosure that grows upward from a trigger row. Portaled menus use
- * their measured corner; room-owned disclosures keep this bottom origin. */
-export const POSE_INLINE_POPOVER_IN = {
-  opacity: 0,
-  y: DISTANCE.popover,
-  scale: 0.99,
-  filter: `blur(${BLUR.dissolve}px)`,
-} as const;
-export const POSE_INLINE_POPOVER_VISIBLE = {
-  opacity: 1,
-  y: 0,
-  scale: 1,
-  filter: "blur(0px)",
-  transitionEnd: { filter: "none" },
-} as const;
-export const POSE_INLINE_POPOVER_OUT = {
-  opacity: 0,
-  y: DISTANCE.popover,
-  scale: 0.99,
-  filter: `blur(${BLUR.dissolve}px)`,
-} as const;
-
 /** Viewport popovers use the canonical 5px / 2px blur settle. The filter is
  * cleared after entry so a settled menu never retains a compositor layer. */
 export const POSE_PORTALED_POPOVER_IN = {
@@ -456,27 +422,6 @@ export const POSE_SHEET_VISIBLE = { opacity: 1, y: 0 } as const;
 export const POSE_SHEET_OUT = {
   opacity: 0,
   y: DISTANCE.sheetExit,
-} as const;
-
-export const PAGE_VARIANTS = {
-  enter: (direction: number) => ({
-    opacity: 0,
-    y: DISTANCE.pageEnter,
-    x: direction * DISTANCE.pageEnter,
-    filter: `blur(${BLUR.pageEnter}px)`,
-  }),
-  center: {
-    opacity: 1,
-    x: 0,
-    y: 0,
-    filter: "blur(0px)",
-  },
-  exit: (direction: number) => ({
-    opacity: 0,
-    x: direction * -DISTANCE.dissolve,
-    y: -DISTANCE.dissolve,
-    filter: `blur(${BLUR.dissolve}px)`,
-  }),
 } as const;
 
 export const CONTENT_SWAP_VARIANTS = {
@@ -555,17 +500,11 @@ export const DECK_ENTER_TRANSITION = {
   ease: PEEK_ENTRY_EASING,
 } as const;
 
-export const PAGE_ENTER_TRANSITION = { duration: MOTION.pageEnter, ease: EASE_OUT } as const;
-export const PAGE_EXIT_TRANSITION = { duration: MOTION.exit, ease: EASE_DISSOLVE } as const;
 export const CONTENT_ENTER_TRANSITION = { duration: MOTION.content, ease: EASE_OUT } as const;
 export const CONTENT_EXIT_TRANSITION = { duration: MOTION.exit, ease: EASE_ACCELERATE } as const;
 export const FURNITURE_TRANSITION = { duration: MOTION.furniture, ease: EASE_DISSOLVE } as const;
 export const PEEK_EXIT_TRANSITION = { duration: MOTION.peekExit, ease: EASE_DISSOLVE } as const;
 export const SHEET_EXIT_TRANSITION = { duration: MOTION.sheetExit, ease: EASE_DISSOLVE } as const;
-/** Shared tab geometry settles separately from the visible indicator slide. */
-export const TABS_LAYOUT_TRANSITION = { duration: MOTION.tabsLayout, ease: TABS_LAYOUT_EASING } as const;
-export const TABS_SLIDE_TRANSITION = { duration: MOTION.tabsSliding, ease: EASE_OUT } as const;
-
 /** Home disclosure lifecycle: opening panel, closing panel, then follower
  * FLIP settle. Kept distinct from viewport popovers. */
 export const DISCLOSURE = {

@@ -145,9 +145,6 @@ class ToolRegistry:
             external=is_external_source(source),
         )
 
-    def all_facts(self) -> tuple[ToolFacts, ...]:
-        return tuple(self.facts(name) for name in self._tools)
-
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 

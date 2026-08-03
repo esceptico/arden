@@ -3,7 +3,6 @@ from fastapi import Depends, HTTPException, Request
 from arden.server.bus import BusRegistry
 from arden.server.runtime import Runtime, get_runtime
 from arden.server.runtime.automation import AutomationRuntime
-from arden.server.runtime.knowledge import KnowledgeRuntime
 from arden.server.state import RunRegistry
 from arden.tools.executor import ToolExecutor
 
@@ -44,12 +43,6 @@ def require_run_registry(runtime: Runtime = Depends(get_runtime)) -> RunRegistry
 
 def get_bus_registry(request: Request) -> BusRegistry:
     return request.app.state.bus_registry
-
-
-def require_knowledge_runtime(runtime: Runtime = Depends(get_runtime)) -> KnowledgeRuntime:
-    if not runtime.knowledge:
-        raise HTTPException(status_code=503, detail="Knowledge runtime not available")
-    return runtime.knowledge
 
 
 def require_automation_runtime(runtime: Runtime = Depends(get_runtime)) -> AutomationRuntime:

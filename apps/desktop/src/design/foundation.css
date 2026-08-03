@@ -759,25 +759,6 @@ button:not(:disabled):active { transform: scale(var(--press-scale)); }
   .arden-resize-handle::after { transition-duration: 1ms; }
 }
 
-.arden-running-text {
-  color: transparent;
-  background: linear-gradient(90deg, var(--muted) 0 28%, var(--ink) 46% 54%, var(--muted) 72% 100%) 100% 0 / 200% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: arden-running-text-shimmer var(--motion-shimmer) linear infinite;
-}
-@keyframes arden-running-text-shimmer { to { background-position: -100% 0; } }
-
-@media (prefers-reduced-motion: reduce) {
-  .arden-running-text {
-    color: var(--muted);
-    background: none;
-    -webkit-text-fill-color: currentColor;
-    animation: none;
-  }
-}
-
 .arden-button {
   min-height: var(--control-size-large);
   padding: 0 .8125rem;

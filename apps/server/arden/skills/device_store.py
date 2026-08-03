@@ -123,7 +123,3 @@ class DeviceSkillStore:
                 )
             )
         return skills
-
-    async def drop_executor(self, executor_id: str) -> None:
-        await self._conn.execute("DELETE FROM device_skills WHERE executor_id = ?", (executor_id,))
-        await self._conn.commit()

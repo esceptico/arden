@@ -321,12 +321,6 @@ export async function listFacts(config: AppConfig, options: { signal?: AbortSign
   return facts;
 }
 
-export function readFact(config: AppConfig, factId: string, options: { signal?: AbortSignal } = {}): Promise<Fact> {
-  return apiWithConfig<{ fact: RawFact }>(config, `/admin/facts/${encodeURIComponent(factId)}`, {
-    signal: options.signal,
-  }).then(({ fact }) => mapFact(fact));
-}
-
 /** Read a bounded, ordered set of facts in one request. The server rejects
  * duplicate or missing IDs atomically, so callers get either the complete
  * requested set or the original error. */

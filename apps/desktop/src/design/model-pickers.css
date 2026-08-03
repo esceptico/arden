@@ -267,8 +267,7 @@
 .model-picker__group { padding-bottom: var(--space-1); }
 .model-picker__group:last-child { padding-bottom: 0; }
 
-.model-picker__group-label,
-.model-picker__menu-label {
+.model-picker__group-label {
   padding: 8px 10px 4px;
   color: var(--faint);
   font: var(--weight-semibold) var(--text-metadata)/1 var(--sans);
@@ -306,8 +305,7 @@
   font: var(--weight-regular) var(--text-label)/1.25 var(--mono);
 }
 
-.model-picker__effort-option,
-.model-picker__quick-option {
+.model-picker__effort-option {
   justify-content: space-between;
   font: var(--weight-regular) var(--text-label)/1.25 var(--sans);
 }

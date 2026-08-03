@@ -97,10 +97,6 @@ class ExecutorCommandLog:
         )
         await self._conn.commit()
 
-    async def prune_acked(self) -> None:
-        await self._conn.execute("DELETE FROM executor_commands WHERE acked_at IS NOT NULL")
-        await self._conn.commit()
-
 
 def _command_from_row(row: aiosqlite.Row) -> ExecutorCommand:
     return ExecutorCommand(

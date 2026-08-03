@@ -1,10 +1,6 @@
 import type { Automation, AutomationTrigger, CreateAutomationPayload } from "@/api/types";
 import { formatTrigger } from "@/lib/agentRun";
 
-export type EditorSeed =
-  | { kind: "create"; preset?: CreateAutomationPayload }
-  | { kind: "edit"; automation: Automation };
-
 export type ScheduleKind = "at" | "every" | "event" | "message" | "idle" | "count";
 export type EventType = "starts" | "ends" | "approaching";
 

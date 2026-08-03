@@ -4,16 +4,12 @@ import {
   deleteCustomEmbeddingModelApi,
   getEmbeddingModelsApi,
   getIndexStatusApi,
-  getSetupStatusApi,
   parseEmbeddingModelsResponse,
   parseIndexStatus,
   parseModelsResponse,
   parseServerConfig,
-  preflightGoogleSetupApi,
-  saveGoogleCredentialsApi,
   startIndexingApi,
   updateEmbeddingModelApi,
-  verifySlackTokenApi,
 } from "@/api/settings";
 
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
@@ -209,24 +205,4 @@ test("custom embedding API wrappers preserve endpoint, dimensions, and encoded m
     api_key: null,
   });
   expect(requests.map((request) => request.method)).toEqual(["POST", "DELETE"]);
-});
-
-test("setup API wrappers preserve endpoint contracts", async () => {
-  const requests = installRequestRecorder({});
-  const appConfig = { serverUrl: "http://localhost:6877", apiKey: "" };
-
-  await getSetupStatusApi(appConfig);
-  await saveGoogleCredentialsApi(appConfig, { path: "/tmp/client_secret.json" });
-  await preflightGoogleSetupApi(appConfig, "google_drive");
-  await verifySlackTokenApi(appConfig, "slack_bot_token", "xoxb-token");
-
-  expect(requests.map((request) => request.path)).toEqual([
-    "/setup/status",
-    "/setup/google/credentials",
-    "/setup/google/preflight",
-    "/setup/slack/verify",
-  ]);
-  expect(JSON.parse(requests[1].body ?? "{}")).toEqual({ path: "/tmp/client_secret.json" });
-  expect(JSON.parse(requests[2].body ?? "{}")).toEqual({ integration_id: "google_drive" });
-  expect(JSON.parse(requests[3].body ?? "{}")).toEqual({ service_id: "slack_bot_token", api_key: "xoxb-token" });
 });

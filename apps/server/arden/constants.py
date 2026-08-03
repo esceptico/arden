@@ -43,11 +43,6 @@ AGENT_MAX_COST = None
 # finite so unattended agent trees cannot drift into multi-million-token runs.
 AGENT_MAX_OUTPUT_TOKENS = 500_000
 
-BASH_TIMEOUT = 120  # seconds — safety brake against runaway commands
-# Hard cap on bash output that enters the harness (head+tail elision past this), so
-# a `cat hugefile`-style command can't dump GBs into context + the offload store.
-BASH_MAX_OUTPUT_CHARS = 1_000_000
-
 # Hard cap on render_html widget payloads (schema-enforced, no truncation logic).
 RENDER_HTML_MAX_CHARS = 150_000
 
@@ -56,7 +51,6 @@ RENDER_HTML_MAX_CHARS = 150_000
 # bounded here regardless. 30 min is generous for deep research while still
 # killing a stuck child; tools can override via the spawn `timeout` param.
 SUBAGENT_DEFAULT_TIMEOUT = 7200
-BACKGROUND_AGENT_TIMEOUT = 7200
 # Boot-time respawns per interrupted detached agent. Each restart re-buys the
 # same LLM work, so crash-looping servers must converge: after this many
 # attempts the row stays interrupted.

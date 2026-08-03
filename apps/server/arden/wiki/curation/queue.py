@@ -178,10 +178,6 @@ class WikiEditCuratorQueueStore:
         )
         return None if not rows else _job(rows[0])
 
-    async def list_jobs(self) -> tuple[WikiEditCuratorJob, ...]:
-        rows = await self._conn.execute_fetchall("SELECT * FROM wiki_edit_curator_jobs ORDER BY created_at, commit_id")
-        return tuple(_job(row) for row in rows)
-
     async def claim_next(self) -> WikiEditCuratorJob | None:
         async with self._lock:
             now = datetime.now(UTC).isoformat()

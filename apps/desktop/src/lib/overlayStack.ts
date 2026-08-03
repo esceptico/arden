@@ -46,11 +46,6 @@ export function useSharedScrimOpen(): boolean {
   return useSyncExternalStore(subscribe, hasSharedScrimOpen, () => false);
 }
 
-/** Whether this exact surface owns the current Escape/focus boundary. */
-export function isTopOverlay(element: HTMLElement | null): boolean {
-  return stack.at(-1)?.element === element;
-}
-
 /** Whether the upper blocking surface would yield — asked before opening a
  *  replacement surface, so a question that cannot be dismissed still wins
  *  without closing anything that merely could be. */
