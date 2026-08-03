@@ -1,3 +1,5 @@
+import asyncio
+
 from arden.server import startup
 
 
@@ -55,6 +57,32 @@ def test_startup_phase_logs_failure_and_reraises(monkeypatch) -> None:
                 "outcome": "error",
                 "elapsed_ms": 250.0,
                 "exc_info": True,
+            },
+        )
+    ]
+
+
+def test_startup_phase_logs_cancellation_without_error_traceback(monkeypatch) -> None:
+    times = iter((30.0, 30.5))
+    monkeypatch.setattr(startup, "perf_counter", lambda: next(times))
+    logger = _Logger()
+
+    try:
+        with startup.startup_phase(logger, "warmup.runtime.index_sync"):
+            raise asyncio.CancelledError
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("startup cancellation was not reraised")
+
+    assert logger.records == [
+        (
+            "info",
+            "Startup phase cancelled",
+            {
+                "startup_phase": "warmup.runtime.index_sync",
+                "outcome": "cancelled",
+                "elapsed_ms": 500.0,
             },
         )
     ]

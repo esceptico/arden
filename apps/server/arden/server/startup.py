@@ -1,5 +1,6 @@
 """Structured timing for startup work that can delay API readiness."""
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from time import perf_counter
@@ -13,6 +14,14 @@ def startup_phase(logger: Any, phase: str) -> Iterator[None]:
     started = perf_counter()
     try:
         yield
+    except asyncio.CancelledError:
+        logger.info(
+            "Startup phase cancelled",
+            startup_phase=phase,
+            outcome="cancelled",
+            elapsed_ms=round((perf_counter() - started) * 1000, 1),
+        )
+        raise
     except BaseException:
         logger.error(
             "Startup phase failed",

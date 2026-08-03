@@ -2,7 +2,7 @@
 
 ## Status
 
-Research and I-01 through I-10 are implemented and verified. Live legacy maintenance remains operational work.
+Research, I-01 through I-10, and live legacy maintenance are implemented and verified. Only rollback-copy deletion remains a user decision.
 
 ## Evidence
 
@@ -29,13 +29,15 @@ Research and I-01 through I-10 are implemented and verified. Live legacy mainten
 | V-19 | I-09 | Export a large archived live session and a current blob-backed session as four sidecars each. | Exact ATIF/Letta validation, prose-order parity, deterministic hashes, compression comparison, and valid blob refs. | 47.96 MB archived source: ATIF summary 23.40 MB/1.14 MB zstd; Letta summary 13.04 MB/1.10 MB. Blob-backed source: ATIF summary 100.7 KB/32.0 KB; Letta summary 40.9 KB/13.1 KB; two blob refs verified. | Pass | `scripts/export_trajectory_bundles.py` against sessions `20260510_235813_387` and `20260730_110249_545`; 2026-08-03 |
 | V-20 | I-01-I-10 | Full server suite after remaining implementation. | No behavioral regression. | 2,482 tests passed; one owner-boundary failure was isolated, fixed, then its 25-test focused closure passed. | Pass | `uv run pytest`; focused rerun from V-18; 2026-08-03 |
 | V-21 | Live maintenance | Read-only legacy inventory and reclaim estimate. | Quantify safe migration before mutation. | 125,590 globally over-cap events / 307 MB; archived events are 4.38 GB, of which a 100-row tail removes 4.23 GB; completed outbox payloads are 711 MB; duplicate FTS text is 226 MB. Found 495 already-missing old-root blobs. | Pass | Read-only SQLite window/aggregate queries plus manifest path audit; 2026-08-03 |
+| V-22 | I-10/live maintenance | Apply the offline migration to the live database through a copy-on-write clone, verified compact copy, and atomic swap. | Preserve transcript messages and sessions; pass integrity/prose checks; retain rollback. | DB fell from 7.5 GiB to 2.3 GiB. Pruned 326,278 events and 1,931 receipts; compacted 2,123 payloads (711,024,988 bytes); migrated 112 inline bodies; removed legacy FTS column. All checks passed; rollback retained. | Pass | `sessions.db.compaction-manifest.json`; direct read-only SQLite checks; 2026-08-03 |
+| V-23 | I-01-I-04/live maintenance | Start Arden against the migrated live DB and request `/health`. | Core API ready under 2s while warmup continues; clean shutdown. | Store/schema phase 68.8 ms; runtime ready path 228.4 ms; API ready 1,255.9 ms. `/health` returned 200 with `core=true`, `warmup=running`. Intentional shutdown completed. | Pass | `uv run arden-server serve --port 16878`; `curl /health`; 2026-08-03 |
+| V-24 | I-01 | Cancel a timed warmup phase. | Reraise cancellation and avoid an error traceback. | Cancellation logs `outcome=cancelled` at info level and reraises `CancelledError`. | Pass | `tests/test_startup_timing.py`; 2026-08-03 |
 
 ## Failures and gaps
 
-- A live-data cold-start benchmark remains useful because the temporary fresh-data run cannot reproduce the 8 GB database's I/O profile.
-- The live migration/atomic swap and application smoke test have not yet run.
-- The 495 old `~/.ntrp` blob files are absent. Their manifests can be preserved and reported, but missing raw content is not reconstructable from those refs alone.
+- Old `~/.ntrp` blob files remain absent. Their manifests were preserved/reported, but missing raw content is not reconstructable.
+- The verified 7.5 GiB rollback copy still occupies disk pending explicit deletion approval.
 
 ## Outcome
 
-The API/warmup split, bounded transport/storage controls, cold exports, and offline migration tooling are implemented and verified. No live Arden database mutation has yet been performed.
+The API/warmup split, bounded transport/storage controls, cold exports, migration tooling, and live database compaction are implemented and verified. The live API is available in about 1.26 seconds while warmup continues. The rollback copy remains intact.
