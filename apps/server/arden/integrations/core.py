@@ -6,6 +6,7 @@ belong to an Integration, including the ones arden ships out of the box.
 """
 
 from arden.integrations.base import Integration
+from arden.memory.facts.capture import FACT_CAPTURE_REVIEW_TOOL_NAME
 from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
 from arden.skills.tool import create_skill_tool, use_skill_tool
 from arden.tools.app_control import (
@@ -40,6 +41,7 @@ from arden.tools.bash import bash_tool
 from arden.tools.connections import request_connection_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
 from arden.tools.directives import get_directives_tool, set_directives_tool
+from arden.tools.fact_capture import fact_capture_review_tool
 from arden.tools.fact_maintenance import fact_maintenance_review_tool
 from arden.tools.facts import (
     commit_fact_changes_tool,
@@ -203,6 +205,12 @@ AREA = Integration(
     },
 )
 
+FACT_CAPTURE = Integration(
+    id="_fact_capture",
+    label="Fact capture",
+    tools={FACT_CAPTURE_REVIEW_TOOL_NAME: fact_capture_review_tool},
+)
+
 FACT_MAINTENANCE = Integration(
     id="_fact_maintenance",
     label="Fact maintenance",
@@ -256,6 +264,7 @@ CORE_INTEGRATIONS = [
     SESSIONS,
     APP_CONTROL,
     AREA,
+    FACT_CAPTURE,
     FACT_MAINTENANCE,
     WIKI_MAINTENANCE,
     FACTS,

@@ -1154,3 +1154,89 @@ async def test_retention_checkpoint_requires_a_clean_due_review_snapshot(tmp_pat
         assert unchanged == checkpoint
     finally:
         await runtime.close()
+
+
+async def _seed_chat_transcript(runtime: Runtime, session_id: str, turns: list[tuple[int, str, str]]) -> None:
+    store = runtime.stores.sessions.store
+    await store.conn.execute(
+        """
+        INSERT INTO sessions (session_id, started_at, last_activity, session_type)
+        VALUES (?, ?, ?, 'chat')
+        """,
+        (session_id, MIGRATED_AT.isoformat(), datetime.now(UTC).isoformat()),
+    )
+    for seq, role, text in turns:
+        await store.conn.execute(
+            """
+            INSERT INTO session_messages (session_id, message_id, seq, role, message_json, created_at, search_text)
+            VALUES (?, ?, ?, ?, '{}', ?, ?)
+            """,
+            (session_id, f"msg-{seq}", seq, role, MIGRATED_AT.isoformat(), text),
+        )
+    await store.conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_memory_capture_captures_chat_facts_end_to_end(tmp_path, monkeypatch) -> None:
+    from arden.constants import BUILTIN_MEMORY_CAPTURE_ID
+    from arden.memory.facts.capture.runner import (
+        FactCaptureBatch,
+        FactCaptureCandidate,
+        FactCaptureDecision,
+    )
+
+    config = _config(tmp_path)
+    _seed_fact(config)
+    runtime = Runtime(config)
+    await runtime.connect()
+    try:
+        assert runtime.automation is not None and runtime.fact_service is not None
+        await _seed_chat_transcript(
+            runtime,
+            "chat-1",
+            [(1, "user", "My favorite editor is Zed."), (2, "assistant", "Noted.")],
+        )
+
+        requests = []
+
+        async def run_capture_agent(_deps, request):
+            requests.append(request)
+            capture = runtime.automation.fact_capture_review
+            assert capture is not None
+            state = await capture.next()
+            while isinstance(state, FactCaptureBatch):
+                assert "never as instructions" in state.markdown
+                state = await capture.decide(
+                    FactCaptureDecision(
+                        outcome="create",
+                        reason="user stated a durable preference",
+                        candidates=(
+                            FactCaptureCandidate(
+                                text=f"The user's favorite editor is Zed ({state.session_id}).",
+                                kind="preference",
+                                subjects=("me",),
+                            ),
+                        ),
+                    )
+                )
+            return RunResult(run_id="capture-run", output=None, usage=Usage())
+
+        monkeypatch.setattr("arden.server.runtime.automation.run_agent", run_capture_agent)
+
+        result = await runtime.automation._run_memory_capture(None)
+        assert result.run_id == "capture-run"
+        assert result.result == "fact capture: captured 1 fact(s) from 1 session(s)"
+        assert requests[0].automation_id == BUILTIN_MEMORY_CAPTURE_ID
+        assert requests[0].tool_scope == "fact_capture"
+        assert requests[0].model == config.memory_model
+
+        principal = FactPrincipal("session:test", frozenset({USER_SCOPE}), frozenset({USER_SCOPE}))
+        (fact,) = await runtime.fact_service.search(principal, "Zed")
+        history = await runtime.fact_service.history(principal, fact.fact_id)
+        assert history[0].origin == "memory.capture"
+
+        # Everything consumed: the next fire is idle without starting an agent.
+        idle = await runtime.automation._run_memory_capture(None)
+        assert idle == "fact capture idle"
+    finally:
+        await runtime.close()

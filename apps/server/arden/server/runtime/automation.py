@@ -8,6 +8,7 @@ from arden.areas.asks import AskStore
 from arden.areas.custodian import CustodianStore
 from arden.areas.models import Area, areas_from_records
 from arden.automation.builtins import (
+    FACT_CAPTURE_PROMPT,
     FACT_MAINTENANCE_PROMPT,
     WIKI_MAINTENANCE_PROMPT,
     seed_builtins,
@@ -25,6 +26,7 @@ from arden.constants import (
     AREA_ASK_IGNORED_DAYS,
     AREAS_AGENT_STATE_FILE,
     AREAS_STATE_FILE,
+    BUILTIN_MEMORY_CAPTURE_ID,
     BUILTIN_MEMORY_CONSOLIDATE_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
     BUILTIN_WIKI_MAINTENANCE_ID,
@@ -34,6 +36,7 @@ from arden.events.sse import AreasChangedEvent, MemoryChangedEvent
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.llm.base import CompletionClient
 from arden.logging import get_logger
+from arden.memory.facts.capture.runner import FactCapture, FactCaptureError
 from arden.memory.facts.maintenance.agent import FactMaintenanceReviewService
 from arden.memory.facts.maintenance.runner import FactMaintenance, FactMaintenanceReviewer
 from arden.monitor.calendar import CalendarMonitor
@@ -64,6 +67,7 @@ class AutomationRuntime:
         get_slack_client: Callable[[], object | None],
         resolve_auxiliary_completion: Callable[[], tuple[CompletionClient, str, str | None]],
         project_wiki_state: Callable[[], Awaitable[None]],
+        get_fact_capture: Callable[[], FactCapture | None] = lambda: None,
         get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[FactMaintenanceReviewer], FactMaintenance | None] = lambda _reviewer: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
@@ -78,6 +82,8 @@ class AutomationRuntime:
         self.config = config
         self.get_calendar_source = get_calendar_source
         self.get_slack_client = get_slack_client
+        self.get_fact_capture = get_fact_capture
+        self.fact_capture_review: FactCapture | None = None
         self.get_fact_dream = get_fact_dream
         self.get_fact_maintenance = get_fact_maintenance
         self.fact_maintenance_review: FactMaintenanceReviewService | None = None
@@ -386,6 +392,7 @@ class AutomationRuntime:
             await self.stores.automations.set_enabled(task_id, False)
 
     async def start_scheduler(self) -> None:
+        self.scheduler.register_handler("memory_capture", self._run_memory_capture)
         self.scheduler.register_handler("memory_maintenance", self._run_fact_maintenance)
         self.scheduler.register_handler("memory_synthesize", self._run_memory_synthesis)
         self.scheduler.register_handler("memory_dream", self._run_memory_dream)
@@ -403,6 +410,39 @@ class AutomationRuntime:
         await self.automation_service.backfill_channels()
         self.scheduler.start()
         self.outbox_runtime.start()
+
+    async def _run_memory_capture(self, context: dict | None) -> str | CompletedAgentRun:
+        capture = self.get_fact_capture()
+        if capture is None:
+            return "fact capture unavailable (no memory model configured)"
+        if not await capture.has_work():
+            return "fact capture idle"
+        self.fact_capture_review = capture
+        try:
+            model = self.config.memory_model
+            if not model:
+                return "fact capture unavailable (no memory model configured)"
+            request = RunRequest(
+                prompt=FACT_CAPTURE_PROMPT,
+                auto_approve=True,
+                source_id=BUILTIN_MEMORY_CAPTURE_ID,
+                model=model,
+                skip_approvals=True,
+                automation_id=BUILTIN_MEMORY_CAPTURE_ID,
+                tool_scope="fact_capture",
+            )
+            agent_run = None
+            while not capture.done:
+                prior_decisions = capture.decided_batches
+                agent_run = await run_agent(self.build_operator_deps(), request)
+                if not capture.done and capture.decided_batches == prior_decisions:
+                    raise FactCaptureError("fact capture agent exited before completing the review workflow")
+            if agent_run is None:
+                raise RuntimeError("fact capture agent did not start")
+            result = capture.require_result()
+            return CompletedAgentRun(agent_run.run_id, result.summary)
+        finally:
+            self.fact_capture_review = None
 
     async def _run_fact_maintenance(self, context: dict | None) -> str | CompletedAgentRun:
         review = FactMaintenanceReviewService.create(self.get_fact_maintenance)

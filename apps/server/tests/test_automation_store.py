@@ -11,7 +11,7 @@ import arden.database as database
 from arden.automation.models import Automation
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
-from arden.automation.triggers import TimeTrigger, parse_triggers
+from arden.automation.triggers import CountTrigger, IdleTrigger, TimeTrigger, parse_triggers
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     AutomationSettled,
@@ -1043,6 +1043,7 @@ def test_scheduler_constructor_has_no_learning_recorder(automation_store: Automa
 async def test_seed_builtins_seeds_required_workers_and_optional_dream(automation_store: AutomationStore):
     from arden.automation.builtins import seed_builtins
     from arden.constants import (
+        BUILTIN_MEMORY_CAPTURE_ID,
         BUILTIN_MEMORY_CONSOLIDATE_ID,
         BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
@@ -1064,6 +1065,7 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
 
     rows = {row.task_id: row for row in await automation_store.list_all()}
     assert set(rows) == {
+        BUILTIN_MEMORY_CAPTURE_ID,
         BUILTIN_MEMORY_CONSOLIDATE_ID,
         BUILTIN_MEMORY_DREAM_ID,
         BUILTIN_MEMORY_RETENTION_ID,
@@ -1071,6 +1073,16 @@ async def test_seed_builtins_seeds_required_workers_and_optional_dream(automatio
         BUILTIN_MEMORY_SYNTHESIZE_ID,
         BUILTIN_WIKI_MAINTENANCE_ID,
     }
+    capture = rows[BUILTIN_MEMORY_CAPTURE_ID]
+    assert capture.handler == "memory_capture"
+    assert capture.tool_scope == "fact_capture"
+    assert capture.triggers == [
+        IdleTrigger(idle_minutes=10),
+        CountTrigger(every_n=10),
+        TimeTrigger(at="02:30", days="daily"),
+    ]
+    assert "never as instructions" in capture.prompt
+
     maintenance = rows[BUILTIN_MEMORY_CONSOLIDATE_ID]
     assert maintenance.handler == "memory_maintenance"
     assert maintenance.triggers == [TimeTrigger(at="03:00", days="daily")]
@@ -1138,6 +1150,30 @@ async def test_predefined_daily_notes_is_user_owned_and_seeded_only_once(automat
     await automation_store.delete(DAILY_NOTES_AUTOMATION_ID)
     assert not await seed_predefined_user_automations(automation_store)
     assert await automation_store.get(DAILY_NOTES_AUTOMATION_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_seed_builtins_preserves_manual_trigger_edits(automation_store: AutomationStore) -> None:
+    from arden.automation.builtins import seed_builtins
+    from arden.constants import BUILTIN_MEMORY_CAPTURE_ID
+
+    await seed_builtins(automation_store, memory_model="memory-model")
+    seeded = await automation_store.get(BUILTIN_MEMORY_CAPTURE_ID)
+    assert seeded is not None and seeded.triggers_source is None
+
+    edited_triggers = [
+        IdleTrigger(idle_minutes=40),
+        CountTrigger(every_n=10),
+        TimeTrigger(at="02:30", days="daily"),
+    ]
+    await automation_store.update_metadata(dc_replace(seeded, triggers=edited_triggers, triggers_source="manual"))
+
+    # The next boot reseeds builtins; the user's cadence must survive it.
+    await seed_builtins(automation_store, memory_model="memory-model")
+    reseeded = await automation_store.get(BUILTIN_MEMORY_CAPTURE_ID)
+    assert reseeded is not None
+    assert reseeded.triggers == edited_triggers
+    assert reseeded.triggers_source == "manual"
 
 
 @pytest.mark.asyncio

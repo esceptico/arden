@@ -3551,6 +3551,52 @@ class SessionStore:
             )
         return records
 
+    async def list_capture_eligible_sessions(self, *, active_within_days: int = 14) -> list[tuple[str, int]]:
+        """User chat sessions with transcript turns, newest activity first bounded."""
+
+        cutoff = (datetime.now(UTC) - timedelta(days=active_within_days)).isoformat()
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT s.session_id AS session_id, MAX(m.seq) AS max_seq
+            FROM sessions s
+            JOIN session_messages m ON m.session_id = s.session_id
+            WHERE s.session_type = 'chat'
+              AND s.origin_automation_id IS NULL
+              AND s.archived_at IS NULL
+              AND s.last_activity >= ?
+              AND m.role IN ('user', 'assistant')
+            GROUP BY s.session_id
+            """,
+            (cutoff,),
+        )
+        return [(row["session_id"], int(row["max_seq"])) for row in rows]
+
+    async def list_transcript_messages_after(self, session_id: str, after_seq: int, limit: int) -> list[dict]:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT seq, role, COALESCE(search_text, '') AS text, message_id, created_at
+            FROM session_messages
+            WHERE session_id = ? AND seq > ? AND role IN ('user', 'assistant')
+            ORDER BY seq ASC
+            LIMIT ?
+            """,
+            (session_id, after_seq, limit),
+        )
+        return [dict(row) for row in rows]
+
+    async def list_latest_transcript_messages(self, session_id: str, limit: int) -> list[dict]:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT seq, role, COALESCE(search_text, '') AS text, message_id, created_at
+            FROM session_messages
+            WHERE session_id = ? AND role IN ('user', 'assistant')
+            ORDER BY seq DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        )
+        return [dict(row) for row in reversed(rows)]
+
     async def get_latest_session_event_seq(self, session_id: str) -> int:
         rows = await self.read_conn.execute_fetchall(
             "SELECT COALESCE(MAX(seq), 0) AS latest_seq FROM session_events WHERE session_id = ?",

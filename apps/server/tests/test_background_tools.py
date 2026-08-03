@@ -40,7 +40,6 @@ async def _live_agent(registry: BackgroundTaskRegistry, task_id: str, child_sess
     return task
 
 
-
 def test_background_registry_reservations_count_toward_cap():
     registry = BackgroundTaskRegistry(session_id="test")
 

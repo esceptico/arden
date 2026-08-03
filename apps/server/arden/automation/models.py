@@ -45,6 +45,9 @@ class Automation:
     # user asks the configured auxiliary model to generate one.
     description: str | None = None
     description_source: AutomationDescriptionSource | None = None
+    # "manual" marks a user-edited trigger list; builtin seeding then leaves
+    # the triggers alone instead of resetting them to the code defaults.
+    triggers_source: str | None = None
 
     def in_cooldown(self, now: datetime) -> bool:
         if not self.cooldown_minutes or not self.last_run_at:

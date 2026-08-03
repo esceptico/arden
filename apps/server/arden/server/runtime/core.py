@@ -28,6 +28,8 @@ from arden.llm.router import get_completion_client
 from arden.llm.router import init as llm_init
 from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
+from arden.memory.facts.capture.runner import CaptureTurn, FactCapture
+from arden.memory.facts.capture.store import SessionConsumerWatermarkStore
 from arden.memory.facts.completion_dream import CompletionFactDreamRenderer
 from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
 from arden.memory.facts.consumer_store import FactConsumerStore
@@ -155,6 +157,7 @@ class Runtime:
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
         self._fact_consumer_store: FactConsumerStore | None = None
+        self._session_watermark_store: SessionConsumerWatermarkStore | None = None
         self._fact_ledger: FactLedger | None = None
 
         self._connected = False
@@ -247,6 +250,8 @@ class Runtime:
             services[WIKI_POST_COMMIT_SERVICE] = self.project_wiki_change_after_commit
         if self.automation:
             services["area_custodians"] = self.automation.custodians
+            if self.automation.fact_capture_review is not None:
+                services["fact_capture"] = self.automation.fact_capture_review
             if self.automation.fact_maintenance_review is not None:
                 services["fact_maintenance"] = self.automation.fact_maintenance_review
             if self.automation.wiki_maintenance_review is not None:
@@ -609,12 +614,16 @@ class Runtime:
         connection = await database.connect(self.config.memory_db_path)
         consumers: FactConsumerStore | None = None
         maintenance: WikiMaintenanceStore | None = None
+        session_watermarks: SessionConsumerWatermarkStore | None = None
         try:
             plans = FactPlanStore(connection)
             await plans.init_schema()
             consumers = await FactConsumerStore.open(self.config.memory_db_path)
             maintenance = await WikiMaintenanceStore.open(self.config.memory_db_path)
+            session_watermarks = await SessionConsumerWatermarkStore.open(self.config.memory_db_path)
         except BaseException:
+            if session_watermarks is not None:
+                await session_watermarks.close()
             if maintenance is not None:
                 await maintenance.close()
             if consumers is not None:
@@ -624,6 +633,7 @@ class Runtime:
         self._fact_plan_conn = connection
         self._fact_consumer_store = consumers
         self._wiki_maintenance_store = maintenance
+        self._session_watermark_store = session_watermarks
         self._fact_ledger = ledger
         self.fact_service = FactService(ledger, plans, post_commit=self._after_fact_commit)
         self.knowledge.set_fact_service(self.fact_service)
@@ -744,6 +754,37 @@ class Runtime:
                 reasoning_effort=self.knowledge._memory_reasoning_effort(model),
             ),
             timezone_name=self.config.memory_timezone,
+        )
+
+    def _create_fact_capture(self) -> FactCapture | None:
+        if (
+            self.fact_service is None
+            or self._session_watermark_store is None
+            or self.stores is None
+            or not self.config.memory_model
+        ):
+            return None
+        sessions = self.stores.sessions.store
+        facts = self.fact_service
+        watermarks = self._session_watermark_store
+
+        async def eligible_sessions() -> list[tuple[str, int]]:
+            return await sessions.list_capture_eligible_sessions()
+
+        async def messages_after(session_id: str, after_seq: int, limit: int) -> list[CaptureTurn]:
+            rows = await sessions.list_transcript_messages_after(session_id, after_seq, limit)
+            return [_capture_turn(row) for row in rows]
+
+        async def latest_messages(session_id: str, limit: int) -> list[CaptureTurn]:
+            rows = await sessions.list_latest_transcript_messages(session_id, limit)
+            return [_capture_turn(row) for row in rows]
+
+        return FactCapture(
+            watermarks=watermarks,
+            facts=facts,
+            eligible_sessions=eligible_sessions,
+            messages_after=messages_after,
+            latest_messages=latest_messages,
         )
 
     def _create_fact_maintenance(self, reviewer: FactMaintenanceReviewer) -> FactMaintenance | None:
@@ -1039,6 +1080,7 @@ class Runtime:
             get_slack_client=lambda: self.integrations.get_client("slack"),
             resolve_auxiliary_completion=self.auxiliary_completion,
             project_wiki_state=self.project_wiki_state,
+            get_fact_capture=self._create_fact_capture,
             get_fact_dream=self._get_fact_dream,
             get_fact_maintenance=self._create_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
@@ -1105,6 +1147,9 @@ class Runtime:
         if self._wiki_curator_store:
             await self._wiki_curator_store.close()
             self._wiki_curator_store = None
+        if self._session_watermark_store:
+            await self._session_watermark_store.close()
+            self._session_watermark_store = None
         if self._fact_consumer_store:
             await self._fact_consumer_store.close()
             self._fact_consumer_store = None
@@ -1240,6 +1285,16 @@ class Runtime:
         if not self.automation:
             return {"status": "disabled", "deleted": 0, "before": before.isoformat(), "limit": limit}
         return await self.automation.prune_outbox_completed(before=before, limit=limit)
+
+
+def _capture_turn(row: dict) -> CaptureTurn:
+    return CaptureTurn(
+        seq=int(row["seq"]),
+        role=str(row["role"]),
+        text=str(row["text"]),
+        message_id=str(row["message_id"]),
+        created_at=str(row["created_at"]),
+    )
 
 
 def get_runtime(request: Request) -> Runtime:

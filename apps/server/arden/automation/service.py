@@ -462,6 +462,7 @@ class AutomationService:
             parsed_triggers = [trigger for t in triggers if (trigger := parse_one(t)) is not None]
             time_triggers = [t for t in parsed_triggers if isinstance(t, TimeTrigger)]
             changes["triggers"] = parsed_triggers
+            changes["triggers_source"] = "manual"
             changes["next_run_at"] = time_triggers[0].next_run(datetime.now(UTC)) if time_triggers else None
         else:
             # For single-trigger patching via field params
@@ -474,6 +475,7 @@ class AutomationService:
             if trigger_result:
                 new_trigger, new_next_run = trigger_result
                 changes["triggers"] = [new_trigger]
+                changes["triggers_source"] = "manual"
                 changes["next_run_at"] = new_next_run
 
         updated = replace(task, **changes) if changes else task

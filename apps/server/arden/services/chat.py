@@ -1161,13 +1161,11 @@ async def respawn_background_agent(
                 f'<background_agent_result session_id="{row.get("child_session_id") or ""}" status="failed">\n'
                 "This is a hidden completion event. The user cannot see this message.\n"
                 f"The agent could not be restarted after a server restart: {failure}\n"
-                'This agent\'s run failed. If you still need this work, assign a follow-up with '
+                "This agent's run failed. If you still need this work, assign a follow-up with "
                 'followup_task(session_id="...") or spawn a fresh agent.\n'
                 "</background_agent_result>"
             )
-            await deps.dispatch_session_message(
-                session_id, notification, f"bg:{task_id}:respawn-failed", True, None
-            )
+            await deps.dispatch_session_message(session_id, notification, f"bg:{task_id}:respawn-failed", True, None)
             await session_service.store.mark_background_completion_delivered(
                 session_id=session_id,
                 task_id=task_id,

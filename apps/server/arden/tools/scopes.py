@@ -12,6 +12,7 @@ model.
 
 from typing import Literal, get_args
 
+from arden.memory.facts.capture import FACT_CAPTURE_REVIEW_TOOL_NAME
 from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
 from arden.tools.core.scope import ToolFilter, tools
 from arden.wiki.constants import PUBLISH_WIKI_GENERATED_TOOL_NAME, WIKI_MAINTENANCE_REVIEW_TOOL_NAME
@@ -28,6 +29,7 @@ ScopeKey = (
         "area_act",
         "area_reply",
         "area_action",
+        "fact_capture",
         "fact_maintenance",
         "fact_retention",
         "daily_notes",
@@ -67,6 +69,7 @@ SCOPES: dict[ScopeKey, ToolFilter] = {
     # out and an action needing one fails here instead of quietly escalating.
     "area_action": _AREA_OBSERVE | tools.system,
     # Builtin workers run one tool to completion and nothing else.
+    "fact_capture": tools.named(FACT_CAPTURE_REVIEW_TOOL_NAME),
     "fact_maintenance": tools.named(FACT_MAINTENANCE_REVIEW_TOOL_NAME),
     "wiki_maintenance": tools.named(WIKI_MAINTENANCE_REVIEW_TOOL_NAME),
     "fact_retention": (
