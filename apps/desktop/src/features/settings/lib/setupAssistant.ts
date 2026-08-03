@@ -67,19 +67,3 @@ export function parseMCPServerImport(text: string): ParsedMCPImport {
 
   throw new Error("MCP import requires { name, config }, mcpServers, servers, or a direct config with name.");
 }
-
-export function splitLines(value: string): string[] {
-  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-}
-
-export function parseKeyValueLines(value: string): Record<string, string> | undefined {
-  const out: Record<string, string> = {};
-  for (const line of splitLines(value)) {
-    const index = line.indexOf("=");
-    if (index <= 0) throw new Error(`Expected KEY=value line: ${line}`);
-    const key = line.slice(0, index).trim();
-    const val = line.slice(index + 1).trim();
-    if (key) out[key] = val;
-  }
-  return Object.keys(out).length ? out : undefined;
-}

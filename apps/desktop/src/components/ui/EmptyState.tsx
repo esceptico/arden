@@ -65,19 +65,3 @@ export function Empty({
     </EmptyState>
   );
 }
-
-/** Compact inline "this list is empty" note — a subtle boxed italic message for
- *  sub-lists (settings tabs, MCP servers), distinct from the icon-chip
- *  EmptyState used for primary/detail panes. */
-export function EmptyNote({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <div
-      className={clsx(
-        "rounded-[10px] bg-bg-main/40 px-3 py-6 text-center text-sm italic text-muted",
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}

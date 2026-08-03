@@ -1,5 +1,5 @@
 import { apiWithConfig } from "@/api/core";
-import { archiveAreaApi, archiveSessionApi, branchSessionApi, createAreaApi, listAreasApi, listArchivedSessionsApi, listPrimarySessionsApi, moveSessionToAreaApi, permanentlyDeleteSessionApi, renameSessionApi, updateSessionModelApi, restoreSessionApi, updateAreaApi } from "@/api/sessions";
+import { archiveAreaApi, archiveSessionApi, branchSessionApi, createAreaApi, listAreasApi, listArchivedSessionsApi, listPrimarySessionsApi, moveSessionToAreaApi, permanentlyDeleteSessionApi, renameSessionApi, updateSessionModelApi, restoreSessionApi } from "@/api/sessions";
 import type { Area, SessionListItem } from "@/api/types";
 import { getState } from "@/stores";
 import { fetchGoal } from "@/actions/goals";
@@ -64,16 +64,6 @@ export async function createArea(): Promise<Area> {
   const area = await createAreaApi(s.config, { name: "New area" });
   s.upsertAreaRecord(area);
   await createSession(area.area_id);
-  return area;
-}
-
-export async function saveArea(
-  areaId: string,
-  patch: { name?: string; default_cwd?: string | null; instructions?: string | null; knowledge_scope?: string },
-): Promise<Area> {
-  const s = getState();
-  const area = await updateAreaApi(s.config, areaId, patch);
-  s.upsertAreaRecord(area);
   return area;
 }
 

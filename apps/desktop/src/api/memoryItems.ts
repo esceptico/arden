@@ -40,15 +40,6 @@ export interface MemoryItem {
   updated_at: string;
 }
 
-export function queryString(params: Record<string, string | number | boolean | undefined>): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== "") query.set(key, String(value));
-  }
-  const raw = query.toString();
-  return raw ? `?${raw}` : "";
-}
-
 export interface MemoryItemsResponse {
   items: MemoryItem[];
   limit: number;
