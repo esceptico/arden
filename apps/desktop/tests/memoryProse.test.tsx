@@ -59,3 +59,25 @@ test("double-dollar display math remains supported", () => {
   const html = renderToStaticMarkup(<Markdown content={"$$\nx^2\n$$"} />);
   expect(html).toContain('class="katex');
 });
+
+test("aliased wikilinks inside table cells keep their column", () => {
+  const table = [
+    "| Company | Role | Status |",
+    "|---|---|---|",
+    "| [[job-applications/companies/nous-research|Nous Research]] | Software Engineer | Warm re-entry |",
+  ].join("\n");
+  const html = renderToStaticMarkup(<Markdown content={table} />);
+  expect(html).toContain('data-wikilink="job-applications/companies/nous-research"');
+  expect(html).toContain(">Nous Research</a>");
+  expect(html).not.toContain("[[");
+  // three header cells, three body cells — the alias pipe never split the row
+  expect(html.match(/<td/g)?.length).toBe(3);
+  expect(html).toContain(">Software Engineer</td>");
+});
+
+test("wikilink pipe escaping leaves fenced and inline code untouched", () => {
+  const source = ["```", "| [[a|b]] |", "```", "", "`[[a|b]]` stays literal."].join("\n");
+  const html = renderToStaticMarkup(<Markdown content={source} />);
+  expect(html).not.toContain("\\|");
+  expect(html.match(/\[\[a\|b\]\]/g)?.length).toBe(2);
+});

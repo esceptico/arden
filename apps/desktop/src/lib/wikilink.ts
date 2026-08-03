@@ -7,6 +7,45 @@ import type { Root, Text } from "mdast";
 // so it renders as an <a> that the Markdown Anchor intercepts (no browser nav).
 const WIKILINK_RE = /\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g;
 
+// GFM splits a table row on every unescaped `|`, so the alias pipe in
+// `[[target|Label]]` cuts the cell in two before remarkWikiLink ever runs —
+// the target lands in one column, the label in the next, and every later
+// column shifts. Escaping the pipe keeps the cell whole; the parser unescapes
+// it back to a literal `|` in the text node, where the wikilink regex finds it.
+const ALIASED_WIKILINK_RE = /\[\[([^[\]|\n]+)\|([^[\]\n]+)\]\]/g;
+const INLINE_CODE_RE = /`+[^`\n]*`+/g;
+const FENCE_RE = /^\s{0,3}(?:`{3,}|~{3,})/;
+
+export function escapeWikiLinkPipes(markdown: string): string {
+  if (!markdown.includes("[[")) return markdown;
+  let fenced = false;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (FENCE_RE.test(line)) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced || !line.includes("[[")) return line;
+      return outsideInlineCode(line, (text) =>
+        text.replace(ALIASED_WIKILINK_RE, (_, target: string, label: string) => `[[${target}\\|${label}]]`),
+      );
+    })
+    .join("\n");
+}
+
+function outsideInlineCode(line: string, transform: (text: string) => string): string {
+  let out = "";
+  let last = 0;
+  INLINE_CODE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = INLINE_CODE_RE.exec(line))) {
+    out += transform(line.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + transform(line.slice(last));
+}
+
 /** remark plugin: split `text` nodes on [[Subject]] and inject inert links. */
 export function remarkWikiLink() {
   return (tree: Root) => {

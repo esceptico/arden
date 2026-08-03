@@ -26,6 +26,7 @@ import { Mermaid } from "@/components/ui/Mermaid";
 import { ICON } from "@/lib/icons";
 import { useTimeoutFlag } from "@/lib/hooks";
 import {
+  escapeWikiLinkPipes,
   parseMemoryArtifactHref,
   remarkProvenance,
   remarkWikiLink,
@@ -126,6 +127,7 @@ export function Markdown({
   /** Decorate completed assistant-response links with cached website icons. */
   externalLinkFavicons?: boolean;
 }) {
+  const source = useMemo(() => escapeWikiLinkPipes(content), [content]);
   const components = {
     // The Chat mock uses the Board typeset pre directly: it has no language
     // strip, registration ticks, or copy control. Other Markdown surfaces
@@ -167,7 +169,7 @@ export function Markdown({
         }
         components={components}
       >
-        {content}
+        {source}
         </ReactMarkdown>
       </ExternalLinkFaviconContext.Provider>
     </div>
