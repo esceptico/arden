@@ -56,4 +56,4 @@ Core API availability is independent of migrations, indexing, wiki health, inter
 - I-09 and I-10 remain intentionally separate from the online boot path.
 - The live maintenance policy keeps 10,000 visible-session events and 100 archived-session events, preserves all transcript messages, and requires atomic rollback.
 - The 495 pre-existing missing legacy blobs are preserved/reported with an explicit CLI allowance; no new missing reference is accepted.
-- The live migration completed through an APFS copy-on-write working clone, verified `VACUUM INTO`, and atomic swap. Its rollback copy remains intact pending explicit deletion approval.
+- The live migration completed through an APFS copy-on-write working clone, verified `VACUUM INTO`, and atomic swap. After smoke testing and explicit approval, its verified rollback copy was deleted.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Research, I-01 through I-10, and live legacy maintenance are implemented and verified. Only rollback-copy deletion remains a user decision.
+Research, I-01 through I-10, live legacy maintenance, and rollback cleanup are complete and verified.
 
 ## Evidence
 
@@ -33,12 +33,12 @@ Research, I-01 through I-10, and live legacy maintenance are implemented and ver
 | V-23 | I-01-I-04/live maintenance | Start Arden against the migrated live DB and request `/health`. | Core API ready under 2s while warmup continues; clean shutdown. | Store/schema phase 68.8 ms; runtime ready path 228.4 ms; API ready 1,255.9 ms. `/health` returned 200 with `core=true`, `warmup=running`. Intentional shutdown completed. | Pass | `uv run arden-server serve --port 16878`; `curl /health`; 2026-08-03 |
 | V-24 | I-01 | Cancel a timed warmup phase. | Reraise cancellation and avoid an error traceback. | Cancellation logs `outcome=cancelled` at info level and reraises `CancelledError`. | Pass | `tests/test_startup_timing.py`; 2026-08-03 |
 | V-25 | Live rollback | Verify the retained rollback against the manifest and inspect both databases read-only. | Rollback exactly matches the pre-migration source; both databases are healthy. | Rollback SHA-256 exactly matches `5dbb736f...40198b`; rollback quick-check and live integrity-check returned `ok`. Live DB has 1,503 sessions, 216,183 messages, 297,196 events, 239 outbox rows, and no `file_search_text` column. | Pass | `shasum -a 256`; SQLite immutable read-only checks; 2026-08-03 |
+| V-26 | Live rollback | Delete only the manifest-linked rollback after explicit approval, then recheck the live database and disk. | Rollback absent; live DB healthy; disk reclaimed. | Exact rollback path is absent; free disk rose from 8.8 GiB to 16 GiB. Live integrity returned `ok` with unchanged counts: 1,503 sessions, 216,183 messages, 297,196 events, and 239 outbox rows. | Pass | Exact-path existence check, `df -h`, SQLite immutable read-only checks; 2026-08-03 |
 
 ## Failures and gaps
 
 - Old `~/.ntrp` blob files remain absent. Their manifests were preserved/reported, but missing raw content is not reconstructable.
-- The verified 7.5 GiB rollback copy still occupies disk pending explicit deletion approval.
 
 ## Outcome
 
-The API/warmup split, bounded transport/storage controls, cold exports, migration tooling, and live database compaction are implemented and verified. The live API is available in about 1.26 seconds while warmup continues. The rollback copy remains intact.
+The API/warmup split, bounded transport/storage controls, cold exports, migration tooling, live compaction, and rollback cleanup are complete and verified. The live API is available in about 1.26 seconds while warmup continues; the live database is 2.3 GiB and free disk is 16 GiB.

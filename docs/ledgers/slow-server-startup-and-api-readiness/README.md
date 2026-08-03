@@ -6,14 +6,14 @@
 
 | Field | Value |
 | --- | --- |
-| State | verifying |
-| Active phase | I-01-I-10 and live migration verified; rollback deletion decision pending |
+| State | complete |
+| Active phase | Complete |
 | Created | 2026-08-03T18:19:19+04:00 |
-| Last updated | 2026-08-03T21:01:00+04:00 |
-| Last consolidated | 2026-08-03T21:01:00+04:00 |
+| Last updated | 2026-08-03T21:48:21+04:00 |
+| Last consolidated | 2026-08-03T21:48:21+04:00 |
 | Codebase branch | codex/slow-startup-readiness |
-| Codebase revision | 5c2ec656a073 + ledger working tree |
-| Sources checked through | code: 5c2ec656a073 + ledger working tree; web: 2026-08-03 |
+| Codebase revision | 2de9b9f2101e + ledger working tree |
+| Sources checked through | code: 2de9b9f2101e + ledger working tree; web: 2026-08-03 |
 
 ## Original task — verbatim
 
@@ -93,7 +93,7 @@ That implementation is complete. Raw-result manifests now support expiry pruning
 
 The live pilot favors **Letta-v1 summarized + zstd** for cold space and ATIF for interchange. On a 47.96 MB archived transcript, summarized Letta was 13.04 MB JSON / 1.10 MB zstd versus ATIF's 23.40 MB / 1.14 MB; both preserved the same user/assistant prose digest. On a current blob-backed session, summarized Letta was 40.9 KB JSON / 13.1 KB zstd versus ATIF's 100.7 KB / 32.0 KB, with both raw blob refs verified.
 
-The live migration is complete and verified. `sessions.db` fell from 7.5 GiB to 2.3 GiB: 326,278 excess events and 1,931 completed outbox receipts were removed, 2,123 completed payloads were compacted, 112 inline bodies were migrated to blobs, and the duplicate FTS column was removed. SQLite integrity, canonical row counts, and user/assistant prose parity passed. A 7.5 GiB rollback copy remains until deletion is explicitly approved.
+The live migration is complete and verified. `sessions.db` fell from 7.5 GiB to 2.3 GiB: 326,278 excess events and 1,931 completed outbox receipts were removed, 2,123 completed payloads were compacted, 112 inline bodies were migrated to blobs, and the duplicate FTS column was removed. SQLite integrity, canonical row counts, and user/assistant prose parity passed. After explicit approval, the verified 7.5 GiB rollback copy was deleted and free disk rose from 8.8 GiB to 16 GiB.
 
 ## Decisions
 
@@ -105,16 +105,16 @@ The live migration is complete and verified. `sessions.db` fell from 7.5 GiB to 
 - Letta-v1 summarized + zstd is the default cold pilot; ATIF-v1.7 remains the full interchange export. Canonical rows are not deleted by the pilot.
 - Live maintenance retains 10,000 events for visible sessions and 100 for archived sessions; transcript messages are untouched and a rollback database is mandatory.
 - Cancellation of background warmup during normal shutdown is logged as `cancelled`, without an error traceback.
+- The verified rollback was deleted only after the live API smoke test and explicit user approval.
 
 ## Open questions
 
 - The user's desired `max_space_gb` value remains unset by default.
 - Some pre-existing blob manifests still reference files lost with the old `~/.ntrp` root. Maintenance preserved and reported them; it cannot reconstruct absent content.
-- Removing the verified rollback database after the maintenance smoke test is a separate destructive step.
 
 ## Next action
 
-Ask whether to delete `/Users/escept1co/.arden/sessions.db.precompact-20260803T164430Z` and reclaim 7.5 GiB.
+None. Monitor the configured storage budget and warmup telemetry during normal use.
 
 ## Details
 
