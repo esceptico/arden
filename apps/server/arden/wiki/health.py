@@ -125,8 +125,8 @@ def _mechanical_issues(
 ) -> tuple[WikiHealthIssue, ...]:
     issues: list[WikiHealthIssue] = []
     for warning in report.warnings:
-        if warning.code in {"unresolved_link", "ambiguous_link"}:
-            evidence = warning.evidence if warning.code == "unresolved_link" else f"ambiguous: {warning.evidence}"
+        if warning.code == "unresolved_link":
+            evidence = warning.evidence
             issues.append(
                 WikiHealthIssue(
                     WikiHealthIssueCode.UNRESOLVED_LINK,

@@ -79,7 +79,7 @@ def _wiki(root: Path) -> WikiService:
         path="topics/interaction-lab.md",
         title="Interaction Lab",
         aliases=("Lab",),
-        body=b"# Interaction Lab\n\n[[Peer]]\n[[Missing]]\n",
+        body=b"# Interaction Lab\n\n[[topics/peer]]\n[[Missing]]\n",
         page_id="interaction-lab",
         expected_head=None,
         actor="test",
@@ -89,7 +89,7 @@ def _wiki(root: Path) -> WikiService:
     wiki.create_page(
         path="topics/peer.md",
         title="Peer",
-        body=b"[[Lab]]\n",
+        body=b"[[topics/interaction-lab]]\n",
         page_id="peer",
         expected_head=wiki.repository.head,
         actor="test",
@@ -324,8 +324,7 @@ async def test_wiki_links_returns_resolved_unresolved_and_backlink_context(tmp_p
             "source_path": "topics/peer.md",
             "target_path": "topics/interaction-lab.md",
             "status": "resolved",
-            "candidates": [],
-            "page": "Lab",
+            "page": "topics/interaction-lab",
             "fragment": None,
             "alias": None,
             "embed": False,
@@ -591,13 +590,12 @@ async def test_agent_wiki_writes_are_cas_safe_and_semantically_idempotent(tmp_pa
     assert conflict.is_error
     assert conflict.outcome.error.code == "name_conflict"
 
-    name_conflict = await create_wiki_page_tool.execute(
+    shared_title = await create_wiki_page_tool.execute(
         execution,
         **{**create_args, "path": "daily/2026-07-29-copy.md"},
     )
-    assert name_conflict.is_error
-    assert name_conflict.outcome.error.code == "name_conflict"
-    assert name_conflict.outcome.error.recovery_action is not None
+    assert not shared_title.is_error
+    assert shared_title.data["changed"] is True
 
     missing = await edit_wiki_page_tool.execute(
         execution,
@@ -1014,7 +1012,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     assert moved.data["changed"] is True
     assert wiki.read_page("interaction-lab").resource.path == "topics/renamed-location.md"
     assert wiki.read_page("interaction-lab").page.title == "Interaction Lab"
-    assert b"[[Lab]]" in wiki.read_page("peer").content
+    assert b"[[topics/renamed-location]]" in wiki.read_page("peer").content
     assert all(page.page.lifecycle != "redirect" for page in wiki.list_pages(include_redirects=True))
 
     exact_replay = await move_wiki_page_tool.execute(

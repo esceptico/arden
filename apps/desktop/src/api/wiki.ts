@@ -49,9 +49,8 @@ export interface WikiLink {
   target: string;
   alias: string | null;
   heading: string | null;
-  status: "resolved" | "ambiguous" | "unresolved";
+  status: "resolved" | "unresolved";
   targetPageId: string | null;
-  candidates: string[];
 }
 
 export interface WikiPageLinks {
@@ -153,9 +152,8 @@ function linkTarget(node: { page?: string | null; fragment?: string | null }): s
 function mapLink(raw: {
   source_page_id: string;
   node: { page?: string | null; fragment?: string | null; alias?: string | null };
-  status: "resolved" | "ambiguous" | "unresolved";
+  status: "resolved" | "unresolved";
   target_page_id?: string | null;
-  candidates?: string[];
 }): WikiLink {
   return {
     sourcePageId: raw.source_page_id,
@@ -164,7 +162,6 @@ function mapLink(raw: {
     heading: raw.node.fragment ?? null,
     status: raw.status,
     targetPageId: raw.target_page_id ?? null,
-    candidates: raw.candidates ?? [],
   };
 }
 

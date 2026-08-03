@@ -128,9 +128,8 @@ interface MemoryLink {
   context: string;
   line: number;
   column: number;
-  status: "resolved" | "ambiguous" | "unresolved";
+  status: "resolved" | "unresolved";
   resolvedPath: string | null;
-  candidates: string[];
   sourceRevision: string;
 }
 
@@ -743,7 +742,6 @@ function mappedLink(
     column: 0,
     status: link.status,
     resolvedPath: resolved?.path ?? null,
-    candidates: link.candidates.map((candidate) => pageById.get(idKey(config, candidate))?.path ?? candidate),
     sourceRevision: source?.version ?? current.version,
   };
 }

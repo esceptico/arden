@@ -7,7 +7,6 @@ from arden.wiki.models import WikiMaintenancePageUpdate
 from arden.wiki.pages import create_page
 from arden.wiki.service import (
     GeneratedRegionConflictError,
-    WikiAmbiguityError,
     WikiService,
     WikiValidationError,
 )
@@ -101,7 +100,7 @@ def test_maintenance_updates_are_atomic_identity_preserving_and_owned_by_mainten
     assert b"<!-- generated -->\nFact.\n<!-- /generated -->" in after.content
 
 
-def test_maintenance_rejects_generated_edits_and_name_collisions_without_partial_commit(tmp_path: Path) -> None:
+def test_maintenance_rejects_generated_edits_and_allows_shared_titles(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     generated = b"<!-- generated -->\nFact.\n<!-- /generated -->\n"
     _seed(
@@ -119,16 +118,15 @@ def test_maintenance_rejects_generated_edits_and_name_collisions_without_partial
         )
     assert repo.head == initial
 
-    with pytest.raises(WikiAmbiguityError):
-        service.apply_maintenance_updates(
-            (
-                _update(service, "one", title="Changed", aliases=(), body=generated),
-                _update(service, "two", title="Changed", aliases=(), body=b""),
-            ),
-            base_head=initial,
-        )
-    assert repo.head == initial
-    assert service.read_page("one").page.title == "One"
+    service.apply_maintenance_updates(
+        (
+            _update(service, "one", title="Changed", aliases=(), body=generated),
+            _update(service, "two", title="Changed", aliases=(), body=b""),
+        ),
+        base_head=initial,
+    )
+    assert service.read_page("one").page.title == "Changed"
+    assert service.read_page("two").page.title == "Changed"
 
 
 def test_maintenance_requires_exact_head_and_resource_versions_even_for_noop(tmp_path: Path) -> None:
@@ -438,7 +436,7 @@ def test_restore_maintenance_change_allows_a_later_unrelated_commit(tmp_path: Pa
     assert service.read_page("other").page.title == "Other"
 
 
-def test_restore_maintenance_change_rejects_name_and_generated_region_violations(tmp_path: Path) -> None:
+def test_restore_maintenance_change_allows_shared_titles_and_rejects_region_violations(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     generated = b"<!-- generated -->\nFact.\n<!-- /generated -->\n"
     _seed(
@@ -453,15 +451,14 @@ def test_restore_maintenance_change_rejects_name_and_generated_region_violations
     )
     maintained = service.read_page("target")
     service.create_page(path="other.md", title="Old", page_id="other", expected_head=repo.head)
-    collision_head = repo.head
-    with pytest.raises(WikiAmbiguityError, match="ambiguous wiki name"):
-        service.restore_maintenance_change(
-            "target",
-            maintenance_commit_id,
-            expected_version=maintained.resource.version_id,
-            expected_head=collision_head,
-        )
-    assert repo.head == collision_head
+    service.restore_maintenance_change(
+        "target",
+        maintenance_commit_id,
+        expected_version=maintained.resource.version_id,
+        expected_head=repo.head,
+    )
+    assert service.read_page("target").page.title == "Old"
+    assert service.read_page("other").page.title == "Old"
 
     region_repo = _repo(tmp_path / "region")
     _seed(

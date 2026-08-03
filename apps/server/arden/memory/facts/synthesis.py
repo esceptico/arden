@@ -11,7 +11,7 @@ from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import Fact, FactChangeFeed
 from arden.revisions.models import ResourceState
-from arden.wiki.constants import AUTOMATIONS_PATH_PREFIX, README_FILENAME
+from arden.wiki.constants import AUTOMATIONS_PATH_PREFIX, README_FILENAME, SYSTEM_DIRECTORIES
 from arden.wiki.models import GeneratedPageTarget, WikiPageRecord
 from arden.wiki.pages import extract_generated_region, extract_user_body, parse_page
 from arden.wiki.service import WikiService
@@ -281,12 +281,13 @@ class FactSynthesis:
             return None, None
         title = _display_subject(facts)
         identity = _identity("topic", value)
+        directory = _match_directory(active, value)
         candidate = _Route(
             "topic",
             value,
             title,
             f"topic-{identity}",
-            f"topics/{_slug(title)}-{identity[:8]}.md",
+            f"{directory or 'topics'}/{_slug(title)}-{identity[:8]}.md",
             {},
         )
         if _archived_match(archived, candidate):
@@ -546,6 +547,25 @@ def _merge_route(first: _Route, second: _Route) -> _Route:
         first.aliases,
         tuple(dict.fromkeys((*first.keys, *second.keys))),
     )
+
+
+def _match_directory(pages: Sequence[WikiPageRecord], subject: str) -> str | None:
+    """Directory whose README owns the subject; new topic pages land inside it."""
+
+    wanted = _normal(subject)
+    matches = []
+    for record in pages:
+        head, _, filename = record.resource.path.rpartition("/")
+        if not head or filename != README_FILENAME or record.page.lifecycle != "active":
+            continue
+        if head.split("/", 1)[0] in SYSTEM_DIRECTORIES:
+            continue
+        label = _normal(head.rsplit("/", 1)[-1].replace("-", " ").replace("_", " "))
+        title = _normal(record.page.title)
+        names = {label, title, title.removesuffix(" readme").strip()}
+        if wanted in names:
+            matches.append(head)
+    return min(matches, key=lambda item: (len(item), item)) if matches else None
 
 
 def _match_topic(pages: Sequence[WikiPageRecord], subject: str) -> WikiPageRecord | None:

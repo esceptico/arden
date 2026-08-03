@@ -115,7 +115,7 @@ async def test_always_rewrites_and_never_keeps_inbound_links(tmp_path: Path) -> 
     )
     committed = await coordinator.request_rename(**_request(service), policy=RenamePolicy.ALWAYS)
     assert committed.status == "committed"
-    assert b"[[New]]" in service.repository.read("source")
+    assert b"[[new]]" in service.repository.read("source")
     await conn.close()
 
     service, coordinator, conn = await _coordinator(tmp_path / "never")
@@ -356,7 +356,7 @@ async def test_head_conflict_supersedes_and_fresh_generation_rewrites_new_link(t
 
     accepted = await coordinator.accept(stale.approval.approval_id)
     assert accepted.status == "accepted"
-    assert b"[[New]]" in service.repository.read("source")
+    assert b"[[new]]" in service.repository.read("source")
     await conn.close()
 
 

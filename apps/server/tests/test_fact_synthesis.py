@@ -1089,3 +1089,73 @@ async def test_fact_commit_blocks_between_validation_and_wiki_publication(
         assert any(page.page.title == "Later" for page in wiki.list_pages())
     finally:
         await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_new_topic_routes_into_matching_directory(tmp_path: Path) -> None:
+    ledger, consumers, wiki, synthesis = await _service(tmp_path)
+    try:
+        wiki.create_page(path="job-applications/anthropic.md", title="Anthropic Application")
+        ledger.commit(
+            ledger.plan(
+                [
+                    _change("one", "Applied to two companies", subjects=["Job Applications"]),
+                    _change("two", "Prefers remote roles", subjects=["Job Applications"]),
+                ],
+                actor="test",
+                origin="test",
+                reason="seed",
+            )
+        )
+        await synthesis.run()
+        page = next(page for page in wiki.list_pages() if page.page.page_id.startswith("topic-"))
+        assert page.resource.path.startswith("job-applications/")
+        assert not page.resource.path.endswith("/README.md")
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_new_topic_without_matching_directory_lands_in_topics(tmp_path: Path) -> None:
+    ledger, consumers, wiki, synthesis = await _service(tmp_path)
+    try:
+        wiki.create_page(path="job-applications/anthropic.md", title="Anthropic Application")
+        ledger.commit(
+            ledger.plan(
+                [
+                    _change("one", "First", subjects=["Gardening"]),
+                    _change("two", "Second", subjects=["Gardening"]),
+                ],
+                actor="test",
+                origin="test",
+                reason="seed",
+            )
+        )
+        await synthesis.run()
+        page = next(page for page in wiki.list_pages() if page.page.page_id.startswith("topic-"))
+        assert page.resource.path.startswith("topics/")
+    finally:
+        await consumers.close()
+
+
+@pytest.mark.asyncio
+async def test_directory_match_never_targets_system_directories(tmp_path: Path) -> None:
+    ledger, consumers, wiki, synthesis = await _service(tmp_path)
+    try:
+        wiki.create_page(path="insights/2026-07.md", title="July Insights")
+        ledger.commit(
+            ledger.plan(
+                [
+                    _change("one", "First", subjects=["Insights"]),
+                    _change("two", "Second", subjects=["Insights"]),
+                ],
+                actor="test",
+                origin="test",
+                reason="seed",
+            )
+        )
+        await synthesis.run()
+        page = next(page for page in wiki.list_pages() if page.page.page_id.startswith("topic-"))
+        assert page.resource.path.startswith("topics/")
+    finally:
+        await consumers.close()

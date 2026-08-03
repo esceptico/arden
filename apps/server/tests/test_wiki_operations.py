@@ -197,36 +197,39 @@ def test_ordinary_page_operations_cannot_take_over_backend_health(tmp_path: Path
         )
 
 
-def test_backlinks_resolve_title_alias_and_path_and_exclude_hidden_contexts(tmp_path: Path) -> None:
+def test_backlinks_resolve_only_path_links_and_exclude_hidden_contexts(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     target = create_page(title="Target", page_id="target", aliases=("Alias",))
     source = create_page(
         title="Source",
         page_id="source",
         body=(
-            b"[[Target]] [[Alias]] [[notes/target]]\n"
-            b"`[[Target]]`\n<!-- [[Target]] -->\n[off](https://x.test/[[Target]])\n"
+            b"[[Target]] [[Alias]] [[notes/target]] [[notes/target.md]]\n"
+            b"`[[notes/target]]`\n<!-- [[notes/target]] -->\n[off](https://x.test/[[notes/target]])\n"
         ),
     )
     _seed(repo, ("target", "notes/target.md", target), ("source", "source.md", source))
 
     links = WikiService(repo).backlinks("target")
-    assert [link.status for link in links] == [LinkStatus.RESOLVED] * 3
-    assert [link.node.page for link in links] == ["Target", "Alias", "notes/target"]
+    assert [link.status for link in links] == [LinkStatus.RESOLVED] * 2
+    assert [link.node.page for link in links] == ["notes/target", "notes/target.md"]
 
 
-def test_backlinks_reports_ambiguous_and_unresolved_links_without_guessing(tmp_path: Path) -> None:
+def test_pages_sharing_a_title_coexist_and_title_links_stay_unresolved(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     first = create_page(title="Same", page_id="first")
     second = create_page(title="same", page_id="second")
-    source = create_page(title="Source", page_id="source", body=b"[[Same]] [[Missing]]")
+    source = create_page(title="Source", page_id="source", body=b"[[Same]] [[Missing]] [[one]]")
     _seed(repo, ("first", "one.md", first), ("second", "two.md", second), ("source", "source.md", source))
     service = WikiService(repo)
 
-    with pytest.raises(WikiAmbiguityError):
-        service.list_pages()
+    assert len(service.list_pages()) == 3
     references = service.links("source")
-    assert [reference.status for reference in references] == [LinkStatus.AMBIGUOUS, LinkStatus.UNRESOLVED]
+    assert [reference.status for reference in references] == [
+        LinkStatus.UNRESOLVED,
+        LinkStatus.UNRESOLVED,
+        LinkStatus.RESOLVED,
+    ]
 
 
 def test_rename_is_atomic_and_preserves_link_bytes(tmp_path: Path) -> None:
@@ -253,7 +256,7 @@ def test_rename_is_atomic_and_preserves_link_bytes(tmp_path: Path) -> None:
         expected_version=target_record.resource.version_id,
         base_head=repo.head,
     )
-    assert (plan.link_count, plan.page_count) == (3, 2)
+    assert (plan.link_count, plan.page_count) == (1, 1)
     commit = service.apply_rename(plan)
     assert len(commit.changes) == 4
 
@@ -263,9 +266,9 @@ def test_rename_is_atomic_and_preserves_link_bytes(tmp_path: Path) -> None:
     assert redirect.page.lifecycle == "redirect"
     assert redirect.page.redirect_to == "target"
     rewritten = repo.read("source")
-    assert b"![[ New #part|shown ]]" in rewritten
+    assert b"![[ Old #part|shown ]]" in rewritten
     assert b"[[archive/new.md#frag|alias]]\r\n" in rewritten
-    assert b"[[New]]" in repo.read("target")
+    assert b"[[Old]]" in repo.read("target")
     assert len(repo.history(resource_id="target")) == 2
     assert service.apply_rename(plan) == commit
     report = service.link_report_for_path("notes/old.md")
@@ -367,10 +370,10 @@ def test_move_rejects_stale_or_colliding_destination_without_changes(tmp_path: P
         )
 
 
-def test_root_title_link_uses_new_title_not_lowercase_path(tmp_path: Path) -> None:
+def test_root_stem_link_rewrites_to_the_new_stem(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     target = create_page(title="Old", page_id="target")
-    source = create_page(title="Source", page_id="source", body=b"[[Old]]")
+    source = create_page(title="Source", page_id="source", body=b"[[old]]")
     _seed(repo, ("target", "old.md", target), ("source", "source.md", source))
     service = WikiService(repo)
 
@@ -383,7 +386,7 @@ def test_root_title_link_uses_new_title_not_lowercase_path(tmp_path: Path) -> No
     )
     service.apply_rename(plan)
 
-    assert repo.read("source").endswith(b"[[New]]")
+    assert repo.read("source").endswith(b"[[new]]")
 
 
 def test_rename_rejects_forged_plan_without_changes(tmp_path: Path) -> None:

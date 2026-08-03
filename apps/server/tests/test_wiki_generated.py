@@ -452,7 +452,7 @@ def test_publish_generated_retries_from_its_pinned_head_after_later_commits(tmp_
     assert service.publish_generated((target,), source_revision="facts-1", base_head=base_head) == first
 
 
-@pytest.mark.parametrize("reuse", ["page_id", "path", "title"])
+@pytest.mark.parametrize("reuse", ["page_id", "path"])
 def test_publish_generated_does_not_recreate_archived_pages(tmp_path: Path, reuse: str) -> None:
     repo = _repo(tmp_path)
     service = _service(repo)
@@ -460,11 +460,7 @@ def test_publish_generated_does_not_recreate_archived_pages(tmp_path: Path, reus
     assert created is not None
     service.archive_page("topic", base_head=repo.head)
 
-    target = _target(
-        "topic" if reuse == "page_id" else "other",
-        path="topics/topic.md" if reuse != "title" else "topics/other.md",
-        title="Topic" if reuse == "title" else None,
-    )
+    target = _target("topic" if reuse == "page_id" else "other", path="topics/topic.md")
     with pytest.raises(WikiValidationError, match=r"unavailable|archived"):
         service.publish_generated((target,), source_revision="facts-2", base_head=repo.head)
 
@@ -521,24 +517,30 @@ def test_publish_generated_records_fact_provenance_without_changing_page_identit
     assert page.metadata["fact_citations"] == {"fact-1": ("source-a",)}
 
 
-@pytest.mark.parametrize(
-    "targets",
-    [
-        (_target("first", title="Same"), _target("second", title="Same")),
-        (_target("first", path="topics/same.md"), _target("second", path="topics/same.md")),
-    ],
-)
-def test_publish_generated_rejects_target_collisions_without_a_partial_commit(
-    tmp_path: Path, targets: tuple[GeneratedPageTarget, ...]
-) -> None:
+def test_publish_generated_rejects_path_collisions_without_a_partial_commit(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
 
     service = _service(repo)
     before = repo.head
+    targets = (_target("first", path="topics/same.md"), _target("second", path="topics/same.md"))
     with pytest.raises(WikiAmbiguityError):
         service.publish_generated(targets, source_revision="facts-1", base_head=repo.head)
 
     assert repo.head == before
+
+
+def test_publish_generated_allows_title_shared_with_existing_page(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    service = _service(repo)
+    service.create_page(path="job-applications/notes.md", title="Job Applications")
+
+    created = service.publish_generated(
+        (_target("topic", path="topics/job-applications.md", title="Job Applications"),),
+        source_revision="facts-1",
+        base_head=repo.head,
+    )
+    assert created is not None
+    assert service.read_page("topic").page.title == "Job Applications"
 
 
 def _page(page_id: str, title: str) -> bytes:

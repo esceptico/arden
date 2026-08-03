@@ -64,7 +64,7 @@ def prepare_plan(
                 continue
             link_count += len(references)
             page_count += 1
-            targets = {item.node: rename_target(item.node, new_path, new_title) for item in references}
+            targets = {item.node: rename_target(item.node, new_path) for item in references}
             rewritten_body = rewrite_page_targets(source.page.body.decode("utf-8"), targets).encode("utf-8")
             if source.page.page_id == page_id:
                 moved_content = replace(replacement, body=rewritten_body).to_bytes()
@@ -133,12 +133,10 @@ def assert_redirect_resource_available(
     raise WikiValidationError(f"redirect resource already exists: {resource_id}")
 
 
-def rename_target(node: WikilinkNode, new_path: str, new_title: str) -> str:
+def rename_target(node: WikilinkNode, new_path: str) -> str:
     if node.page is None:
         raise WikiValidationError("rename rewrite requires a page link target")
-    if "/" in node.page or node.page.casefold().endswith(".md"):
-        return new_path if node.page.casefold().endswith(".md") else new_path[:-3]
-    return new_title
+    return new_path if node.page.casefold().endswith(".md") else new_path[:-3]
 
 
 def redirect_id(page_id: str, old_path: str) -> str:
@@ -179,13 +177,13 @@ def is_exact_generated_rewrite(
         or after.state is not ResourceState.ACTIVE
     ):
         return False
-    prior = snapshot(repository, strict_names=True, at=commit.parent_id)
+    prior = snapshot(repository, at=commit.parent_id)
     page_index = index(prior)
     source = page_index.pages.get(page_id)
     if source is None or source.resource != before:
         return False
 
-    moved: dict[str, tuple[str, str, str]] = {}
+    moved: dict[str, str] = {}
     for change in commit.changes:
         if change.action != "move" or change.before is None or change.after is None:
             continue
@@ -194,8 +192,7 @@ def is_exact_generated_rewrite(
         target = page_index.pages.get(change.before.resource_id)
         if target is None or target.resource != change.before:
             return False
-        after_page = parse(change.after, repository.read_version(change.after))
-        moved[change.before.resource_id] = (change.after.path, target.page.title, after_page.title)
+        moved[change.before.resource_id] = change.after.path
     if not moved:
         return False
 
@@ -206,13 +203,7 @@ def is_exact_generated_rewrite(
     )
     if not references:
         return False
-    targets: dict[WikilinkNode, str] = {}
-    for item in references:
-        new_path, old_title, new_title = moved[item.target_page_id]
-        if old_title != new_title:
-            targets[item.node] = rename_target(item.node, new_path, new_title)
-        elif item.node.page is not None and ("/" in item.node.page or item.node.page.casefold().endswith(".md")):
-            targets[item.node] = new_path if item.node.page.casefold().endswith(".md") else new_path[:-3]
+    targets = {item.node: rename_target(item.node, moved[item.target_page_id]) for item in references}
     if not targets:
         return False
     rewritten_body = rewrite_page_targets(source.page.body.decode("utf-8"), targets).encode("utf-8")

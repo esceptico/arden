@@ -128,7 +128,7 @@ def test_generated_health_does_not_claim_the_personal_health_topic_name(tmp_path
         path="source.md",
         title="Source",
         page_id="source",
-        body=b"[[Health]] and [[Wiki health]].\n",
+        body=b"[[topics/health]] and [[health.md]].\n",
     )
 
     WikiHealthProjector(service).project(_input(service))
@@ -153,7 +153,7 @@ def test_health_preserves_an_index_error_at_the_current_revision(tmp_path: Path)
     assert "- Detail: embedding failed" in content
 
 
-def test_health_maps_ambiguous_links_to_unresolved_link_issues(tmp_path: Path) -> None:
+def test_health_maps_title_links_to_unresolved_link_issues(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     pages = (
         Create("first", "first.md", create_page(title="Shared", page_id="first").to_bytes()),
@@ -177,7 +177,7 @@ def test_health_maps_ambiguous_links_to_unresolved_link_issues(tmp_path: Path) -
 
     issue = next(issue for issue in result.issues if issue.code is WikiHealthIssueCode.UNRESOLVED_LINK)
     assert issue.target == "source.md"
-    assert issue.evidence.startswith("ambiguous: Shared")
+    assert issue.evidence == "Shared"
 
 
 def test_health_emits_stale_fact_page_with_revision_evidence(tmp_path: Path) -> None:

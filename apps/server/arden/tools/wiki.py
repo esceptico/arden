@@ -43,7 +43,6 @@ _MAX_LINKS = 500
 _MAX_LINK_DATA_BYTES = 40_000
 _MAX_LINK_FIELD_CHARS = 2_000
 _MAX_LINK_PATH_CHARS = 4_096
-_MAX_LINK_CANDIDATES = 20
 _CONTENT_TRUNCATION = "\n[truncated at 40000 characters]"
 _WIKI_PERMISSION = frozenset({WIKI_SERVICE})
 _WIKI_WRITE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE})
@@ -400,12 +399,6 @@ def _link_data(reference: LinkReference, paths: dict[str, str]) -> tuple[dict[st
     page, page_truncated = _bounded_text(reference.node.page, _MAX_LINK_FIELD_CHARS)
     fragment, fragment_truncated = _bounded_text(reference.node.fragment, _MAX_LINK_FIELD_CHARS)
     alias, alias_truncated = _bounded_text(reference.node.alias, _MAX_LINK_FIELD_CHARS)
-    candidates = []
-    candidate_truncated = len(reference.candidates) > _MAX_LINK_CANDIDATES
-    for candidate in reference.candidates[:_MAX_LINK_CANDIDATES]:
-        bounded, truncated = _bounded_text(paths.get(candidate), _MAX_LINK_PATH_CHARS)
-        candidates.append(bounded)
-        candidate_truncated = candidate_truncated or truncated
     truncated = any(
         (
             source_truncated,
@@ -413,14 +406,12 @@ def _link_data(reference: LinkReference, paths: dict[str, str]) -> tuple[dict[st
             page_truncated,
             fragment_truncated,
             alias_truncated,
-            candidate_truncated,
         )
     )
     return {
         "source_path": source_path,
         "target_path": target_path,
         "status": reference.status.value,
-        "candidates": candidates,
         "page": page,
         "fragment": fragment,
         "alias": alias,
@@ -1084,7 +1075,7 @@ async def approve_move_wiki_page(
 ) -> ApprovalInfo:
     return ApprovalInfo(
         description=f"Move wiki page {args.path} to {args.new_path}",
-        preview="Path-style wiki links to this page will be rewritten; title-style links will stay unchanged.",
+        preview="Wiki links to this page will be rewritten to the new path.",
         diff="Move the current page and update resolved path-style links.",
     )
 
@@ -1267,6 +1258,8 @@ create_wiki_page_tool = tool(
     display_description="Create one managed wiki page.",
     description=(
         "Create one common managed wiki page from a path, title, aliases, and Markdown body. "
+        "The path is the page's identity; the title is display-only. In the body, link other pages "
+        "by path ([[topics/acme]] or [[topics/acme|Acme]]) — bare title links do not resolve. "
         "Missing ancestor directories receive semantic README.md contracts in the same commit. "
         "Read and specialize any reported bootstrap README before finishing. "
         f"Scheduled automations can create pages only under {AUTOMATIONS_PATH_PREFIX}."
@@ -1290,7 +1283,7 @@ edit_wiki_page_tool = tool(
     display_description="Replace one managed wiki page body.",
     description=(
         "Replace only the Markdown body of one active managed wiki page while preserving its identity and metadata. "
-        "Read the page first. "
+        "Read the page first. Link other pages by path ([[topics/acme|Acme]]); bare title links do not resolve. "
         f"Scheduled automations can edit pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
     input_model=EditWikiPageInput,
@@ -1336,7 +1329,7 @@ move_wiki_page_tool = tool(
         "Move one active managed wiki page to a new path without changing its identity, title, aliases, body, or metadata. "
         "Missing destination directory README.md contracts are created in the same commit. "
         "Read and specialize any reported bootstrap README before finishing. "
-        "Path-style wikilinks that resolve to the page are updated atomically; title-style links remain unchanged. "
+        "Wikilinks that resolve to the page are rewritten to the new path atomically. "
         "Read the page first."
     ),
     input_model=MoveWikiPageInput,

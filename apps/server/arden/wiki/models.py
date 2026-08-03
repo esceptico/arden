@@ -12,7 +12,6 @@ from arden.wiki.wikilinks import WikilinkNode
 
 class LinkStatus(StrEnum):
     RESOLVED = "resolved"
-    AMBIGUOUS = "ambiguous"
     UNRESOLVED = "unresolved"
 
 
@@ -57,7 +56,6 @@ class LinkReference:
     node: WikilinkNode
     status: LinkStatus
     target_page_id: str | None = None
-    candidates: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

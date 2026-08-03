@@ -114,7 +114,7 @@ class WikiService:
         self.repository = repository
 
     def snapshot(self) -> WikiSnapshot:
-        return snapshots.snapshot(self.repository, strict_names=True)
+        return snapshots.snapshot(self.repository)
 
     def list_pages(self, *, include_redirects: bool = False) -> tuple[WikiPageRecord, ...]:
         return tuple(
@@ -156,7 +156,7 @@ class WikiService:
         )
 
     def read_page(self, page_id: str, *, at: str | None = None) -> WikiPageRecord:
-        record = snapshots.index(snapshots.snapshot(self.repository, strict_names=True, at=at)).pages.get(page_id)
+        record = snapshots.index(snapshots.snapshot(self.repository, at=at)).pages.get(page_id)
         if record is None:
             raise KeyError(f"unknown active wiki page: {page_id}")
         return record
@@ -359,11 +359,7 @@ class WikiService:
             raise TypeError("base_head must be a string or None")
         if not isinstance(targets, tuple) or not all(isinstance(target, GeneratedPageTarget) for target in targets):
             raise TypeError("targets must be a tuple of GeneratedPageTarget values")
-        snapshot = (
-            WikiSnapshot(None, ())
-            if base_head is None
-            else snapshots.snapshot(self.repository, strict_names=True, at=base_head)
-        )
+        snapshot = WikiSnapshot(None, ()) if base_head is None else snapshots.snapshot(self.repository, at=base_head)
         if not targets:
             return None
         records = snapshots.index(snapshot).pages
@@ -374,9 +370,7 @@ class WikiService:
             snapshots.require_ordinary_page_path(target.path)
         new_targets = tuple(target for target in targets if target.page_id not in records)
         reserved_names = {
-            snapshots.normal(name)
-            for target in new_targets
-            for name in snapshots.names_for_target(target.title, target.aliases, target.path)
+            snapshots.normal(name) for target in new_targets for name in snapshots.names_for_target(target.path)
         }
         readmes, readme_operations = self._directory_readme_changes(
             snapshot,
@@ -412,10 +406,7 @@ class WikiService:
                         pass
                     else:
                         raise WikiValidationError(f"generated target resource is unavailable: {target.page_id}")
-                reused = {
-                    snapshots.normal(name)
-                    for name in snapshots.names_for_target(target.title, target.aliases, target.path)
-                } & archived_names
+                reused = {snapshots.normal(name) for name in snapshots.names_for_target(target.path)} & archived_names
                 if reused:
                     raise WikiValidationError(f"generated target reuses an archived wiki name: {min(reused)}")
                 content = update_generated_region(
@@ -496,7 +487,7 @@ class WikiService:
             raise TypeError("updates must be a tuple of WikiMaintenancePageUpdate values")
         if not isinstance(base_head, str) or not base_head:
             raise ValueError("base_head must be a nonempty commit ID")
-        snapshot = snapshots.snapshot(self.repository, strict_names=True, at=base_head)
+        snapshot = snapshots.snapshot(self.repository, at=base_head)
         records = snapshots.index(snapshot).pages
         if len({item.page_id for item in updates}) != len(updates):
             raise WikiValidationError("maintenance updates must not repeat a page_id")
@@ -609,11 +600,11 @@ class WikiService:
         return self.link_report(page_id).outgoing
 
     def link_report(self, page_id: str, *, at: str | None = None) -> WikiLinkReport:
-        return snapshots.link_report(snapshots.snapshot(self.repository, strict_names=False, at=at), page_id)
+        return snapshots.link_report(snapshots.snapshot(self.repository, at=at), page_id)
 
     def link_report_for_path(self, path: str) -> WikiLinkReport:
-        snapshot = snapshots.snapshot(self.repository, strict_names=False)
-        page_index = snapshots.index(snapshot, strict_names=False)
+        snapshot = snapshots.snapshot(self.repository)
+        page_index = snapshots.index(snapshot)
         record = next((item for item in snapshot.pages if item.resource.path == path), None)
         if record is None:
             raise KeyError(f"unknown wiki path: {path}")
@@ -666,7 +657,7 @@ class WikiService:
             raise WikiValidationError(f"page is not archived: {page_id}")
         content = self.repository.read_version(resource)
         page = snapshots.parse(resource, content)
-        active = snapshots.snapshot(self.repository, strict_names=True, at=head)
+        active = snapshots.snapshot(self.repository, at=head)
         reserved_names = {snapshots.normal(name) for name in snapshots.names_for_page(page, resource.path)}
         readmes, readme_operations = self._directory_readme_changes(
             active,
@@ -785,7 +776,7 @@ class WikiService:
     def _validate_rename_plan(self, plan: RenamePlan) -> tuple[WikiSnapshot, WikiPageRecord]:
         if not isinstance(plan, RenamePlan):
             raise TypeError("plan must be a RenamePlan")
-        snapshot = snapshots.snapshot(self.repository, strict_names=True, at=plan.base_head)
+        snapshot = snapshots.snapshot(self.repository, at=plan.base_head)
         canonical = rename.prepare_plan(
             self.repository,
             snapshot,

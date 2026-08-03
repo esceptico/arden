@@ -369,7 +369,7 @@ async def test_area_rename_moves_its_bound_page_without_a_redirect_and_rewrites_
     wiki.create_page(
         path="topics/related.md",
         title="Related",
-        body=b"# Related\n\n[[Dex]]\n",
+        body=b"# Related\n\n[[topics/dex]]\n",
         expected_head=head,
     )
 
@@ -384,7 +384,7 @@ async def test_area_rename_moves_its_bound_page_without_a_redirect_and_rewrites_
         "topics/related.md",
     ]
     related = next(record for record in wiki.list_pages() if record.resource.path == "topics/related.md")
-    assert "[[Arden]]" in wiki.read_page(related.page.page_id).page.body.decode()
+    assert "[[topics/arden]]" in wiki.read_page(related.page.page_id).page.body.decode()
     assert synced[-1]["name"] == "Arden"
 
 

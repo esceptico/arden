@@ -459,7 +459,6 @@ def _reference_value(reference: LinkReference) -> dict[str, object]:
         "node": asdict(reference.node),
         "status": reference.status.value,
         "target_page_id": reference.target_page_id,
-        "candidates": list(reference.candidates),
     }
 
 
@@ -500,7 +499,7 @@ def _decode_rewrite(value: Any, index: int) -> RenameRewrite:
 
 
 def _decode_reference(value: Any, label: str) -> LinkReference:
-    _require_keys(value, {"source_page_id", "node", "status", "target_page_id", "candidates"}, label)
+    _require_keys(value, {"source_page_id", "node", "status", "target_page_id"}, label)
     node_value = value["node"]
     _require_keys(node_value, _WIKILINK_NODE_FIELDS, f"{label}.node")
     try:
@@ -524,9 +523,6 @@ def _decode_reference(value: Any, label: str) -> LinkReference:
         ),
         status=status,
         target_page_id=_optional_string(value["target_page_id"], f"{label}.target_page_id"),
-        candidates=tuple(
-            _string(item, f"{label}.candidates") for item in _list(value["candidates"], f"{label}.candidates")
-        ),
     )
 
 

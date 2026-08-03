@@ -59,6 +59,7 @@ from arden.server.routers.wiki import router as wiki_router
 from arden.server.runtime import Runtime
 from arden.services.chat import respawn_background_agent, resume_suspended_chat_run, submit_chat_message
 from arden.tools.scopes import ScopeKey
+from arden.wiki.migrate import migrate_title_links
 
 _logger = get_logger(__name__)
 
@@ -204,6 +205,12 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(prune_offload_store)
     except Exception:
         _logger.warning("tool-result store prune failed on startup; continuing", exc_info=True)
+    # Titles are display-only now; stored title-style wikilinks become path links once.
+    if runtime.wiki_service is not None:
+        try:
+            await asyncio.to_thread(migrate_title_links, runtime.wiki_service)
+        except Exception:
+            _logger.warning("wiki title-link migration failed on startup; continuing", exc_info=True)
     bus_registry = await _create_bus_registry(runtime)
     runtime.scheduler.set_bus_registry(bus_registry)
 

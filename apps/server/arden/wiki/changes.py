@@ -101,7 +101,7 @@ def changes_since(
     head = repository.head
     commits_newest_first = history_since(repository, head, watermark)
     current_records, current_warnings = maintenance_snapshot(repository, head)
-    current_index = index(WikiSnapshot(head, current_records), strict_names=False)
+    current_index = index(WikiSnapshot(head, current_records))
     current_links = maintenance_links(current_records, current_index)
     warnings = list(current_warnings)
     warnings.extend(link_warnings(current_records, current_links))
@@ -429,7 +429,7 @@ def maintenance_current_context(
     metadata_records = tuple(sorted((context.record for context in contexts), key=lambda record: record.page.page_id))
     current_links = maintenance_links_from_nodes(
         tuple((context.record.page.page_id, context.nodes) for context in contexts),
-        index(WikiSnapshot(head, metadata_records), strict_names=False),
+        index(WikiSnapshot(head, metadata_records)),
     )
     warnings.extend(link_warnings(metadata_records, current_links))
     page_ids = set(changed_page_ids)
@@ -514,7 +514,7 @@ def link_warnings(
                 WikiChangeWarning(
                     f"{item.status.value}_link",
                     record.resource.path,
-                    f"{target} ({', '.join(item.candidates)})" if item.candidates else target,
+                    target,
                 )
             )
     return tuple(warnings)
@@ -604,7 +604,7 @@ def restore_maintenance_change(
         raise RevisionConflictError(f"current head changed: expected {expected_head!r}, found {repository.head!r}")
     from arden.wiki.snapshots import snapshot
 
-    current = index(snapshot(repository, strict_names=True, at=expected_head)).pages.get(page_id)
+    current = index(snapshot(repository, at=expected_head)).pages.get(page_id)
     if current is None or current.page.lifecycle != "active":
         raise KeyError(f"unknown active wiki page: {page_id}")
     if page_id == WIKI_HEALTH_RESOURCE_ID:

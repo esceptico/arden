@@ -291,7 +291,6 @@ test("canonical links retain resolution and map identities back to notebook path
           heading: "Plan",
           status: "resolved",
           targetPageId: "page-b",
-          candidates: ["page-b"],
         }],
       },
     },
@@ -311,7 +310,6 @@ test("canonical links retain resolution and map identities back to notebook path
     column: 0,
     status: "resolved",
     resolvedPath: "projects/b.md",
-    candidates: ["projects/b.md"],
     sourceRevision: "page-a:v1",
   }]);
 });

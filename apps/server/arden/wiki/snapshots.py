@@ -21,7 +21,6 @@ class SnapshotIndex:
 def snapshot(
     repository: ManagedFileRepository,
     *,
-    strict_names: bool,
     at: str | None = None,
 ) -> WikiSnapshot:
     head = repository.head if at is None else at
@@ -32,7 +31,7 @@ def snapshot(
         content = repository.read_version(resource)
         records.append(WikiPageRecord(resource, parse(resource, content), content))
     result = WikiSnapshot(head=head, pages=tuple(sorted(records, key=lambda record: record.page.page_id)))
-    validate_redirects(index(result, strict_names=strict_names))
+    validate_redirects(index(result))
     return result
 
 
@@ -43,23 +42,18 @@ def parse(resource: ResourceVersion, content: bytes) -> WikiPage:
         raise WikiValidationError(f"invalid wiki page {resource.path}: {error}") from error
 
 
-def index(snapshot: WikiSnapshot, *, strict_names: bool = True) -> SnapshotIndex:
+def index(snapshot: WikiSnapshot) -> SnapshotIndex:
     pages = {record.page.page_id: record for record in snapshot.pages}
     names: dict[str, set[str]] = {}
     for record in snapshot.pages:
         for name in names_for_page(record.page, record.resource.path):
             names.setdefault(normal(name), set()).add(record.page.page_id)
-    collisions = {name: tuple(sorted(ids)) for name, ids in names.items() if len(ids) > 1}
-    if strict_names and collisions:
-        name, ids = next(iter(collisions.items()))
-        raise WikiAmbiguityError(f"ambiguous wiki name {name!r}: {', '.join(ids)}")
     return SnapshotIndex(names={name: tuple(sorted(ids)) for name, ids in names.items()}, pages=pages)
 
 
 def resolve_topic_name(snapshot: WikiSnapshot, name: str) -> WikiPageRecord | None:
     if not isinstance(name, str) or not name.strip():
         raise ValueError("topic name must be a nonempty string")
-    index(snapshot)
     wanted = normal(name)
     matches = tuple(
         record
@@ -74,7 +68,7 @@ def resolve_topic_name(snapshot: WikiSnapshot, name: str) -> WikiPageRecord | No
 
 
 def link_report(snapshot: WikiSnapshot, page_id: str) -> WikiLinkReport:
-    page_index = index(snapshot, strict_names=False)
+    page_index = index(snapshot)
     record = page_index.pages.get(page_id)
     if record is None or record.page.lifecycle != "active":
         raise KeyError(f"unknown active wiki page: {page_id}")
@@ -94,8 +88,6 @@ def reference(page_index: SnapshotIndex, source_page_id: str, node: WikilinkNode
     candidates = page_index.names.get(normal(node.page), ())
     if not candidates:
         return LinkReference(source_page_id, node, LinkStatus.UNRESOLVED)
-    if len(candidates) != 1:
-        return LinkReference(source_page_id, node, LinkStatus.AMBIGUOUS, candidates=candidates)
     target = follow_redirect(page_index, candidates[0])
     if target is None:
         return LinkReference(source_page_id, node, LinkStatus.UNRESOLVED)
@@ -127,15 +119,15 @@ def validate_prospective(snapshot: WikiSnapshot, pages: tuple[WikiPageRecord, ..
 
 
 def names_for_page(page: WikiPage, path: str) -> tuple[str, ...]:
-    stem = path[:-3] if path.endswith(".md") else path
+    """Link-addressable names: the path and its stem. Titles are display-only."""
+
     if page.page_id == WIKI_HEALTH_RESOURCE_ID and path == WIKI_HEALTH_PATH:
-        return (page.title, *page.aliases, path)
-    return (page.title, *page.aliases, path, stem)
+        return (path,)
+    return (path, path[:-3] if path.endswith(".md") else path)
 
 
-def names_for_target(title: str, aliases: tuple[str, ...], path: str) -> tuple[str, ...]:
-    stem = path[:-3] if path.endswith(".md") else path
-    return (title, *aliases, path, stem)
+def names_for_target(path: str) -> tuple[str, ...]:
+    return (path, path[:-3] if path.endswith(".md") else path)
 
 
 def normal(value: str) -> str:
