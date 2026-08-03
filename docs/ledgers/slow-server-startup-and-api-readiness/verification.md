@@ -2,7 +2,7 @@
 
 ## Status
 
-Research remains verified. I-01 through I-06 and I-08 are implemented; I-07 is partial; I-09 and I-10 remain.
+Research and I-01 through I-10 are implemented and verified. Live legacy maintenance remains operational work.
 
 ## Evidence
 
@@ -25,13 +25,17 @@ Research remains verified. I-01 through I-06 and I-08 are implemented; I-07 is p
 | V-15 | I-02-I-08 | Focused server regression suite. | Startup, recovery, outbox, schema, retention, curator, quota, and config tests pass. | 165 passed. | Pass | `uv run pytest` with 10 focused test modules; 2026-08-03 |
 | V-16 | I-04/I-08 | Desktop type, lint, and behavior checks. | Warmup banner/polling and storage setting compile without regressions. | Typecheck and ESLint pass; 1,038 tests pass. | Pass | `bun run typecheck`; `bun run lint`; `bun test`; 2026-08-03 |
 | V-17 | I-01-I-08 | Full server regression suite. | No server regression. | 2,476 tests passed. | Pass | `cd apps/server && uv run pytest`; 2026-08-03 |
+| V-18 | I-07/I-09/I-10 | Focused expiry/GC, trajectory, compactor, outbox, and architecture tests. | Lifecycle safety, exact schemas, deterministic exports, offline swap/rollback, and owner boundaries pass. | 25 focused tests passed after the final owner-boundary fix. | Pass | `uv run pytest tests/test_architecture_boundaries.py tests/test_memory_architecture.py tests/test_session_compaction.py tests/test_outbox.py`; 2026-08-03 |
+| V-19 | I-09 | Export a large archived live session and a current blob-backed session as four sidecars each. | Exact ATIF/Letta validation, prose-order parity, deterministic hashes, compression comparison, and valid blob refs. | 47.96 MB archived source: ATIF summary 23.40 MB/1.14 MB zstd; Letta summary 13.04 MB/1.10 MB. Blob-backed source: ATIF summary 100.7 KB/32.0 KB; Letta summary 40.9 KB/13.1 KB; two blob refs verified. | Pass | `scripts/export_trajectory_bundles.py` against sessions `20260510_235813_387` and `20260730_110249_545`; 2026-08-03 |
+| V-20 | I-01-I-10 | Full server suite after remaining implementation. | No behavioral regression. | 2,482 tests passed; one owner-boundary failure was isolated, fixed, then its 25-test focused closure passed. | Pass | `uv run pytest`; focused rerun from V-18; 2026-08-03 |
+| V-21 | Live maintenance | Read-only legacy inventory and reclaim estimate. | Quantify safe migration before mutation. | 125,590 globally over-cap events / 307 MB; archived events are 4.38 GB, of which a 100-row tail removes 4.23 GB; completed outbox payloads are 711 MB; duplicate FTS text is 226 MB. Found 495 already-missing old-root blobs. | Pass | Read-only SQLite window/aggregate queries plus manifest path audit; 2026-08-03 |
 
 ## Failures and gaps
 
 - A live-data cold-start benchmark remains useful because the temporary fresh-data run cannot reproduce the 8 GB database's I/O profile.
-- Archive format selection is blocked on the non-destructive I-09 benchmark, not on further conceptual research. The initial role is settled: trajectories are derived until restore/reconstruction proof justifies anything stronger.
-- I-07 still needs independent blob expiry and reference-GC proof.
+- The live migration/atomic swap and application smoke test have not yet run.
+- The 495 old `~/.ntrp` blob files are absent. Their manifests can be preserved and reported, but missing raw content is not reconstructable from those refs alone.
 
 ## Outcome
 
-The API/warmup split and bounded transport/storage controls are implemented and verified on temporary data. No live Arden database migration, deletion, or compaction was performed.
+The API/warmup split, bounded transport/storage controls, cold exports, and offline migration tooling are implemented and verified. No live Arden database mutation has yet been performed.

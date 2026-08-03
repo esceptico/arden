@@ -2,6 +2,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from arden.core import raw_tool_results
 from arden.storage_budget import enforce_storage_budget
 
 
@@ -68,3 +69,24 @@ def test_budget_reports_without_enforcement_when_disabled(tmp_path: Path) -> Non
     assert report.total_bytes == 6
     assert report.reclaimable_bytes == 6
     assert orphan.exists() is True
+
+
+def test_reusing_deduplicated_blob_renews_gc_grace(monkeypatch, tmp_path: Path) -> None:
+    blob_root = tmp_path / "blobs" / "tool-results"
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", blob_root)
+    content = "shared content"
+    blob = raw_tool_results.persist_raw_tool_result(content)
+    path = Path(blob.blob_path)
+    old = (datetime.now(UTC) - timedelta(days=8)).timestamp()
+    os.utime(path, (old, old))
+
+    same_blob = raw_tool_results.persist_raw_tool_result(content)
+    report = enforce_storage_budget(
+        tmp_path,
+        max_space_gb=0.000000001,
+        referenced_tool_result_hashes=set(),
+    )
+
+    assert same_blob.blob_path == blob.blob_path
+    assert path.exists() is True
+    assert report.reclaimed_bytes == 0

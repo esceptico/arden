@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1668,6 +1668,43 @@ async def test_large_tool_result_event_spills_raw_content_to_manifest(store: Ses
     assert events[0].event.tool_call_id == "call-raw"
     assert events[0].event.raw_ref == payload["raw_ref"]
     assert events[0].event.content != raw
+
+
+@pytest.mark.asyncio
+async def test_tool_result_manifest_obeys_declared_expiry_and_prunes_durably(store: SessionStore):
+    raw = "expiring evidence\n" * 5000
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="sess-expiring",
+            event=ToolCallResultEvent(tool_call_id="call-expiring", name="bash", content=raw),
+        )
+    )
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT tool_result_id, content_sha256 FROM tool_results WHERE session_id = 'sess-expiring'"
+    )
+    tool_result_id = rows[0]["tool_result_id"]
+    content_sha256 = rows[0]["content_sha256"]
+    future = datetime.now(UTC) + timedelta(hours=1)
+    await store.conn.execute(
+        "UPDATE tool_results SET retention_class = 'temporary', expires_at = ? WHERE tool_result_id = ?",
+        (future.isoformat(), tool_result_id),
+    )
+    await store.conn.commit()
+
+    assert await store.get_tool_result(tool_result_id) is not None
+    assert await store.prune_expired_tool_results(now=future - timedelta(seconds=1)) == 0
+    assert content_sha256 in await store.list_tool_result_content_hashes()
+
+    after_expiry = datetime.now(UTC) - timedelta(seconds=1)
+    await store.conn.execute(
+        "UPDATE tool_results SET expires_at = ? WHERE tool_result_id = ?",
+        (after_expiry.isoformat(), tool_result_id),
+    )
+    await store.conn.commit()
+    assert await store.get_tool_result(tool_result_id) is None
+    assert await store.prune_expired_tool_results(now=after_expiry) == 1
+    assert content_sha256 not in await store.list_tool_result_content_hashes()
 
 
 @pytest.mark.asyncio

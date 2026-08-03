@@ -8,6 +8,8 @@ payloads share one object and old manifests can be garbage-collected later.
 import gzip
 import hashlib
 import os
+import stat
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +18,7 @@ from arden.settings import ARDEN_DIR
 
 RAW_TOOL_RESULTS_BASE = ARDEN_DIR / "blobs" / "tool-results"
 _COMPRESSION = "gzip"
+_BLOB_FILE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -66,14 +69,20 @@ def persist_raw_tool_result(content: str) -> RawToolResultBlob:
     _ensure_ignore_marker()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not path.exists():
-        compressed = gzip.compress(raw)
-        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-        tmp.write_bytes(compressed)
-        try:
-            tmp.replace(path)
-        except FileExistsError:
-            tmp.unlink(missing_ok=True)
+    with _BLOB_FILE_LOCK:
+        if not path.exists():
+            compressed = gzip.compress(raw)
+            tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+            tmp.write_bytes(compressed)
+            try:
+                tmp.replace(path)
+            except FileExistsError:
+                tmp.unlink(missing_ok=True)
+        else:
+            # A concurrent orphan sweep uses mtime as its grace lease. Touching
+            # an existing deduplicated blob prevents a stale inventory from
+            # deleting it between persistence and manifest insertion.
+            path.touch()
 
     return RawToolResultBlob(
         blob_ref=f"sha256:{content_sha256}",
@@ -94,6 +103,36 @@ def read_raw_tool_result(blob_path: str, *, compression: str = _COMPRESSION) -> 
 def read_raw_tool_result_by_ref(blob_ref: str) -> str:
     """Read a blob by its `sha256:<hex>` ref — the path is content-derived."""
     return read_raw_tool_result(str(_blob_path(blob_ref.removeprefix("sha256:"))))
+
+
+def delete_stale_raw_tool_result(
+    path: Path,
+    *,
+    blob_root: Path,
+    older_than_timestamp: float,
+    expected_size: int,
+) -> bool:
+    """Delete one still-stale regular blob under the allowlisted root.
+
+    The shared lock closes the inventory→unlink race with
+    :func:`persist_raw_tool_result`; callers must separately prove that no
+    durable manifest references the blob.
+    """
+
+    with _BLOB_FILE_LOCK:
+        try:
+            metadata = path.lstat()
+            path.resolve().relative_to(blob_root.resolve())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size != expected_size
+                or metadata.st_mtime > older_than_timestamp
+            ):
+                return False
+            path.unlink()
+        except (FileNotFoundError, PermissionError, ValueError):
+            return False
+    return True
 
 
 def internal_blob_from_data(data: dict | None) -> RawToolResultBlob | None:

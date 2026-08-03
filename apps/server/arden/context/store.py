@@ -232,6 +232,9 @@ CREATE INDEX IF NOT EXISTS idx_tool_results_session_created
     ON tool_results(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_tool_results_tool_call
     ON tool_results(tool_call_id);
+CREATE INDEX IF NOT EXISTS idx_tool_results_expires
+    ON tool_results(expires_at)
+    WHERE expires_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS tool_approvals (
     run_id TEXT NOT NULL,
@@ -2516,9 +2519,14 @@ class SessionStore:
         return rows[0]["run_id"] if rows else None
 
     async def get_tool_result(self, tool_result_id: str) -> dict | None:
+        now = datetime.now(UTC).isoformat()
         rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM tool_results WHERE tool_result_id = ?",
-            (tool_result_id,),
+            """
+            SELECT * FROM tool_results
+            WHERE tool_result_id = ?
+              AND (expires_at IS NULL OR expires_at > ?)
+            """,
+            (tool_result_id, now),
         )
         if not rows:
             return None
@@ -2530,15 +2538,39 @@ class SessionStore:
         rows = await self.read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
         return {row["content_sha256"] for row in rows}
 
+    async def prune_expired_tool_results(self, *, limit: int = 1000, now: datetime | None = None) -> int:
+        """Drop expired manifests; the orphan-blob sweep reclaims bytes safely."""
+
+        if limit <= 0:
+            return 0
+        cutoff = (now or datetime.now(UTC)).isoformat()
+        cursor = await self.conn.execute(
+            """
+            DELETE FROM tool_results
+            WHERE tool_result_id IN (
+                SELECT tool_result_id
+                FROM tool_results
+                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                ORDER BY expires_at, tool_result_id
+                LIMIT ?
+            )
+            """,
+            (cutoff, limit),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
+
     async def get_tool_result_for_call(self, *, run_id: str, tool_call_id: str) -> dict | None:
+        now = datetime.now(UTC).isoformat()
         rows = await self.read_conn.execute_fetchall(
             """
             SELECT * FROM tool_results
             WHERE run_id = ? AND tool_call_id = ?
+              AND (expires_at IS NULL OR expires_at > ?)
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (run_id, tool_call_id),
+            (run_id, tool_call_id, now),
         )
         if not rows:
             return None

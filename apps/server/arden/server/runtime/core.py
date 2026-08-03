@@ -853,6 +853,7 @@ class Runtime:
 
     async def run_storage_maintenance_once(self) -> dict:
         try:
+            await self.session_service.store.prune_expired_tool_results()
             referenced = await self.session_service.store.list_tool_result_content_hashes()
             report = await asyncio.to_thread(
                 enforce_storage_budget,

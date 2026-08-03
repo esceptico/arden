@@ -1,10 +1,11 @@
 """Safe, bounded maintenance for Arden-owned storage."""
 
 import os
-import stat
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from arden.core.raw_tool_results import delete_stale_raw_tool_result
 
 _GIB = 1024**3
 _CLEAN_TARGET_RATIO = 0.85
@@ -105,14 +106,12 @@ def enforce_storage_budget(
         for candidate in sorted(candidates, key=lambda item: (item.modified_at, str(item.path))):
             if total - reclaimed <= target_bytes:
                 break
-            try:
-                metadata = candidate.path.lstat()
-                resolved = candidate.path.resolve()
-                resolved.relative_to(blob_root)
-                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != candidate.size:
-                    continue
-                candidate.path.unlink()
-            except (FileNotFoundError, PermissionError, ValueError):
+            if not delete_stale_raw_tool_result(
+                candidate.path,
+                blob_root=blob_root,
+                older_than_timestamp=orphan_before,
+                expected_size=candidate.size,
+            ):
                 continue
             reclaimed += candidate.size
 

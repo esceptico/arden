@@ -1,6 +1,7 @@
 import hashlib
 import json
-from datetime import UTC, datetime
+import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -19,6 +20,8 @@ from arden.outbox.events import (
     run_failed_payload,
 )
 from arden.outbox.models import OutboxEvent
+
+OUTBOX_TABLE = "outbox_events"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS outbox_events (
@@ -204,6 +207,44 @@ LIMIT ?
 """
 
 _STATUS_KEYS = ("pending", "running", "completed", "dead")
+
+
+def compact_legacy_completed(connection: sqlite3.Connection, retention_days: int) -> dict[str, int]:
+    """Offline-only backfill for completed payload receipts and retention."""
+
+    stats = {"payloads_compacted": 0, "payload_bytes_removed": 0, "receipts_pruned": 0}
+    columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({OUTBOX_TABLE})").fetchall()}
+    if not columns:
+        return stats
+    if "receipt_at" not in columns:
+        connection.execute(f"ALTER TABLE {OUTBOX_TABLE} ADD COLUMN receipt_at TEXT")
+    now = datetime.now(UTC).isoformat()
+    rows = connection.execute(
+        f"SELECT id, payload FROM {OUTBOX_TABLE} WHERE status = 'completed' AND receipt_at IS NULL"
+    ).fetchall()
+    for row in rows:
+        payload = str(row["payload"])
+        receipt = json.dumps(
+            {
+                "receipt_version": 1,
+                "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+                "payload_bytes": len(payload.encode()),
+            },
+            separators=(",", ":"),
+        )
+        connection.execute(
+            f"UPDATE {OUTBOX_TABLE} SET payload = ?, receipt_at = ? WHERE id = ?",
+            (receipt, now, row["id"]),
+        )
+        stats["payloads_compacted"] += 1
+        stats["payload_bytes_removed"] += max(0, len(payload.encode()) - len(receipt.encode()))
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    cursor = connection.execute(
+        f"DELETE FROM {OUTBOX_TABLE} WHERE status = 'completed' AND updated_at < ?",
+        (cutoff,),
+    )
+    stats["receipts_pruned"] = cursor.rowcount
+    return stats
 
 
 def _now() -> datetime:
