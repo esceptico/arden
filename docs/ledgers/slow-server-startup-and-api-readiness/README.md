@@ -9,11 +9,11 @@
 | State | verifying |
 | Active phase | I-01-I-10 and live migration verified; rollback deletion decision pending |
 | Created | 2026-08-03T18:19:19+04:00 |
-| Last updated | 2026-08-03T20:46:31+04:00 |
-| Last consolidated | 2026-08-03T20:46:31+04:00 |
+| Last updated | 2026-08-03T21:01:00+04:00 |
+| Last consolidated | 2026-08-03T21:01:00+04:00 |
 | Codebase branch | codex/slow-startup-readiness |
-| Codebase revision | 951f96cd + verification working tree |
-| Sources checked through | code: 951f96cd + verification working tree; web: 2026-08-03 |
+| Codebase revision | 5c2ec656a073 + ledger working tree |
+| Sources checked through | code: 5c2ec656a073 + ledger working tree; web: 2026-08-03 |
 
 ## Original task — verbatim
 
