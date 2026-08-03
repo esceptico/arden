@@ -65,7 +65,7 @@ class _Input(BaseModel):
 FactId = Annotated[str, Field(min_length=1, max_length=500)]
 
 
-class SearchFactsInput(_Input):
+class FactSearchInput(_Input):
     query: str | None = Field(default=None, min_length=1, max_length=20_000)
     subject: str | None = Field(default=None, min_length=1, max_length=500)
     status: Literal["active", "all"] = Field(
@@ -77,11 +77,11 @@ class SearchFactsInput(_Input):
     )
 
 
-class GetFactInput(_Input):
+class FactGetInput(_Input):
     fact_id: str = Field(min_length=1, max_length=500)
 
 
-class GetFactHistoryInput(_Input):
+class FactHistoryInput(_Input):
     fact_id: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=50, ge=1, le=_MAX_FACT_RESULTS)
     cursor: str | None = Field(
@@ -89,7 +89,7 @@ class GetFactHistoryInput(_Input):
     )
 
 
-class GetDueFactReviewsInput(_Input):
+class FactDueReviewsInput(_Input):
     limit: int = Field(default=20, ge=1, le=_MAX_FACT_RESULTS)
     cursor: str | None = Field(
         default=None, max_length=_MAX_CURSOR_CHARS, description="Opaque cursor from a prior due-review page."
@@ -176,7 +176,7 @@ FactChange = Annotated[
 ]
 
 
-class PlanFactChangesInput(_Input):
+class FactPlanChangesInput(_Input):
     changes: list[FactChange] = Field(min_length=1, max_length=30)
     reason: str = Field(
         min_length=1,
@@ -185,7 +185,7 @@ class PlanFactChangesInput(_Input):
     )
 
 
-class CommitFactChangesInput(_Input):
+class FactCommitChangesInput(_Input):
     plan_id: str = Field(min_length=1, max_length=100, description="Exact plan_id returned by fact_plan_changes.")
 
 
@@ -732,7 +732,7 @@ def _failure(exc: Exception) -> ToolResult:
     )
 
 
-async def search_facts(execution: ToolExecution, args: SearchFactsInput) -> ToolResult:
+async def fact_search(execution: ToolExecution, args: FactSearchInput) -> ToolResult:
     service = _service(execution)
     if isinstance(service, ToolResult):
         return service
@@ -799,7 +799,7 @@ async def search_facts(execution: ToolExecution, args: SearchFactsInput) -> Tool
         return _failure(exc)
 
 
-async def get_fact(execution: ToolExecution, args: GetFactInput) -> ToolResult:
+async def fact_get(execution: ToolExecution, args: FactGetInput) -> ToolResult:
     service = _service(execution)
     if isinstance(service, ToolResult):
         return service
@@ -815,7 +815,7 @@ async def get_fact(execution: ToolExecution, args: GetFactInput) -> ToolResult:
         return _failure(exc)
 
 
-async def get_fact_history(execution: ToolExecution, args: GetFactHistoryInput) -> ToolResult:
+async def fact_history(execution: ToolExecution, args: FactHistoryInput) -> ToolResult:
     service = _service(execution)
     if isinstance(service, ToolResult):
         return service
@@ -846,7 +846,7 @@ async def get_fact_history(execution: ToolExecution, args: GetFactHistoryInput) 
         return _failure(exc)
 
 
-async def get_due_fact_reviews(execution: ToolExecution, args: GetDueFactReviewsInput) -> ToolResult:
+async def fact_due_reviews(execution: ToolExecution, args: FactDueReviewsInput) -> ToolResult:
     service = _service(execution)
     if isinstance(service, ToolResult):
         return service
@@ -915,7 +915,7 @@ async def get_due_fact_reviews(execution: ToolExecution, args: GetDueFactReviews
         return _failure(exc)
 
 
-async def plan_fact_changes(execution: ToolExecution, args: PlanFactChangesInput) -> ToolResult:
+async def fact_plan_changes(execution: ToolExecution, args: FactPlanChangesInput) -> ToolResult:
     service = _service(execution)
     if isinstance(service, ToolResult):
         return service
@@ -942,7 +942,7 @@ async def plan_fact_changes(execution: ToolExecution, args: PlanFactChangesInput
         return _failure(exc)
 
 
-async def commit_fact_changes(execution: ToolExecution, args: CommitFactChangesInput) -> ToolResult:
+async def fact_commit_changes(execution: ToolExecution, args: FactCommitChangesInput) -> ToolResult:
     service = _service(execution)
     if isinstance(service, ToolResult):
         return service
@@ -966,64 +966,64 @@ async def commit_fact_changes(execution: ToolExecution, args: CommitFactChangesI
         return _failure(exc)
 
 
-search_facts_tool = tool(
+fact_search_tool = tool(
     display_name="Search Facts",
     display_description="Search canonical facts.",
     description="Search visible canonical facts. Returns active facts by default and stable fact_id values for follow-up calls.",
-    input_model=SearchFactsInput,
+    input_model=FactSearchInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
-    execute=search_facts,
+    execute=fact_search,
 )
 
-get_fact_tool = tool(
+fact_get_tool = tool(
     display_name="Get Fact",
     display_description="Read one canonical fact.",
     description="Read one visible fact with its lifecycle and saved provenance.",
-    input_model=GetFactInput,
+    input_model=FactGetInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
-    execute=get_fact,
+    execute=fact_get,
 )
 
-get_fact_history_tool = tool(
+fact_history_tool = tool(
     display_name="Get Fact History",
     display_description="Read a fact's immutable event history.",
     description="Read saved fact events and provenance. This does not perform a live source lookup.",
-    input_model=GetFactHistoryInput,
+    input_model=FactHistoryInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
     ),
-    execute=get_fact_history,
+    execute=fact_history,
 )
 
-get_due_fact_reviews_tool = tool(
+fact_due_reviews_tool = tool(
     display_name="Get Due Fact Reviews",
     display_description="List facts due for evidence-based review.",
     description="List visible due facts with newer shared-subject evidence. It recommends no lifecycle action.",
-    input_model=GetDueFactReviewsInput,
+    input_model=FactDueReviewsInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
     ),
-    execute=get_due_fact_reviews,
+    execute=fact_due_reviews,
 )
 
-plan_fact_changes_tool = tool(
+fact_plan_changes_tool = tool(
     display_name="Plan Fact Changes",
     display_description="Validate fact changes without publishing them.",
     description="Prepare creates, reviews, metadata amendments, supersessions, expiries, or retractions. Returns a durable exact preview; it does not publish facts.",
-    input_model=PlanFactChangesInput,
+    input_model=FactPlanChangesInput,
     policy=ToolPolicy(
         action=ToolAction.DRAFT, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
     ),
-    execute=plan_fact_changes,
+    execute=fact_plan_changes,
 )
 
-commit_fact_changes_tool = tool(
+fact_commit_changes_tool = tool(
     display_name="Commit Fact Changes",
     display_description="Publish one previously planned fact change set.",
     description="Commit an exact plan_id only if its affected facts remain unchanged since planning.",
-    input_model=CommitFactChangesInput,
+    input_model=FactCommitChangesInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
     ),
-    execute=commit_fact_changes,
+    execute=fact_commit_changes,
 )

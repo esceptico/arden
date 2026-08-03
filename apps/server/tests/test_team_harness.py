@@ -16,10 +16,10 @@ from arden.core.isolation import IsolationLevel
 from arden.core.prompts import TEAM_CHILD_BLOCK
 from arden.core.spawner import create_spawn_fn
 from arden.tools.app_control import (
-    FollowupTaskInput,
-    approve_followup_task,
-    followup_task,
-    followup_task_tool,
+    AppFollowupTaskInput,
+    app_followup_task,
+    app_followup_task_tool,
+    approve_app_followup_task,
 )
 from arden.tools.core.context import (
     BackgroundTaskRegistry,
@@ -173,7 +173,9 @@ async def test_followup_task_queues_into_a_live_agents_inbox():
     try:
         execution, app_control = _execution(registry)
 
-        result = await followup_task(execution, FollowupTaskInput(session_id="cur::a1", task="also audit invoices"))
+        result = await app_followup_task(
+            execution, AppFollowupTaskInput(session_id="cur::a1", task="also audit invoices")
+        )
 
         assert not result.is_error
         assert app_control.dispatched == []
@@ -190,7 +192,7 @@ async def test_followup_task_wakes_a_finished_agent_with_a_hidden_continuation()
     registry = BackgroundTaskRegistry(session_id="cur")
     execution, app_control = _execution(registry, sessions={"cur::a1": _agent_session("cur::a1", "cur")})
 
-    result = await followup_task(execution, FollowupTaskInput(session_id="cur::a1", task="re-check the totals"))
+    result = await app_followup_task(execution, AppFollowupTaskInput(session_id="cur::a1", task="re-check the totals"))
 
     assert not result.is_error
     assert len(app_control.dispatched) == 1
@@ -207,7 +209,7 @@ async def test_followup_task_refuses_a_session_that_is_not_your_agent():
     registry = BackgroundTaskRegistry(session_id="cur")
     execution, app_control = _execution(registry, sessions={"other::a1": _agent_session("other::a1", "other")})
 
-    result = await followup_task(execution, FollowupTaskInput(session_id="other::a1", task="do things"))
+    result = await app_followup_task(execution, AppFollowupTaskInput(session_id="other::a1", task="do things"))
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -221,8 +223,8 @@ async def test_followup_task_approval_waived_only_for_live_agents():
     try:
         execution, _ = _execution(registry)
 
-        live = await approve_followup_task(execution, FollowupTaskInput(session_id="cur::a1", task="go"))
-        idle = await approve_followup_task(execution, FollowupTaskInput(session_id="cur::b2", task="go"))
+        live = await approve_app_followup_task(execution, AppFollowupTaskInput(session_id="cur::a1", task="go"))
+        idle = await approve_app_followup_task(execution, AppFollowupTaskInput(session_id="cur::b2", task="go"))
 
         assert live is APPROVAL_WAIVED
         assert isinstance(idle, ApprovalInfo)
@@ -231,9 +233,9 @@ async def test_followup_task_approval_waived_only_for_live_agents():
 
 
 def test_followup_task_policy_mirrors_send_message():
-    assert followup_task_tool.policy.requires_approval is True
-    assert followup_task_tool.policy.allow_approval_bypass is False
-    assert followup_task_tool.policy.permissions == frozenset({"session", "app_control"})
+    assert app_followup_task_tool.policy.requires_approval is True
+    assert app_followup_task_tool.policy.allow_approval_bypass is False
+    assert app_followup_task_tool.policy.permissions == frozenset({"session", "app_control"})
 
 
 async def _delivered(registry: BackgroundTaskRegistry, *, status: str, result: str) -> str:

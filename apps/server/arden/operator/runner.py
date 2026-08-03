@@ -28,7 +28,7 @@ class OperatorDeps:
     executor: ToolExecutor
     config: AgentConfig
     source_details: dict[str, dict]
-    create_session: Callable[[], SessionState]
+    session_create: Callable[[], SessionState]
     notifiers: list[dict[str, str]]
     enqueue_run_completed: Callable[[RunCompleted], Awaitable[bool]] | None = None
     skill_registry: SkillRegistry | None = None
@@ -58,7 +58,7 @@ class RunResult:
 
 async def _prepare(deps: OperatorDeps, request: RunRequest) -> tuple[Agent, list[dict], str, str]:
     run_id = generate_run_id()
-    session_state = deps.create_session()
+    session_state = deps.session_create()
     session_state.origin_automation_id = request.automation_id
 
     memory_context = await deps.wiki_context.resident_context() if deps.wiki_context is not None else None

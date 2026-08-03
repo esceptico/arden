@@ -13,13 +13,13 @@ from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContex
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolOverrideDecision
 from arden.tools.directives import (
-    GetDirectivesInput,
-    SetDirectivesInput,
-    approve_set_directives,
-    get_directives,
-    get_directives_tool,
-    set_directives,
-    set_directives_tool,
+    DirectivesGetInput,
+    DirectivesSetInput,
+    approve_directives_set,
+    directives_get,
+    directives_get_tool,
+    directives_set,
+    directives_set_tool,
 )
 from arden.tools.executor import ToolExecutor
 
@@ -47,15 +47,15 @@ async def test_directives_read_hides_revision_and_stale_write_is_rejected(tmp_pa
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
 
     execution = _execution("directives_get")
-    read = await get_directives(execution, GetDirectivesInput())
-    approval = await approve_set_directives(
+    read = await directives_get(execution, DirectivesGetInput())
+    approval = await approve_directives_set(
         execution,
-        SetDirectivesInput(directives="approved replacement"),
+        DirectivesSetInput(directives="approved replacement"),
     )
     target.write_text(json.dumps({"content": "version B"}), encoding="utf-8")
-    result = await set_directives(
+    result = await directives_set(
         execution,
-        SetDirectivesInput(directives="approved replacement"),
+        DirectivesSetInput(directives="approved replacement"),
     )
 
     assert read.content == "version A"
@@ -74,8 +74,8 @@ async def test_directives_conflict_stays_hash_free_through_agent_executor(tmp_pa
     target.write_text(json.dumps({"content": "version A"}), encoding="utf-8")
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
     registry = ToolRegistry(tool_overrides={"directives_set": ToolOverrideDecision.APPROVE})
-    registry.register("directives_get", get_directives_tool)
-    registry.register("directives_set", set_directives_tool)
+    registry.register("directives_get", directives_get_tool)
+    registry.register("directives_set", directives_set_tool)
     context = _execution("directives_get").ctx
     context.registry = registry
     executor = ArdenToolExecutor(
@@ -104,10 +104,10 @@ async def test_directives_create_and_clear_are_idempotent(tmp_path, monkeypatch)
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
 
     execution = _execution("directives_set")
-    created = await set_directives(execution, SetDirectivesInput(directives="Be concise"))
-    cleared = await set_directives(
+    created = await directives_set(execution, DirectivesSetInput(directives="Be concise"))
+    cleared = await directives_set(
         execution,
-        SetDirectivesInput(directives=""),
+        DirectivesSetInput(directives=""),
     )
 
     assert created.outcome is not None and created.outcome.effect is not None
@@ -124,7 +124,7 @@ async def test_directives_require_a_fresh_read_for_replacement(tmp_path, monkeyp
     target.write_text(json.dumps({"content": "existing"}), encoding="utf-8")
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
 
-    result = await set_directives(_execution("directives_set"), SetDirectivesInput(directives="replacement"))
+    result = await directives_set(_execution("directives_set"), DirectivesSetInput(directives="replacement"))
 
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
@@ -139,8 +139,8 @@ async def test_directives_reject_a_read_that_will_be_offloaded(tmp_path, monkeyp
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
     execution = _execution("directives_set")
 
-    await get_directives(execution, GetDirectivesInput())
-    result = await set_directives(execution, SetDirectivesInput(directives="replacement"))
+    await directives_get(execution, DirectivesGetInput())
+    result = await directives_set(execution, DirectivesSetInput(directives="replacement"))
 
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
@@ -149,6 +149,6 @@ async def test_directives_reject_a_read_that_will_be_offloaded(tmp_path, monkeyp
 
 
 def test_directive_schema_rejects_hash_arguments() -> None:
-    assert "expected_sha256" not in SetDirectivesInput.model_fields
+    assert "expected_sha256" not in DirectivesSetInput.model_fields
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        SetDirectivesInput.model_validate({"directives": "x", "expected_sha256": "a" * 64})
+        DirectivesSetInput.model_validate({"directives": "x", "expected_sha256": "a" * 64})

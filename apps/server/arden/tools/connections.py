@@ -95,7 +95,7 @@ def render_connection_catalog(descriptors: list[IntegrationConnectionDescriptor]
     )
 
 
-class RequestConnectionInput(BaseModel):
+class ConnectionRequestInput(BaseModel):
     integration_id: str = Field(description="Exact integration_id from <available_connections>.")
     reason: str = Field(
         max_length=500,
@@ -103,7 +103,7 @@ class RequestConnectionInput(BaseModel):
     )
 
 
-async def request_connection(execution: ToolExecution, args: RequestConnectionInput) -> ToolResult:
+async def connection_request(execution: ToolExecution, args: ConnectionRequestInput) -> ToolResult:
     service = execution.ctx.get_client("connections", ConnectionService)
     descriptor = service.get_disconnected(args.integration_id) if service else None
     if descriptor is None:
@@ -132,7 +132,7 @@ async def request_connection(execution: ToolExecution, args: RequestConnectionIn
     )
 
 
-request_connection_tool = tool(
+connection_request_tool = tool(
     display_name="Request Connection",
     display_description="Ask the user to connect an integration.",
     description=(
@@ -140,11 +140,11 @@ request_connection_tool = tool(
         "Use only when the user's explicit request requires that capability and no connected tool can satisfy it. "
         "Never call this for speculative recommendations or an integration absent from the allowlist."
     ),
-    input_model=RequestConnectionInput,
+    input_model=ConnectionRequestInput,
     policy=ToolPolicy(
         action=ToolAction.READ,
         scope=ToolScope.EXTERNAL,
         permissions=frozenset({"connections"}),
     ),
-    execute=request_connection,
+    execute=connection_request,
 )

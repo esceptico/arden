@@ -19,7 +19,7 @@ from arden.memory.facts.models import Fact, FactConflictError, FactValidationErr
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
 from arden.revisions import Archive, ChangeSet, Create, ManagedFileRepository, RevisionConflictError, Update
-from arden.wiki.pages import create_page as create_wiki_page
+from arden.wiki.pages import create_page as wiki_create_page
 from arden.wiki.service import WikiService
 
 pytestmark = pytest.mark.asyncio
@@ -622,12 +622,12 @@ async def test_normalize_topic_redirect_owner_blocks_relabel(tmp_path: Path) -> 
                 Create(
                     "bicycle-page",
                     "bicycle.md",
-                    create_wiki_page(page_id="bicycle-page", title="Bicycle").to_bytes(),
+                    wiki_create_page(page_id="bicycle-page", title="Bicycle").to_bytes(),
                 ),
                 Create(
                     "bike-redirect",
                     "bike.md",
-                    create_wiki_page(
+                    wiki_create_page(
                         page_id="bike-redirect",
                         title="Bike",
                         lifecycle="redirect",
@@ -684,7 +684,7 @@ async def test_committed_normalization_is_corrected_when_topic_owner_changes(
             return
         diverged = True
         record = wiki.read_page("bicycle-page")
-        replacement = create_wiki_page(
+        replacement = wiki_create_page(
             page_id=record.page.page_id,
             title=record.page.title,
             aliases=(),
@@ -699,7 +699,7 @@ async def test_committed_normalization_is_corrected_when_topic_owner_changes(
                     Create(
                         "bike-page",
                         "bike.md",
-                        create_wiki_page(page_id="bike-page", title="Bike").to_bytes(),
+                        wiki_create_page(page_id="bike-page", title="Bike").to_bytes(),
                     ),
                 ),
                 actor="user:desktop",
@@ -756,7 +756,7 @@ async def test_normalize_topic_revalidates_binding_after_corrective_fact_commit(
         notifications += 1
         bicycle = wiki.read_page("bicycle-page")
         if notifications == 1:
-            without_alias = create_wiki_page(
+            without_alias = wiki_create_page(
                 page_id=bicycle.page.page_id,
                 title=bicycle.page.title,
                 aliases=(),
@@ -770,7 +770,7 @@ async def test_normalize_topic_revalidates_binding_after_corrective_fact_commit(
                         Create(
                             "bike-page",
                             "bike.md",
-                            create_wiki_page(page_id="bike-page", title="Bike").to_bytes(),
+                            wiki_create_page(page_id="bike-page", title="Bike").to_bytes(),
                         ),
                     ),
                     actor="user:desktop",
@@ -782,7 +782,7 @@ async def test_normalize_topic_revalidates_binding_after_corrective_fact_commit(
             )
         elif notifications == 2:
             bike = repository.get("bike-page")
-            with_alias = create_wiki_page(
+            with_alias = wiki_create_page(
                 page_id=bicycle.page.page_id,
                 title=bicycle.page.title,
                 aliases=("Bike",),

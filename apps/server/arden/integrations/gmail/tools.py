@@ -17,12 +17,12 @@ from arden.utils import truncate
 
 SEND_EMAIL_DESCRIPTION = "Send an email from a specified Gmail account. Requires approval."
 REPLY_EMAIL_DESCRIPTION = (
-    "Reply in an existing Gmail thread using the qualified account:message_id returned by emails or email_read. "
+    "Reply in an existing Gmail thread using the qualified account:message_id returned by email_search or email_read. "
     "Preserves the provider thread and reply headers. Requires approval."
 )
 
 READ_EMAIL_DESCRIPTION = (
-    "Read the full content of an email by its ID. Use emails() or emails(query) first to find email IDs."
+    "Read the full content of an email by its ID. Use email_search() or email_search(query) first to find email IDs."
 )
 
 EMAILS_DESCRIPTION = """Browse or search emails.
@@ -70,7 +70,7 @@ def _message_source_refs(items: list) -> tuple[ToolSourceRef, ...]:
     return normalize_source_refs(refs)
 
 
-class SendEmailInput(BaseModel):
+class EmailSendInput(BaseModel):
     account: str = Field(description="Sender email address (must match a connected Gmail account)")
     to: str = Field(description="Recipient email address")
     subject: str = Field(description="Email subject")
@@ -78,13 +78,13 @@ class SendEmailInput(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200, description="Unique stable key for this send attempt")
 
 
-class ReplyEmailInput(BaseModel):
-    message_ref: str = Field(description="Qualified account:message_id returned by emails or email_read.")
+class EmailReplyInput(BaseModel):
+    message_ref: str = Field(description="Qualified account:message_id returned by email_search or email_read.")
     body: str = Field(min_length=1, max_length=100_000, description="Plain-text reply body.")
     idempotency_key: str = Field(min_length=8, max_length=200, description="Unique stable key for this reply attempt.")
 
 
-async def approve_send_email(execution: ToolExecution, args: SendEmailInput) -> ApprovalInfo | None:
+async def approve_email_send(execution: ToolExecution, args: EmailSendInput) -> ApprovalInfo | None:
     preview = truncate(
         f"Subject: {args.subject}\nFrom: {args.account}\n\nBody:\n{args.body}",
         1_500,
@@ -92,7 +92,7 @@ async def approve_send_email(execution: ToolExecution, args: SendEmailInput) -> 
     return ApprovalInfo(description=args.to, preview=preview, diff=None)
 
 
-async def send_email(execution: ToolExecution, args: SendEmailInput) -> ToolResult:
+async def email_send(execution: ToolExecution, args: EmailSendInput) -> ToolResult:
     async def invoke() -> ToolResult:
         source = execution.ctx.get_client("gmail", MultiGmailSource)
         try:
@@ -121,7 +121,7 @@ async def send_email(execution: ToolExecution, args: SendEmailInput) -> ToolResu
     )
 
 
-async def approve_reply_email(execution: ToolExecution, args: ReplyEmailInput) -> ApprovalInfo | None:
+async def approve_email_reply(execution: ToolExecution, args: EmailReplyInput) -> ApprovalInfo | None:
     return ApprovalInfo(
         description=f"Reply to {args.message_ref}",
         preview=truncate(f"Thread: {args.message_ref}\n\nBody:\n{args.body}", 1_500),
@@ -129,7 +129,7 @@ async def approve_reply_email(execution: ToolExecution, args: ReplyEmailInput) -
     )
 
 
-async def reply_email(execution: ToolExecution, args: ReplyEmailInput) -> ToolResult:
+async def email_reply(execution: ToolExecution, args: EmailReplyInput) -> ToolResult:
     async def invoke() -> ToolResult:
         source = execution.ctx.get_client("gmail", MultiGmailSource)
         try:
@@ -168,19 +168,19 @@ async def reply_email(execution: ToolExecution, args: ReplyEmailInput) -> ToolRe
     )
 
 
-class ReadEmailInput(BaseModel):
+class EmailReadInput(BaseModel):
     email_id: str = Field(description="The email ID (from search or list results)")
 
 
-async def read_email(execution: ToolExecution, args: ReadEmailInput) -> ToolResult:
+async def email_read(execution: ToolExecution, args: EmailReadInput) -> ToolResult:
     source = execution.ctx.get_client("gmail", MultiGmailSource)
     email = source.read(args.email_id)
     if not email:
         return ToolResult.failure(
             code="not_found",
-            message=f"Email not found: {args.email_id}. Use emails() or emails(query) to find valid email IDs.",
+            message=f"Email not found: {args.email_id}. Use email_search() or email_search(query) to find valid email IDs.",
             preview="Not found",
-            recovery_action="Call emails with a query and retry using an exact returned email ID.",
+            recovery_action="Call email_search with a query and retry using an exact returned email ID.",
         )
 
     lines = email.content.count("\n") + 1
@@ -220,7 +220,7 @@ _DEFAULT_EMAIL_DAYS = 7
 _DEFAULT_EMAIL_LIMIT = 30
 
 
-class EmailsInput(BaseModel):
+class EmailSearchInput(BaseModel):
     query: str | None = Field(default=None, description="Search query. Omit to list recent emails.")
     days: int = Field(
         default=_DEFAULT_EMAIL_DAYS,
@@ -272,40 +272,40 @@ def _search_emails(source: MultiGmailSource, query: str, limit: int) -> ToolResu
     )
 
 
-async def emails(execution: ToolExecution, args: EmailsInput) -> ToolResult:
+async def email_search(execution: ToolExecution, args: EmailSearchInput) -> ToolResult:
     source = execution.ctx.get_client("gmail", MultiGmailSource)
     if args.query:
         return _search_emails(source, args.query, args.limit)
     return _list_emails(source, args.days, args.limit)
 
 
-emails_tool = tool(
+email_search_tool = tool(
     display_name="Emails",
     display_description="Browse and search Gmail messages.",
     description=EMAILS_DESCRIPTION,
-    input_model=EmailsInput,
+    input_model=EmailSearchInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"}), deferred=True
     ),
-    execute=emails,
+    execute=email_search,
 )
 
-read_email_tool = tool(
+email_read_tool = tool(
     display_name="ReadEmail",
     display_description="Read a Gmail message.",
     description=READ_EMAIL_DESCRIPTION,
-    input_model=ReadEmailInput,
+    input_model=EmailReadInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"}), deferred=True
     ),
-    execute=read_email,
+    execute=email_read,
 )
 
-send_email_tool = tool(
+email_send_tool = tool(
     display_name="SendEmail",
     display_description="Send a Gmail message after approval.",
     description=SEND_EMAIL_DESCRIPTION,
-    input_model=SendEmailInput,
+    input_model=EmailSendInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.EXTERNAL,
@@ -313,15 +313,15 @@ send_email_tool = tool(
         permissions=frozenset({"gmail"}),
         deferred=True,
     ),
-    approval=approve_send_email,
-    execute=send_email,
+    approval=approve_email_send,
+    execute=email_send,
 )
 
-reply_email_tool = tool(
+email_reply_tool = tool(
     display_name="ReplyEmail",
     display_description="Reply in a Gmail thread after approval.",
     description=REPLY_EMAIL_DESCRIPTION,
-    input_model=ReplyEmailInput,
+    input_model=EmailReplyInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.EXTERNAL,
@@ -329,6 +329,6 @@ reply_email_tool = tool(
         permissions=frozenset({"gmail"}),
         deferred=True,
     ),
-    approval=approve_reply_email,
-    execute=reply_email,
+    approval=approve_email_reply,
+    execute=email_reply,
 )

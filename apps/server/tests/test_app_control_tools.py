@@ -17,19 +17,19 @@ from arden.context.models import SessionData, SessionState
 from arden.context.store import AREA_FILTER_UNSET
 from arden.events.sse import EventType, SSEEvent
 from arden.tools.app_control import (
-    ArchiveSessionInput,
-    OpenInAppInput,
-    RenameSessionInput,
-    RequestAttentionInput,
-    SendMessageInput,
-    approve_send_message,
-    archive_session,
-    archive_session_tool,
-    open_in_app,
-    rename_session,
-    request_attention,
-    send_message,
-    send_message_tool,
+    AppOpenInput,
+    AppRequestAttentionInput,
+    SessionArchiveInput,
+    SessionRenameInput,
+    SessionSendMessageInput,
+    app_open,
+    app_request_attention,
+    approve_session_send_message,
+    session_archive,
+    session_archive_tool,
+    session_rename,
+    session_send_message,
+    session_send_message_tool,
 )
 from arden.tools.core.context import (
     BackgroundTaskRegistry,
@@ -182,7 +182,7 @@ async def _live_agent(session_id: str) -> AsyncIterator[BackgroundTaskRegistry]:
 async def test_send_message_refuses_its_own_session():
     execution, _, app_control = _make_execution(sessions={"cur": _session("cur", "Current")})
 
-    result = await send_message(execution, SendMessageInput(session_id="cur", message="go"))
+    result = await session_send_message(execution, SessionSendMessageInput(session_id="cur", message="go"))
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -193,7 +193,7 @@ async def test_send_message_refuses_its_own_session():
 async def test_send_message_reports_unknown_session_with_recent_ids():
     execution, service, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await send_message(execution, SendMessageInput(session_id="nope", message="go"))
+    result = await session_send_message(execution, SessionSendMessageInput(session_id="nope", message="go"))
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
@@ -208,7 +208,7 @@ async def test_unknown_session_hint_stays_inside_the_callers_area():
     about sessions its own session_list would never show it."""
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")}, area_id="ops")
 
-    result = await send_message(execution, SendMessageInput(session_id="nope", message="go"))
+    result = await session_send_message(execution, SessionSendMessageInput(session_id="nope", message="go"))
 
     assert result.is_error
     assert service.list_calls[-1]["area_id"] == "ops"
@@ -218,7 +218,7 @@ async def test_unknown_session_hint_stays_inside_the_callers_area():
 async def test_send_message_dispatches_with_tool_call_client_id_and_no_approval_override():
     execution, _, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await send_message(execution, SendMessageInput(session_id="s1", message="check the digest"))
+    result = await session_send_message(execution, SessionSendMessageInput(session_id="s1", message="check the digest"))
 
     assert not result.is_error
     assert app_control.dispatched == [
@@ -236,7 +236,7 @@ async def test_send_message_refuses_an_archived_target():
         archived={"s1"},
     )
 
-    result = await send_message(execution, SendMessageInput(session_id="s1", message="go"))
+    result = await session_send_message(execution, SessionSendMessageInput(session_id="s1", message="go"))
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -245,9 +245,9 @@ async def test_send_message_refuses_an_archived_target():
 
 @pytest.mark.asyncio
 async def test_send_message_policy_matches_bash():
-    assert send_message_tool.policy.requires_approval is True
-    assert send_message_tool.policy.allow_approval_bypass is False
-    assert send_message_tool.policy.permissions == frozenset({"session", "app_control"})
+    assert session_send_message_tool.policy.requires_approval is True
+    assert session_send_message_tool.policy.allow_approval_bypass is False
+    assert session_send_message_tool.policy.permissions == frozenset({"session", "app_control"})
 
 
 @pytest.mark.asyncio
@@ -255,7 +255,9 @@ async def test_send_message_steers_a_live_agent_without_dispatching():
     async with _live_agent("cur::a1") as registry:
         execution, _, app_control = _make_execution(background_tasks=registry)
 
-        result = await send_message(execution, SendMessageInput(session_id="cur::a1", message="also check pricing"))
+        result = await session_send_message(
+            execution, SessionSendMessageInput(session_id="cur::a1", message="also check pricing")
+        )
 
         assert not result.is_error
         assert app_control.dispatched == []
@@ -271,8 +273,10 @@ async def test_send_message_waives_approval_only_for_own_live_agents():
     async with _live_agent("cur::a1") as registry:
         execution, _, _ = _make_execution(background_tasks=registry)
 
-        waived = await approve_send_message(execution, SendMessageInput(session_id="cur::a1", message="go"))
-        foreign = await approve_send_message(execution, SendMessageInput(session_id="s1", message="go"))
+        waived = await approve_session_send_message(
+            execution, SessionSendMessageInput(session_id="cur::a1", message="go")
+        )
+        foreign = await approve_session_send_message(execution, SessionSendMessageInput(session_id="s1", message="go"))
 
         assert waived is APPROVAL_WAIVED
         assert isinstance(foreign, ApprovalInfo)
@@ -289,7 +293,7 @@ async def test_send_message_refuses_to_dispatch_when_the_agent_finished_mid_appr
             background_tasks=registry,
         )
 
-        result = await send_message(execution, SendMessageInput(session_id="cur::a1", message="go"))
+        result = await session_send_message(execution, SessionSendMessageInput(session_id="cur::a1", message="go"))
 
         assert result.is_error
         assert result.outcome.error.code == "conflict"
@@ -300,7 +304,7 @@ async def test_send_message_refuses_to_dispatch_when_the_agent_finished_mid_appr
 async def test_rename_session_renames_and_announces_row():
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Old name", messages=3)})
 
-    result = await rename_session(execution, RenameSessionInput(session_id="s1", name="Invoice triage"))
+    result = await session_rename(execution, SessionRenameInput(session_id="s1", name="Invoice triage"))
 
     assert not result.is_error
     assert service.renamed == [("s1", "Invoice triage")]
@@ -312,7 +316,7 @@ async def test_rename_session_renames_and_announces_row():
 async def test_rename_session_reports_unknown_session():
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await rename_session(execution, RenameSessionInput(session_id="ghost", name="Nope"))
+    result = await session_rename(execution, SessionRenameInput(session_id="ghost", name="Nope"))
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
@@ -325,7 +329,7 @@ async def test_rename_session_refuses_an_archived_target():
     at the top of the list until the next /sessions load."""
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")}, archived={"s1"})
 
-    result = await rename_session(execution, RenameSessionInput(session_id="s1", name="Nope"))
+    result = await session_rename(execution, SessionRenameInput(session_id="s1", name="Nope"))
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -340,7 +344,7 @@ async def test_archive_session_skips_own_session_but_archives_the_rest():
         run_registry=_StubRunRegistry(),
     )
 
-    result = await archive_session(execution, ArchiveSessionInput(session_ids=["cur", "s1"]))
+    result = await session_archive(execution, SessionArchiveInput(session_ids=["cur", "s1"]))
 
     assert not result.is_error
     assert service.archived == ["s1"]
@@ -357,7 +361,7 @@ async def test_archive_session_batch_reports_every_outcome():
         run_registry=_StubRunRegistry({"s2": object()}),
     )
 
-    result = await archive_session(execution, ArchiveSessionInput(session_ids=["s1", "s2", "s3", "ghost", "s1"]))
+    result = await session_archive(execution, SessionArchiveInput(session_ids=["s1", "s2", "s3", "ghost", "s1"]))
 
     assert not result.is_error
     assert service.archived == ["s1"]  # duplicate id archives once
@@ -376,7 +380,7 @@ async def test_archive_session_all_skipped_is_an_error():
         run_registry=_StubRunRegistry(),
     )
 
-    result = await archive_session(execution, ArchiveSessionInput(session_ids=["s1", "ghost"]))
+    result = await session_archive(execution, SessionArchiveInput(session_ids=["s1", "ghost"]))
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -385,11 +389,11 @@ async def test_archive_session_all_skipped_is_an_error():
 
 @pytest.mark.asyncio
 async def test_archive_session_needs_no_approval():
-    assert archive_session_tool.policy.requires_approval is False
+    assert session_archive_tool.policy.requires_approval is False
 
 
-def _attention(key: str = "invoice-4021", kind: str = "question") -> RequestAttentionInput:
-    return RequestAttentionInput(
+def _attention(key: str = "invoice-4021", kind: str = "question") -> AppRequestAttentionInput:
+    return AppRequestAttentionInput(
         text="Invoice #4021 is 12 days overdue",
         kind=kind,
         why_now="The 15-day escalation window closes tomorrow.",
@@ -402,7 +406,7 @@ def _attention(key: str = "invoice-4021", kind: str = "question") -> RequestAtte
 async def test_request_attention_creates_an_unfiled_ask():
     execution, _, app_control = _make_execution()
 
-    result = await request_attention(execution, _attention())
+    result = await app_request_attention(execution, _attention())
 
     assert not result.is_error
     ask = app_control.asks.get("tool:cur:invoice-4021")
@@ -418,7 +422,7 @@ async def test_request_attention_creates_an_unfiled_ask():
 async def test_request_attention_stamps_the_callers_area():
     execution, _, app_control = _make_execution(area_id="ops")
 
-    await request_attention(execution, _attention())
+    await app_request_attention(execution, _attention())
 
     assert app_control.asks.get("tool:cur:invoice-4021").area_key == "ops"
     assert [e.keys for e in app_control.emitted] == [["ops"]]
@@ -428,7 +432,7 @@ async def test_request_attention_stamps_the_callers_area():
 async def test_request_attention_notify_kind_expires():
     execution, _, app_control = _make_execution()
 
-    await request_attention(execution, _attention(kind="notify"))
+    await app_request_attention(execution, _attention(kind="notify"))
 
     assert app_control.asks.get("tool:cur:invoice-4021").expires_at is not None
 
@@ -437,7 +441,7 @@ async def test_request_attention_notify_kind_expires():
 async def test_request_attention_question_kind_does_not_expire():
     execution, _, app_control = _make_execution()
 
-    await request_attention(execution, _attention(kind="question"))
+    await app_request_attention(execution, _attention(kind="question"))
 
     assert app_control.asks.get("tool:cur:invoice-4021").expires_at is None
 
@@ -445,10 +449,10 @@ async def test_request_attention_question_kind_does_not_expire():
 @pytest.mark.asyncio
 async def test_request_attention_resurface_is_silent_after_a_decision():
     execution, _, app_control = _make_execution()
-    await request_attention(execution, _attention())
+    await app_request_attention(execution, _attention())
     app_control.asks.resolve("tool:cur:invoice-4021", "done", None, "acknowledged")
 
-    result = await request_attention(execution, _attention())
+    result = await app_request_attention(execution, _attention())
 
     assert "Refreshed the existing item" in result.content
     assert result.preview == "refreshed"
@@ -459,9 +463,9 @@ async def test_request_attention_says_when_it_loses_the_shared_unfiled_lane():
     """Every chat outside an Area shares one Home lane, so a stored ask is not
     necessarily a visible one — the result must not claim otherwise."""
     execution, _, app_control = _make_execution()
-    await request_attention(execution, _attention(key="invoice-4021", kind="question"))
+    await app_request_attention(execution, _attention(key="invoice-4021", kind="question"))
 
-    result = await request_attention(execution, _attention(key="ledger-drift", kind="notify"))
+    result = await app_request_attention(execution, _attention(key="ledger-drift", kind="notify"))
 
     assert not result.is_error
     assert "Home is not showing 'ledger-drift' yet" in result.content
@@ -472,9 +476,9 @@ async def test_request_attention_says_when_it_loses_the_shared_unfiled_lane():
 async def test_open_in_app_emits_navigation_requested_with_origin_session():
     execution, _, app_control = _make_execution(areas=["ops"])
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "area", "area_id": "ops"}, label="Open the Ops area"),
+        AppOpenInput(destination={"kind": "area", "area_id": "ops"}, label="Open the Ops area"),
     )
 
     assert not result.is_error
@@ -489,7 +493,7 @@ async def test_open_in_app_emits_navigation_requested_with_origin_session():
 async def test_open_in_app_drops_unset_optional_destination_fields():
     execution, _, app_control = _make_execution()
 
-    await open_in_app(execution, OpenInAppInput(destination={"kind": "automation"}, label="Open automations"))
+    await app_open(execution, AppOpenInput(destination={"kind": "automation"}, label="Open automations"))
 
     assert app_control.emitted[0].destination == {"kind": "automation"}
 
@@ -498,9 +502,9 @@ async def test_open_in_app_drops_unset_optional_destination_fields():
 async def test_open_in_app_refuses_an_unknown_session():
     execution, _, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "session", "session_id": "ghost"}, label="Open the ghost chat"),
+        AppOpenInput(destination={"kind": "session", "session_id": "ghost"}, label="Open the ghost chat"),
     )
 
     assert result.is_error
@@ -512,9 +516,9 @@ async def test_open_in_app_refuses_an_unknown_session():
 async def test_open_in_app_refuses_an_unknown_area():
     execution, _, app_control = _make_execution(areas=["ops"])
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "area", "area_id": "finance"}, label="Open the Finance area"),
+        AppOpenInput(destination={"kind": "area", "area_id": "finance"}, label="Open the Finance area"),
     )
 
     assert result.is_error
@@ -527,9 +531,9 @@ async def test_open_in_app_refuses_an_unknown_area():
 async def test_open_in_app_refuses_an_unknown_automation():
     execution, _, app_control = _make_execution(automation=_StubAutomationService({"digest"}))
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "automation", "task_id": "ghost"}, label="Review the digest"),
+        AppOpenInput(destination={"kind": "automation", "task_id": "ghost"}, label="Review the digest"),
     )
 
     assert result.is_error
@@ -541,9 +545,9 @@ async def test_open_in_app_refuses_an_unknown_automation():
 async def test_open_in_app_refuses_an_automation_ref_when_automations_are_off():
     execution, _, app_control = _make_execution()
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "automation", "task_id": "digest"}, label="Review the digest"),
+        AppOpenInput(destination={"kind": "automation", "task_id": "digest"}, label="Review the digest"),
     )
 
     assert result.is_error
@@ -556,7 +560,7 @@ async def test_open_in_app_opens_the_automations_surface_without_a_task_id():
     """The bare surface carries no ref, so there is nothing to validate."""
     execution, _, app_control = _make_execution()
 
-    result = await open_in_app(execution, OpenInAppInput(destination={"kind": "automation"}, label="Open automations"))
+    result = await app_open(execution, AppOpenInput(destination={"kind": "automation"}, label="Open automations"))
 
     assert not result.is_error
     assert app_control.emitted[0].destination == {"kind": "automation"}
@@ -566,10 +570,10 @@ async def test_open_in_app_opens_the_automations_surface_without_a_task_id():
 async def test_open_in_app_still_opens_home_and_settings_without_checks():
     execution, _, app_control = _make_execution()
 
-    home = await open_in_app(execution, OpenInAppInput(destination={"kind": "home"}, label="Go Home"))
-    settings = await open_in_app(
+    home = await app_open(execution, AppOpenInput(destination={"kind": "home"}, label="Go Home"))
+    settings = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "settings", "tab": "models"}, label="Open model settings"),
+        AppOpenInput(destination={"kind": "settings", "tab": "models"}, label="Open model settings"),
     )
 
     assert not home.is_error
@@ -595,7 +599,7 @@ async def test_rename_session_updates_a_live_runs_in_memory_state():
         run_registry=registry,
     )
 
-    result = await rename_session(execution, RenameSessionInput(session_id="s1", name="Invoice triage"))
+    result = await session_rename(execution, SessionRenameInput(session_id="s1", name="Invoice triage"))
 
     assert not result.is_error
     assert service.renamed == [("s1", "Invoice triage")]
@@ -622,9 +626,9 @@ async def test_open_in_app_sends_the_user_to_a_wiki_page():
     history walks."""
     execution, _, app_control = _make_execution(wiki=_StubWikiService({"areas/health.md"}))
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(
+        AppOpenInput(
             destination={"kind": "memory", "path": "areas/health.md"},
             label="Open the Health page",
         ),
@@ -638,9 +642,9 @@ async def test_open_in_app_sends_the_user_to_a_wiki_page():
 async def test_open_in_app_refuses_an_unknown_wiki_page():
     execution, _, app_control = _make_execution(wiki=_StubWikiService({"areas/health.md"}))
 
-    result = await open_in_app(
+    result = await app_open(
         execution,
-        OpenInAppInput(destination={"kind": "memory", "path": "areas/ghost.md"}, label="Open the page"),
+        AppOpenInput(destination={"kind": "memory", "path": "areas/ghost.md"}, label="Open the page"),
     )
 
     assert result.is_error
@@ -652,7 +656,7 @@ async def test_open_in_app_refuses_an_unknown_wiki_page():
 async def test_open_in_app_still_opens_memory_without_a_page():
     execution, _, app_control = _make_execution()
 
-    result = await open_in_app(execution, OpenInAppInput(destination={"kind": "memory"}, label="Open memory"))
+    result = await app_open(execution, AppOpenInput(destination={"kind": "memory"}, label="Open memory"))
 
     assert not result.is_error
     assert app_control.emitted[0].destination == {"kind": "memory"}

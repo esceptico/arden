@@ -27,13 +27,13 @@ Requires user approval before creating."""
 
 EDIT_CALENDAR_EVENT_DESCRIPTION = """Edit an existing calendar event.
 
-Use calendar() or calendar(query) first to find the event ID.
+Use calendar_search() or calendar_search(query) first to find the event ID.
 Only provide the fields you want to change - others remain unchanged.
 Requires user approval before editing."""
 
 DELETE_CALENDAR_EVENT_DESCRIPTION = """Delete a calendar event by ID.
 
-Use calendar() or calendar(query) first to find the event ID.
+Use calendar_search() or calendar_search(query) first to find the event ID.
 Requires user approval before deleting."""
 
 
@@ -92,7 +92,7 @@ _DEFAULT_DAYS_BACK = 0
 _DEFAULT_CALENDAR_LIMIT = 30
 
 
-class CalendarInput(BaseModel):
+class CalendarSearchInput(BaseModel):
     query: str | None = Field(default=None, description="Search query. Omit to list events by time range.")
     days_forward: int = Field(
         default=_DEFAULT_DAYS_FORWARD,
@@ -165,14 +165,14 @@ def _calendar_list(source: MultiCalendarSource, days_forward: int, days_back: in
     )
 
 
-async def calendar(execution: ToolExecution, args: CalendarInput) -> ToolResult:
+async def calendar_search(execution: ToolExecution, args: CalendarSearchInput) -> ToolResult:
     source = execution.ctx.get_client("calendar", MultiCalendarSource)
     if args.query:
         return _calendar_search(source, args.query, args.limit)
     return _calendar_list(source, args.days_forward, args.days_back, args.limit)
 
 
-class CreateCalendarEventInput(BaseModel):
+class CalendarCreateEventInput(BaseModel):
     summary: str = Field(description="Event title/summary")
     start: str = Field(description="Start time in ISO format (e.g., '2024-01-15T14:00:00')")
     end: str | None = Field(
@@ -186,8 +186,8 @@ class CreateCalendarEventInput(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-async def approve_create_calendar_event(
-    execution: ToolExecution, args: CreateCalendarEventInput
+async def approve_calendar_create_event(
+    execution: ToolExecution, args: CalendarCreateEventInput
 ) -> ApprovalInfo | None:
     start_dt = _parse_datetime(args.start)
     if not start_dt:
@@ -203,7 +203,7 @@ async def approve_create_calendar_event(
     )
 
 
-async def create_calendar_event(execution: ToolExecution, args: CreateCalendarEventInput) -> ToolResult:
+async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEventInput) -> ToolResult:
     start_dt = _parse_datetime(args.start)
     if not start_dt:
         return ToolResult.failure(
@@ -255,7 +255,7 @@ async def create_calendar_event(execution: ToolExecution, args: CreateCalendarEv
     )
 
 
-class EditCalendarEventInput(BaseModel):
+class CalendarEditEventInput(BaseModel):
     event_id: str = Field(description="The event ID to edit (from calendar() or calendar(query))")
     summary: str | None = Field(default=None, description="New event title (optional)")
     start: str | None = Field(default=None, description="New start time in ISO format (optional)")
@@ -268,7 +268,7 @@ class EditCalendarEventInput(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-async def approve_edit_calendar_event(execution: ToolExecution, args: EditCalendarEventInput) -> ApprovalInfo | None:
+async def approve_calendar_edit_event(execution: ToolExecution, args: CalendarEditEventInput) -> ApprovalInfo | None:
     changes = []
     if args.summary:
         changes.append(f"Title: {args.summary}")
@@ -285,7 +285,7 @@ async def approve_edit_calendar_event(execution: ToolExecution, args: EditCalend
     )
 
 
-async def edit_calendar_event(execution: ToolExecution, args: EditCalendarEventInput) -> ToolResult:
+async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventInput) -> ToolResult:
     start_dt = _parse_datetime(args.start) if args.start else None
     if args.start and not start_dt:
         return ToolResult.failure(
@@ -340,13 +340,13 @@ async def edit_calendar_event(execution: ToolExecution, args: EditCalendarEventI
     )
 
 
-class DeleteCalendarEventInput(BaseModel):
+class CalendarDeleteEventInput(BaseModel):
     event_id: str = Field(description="The event ID to delete")
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-async def approve_delete_calendar_event(
-    execution: ToolExecution, args: DeleteCalendarEventInput
+async def approve_calendar_delete_event(
+    execution: ToolExecution, args: CalendarDeleteEventInput
 ) -> ApprovalInfo | None:
     return ApprovalInfo(
         description="Delete calendar event",
@@ -355,7 +355,7 @@ async def approve_delete_calendar_event(
     )
 
 
-async def delete_calendar_event(execution: ToolExecution, args: DeleteCalendarEventInput) -> ToolResult:
+async def calendar_delete_event(execution: ToolExecution, args: CalendarDeleteEventInput) -> ToolResult:
     async def invoke() -> ToolResult:
         source = execution.ctx.get_client("calendar", MultiCalendarSource)
         try:
@@ -382,22 +382,22 @@ async def delete_calendar_event(execution: ToolExecution, args: DeleteCalendarEv
     )
 
 
-calendar_tool = tool(
+calendar_search_tool = tool(
     display_name="Calendar",
     display_description="Browse and search calendar events.",
     description=CALENDAR_DESCRIPTION,
-    input_model=CalendarInput,
+    input_model=CalendarSearchInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"calendar"}), deferred=True
     ),
-    execute=calendar,
+    execute=calendar_search,
 )
 
-create_calendar_event_tool = tool(
+calendar_create_event_tool = tool(
     display_name="CreateEvent",
     display_description="Create a calendar event after approval.",
     description=CREATE_CALENDAR_EVENT_DESCRIPTION,
-    input_model=CreateCalendarEventInput,
+    input_model=CalendarCreateEventInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.EXTERNAL,
@@ -405,15 +405,15 @@ create_calendar_event_tool = tool(
         permissions=frozenset({"calendar"}),
         deferred=True,
     ),
-    approval=approve_create_calendar_event,
-    execute=create_calendar_event,
+    approval=approve_calendar_create_event,
+    execute=calendar_create_event,
 )
 
-edit_calendar_event_tool = tool(
+calendar_edit_event_tool = tool(
     display_name="EditEvent",
     display_description="Edit a calendar event after approval.",
     description=EDIT_CALENDAR_EVENT_DESCRIPTION,
-    input_model=EditCalendarEventInput,
+    input_model=CalendarEditEventInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.EXTERNAL,
@@ -421,15 +421,15 @@ edit_calendar_event_tool = tool(
         permissions=frozenset({"calendar"}),
         deferred=True,
     ),
-    approval=approve_edit_calendar_event,
-    execute=edit_calendar_event,
+    approval=approve_calendar_edit_event,
+    execute=calendar_edit_event,
 )
 
-delete_calendar_event_tool = tool(
+calendar_delete_event_tool = tool(
     display_name="DeleteEvent",
     display_description="Delete a calendar event after approval.",
     description=DELETE_CALENDAR_EVENT_DESCRIPTION,
-    input_model=DeleteCalendarEventInput,
+    input_model=CalendarDeleteEventInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.EXTERNAL,
@@ -437,6 +437,6 @@ delete_calendar_event_tool = tool(
         permissions=frozenset({"calendar"}),
         deferred=True,
     ),
-    approval=approve_delete_calendar_event,
-    execute=delete_calendar_event,
+    approval=approve_calendar_delete_event,
+    execute=calendar_delete_event,
 )

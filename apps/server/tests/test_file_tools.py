@@ -17,24 +17,24 @@ from arden.tools.core.types import ToolPlacement
 from arden.tools.deferred import is_deferred_tool
 from arden.tools.executor import ToolExecutor
 from arden.tools.files import (
-    EditFileInput,
-    ReadFileInput,
+    FileEditInput,
+    FileReadInput,
     WriteFileInput,
-    edit_file_tool,
-    find_files_tool,
-    list_files_tool,
-    read_file_tool,
-    search_text_tool,
-    write_file_tool,
+    file_edit_tool,
+    file_find_tool,
+    file_list_tool,
+    file_read_tool,
+    file_search_text_tool,
+    file_write_tool,
 )
 
 ALL_FILE_TOOLS = {
-    "file_read": read_file_tool,
-    "file_list": list_files_tool,
-    "file_find": find_files_tool,
-    "file_search_text": search_text_tool,
-    "file_write": write_file_tool,
-    "file_edit": edit_file_tool,
+    "file_read": file_read_tool,
+    "file_list": file_list_tool,
+    "file_find": file_find_tool,
+    "file_search_text": file_search_text_tool,
+    "file_write": file_write_tool,
+    "file_edit": file_edit_tool,
 }
 
 
@@ -60,11 +60,11 @@ def test_all_file_tools_are_client_placed():
 
 @pytest.mark.asyncio
 async def test_read_tools_refuse_in_process_execution(tmp_path):
-    result = await read_file_tool.execute(_make_execution("file_read"), path=str(tmp_path / "x.txt"))
+    result = await file_read_tool.execute(_make_execution("file_read"), path=str(tmp_path / "x.txt"))
     assert result.is_error
     assert result.outcome.error.code == "no_client_execution"
 
-    result = await list_files_tool.execute(_make_execution("file_list"), path=str(tmp_path))
+    result = await file_list_tool.execute(_make_execution("file_list"), path=str(tmp_path))
     assert result.is_error
     assert result.outcome.error.code == "no_client_execution"
 
@@ -72,7 +72,7 @@ async def test_read_tools_refuse_in_process_execution(tmp_path):
 @pytest.mark.asyncio
 async def test_write_tools_refuse_in_process_execution_without_touching_disk(tmp_path):
     target = tmp_path / "note.txt"
-    result = await write_file_tool.execute(_make_execution("file_write"), path=str(target), content="hello")
+    result = await file_write_tool.execute(_make_execution("file_write"), path=str(target), content="hello")
     assert result.is_error
     assert result.outcome.error.code == "no_client_execution"
     assert not target.exists()
@@ -126,7 +126,7 @@ def test_area_prompt_tells_agent_to_use_relative_paths():
 
 
 def test_file_write_schemas_reject_hash_arguments() -> None:
-    for model in (ReadFileInput, WriteFileInput, EditFileInput):
+    for model in (FileReadInput, WriteFileInput, FileEditInput):
         assert "expected_sha256" not in model.model_fields
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
@@ -141,7 +141,7 @@ async def test_write_approval_builds_diff_without_hashes(tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("version A\n", encoding="utf-8")
 
-    approval = await write_file_tool.approval_info(
+    approval = await file_write_tool.approval_info(
         _make_execution("file_write"),
         path=str(target),
         content="approved replacement\n",
@@ -157,7 +157,7 @@ async def test_write_approval_builds_diff_without_hashes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_write_approval_for_new_file_says_create(tmp_path):
-    approval = await write_file_tool.approval_info(
+    approval = await file_write_tool.approval_info(
         _make_execution("file_write"),
         path=str(tmp_path / "new.txt"),
         content="hello",
@@ -171,7 +171,7 @@ async def test_edit_approval_requires_unique_match(tmp_path):
     target = tmp_path / "note.txt"
     target.write_text("same\nsame\n", encoding="utf-8")
 
-    approval = await edit_file_tool.approval_info(
+    approval = await file_edit_tool.approval_info(
         _make_execution("file_edit"),
         path=str(target),
         old_text="same",
@@ -180,7 +180,7 @@ async def test_edit_approval_requires_unique_match(tmp_path):
     assert approval is None
 
     target.write_text("hello old world\n", encoding="utf-8")
-    approval = await edit_file_tool.approval_info(
+    approval = await file_edit_tool.approval_info(
         _make_execution("file_edit"),
         path=str(target),
         old_text="old",
@@ -195,7 +195,7 @@ async def test_edit_approval_requires_unique_match(tmp_path):
 async def test_area_approvals_display_relative_paths(tmp_path):
     (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
 
-    approval = await edit_file_tool.approval_info(
+    approval = await file_edit_tool.approval_info(
         _make_execution("file_edit", area_cwd=str(tmp_path)),
         path="notes.txt",
         old_text="hello",
@@ -228,7 +228,7 @@ def test_file_tools_are_registered_as_core_tools():
 async def test_write_file_requires_approval_through_registry(tmp_path):
     target = tmp_path / "new.txt"
     registry = ToolRegistry()
-    registry.register("file_write", write_file_tool)
+    registry.register("file_write", file_write_tool)
     execution = _make_execution("file_write")
 
     result = await registry.execute(

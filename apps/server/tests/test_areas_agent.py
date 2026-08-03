@@ -250,12 +250,12 @@ def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
     assert "observe" in observe.description
     assert "act" in acting.description
 
-    run_automation = next(f for f in AREA_OWN if f.name == "area_run_automation")
-    create_automation = AUTOMATION[0]
-    assert ACT.matches(run_automation)
+    automation_run = next(f for f in AREA_OWN if f.name == "area_run_automation")
+    automation_create = AUTOMATION[0]
+    assert ACT.matches(automation_run)
     # Acting may propose child automations — creation itself is approval-gated.
-    assert ACT.matches(create_automation)
-    assert not OBSERVE.matches(create_automation)
+    assert ACT.matches(automation_create)
+    assert not OBSERVE.matches(automation_create)
     for fact in WRITES:
         assert not ACT.matches(fact), fact.name
 

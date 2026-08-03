@@ -105,7 +105,7 @@ def _refuse_in_process(tool_name: str) -> ToolResult:
     )
 
 
-class ReadFileInput(BaseModel):
+class FileReadInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(description="File path. Prefer relative paths from the area default cwd when set.")
@@ -123,11 +123,11 @@ class ReadFileInput(BaseModel):
     )
 
 
-async def read_file(execution: ToolExecution, args: ReadFileInput) -> ToolResult:
+async def file_read(execution: ToolExecution, args: FileReadInput) -> ToolResult:
     return _refuse_in_process("file_read")
 
 
-class ListFilesInput(BaseModel):
+class FileListInput(BaseModel):
     path: str = Field(
         default=".", description="Directory path to list. Prefer relative paths from the area default cwd when set."
     )
@@ -138,11 +138,11 @@ class ListFilesInput(BaseModel):
     )
 
 
-async def list_files(execution: ToolExecution, args: ListFilesInput) -> ToolResult:
+async def file_list(execution: ToolExecution, args: FileListInput) -> ToolResult:
     return _refuse_in_process("file_list")
 
 
-class FindFilesInput(BaseModel):
+class FileFindInput(BaseModel):
     path: str = Field(
         default=".",
         description="Directory path to search under. Prefer relative paths from the area default cwd when set.",
@@ -152,11 +152,11 @@ class FindFilesInput(BaseModel):
     include_hidden: bool = Field(default=False, description="Include dotfiles and dot-directories.")
 
 
-async def find_files(execution: ToolExecution, args: FindFilesInput) -> ToolResult:
+async def file_find(execution: ToolExecution, args: FileFindInput) -> ToolResult:
     return _refuse_in_process("file_find")
 
 
-class SearchTextInput(BaseModel):
+class FileSearchTextInput(BaseModel):
     query: str = Field(min_length=1, description="Literal text to search for.")
     path: str = Field(
         default=".",
@@ -166,7 +166,7 @@ class SearchTextInput(BaseModel):
     limit: int = Field(default=_DEFAULT_MATCH_LIMIT, ge=1, le=1000, description="Maximum matches to return.")
 
 
-async def search_text(execution: ToolExecution, args: SearchTextInput) -> ToolResult:
+async def file_search_text(execution: ToolExecution, args: FileSearchTextInput) -> ToolResult:
     return _refuse_in_process("file_search_text")
 
 
@@ -194,15 +194,15 @@ def _approve_write_file_sync(args: WriteFileInput, cwd: str | None = None) -> Ap
     )
 
 
-async def approve_write_file(execution: ToolExecution, args: WriteFileInput) -> ApprovalInfo | None:
+async def approve_file_write(execution: ToolExecution, args: WriteFileInput) -> ApprovalInfo | None:
     return await asyncio.to_thread(_approve_write_file_sync, args, _session_cwd(execution))
 
 
-async def write_file(execution: ToolExecution, args: WriteFileInput) -> ToolResult:
+async def file_write(execution: ToolExecution, args: WriteFileInput) -> ToolResult:
     return _refuse_in_process("file_write")
 
 
-class EditFileInput(BaseModel):
+class FileEditInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(description="Path to edit. Prefer relative paths from the area default cwd when set.")
@@ -210,7 +210,7 @@ class EditFileInput(BaseModel):
     new_text: str = Field(description="Replacement text.")
 
 
-def _approve_edit_file_sync(args: EditFileInput, cwd: str | None = None) -> ApprovalInfo | None:
+def _approve_file_edit_sync(args: FileEditInput, cwd: str | None = None) -> ApprovalInfo | None:
     path = _resolve_path(args.path, cwd)
     if not path.exists() or not path.is_file():
         return None
@@ -226,51 +226,51 @@ def _approve_edit_file_sync(args: EditFileInput, cwd: str | None = None) -> Appr
     )
 
 
-async def approve_edit_file(execution: ToolExecution, args: EditFileInput) -> ApprovalInfo | None:
-    return await asyncio.to_thread(_approve_edit_file_sync, args, _session_cwd(execution))
+async def approve_file_edit(execution: ToolExecution, args: FileEditInput) -> ApprovalInfo | None:
+    return await asyncio.to_thread(_approve_file_edit_sync, args, _session_cwd(execution))
 
 
-async def edit_file(execution: ToolExecution, args: EditFileInput) -> ToolResult:
+async def file_edit(execution: ToolExecution, args: FileEditInput) -> ToolResult:
     return _refuse_in_process("file_edit")
 
 
-read_file_tool = tool(
+file_read_tool = tool(
     display_name="ReadFile",
     display_description="Read a file from the user's device.",
     description=READ_FILE_DESCRIPTION,
-    input_model=ReadFileInput,
+    input_model=FileReadInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
-    execute=read_file,
+    execute=file_read,
 )
 
-list_files_tool = tool(
+file_list_tool = tool(
     display_name="ListFiles",
     display_description="List files in a directory on the user's device.",
     description=LIST_FILES_DESCRIPTION,
-    input_model=ListFilesInput,
+    input_model=FileListInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
-    execute=list_files,
+    execute=file_list,
 )
 
-find_files_tool = tool(
+file_find_tool = tool(
     display_name="FindFiles",
     display_description="Find files by name or pattern on the user's device.",
     description=FIND_FILES_DESCRIPTION,
-    input_model=FindFilesInput,
+    input_model=FileFindInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
-    execute=find_files,
+    execute=file_find,
 )
 
-search_text_tool = tool(
+file_search_text_tool = tool(
     display_name="SearchText",
     display_description="Search text across files on the user's device.",
     description=SEARCH_TEXT_DESCRIPTION,
-    input_model=SearchTextInput,
+    input_model=FileSearchTextInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
-    execute=search_text,
+    execute=file_search_text,
 )
 
-write_file_tool = tool(
+file_write_tool = tool(
     display_name="WriteFile",
     display_description="Create or replace a file on the user's device.",
     description=WRITE_FILE_DESCRIPTION,
@@ -282,15 +282,15 @@ write_file_tool = tool(
         requires_approval=True,
         deferred=True,
     ),
-    approval=approve_write_file,
-    execute=write_file,
+    approval=approve_file_write,
+    execute=file_write,
 )
 
-edit_file_tool = tool(
+file_edit_tool = tool(
     display_name="EditFile",
     display_description="Replace exact text in a file on the user's device.",
     description=EDIT_FILE_DESCRIPTION,
-    input_model=EditFileInput,
+    input_model=FileEditInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -298,6 +298,6 @@ edit_file_tool = tool(
         requires_approval=True,
         deferred=True,
     ),
-    approval=approve_edit_file,
-    execute=edit_file,
+    approval=approve_file_edit,
+    execute=file_edit,
 )

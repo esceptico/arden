@@ -33,7 +33,7 @@ _PREVIEW_CHARS = 1_200
 _RECENT_ID_HINT_LIMIT = 10
 
 
-class SendMessageInput(BaseModel):
+class SessionSendMessageInput(BaseModel):
     session_id: str = Field(
         min_length=1,
         max_length=200,
@@ -54,7 +54,7 @@ class SendMessageInput(BaseModel):
     )
 
 
-class FollowupTaskInput(BaseModel):
+class AppFollowupTaskInput(BaseModel):
     session_id: str = Field(
         min_length=1,
         max_length=200,
@@ -73,7 +73,7 @@ class FollowupTaskInput(BaseModel):
     )
 
 
-class RenameSessionInput(BaseModel):
+class SessionRenameInput(BaseModel):
     session_id: str = Field(min_length=1, max_length=200, description="Session id from session_list.")
     name: str = Field(
         min_length=1,
@@ -82,7 +82,7 @@ class RenameSessionInput(BaseModel):
     )
 
 
-class ArchiveSessionInput(BaseModel):
+class SessionArchiveInput(BaseModel):
     session_ids: list[str] = Field(
         min_length=1,
         max_length=50,
@@ -94,7 +94,7 @@ class ArchiveSessionInput(BaseModel):
     )
 
 
-class RequestAttentionInput(BaseModel):
+class AppRequestAttentionInput(BaseModel):
     text: str = Field(
         min_length=1,
         max_length=200,
@@ -132,7 +132,7 @@ class RequestAttentionInput(BaseModel):
     )
 
 
-class OpenInAppInput(BaseModel):
+class AppOpenInput(BaseModel):
     destination: AppDestination = Field(
         description=(
             'Where to send the user. One of: {"kind":"home"}, '
@@ -188,7 +188,9 @@ def _archived_session(session_id: str, recovery_action: str) -> ToolResult:
     )
 
 
-async def approve_send_message(execution: ToolExecution, args: SendMessageInput) -> ApprovalInfo | ApprovalWaived:
+async def approve_session_send_message(
+    execution: ToolExecution, args: SessionSendMessageInput
+) -> ApprovalInfo | ApprovalWaived:
     if execution.ctx.background_tasks.task_for_session(args.session_id) is not None:
         return APPROVAL_WAIVED
     return ApprovalInfo(
@@ -198,7 +200,7 @@ async def approve_send_message(execution: ToolExecution, args: SendMessageInput)
     )
 
 
-async def send_message(execution: ToolExecution, args: SendMessageInput) -> ToolResult:
+async def session_send_message(execution: ToolExecution, args: SessionSendMessageInput) -> ToolResult:
     if args.session_id == execution.ctx.session_id:
         return ToolResult.failure(
             code="invalid_arguments",
@@ -254,7 +256,9 @@ async def send_message(execution: ToolExecution, args: SendMessageInput) -> Tool
     )
 
 
-async def approve_followup_task(execution: ToolExecution, args: FollowupTaskInput) -> ApprovalInfo | ApprovalWaived:
+async def approve_app_followup_task(
+    execution: ToolExecution, args: AppFollowupTaskInput
+) -> ApprovalInfo | ApprovalWaived:
     # Same line send_message draws: queueing into a live agent is free; waking
     # an idle one starts a fresh run — that costs money, so the user decides.
     if execution.ctx.background_tasks.task_for_session(args.session_id) is not None:
@@ -266,7 +270,7 @@ async def approve_followup_task(execution: ToolExecution, args: FollowupTaskInpu
     )
 
 
-async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> ToolResult:
+async def app_followup_task(execution: ToolExecution, args: AppFollowupTaskInput) -> ToolResult:
     ctx = execution.ctx
     if args.session_id == ctx.session_id:
         return ToolResult.failure(
@@ -335,7 +339,7 @@ async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> To
     )
 
 
-async def rename_session(execution: ToolExecution, args: RenameSessionInput) -> ToolResult:
+async def session_rename(execution: ToolExecution, args: SessionRenameInput) -> ToolResult:
     svc = execution.ctx.services["session"]
     data = await svc.load(args.session_id)
     if data is None:
@@ -359,7 +363,7 @@ async def rename_session(execution: ToolExecution, args: RenameSessionInput) -> 
     )
 
 
-async def archive_session(execution: ToolExecution, args: ArchiveSessionInput) -> ToolResult:
+async def session_archive(execution: ToolExecution, args: SessionArchiveInput) -> ToolResult:
     registry = execution.ctx.run_registry
     svc = execution.ctx.services["session"]
     lines: list[str] = []
@@ -400,7 +404,7 @@ async def archive_session(execution: ToolExecution, args: ArchiveSessionInput) -
     )
 
 
-async def request_attention(execution: ToolExecution, args: RequestAttentionInput) -> ToolResult:
+async def app_request_attention(execution: ToolExecution, args: AppRequestAttentionInput) -> ToolResult:
     app = execution.ctx.services["app_control"]
     area_id = execution.ctx.session_state.area_id
     session_id = execution.ctx.session_id
@@ -490,7 +494,7 @@ async def _invalid_destination(execution: ToolExecution, destination: AppDestina
     return None
 
 
-async def open_in_app(execution: ToolExecution, args: OpenInAppInput) -> ToolResult:
+async def app_open(execution: ToolExecution, args: AppOpenInput) -> ToolResult:
     if failure := await _invalid_destination(execution, args.destination):
         return failure
     await execution.ctx.services["app_control"].emit(
@@ -573,11 +577,11 @@ OPEN_IN_APP_DESCRIPTION = (
 )
 
 
-send_message_tool = tool(
+session_send_message_tool = tool(
     display_name="SendMessage",
     display_description="Message a chat or a running agent.",
     description=SEND_MESSAGE_DESCRIPTION,
-    input_model=SendMessageInput,
+    input_model=SessionSendMessageInput,
     policy=ToolPolicy(
         action=ToolAction.EXECUTE,
         scope=ToolScope.INTERNAL,
@@ -586,15 +590,15 @@ send_message_tool = tool(
         permissions=frozenset({"session", "app_control"}),
         deferred=True,
     ),
-    approval=approve_send_message,
-    execute=send_message,
+    approval=approve_session_send_message,
+    execute=session_send_message,
 )
 
-followup_task_tool = tool(
+app_followup_task_tool = tool(
     display_name="FollowupTask",
     display_description="Assign a task to one of your agents.",
     description=FOLLOWUP_TASK_DESCRIPTION,
-    input_model=FollowupTaskInput,
+    input_model=AppFollowupTaskInput,
     policy=ToolPolicy(
         action=ToolAction.EXECUTE,
         scope=ToolScope.INTERNAL,
@@ -603,53 +607,53 @@ followup_task_tool = tool(
         permissions=frozenset({"session", "app_control"}),
         deferred=True,
     ),
-    approval=approve_followup_task,
-    execute=followup_task,
+    approval=approve_app_followup_task,
+    execute=app_followup_task,
 )
 
-rename_session_tool = tool(
+session_rename_tool = tool(
     display_name="RenameSession",
     display_description="Rename a chat session.",
     description=RENAME_SESSION_DESCRIPTION,
-    input_model=RenameSessionInput,
+    input_model=SessionRenameInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
     ),
-    execute=rename_session,
+    execute=session_rename,
 )
 
-archive_session_tool = tool(
+session_archive_tool = tool(
     display_name="ArchiveSession",
     display_description="Archive a chat session.",
     description=ARCHIVE_SESSION_DESCRIPTION,
-    input_model=ArchiveSessionInput,
+    input_model=SessionArchiveInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
     ),
-    execute=archive_session,
+    execute=session_archive,
 )
 
-request_attention_tool = tool(
+app_request_attention_tool = tool(
     display_name="RequestAttention",
     display_description="Raise a needs-you item on Home.",
     description=REQUEST_ATTENTION_DESCRIPTION,
-    input_model=RequestAttentionInput,
+    input_model=AppRequestAttentionInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"app_control"}), deferred=True
     ),
-    execute=request_attention,
+    execute=app_request_attention,
 )
 
-open_in_app_tool = tool(
+app_open_tool = tool(
     display_name="OpenInApp",
     display_description="Open a place in the Arden app.",
     description=OPEN_IN_APP_DESCRIPTION,
-    input_model=OpenInAppInput,
+    input_model=AppOpenInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({"app_control", "session"}),
         deferred=True,
     ),
-    execute=open_in_app,
+    execute=app_open,
 )

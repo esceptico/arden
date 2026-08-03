@@ -8,7 +8,7 @@ from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolSco
 _logger = get_logger(__name__)
 
 
-class UseSkillInput(BaseModel):
+class SkillUseInput(BaseModel):
     skill: str = Field(description="Name of the skill to activate")
     args: str = Field(default="", description="Optional arguments for the skill")
 
@@ -21,7 +21,7 @@ USE_SKILL_DESCRIPTION = (
 )
 
 
-async def use_skill(execution: ToolExecution, args: UseSkillInput) -> ToolResult:
+async def skill_use(execution: ToolExecution, args: SkillUseInput) -> ToolResult:
     registry = execution.ctx.services["skill_registry"]
     meta = registry.get(args.skill)
     content = registry.render_skill_xml(args.skill, args.args)
@@ -37,17 +37,17 @@ async def use_skill(execution: ToolExecution, args: UseSkillInput) -> ToolResult
     return ToolResult(content=content, preview=f"Loaded skill: {args.skill}")
 
 
-use_skill_tool = tool(
+skill_use_tool = tool(
     display_name="UseSkill",
     display_description="Load instructions for a specialized skill.",
     description=USE_SKILL_DESCRIPTION,
-    input_model=UseSkillInput,
+    input_model=SkillUseInput,
     policy=ToolPolicy(
         action=ToolAction.READ,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({"skill_registry"}),
     ),
-    execute=use_skill,
+    execute=skill_use,
 )
 
 
@@ -62,7 +62,7 @@ CREATE_SKILL_DESCRIPTION = (
 )
 
 
-class CreateSkillInput(BaseModel):
+class SkillCreateInput(BaseModel):
     name: str = Field(
         min_length=1,
         max_length=48,
@@ -80,7 +80,7 @@ class CreateSkillInput(BaseModel):
     )
 
 
-async def approve_create_skill(execution: ToolExecution, args: CreateSkillInput) -> ApprovalInfo | None:
+async def approve_skill_create(execution: ToolExecution, args: SkillCreateInput) -> ApprovalInfo | None:
     # The approval card surfaces the name, description, and a body excerpt
     # so the user can decide without opening anything else.
     preview = f"Name: {args.name}\nDescription: {args.description}\nBody:\n{args.body}"
@@ -91,7 +91,7 @@ async def approve_create_skill(execution: ToolExecution, args: CreateSkillInput)
     )
 
 
-async def create_skill(execution: ToolExecution, args: CreateSkillInput) -> ToolResult:
+async def skill_create(execution: ToolExecution, args: SkillCreateInput) -> ToolResult:
     svc = execution.ctx.services.get("skill_service")
     if svc is None:
         return ToolResult.failure(
@@ -123,11 +123,11 @@ async def create_skill(execution: ToolExecution, args: CreateSkillInput) -> Tool
     )
 
 
-create_skill_tool = tool(
+skill_create_tool = tool(
     display_name="CreateSkill",
     display_description="Create a reusable global skill.",
     description=CREATE_SKILL_DESCRIPTION,
-    input_model=CreateSkillInput,
+    input_model=SkillCreateInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -135,6 +135,6 @@ create_skill_tool = tool(
         permissions=frozenset({"skill_service"}),
         deferred=True,
     ),
-    approval=approve_create_skill,
-    execute=create_skill,
+    approval=approve_skill_create,
+    execute=skill_create,
 )

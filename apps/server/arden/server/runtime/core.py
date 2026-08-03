@@ -1223,7 +1223,7 @@ class Runtime:
             wiki_context=self.wiki_context,
             config=AgentConfig.from_config(self.config),
             source_details={},
-            create_session=self.stores.sessions.create,
+            session_create=self.stores.sessions.create,
             notifiers=self.notifier_service.list_summary() if self.notifier_service else [],
             enqueue_run_completed=self.stores.outbox.enqueue_run_completed,
             skill_registry=self.skill_registry,

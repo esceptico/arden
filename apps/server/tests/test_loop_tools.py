@@ -13,17 +13,17 @@ from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
 from arden.context.models import SessionState
 from arden.tools.automation import (
-    CreateAutomationInput,
-    CreateLoopInput,
+    AutomationCreateInput,
+    LoopCreateInput,
     LoopDoneInput,
-    ScheduleWakeupInput,
-    approve_create_automation,
-    approve_create_loop,
-    create_automation,
-    create_loop,
-    list_automation_runs_tool,
+    LoopScheduleWakeupInput,
+    approve_automation_create,
+    approve_loop_create,
+    automation_create,
+    automation_list_runs_tool,
+    loop_create,
     loop_done,
-    schedule_wakeup,
+    loop_schedule_wakeup,
 )
 from arden.tools.core.base import Tool
 from arden.tools.core.context import (
@@ -117,7 +117,7 @@ async def test_schedule_wakeup_updates_next_run(store_and_svc):
     execution = _execution(svc, loop_task_id="loop-1")
 
     before = datetime.now(UTC)
-    result = await schedule_wakeup(execution, ScheduleWakeupInput(delay_seconds=300))
+    result = await loop_schedule_wakeup(execution, LoopScheduleWakeupInput(delay_seconds=300))
     assert not result.is_error
     loop = await store.get("loop-1")
     assert loop.next_run_at is not None
@@ -145,7 +145,7 @@ async def test_list_automation_runs_exposes_trigger_result_and_channel(store_and
         disable_one_shot=False,
     )
 
-    result = await list_automation_runs_tool.execute(
+    result = await automation_list_runs_tool.execute(
         _execution(svc, loop_task_id=None),
         since=started - timedelta(minutes=1),
     )
@@ -171,7 +171,7 @@ async def test_schedule_wakeup_refuses_outside_loop(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    result = await schedule_wakeup(execution, ScheduleWakeupInput(delay_seconds=60))
+    result = await loop_schedule_wakeup(execution, LoopScheduleWakeupInput(delay_seconds=60))
     assert result.is_error
     assert "loop" in result.content.lower()
 
@@ -201,16 +201,16 @@ def test_schedule_wakeup_input_enforces_min_delay():
     import pydantic
 
     with pytest.raises(pydantic.ValidationError):
-        ScheduleWakeupInput(delay_seconds=59)
+        LoopScheduleWakeupInput(delay_seconds=59)
 
 
 def test_automation_display_description_is_bounded():
     import pydantic
 
-    from arden.tools.automation import UpdateAutomationInput
+    from arden.tools.automation import AutomationUpdateInput
 
     with pytest.raises(pydantic.ValidationError):
-        CreateAutomationInput(
+        AutomationCreateInput(
             name="bounded",
             prompt="Run the bounded automation.",
             description="x" * 221,
@@ -219,11 +219,11 @@ def test_automation_display_description_is_bounded():
             idempotency_key="bounded",
         )
     with pytest.raises(pydantic.ValidationError):
-        UpdateAutomationInput(task_id="bounded", description="x" * 221)
+        AutomationUpdateInput(task_id="bounded", description="x" * 221)
 
 
 def test_create_automation_schema_does_not_expose_session_binding():
-    properties = CreateAutomationInput.model_json_schema()["properties"]
+    properties = AutomationCreateInput.model_json_schema()["properties"]
 
     assert "thread_id" not in properties
     assert "read_history" not in properties
@@ -231,7 +231,7 @@ def test_create_automation_schema_does_not_expose_session_binding():
 
 def test_create_automation_requires_retry_safe_idempotency():
     with pytest.raises(ValidationError, match="idempotency_key"):
-        CreateAutomationInput(
+        AutomationCreateInput(
             name="unsafe",
             prompt="Run once.",
             trigger_type="time",
@@ -239,7 +239,7 @@ def test_create_automation_requires_retry_safe_idempotency():
         )
 
     with pytest.raises(ValidationError, match="attempt_n is required"):
-        CreateAutomationInput(
+        AutomationCreateInput(
             name="attempt",
             prompt="Run once per attempt.",
             trigger_type="time",
@@ -257,7 +257,7 @@ async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="daily brief",
         description="Posts the morning brief.",
         prompt="Post the morning brief.",
@@ -266,11 +266,11 @@ async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
         idempotency_key="daily-brief-1",
     )
 
-    first = await create_automation(execution, args)
+    first = await automation_create(execution, args)
     assert not first.is_error
     assert "Created" in first.content or "created" in first.content.lower()
 
-    second = await create_automation(execution, args)
+    second = await automation_create(execution, args)
     assert not second.is_error
     assert "already exists" in second.content.lower()
 
@@ -291,7 +291,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
     execution = _execution(svc, loop_task_id=None)
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        CreateAutomationInput.model_validate(
+        AutomationCreateInput.model_validate(
             {
                 "name": "channel automation",
                 "description": "Posts into its own channel.",
@@ -304,7 +304,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
                 "idempotency_key": "channel-automation",
             }
         )
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="channel automation",
         description="Posts into its own channel.",
         prompt="Post into its own channel.",
@@ -313,7 +313,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
         all_tools=True,
         idempotency_key="channel-automation",
     )
-    result = await create_automation(execution, args)
+    result = await automation_create(execution, args)
     assert not result.is_error
 
     rows = await store.list_all()
@@ -331,7 +331,7 @@ async def test_create_automation_cannot_bind_an_arbitrary_session(store_and_svc)
 async def test_approve_create_automation_shows_tool_scope(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="scoped sender",
         description="Posts a reviewed update.",
         prompt="Post a reviewed update.",
@@ -342,7 +342,7 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
         idempotency_key="scoped-sender",
     )
 
-    info = await approve_create_automation(execution, args)
+    info = await approve_automation_create(execution, args)
 
     assert info is not None
     assert "Auto-approve: yes (skips approval for granted tools; does not grant access)" in (info.preview or "")
@@ -351,13 +351,13 @@ async def test_approve_create_automation_shows_tool_scope(store_and_svc):
 
 @pytest.mark.asyncio
 async def test_update_automation_changes_tool_scope(store_and_svc):
-    from arden.tools.automation import UpdateAutomationInput, update_automation
+    from arden.tools.automation import AutomationUpdateInput, automation_update
 
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
-    await create_automation(
+    await automation_create(
         execution,
-        CreateAutomationInput(
+        AutomationCreateInput(
             name="scope update",
             description="Reads the source first.",
             prompt="Read the source first.",
@@ -368,9 +368,9 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
     )
     created = next(a for a in await store.list_all() if a.name == "scope update")
 
-    result = await update_automation(
+    result = await automation_update(
         execution,
-        UpdateAutomationInput(task_id=created.task_id, all_tools=True),
+        AutomationUpdateInput(task_id=created.task_id, all_tools=True),
     )
 
     assert not result.is_error
@@ -405,7 +405,7 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
         get_slack_client=lambda: _FakeSlack(),
     )
     execution = _execution(svc, loop_task_id=None)
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="bug watch",
         description="Triages bug reports.",
         prompt="Triage bugs.",
@@ -416,7 +416,7 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
         idempotency_key="bug-watch",
     )
 
-    result = await create_automation(execution, args)
+    result = await automation_create(execution, args)
     assert not result.is_error, result.content
 
     triggers = [t for a in await store.list_all() for t in a.triggers if isinstance(t, MessageTrigger)]
@@ -434,7 +434,7 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
     from arden.automation.triggers import MessageTrigger
     from arden.context.store import SessionStore
     from arden.services.session import SessionService
-    from arden.tools.automation import UpdateAutomationInput, update_automation
+    from arden.tools.automation import AutomationUpdateInput, automation_update
 
     conn = await database.connect(tmp_path / "automation.db")
     store = AutomationStore(conn)
@@ -449,9 +449,9 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
         get_slack_client=lambda: _FakeSlack(),
     )
     execution = _execution(svc, loop_task_id=None)
-    await create_automation(
+    await automation_create(
         execution,
-        CreateAutomationInput(
+        AutomationCreateInput(
             name="watch",
             description="Triages new items.",
             prompt="Triage new items.",
@@ -462,9 +462,9 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
     )
     task_id = next(a.task_id for a in await store.list_all())
 
-    result = await update_automation(
+    result = await automation_update(
         execution,
-        UpdateAutomationInput(task_id=task_id, trigger_type="message", channels=["eng-bugs"], contains=["bug"]),
+        AutomationUpdateInput(task_id=task_id, trigger_type="message", channels=["eng-bugs"], contains=["bug"]),
     )
     assert not result.is_error, result.content
 
@@ -482,7 +482,7 @@ async def test_create_automation_defaults_parent_from_loop_ctx(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id="loop-1")
 
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="child auto",
         description="Runs follow-up work from the loop.",
         prompt="Run follow-up work from the loop.",
@@ -490,7 +490,7 @@ async def test_create_automation_defaults_parent_from_loop_ctx(store_and_svc):
         every="2h",
         idempotency_key="child-auto",
     )
-    result = await create_automation(execution, args)
+    result = await automation_create(execution, args)
     assert not result.is_error
 
     rows = await store.list_all()
@@ -505,9 +505,9 @@ async def test_create_automation_attempt_scope_uses_attempt_number(store_and_svc
     await store.update_last_run("loop-1", fired_at, fired_at + timedelta(minutes=5))
     execution = _execution(svc, loop_task_id="loop-1")
 
-    result = await create_automation(
+    result = await automation_create(
         execution,
-        CreateAutomationInput(
+        AutomationCreateInput(
             name="attempt child",
             description="Runs once for this retry attempt.",
             prompt="Run the attempt-scoped child.",
@@ -529,9 +529,9 @@ async def test_create_loop_infers_parent_from_loop_ctx(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id="loop-1")
 
-    result = await create_loop(
+    result = await loop_create(
         execution,
-        CreateLoopInput(prompt="watch CI again", every="5m"),
+        LoopCreateInput(prompt="watch CI again", every="5m"),
     )
     assert not result.is_error
 
@@ -545,9 +545,9 @@ async def test_create_loop_explicit_parent_overrides_ctx(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id="loop-1")
 
-    result = await create_loop(
+    result = await loop_create(
         execution,
-        CreateLoopInput(
+        LoopCreateInput(
             prompt="watch CI yet again",
             every="5m",
             parent_automation_id="explicit-parent",
@@ -566,7 +566,7 @@ async def test_create_loop_attaches_the_exact_current_chat(store_and_svc):
     await svc.session_service.provision(name="other chat", session_id="sess-other")
     execution = _execution(svc, loop_task_id=None, session_id="sess-1")
 
-    result = await create_loop(execution, CreateLoopInput(prompt="watch CI", every="5m"))
+    result = await loop_create(execution, LoopCreateInput(prompt="watch CI", every="5m"))
 
     assert not result.is_error
     loop = next(a for a in await store.list_all() if a.kind == "loop" and a.prompt == "watch CI")
@@ -578,7 +578,7 @@ async def test_create_loop_rejects_missing_current_chat(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None, session_id="missing-chat")
 
-    result = await create_loop(execution, CreateLoopInput(prompt="watch CI", every="5m"))
+    result = await loop_create(execution, LoopCreateInput(prompt="watch CI", every="5m"))
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -590,7 +590,7 @@ async def test_create_loop_rejects_archived_current_chat(store_and_svc):
     assert await svc.session_service.archive("sess-1")
     execution = _execution(svc, loop_task_id=None)
 
-    result = await create_loop(execution, CreateLoopInput(prompt="watch CI", every="5m"))
+    result = await loop_create(execution, LoopCreateInput(prompt="watch CI", every="5m"))
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -603,7 +603,7 @@ async def test_create_automation_run_scope_missing_parent_errors(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="orphan",
         description="Tests a missing parent.",
         prompt="This should fail because its parent is missing.",
@@ -613,7 +613,7 @@ async def test_create_automation_run_scope_missing_parent_errors(store_and_svc):
         idempotency_key="k1",
         idempotency_scope="run",
     )
-    result = await create_automation(execution, args)
+    result = await automation_create(execution, args)
     assert result.is_error
     assert "ghost" in result.content
     assert "run" in result.content
@@ -625,9 +625,9 @@ async def test_create_loop_attempt_scope_missing_parent_errors(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    result = await create_loop(
+    result = await loop_create(
         execution,
-        CreateLoopInput(
+        LoopCreateInput(
             prompt="x",
             every="5m",
             parent_automation_id="ghost",
@@ -648,7 +648,7 @@ async def test_approve_create_automation_flags_missing_parent(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    args = CreateAutomationInput(
+    args = AutomationCreateInput(
         name="orphan",
         description="Tests a missing parent warning.",
         prompt="This should warn because its parent is missing.",
@@ -658,7 +658,7 @@ async def test_approve_create_automation_flags_missing_parent(store_and_svc):
         idempotency_key="k1",
         idempotency_scope="run",
     )
-    info = await approve_create_automation(execution, args)
+    info = await approve_automation_create(execution, args)
     assert info is not None
     assert "ghost" in info.preview
     assert "missing" in info.preview.lower() or "will fail" in info.preview.lower()
@@ -670,14 +670,14 @@ async def test_approve_create_loop_flags_missing_parent(store_and_svc):
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    args = CreateLoopInput(
+    args = LoopCreateInput(
         prompt="watch",
         every="5m",
         parent_automation_id="ghost",
         idempotency_key="k1",
         idempotency_scope="run",
     )
-    info = await approve_create_loop(execution, args)
+    info = await approve_loop_create(execution, args)
     assert info is not None
     assert "ghost" in info.preview
     assert "missing" in info.preview.lower() or "will fail" in info.preview.lower()
@@ -691,9 +691,9 @@ async def test_the_agent_can_only_choose_read_only_or_everything(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
-    assert "tool_scope" not in CreateAutomationInput.model_fields
+    assert "tool_scope" not in AutomationCreateInput.model_fields
     with pytest.raises(ValidationError):
-        CreateAutomationInput.model_validate(
+        AutomationCreateInput.model_validate(
             {
                 "name": "x",
                 "prompt": "x",
@@ -705,9 +705,9 @@ async def test_the_agent_can_only_choose_read_only_or_everything(store_and_svc):
         )
 
     for all_tools, expected in ((False, "read_only"), (True, "all")):
-        result = await create_automation(
+        result = await automation_create(
             execution,
-            CreateAutomationInput(
+            AutomationCreateInput(
                 name=f"lever-{expected}",
                 description="Reads things.",
                 prompt="Read things.",

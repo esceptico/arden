@@ -7,7 +7,7 @@ import pytest
 from arden.context.models import SessionState
 from arden.integrations.base import IntegrationOperationError
 from arden.integrations.gmail.client import GmailSource, MultiGmailSource
-from arden.integrations.gmail.tools import ReplyEmailInput, approve_reply_email, reply_email
+from arden.integrations.gmail.tools import EmailReplyInput, approve_email_reply, email_reply
 from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -105,15 +105,15 @@ async def test_reply_tool_returns_idempotent_receipt_and_refs(tmp_path, monkeypa
         },
     )
     execution = ToolExecution(tool_id="reply-call-1", tool_name="email_reply", ctx=ctx)
-    args = ReplyEmailInput(
+    args = EmailReplyInput(
         message_ref="me@example.test:message-1",
         body="Thanks — confirmed.",
         idempotency_key="reply-roadmap-1",
     )
 
-    approval = await approve_reply_email(execution, args)
-    result = await reply_email(execution, args)
-    replay = await reply_email(execution, args)
+    approval = await approve_email_reply(execution, args)
+    result = await email_reply(execution, args)
+    replay = await email_reply(execution, args)
 
     assert approval is not None and args.body in approval.preview
     assert result.outcome is not None

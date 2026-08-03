@@ -45,7 +45,7 @@ def _deps(skill_registry: SkillRegistry | None, executor=None, enqueue_run_compl
         executor=executor if executor is not None else FakeExecutor(),
         config=AgentConfig(model="test-model", research_model=None, max_depth=1, deferred_tools=False),
         source_details={},
-        create_session=lambda: SessionState(
+        session_create=lambda: SessionState(
             session_id="s1",
             started_at=datetime.now(UTC),
             name="test",

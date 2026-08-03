@@ -17,7 +17,7 @@ from arden.tools.area import (
     area_page_read,
     area_page_write,
     area_run_automation,
-    submit_area_report,
+    area_submit_report,
 )
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -406,7 +406,7 @@ async def test_area_report_is_committed_inside_the_trusted_custodian_run(tmp_pat
         services={"area_work": work},
     )
 
-    result = await submit_area_report(run, report())
+    result = await area_submit_report(run, report())
 
     assert not result.is_error
     assert result.data == {"accepted": True}
@@ -423,11 +423,11 @@ async def test_area_report_rejects_untrusted_identity_and_state_conflicts(tmp_pa
             raise AreaWorkReportError("Outcome changed since the run started")
 
     work = Work()
-    untrusted = await submit_area_report(
+    untrusted = await area_submit_report(
         execution(wiki_at(tmp_path), services={"area_work": work}),
         report(),
     )
-    conflict = await submit_area_report(
+    conflict = await area_submit_report(
         execution(
             wiki_at(tmp_path),
             automation_id="area:area_health",

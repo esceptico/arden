@@ -8,7 +8,7 @@ from arden.server.app import app
 from arden.server.deps import require_skill_service
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
-from arden.skills.tool import CreateSkillInput, UseSkillInput, create_skill, use_skill
+from arden.skills.tool import SkillCreateInput, SkillUseInput, skill_create, skill_use
 
 
 def _write_skill(root: Path, name: str, frontmatter: str, body: str = "# Body\n") -> None:
@@ -85,10 +85,10 @@ async def test_skill_tools_return_typed_actionable_failures():
     empty_registry = SkillRegistry()
     use_execution = SimpleNamespace(ctx=SimpleNamespace(services={"skill_registry": empty_registry}))
 
-    missing = await use_skill(use_execution, UseSkillInput(skill="missing"))
-    unavailable = await create_skill(
+    missing = await skill_use(use_execution, SkillUseInput(skill="missing"))
+    unavailable = await skill_create(
         SimpleNamespace(ctx=SimpleNamespace(services={})),
-        CreateSkillInput(name="new-skill", description="Reusable procedure", body="# Procedure"),
+        SkillCreateInput(name="new-skill", description="Reusable procedure", body="# Procedure"),
     )
 
     for result, code in ((missing, "not_found"), (unavailable, "not_configured")):

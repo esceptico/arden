@@ -4,27 +4,27 @@ from arden.automation.builtins import FACT_MAINTENANCE_PROMPT, WIKI_MAINTENANCE_
 from arden.core.prompts import BASE_SYSTEM_PROMPT
 from arden.server.schemas import CreateAutomationRequest
 from arden.tools.area import AreaPagePatchInput, AreaPageWriteInput
-from arden.tools.automation import CreateAutomationInput
-from arden.tools.directives import SetDirectivesInput
-from arden.tools.files import EditFileInput, WriteFileInput
+from arden.tools.automation import AutomationCreateInput
+from arden.tools.directives import DirectivesSetInput
+from arden.tools.files import FileEditInput, WriteFileInput
 from arden.tools.wiki import (
-    ArchiveWikiPageInput,
-    CreateWikiPageInput,
-    EditWikiPageInput,
-    MoveWikiPageInput,
-    PublishWikiGeneratedInput,
+    WikiArchivePageInput,
+    WikiCreatePageInput,
+    WikiEditPageInput,
+    WikiMovePageInput,
+    WikiPublishGeneratedInput,
 )
 from arden.wiki.maintenance.runner import WikiMaintenanceDecision
 
 
 def test_create_automation_prompt_is_required_by_both_input_schemas():
     assert CreateAutomationRequest.model_fields["prompt"].is_required()
-    assert CreateAutomationInput.model_fields["prompt"].is_required()
+    assert AutomationCreateInput.model_fields["prompt"].is_required()
 
 
 def test_create_automation_idempotency_key_is_required_by_both_input_schemas():
     assert CreateAutomationRequest.model_fields["idempotency_key"].is_required()
-    assert CreateAutomationInput.model_fields["idempotency_key"].is_required()
+    assert AutomationCreateInput.model_fields["idempotency_key"].is_required()
 
 
 def test_agent_wiki_mutations_hide_backend_revision_hashes():
@@ -39,16 +39,16 @@ def test_agent_wiki_mutations_hide_backend_revision_hashes():
         "version",
     }
     for input_model in (
-        CreateWikiPageInput,
-        EditWikiPageInput,
-        ArchiveWikiPageInput,
-        MoveWikiPageInput,
-        PublishWikiGeneratedInput,
+        WikiCreatePageInput,
+        WikiEditPageInput,
+        WikiArchivePageInput,
+        WikiMovePageInput,
+        WikiPublishGeneratedInput,
         AreaPagePatchInput,
         AreaPageWriteInput,
         WriteFileInput,
-        EditFileInput,
-        SetDirectivesInput,
+        FileEditInput,
+        DirectivesSetInput,
     ):
         assert internal_fields.isdisjoint(input_model.model_fields)
 

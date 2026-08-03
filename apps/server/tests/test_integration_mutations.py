@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from arden.integrations.calendar.tools import CreateCalendarEventInput, DeleteCalendarEventInput, EditCalendarEventInput
-from arden.integrations.gmail.tools import SendEmailInput
+from arden.integrations.calendar.tools import CalendarCreateEventInput, CalendarDeleteEventInput, CalendarEditEventInput
+from arden.integrations.gmail.tools import EmailSendInput
 from arden.integrations.google_drive.tools import (
-    CreateGoogleDocInput,
-    CreateGoogleSheetInput,
-    EditGoogleDocInput,
+    DriveCreateDocInput,
+    DriveCreateSheetInput,
+    DriveEditDocInput,
     SheetWriteInput,
 )
 from arden.integrations.mutations import (
@@ -22,15 +22,15 @@ from arden.tools.core.context import ToolExecution
 
 def test_external_mutation_inputs_require_idempotency_keys():
     input_models = (
-        SendEmailInput,
-        CreateCalendarEventInput,
-        EditCalendarEventInput,
-        DeleteCalendarEventInput,
+        EmailSendInput,
+        CalendarCreateEventInput,
+        CalendarEditEventInput,
+        CalendarDeleteEventInput,
         SlackPostMessageInput,
         SlackPostBlocksInput,
-        CreateGoogleDocInput,
-        EditGoogleDocInput,
-        CreateGoogleSheetInput,
+        DriveCreateDocInput,
+        DriveEditDocInput,
+        DriveCreateSheetInput,
         SheetWriteInput,
     )
     assert all(model.model_fields["idempotency_key"].is_required() for model in input_models)

@@ -6,16 +6,21 @@ import pytest
 from arden.context.models import SessionState
 from arden.integrations.base import IntegrationOperationError
 from arden.integrations.calendar.client import GoogleCalendar, MultiCalendarSource
-from arden.integrations.calendar.tools import CalendarInput, CreateCalendarEventInput, calendar, create_calendar_event
+from arden.integrations.calendar.tools import (
+    CalendarCreateEventInput,
+    CalendarSearchInput,
+    calendar_create_event,
+    calendar_search,
+)
 from arden.integrations.gmail.client import GmailSource, MultiGmailSource
 from arden.integrations.gmail.tools import (
-    EmailsInput,
-    ReadEmailInput,
-    SendEmailInput,
-    approve_send_email,
-    emails,
-    read_email,
-    send_email,
+    EmailReadInput,
+    EmailSearchInput,
+    EmailSendInput,
+    approve_email_send,
+    email_read,
+    email_search,
+    email_send,
 )
 from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
 from arden.integrations.slack.client import SlackClient, SlackThreadResult
@@ -170,9 +175,9 @@ async def test_send_email_maps_provider_failure_to_typed_result(tmp_path):
     source.send_email = fail_send
     execution = _execution("gmail", source, "email_send")
     execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
-    result = await send_email(
+    result = await email_send(
         execution,
-        SendEmailInput(
+        EmailSendInput(
             account="me@example.test",
             to="you@example.test",
             subject="Status",
@@ -201,9 +206,9 @@ async def test_calendar_create_maps_provider_failure_to_typed_result(tmp_path):
     source.create_event = fail_create
     execution = _execution("calendar", source, "calendar_create_event")
     execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
-    result = await create_calendar_event(
+    result = await calendar_create_event(
         execution,
-        CreateCalendarEventInput(
+        CalendarCreateEventInput(
             summary="Review",
             start="2026-07-20T09:00:00+04:00",
             idempotency_key="calendar-review-1",
@@ -297,9 +302,9 @@ async def test_gmail_search_uses_returned_message_id_without_inventing_a_url():
         ]
     )
 
-    result = await emails(
+    result = await email_search(
         _execution("gmail", source, "email_search"),
-        EmailsInput(query="quarterly plan"),
+        EmailSearchInput(query="quarterly plan"),
     )
 
     assert [ref.to_dict() for ref in result.source_refs] == [
@@ -331,9 +336,9 @@ async def test_gmail_search_drops_empty_ids_and_falls_back_only_for_blank_titles
         ]
     )
 
-    result = await emails(
+    result = await email_search(
         _execution("gmail", source, "email_search"),
-        EmailsInput(query="quarterly plan"),
+        EmailSearchInput(query="quarterly plan"),
     )
 
     assert [ref.to_dict() for ref in result.source_refs] == [
@@ -350,9 +355,9 @@ async def test_gmail_search_drops_empty_ids_and_falls_back_only_for_blank_titles
 async def test_gmail_read_uses_requested_message_id_with_stable_fallback_title():
     source = FakeGmailSource()
 
-    result = await read_email(
+    result = await email_read(
         _execution("gmail", source, "email_read"),
-        ReadEmailInput(email_id="message-123"),
+        EmailReadInput(email_id="message-123"),
     )
 
     assert [ref.to_dict() for ref in result.source_refs] == [
@@ -381,9 +386,9 @@ def test_multi_gmail_read_returns_the_matching_account_identity():
 
 @pytest.mark.asyncio
 async def test_send_email_approval_includes_the_body():
-    info = await approve_send_email(
+    info = await approve_email_send(
         _execution("gmail", FakeGmailSource(), "email_send"),
-        SendEmailInput(
+        EmailSendInput(
             account="me@example.test",
             to="you@example.test",
             subject="Release status",
@@ -436,9 +441,9 @@ async def test_calendar_search_uses_event_id_title_and_html_link():
         ]
     )
 
-    result = await calendar(
+    result = await calendar_search(
         _execution("calendar", source, "calendar_search"),
-        CalendarInput(query="Planning review"),
+        CalendarSearchInput(query="Planning review"),
     )
 
     assert [ref.to_dict() for ref in result.source_refs] == [
@@ -461,7 +466,7 @@ async def test_gmail_equal_local_ids_from_two_accounts_remain_distinct():
         ]
     )
 
-    result = await emails(_execution("gmail", source, "email_search"), EmailsInput(query="same"))
+    result = await email_search(_execution("gmail", source, "email_search"), EmailSearchInput(query="same"))
 
     assert [ref.ref for ref in result.source_refs] == [
         "first@example.test:same-id",
@@ -489,7 +494,7 @@ async def test_gmail_list_equal_local_ids_from_two_accounts_remain_distinct():
         ),
     ]
 
-    result = await emails(_execution("gmail", source, "email_search"), EmailsInput())
+    result = await email_search(_execution("gmail", source, "email_search"), EmailSearchInput())
 
     assert [ref.ref for ref in result.source_refs] == [
         "first@example.test:same-id",
@@ -516,7 +521,7 @@ async def test_calendar_equal_local_ids_from_two_calendars_remain_distinct():
         ]
     )
 
-    result = await calendar(_execution("calendar", source, "calendar_search"), CalendarInput(query="same"))
+    result = await calendar_search(_execution("calendar", source, "calendar_search"), CalendarSearchInput(query="same"))
 
     assert [ref.ref for ref in result.source_refs] == [
         "first@example.test:same-id",

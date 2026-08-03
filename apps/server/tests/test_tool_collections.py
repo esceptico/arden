@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from arden.integrations.calendar.tools import CalendarInput
-from arden.integrations.gmail.tools import EmailsInput
+from arden.integrations.calendar.tools import CalendarSearchInput
+from arden.integrations.gmail.tools import EmailSearchInput
 from arden.integrations.slack.tools import SlackSearchInput
 from arden.tools.core.collections import format_timestamp, paginate
 from arden.tools.workflow import _render
@@ -33,9 +33,9 @@ def test_collection_inputs_reject_invalid_enums_and_bounds():
     with pytest.raises(ValidationError):
         SlackSearchInput(query="status", scope="everything")
     with pytest.raises(ValidationError):
-        EmailsInput(limit=0)
+        EmailSearchInput(limit=0)
     with pytest.raises(ValidationError):
-        CalendarInput(limit=101)
+        CalendarSearchInput(limit=101)
 
 
 def test_workflow_result_uses_compact_stable_summary():

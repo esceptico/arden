@@ -47,7 +47,7 @@ from arden.outbox import AutomationSettled
 from arden.revisions.models import CollectionReport
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
-from arden.wiki.constants import READ_WIKI_PAGE_TOOL_NAME
+from arden.wiki.constants import WIKI_READ_PAGE_TOOL_NAME
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService
 from arden.wiki.maintenance.runner import WikiMaintenance, WikiMaintenanceReviewer
 from arden.wiki.service import WikiService
@@ -142,7 +142,7 @@ class AutomationRuntime:
             raise RuntimeError("wiki producer has no owned page")
         calls = await self.stores.sessions.store.list_tool_calls(run_id=run_id)
         if any(
-            call["tool_name"] == READ_WIKI_PAGE_TOOL_NAME
+            call["tool_name"] == WIKI_READ_PAGE_TOOL_NAME
             and call["status"] == "success"
             and call["result_preview"] in owned_titles
             for call in calls

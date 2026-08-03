@@ -91,7 +91,7 @@ def _automation_unavailable() -> ToolResult:
     )
 
 
-class ListAutomationRunsInput(BaseModel):
+class AutomationListRunsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     since: AwareDatetime = Field(description="Inclusive ISO timestamp, usually today's local midnight.")
@@ -154,7 +154,7 @@ def _automation_label(automation: Automation) -> str:
 # --- Input Models ---
 
 
-class CreateAutomationInput(BaseModel):
+class AutomationCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(description="Short human-readable label (e.g. 'morning briefing', 'pre-meeting prep')")
@@ -254,7 +254,7 @@ class CreateAutomationInput(BaseModel):
         return self
 
 
-class UpdateAutomationInput(BaseModel):
+class AutomationUpdateInput(BaseModel):
     # Without this a stale field name (the removed `tool_scope`) is accepted and
     # ignored, so the model believes it set something it did not.
     model_config = ConfigDict(extra="forbid")
@@ -304,22 +304,22 @@ class UpdateAutomationInput(BaseModel):
     enabled: bool | None = Field(default=None, description="Enable or disable the automation")
 
 
-class DeleteAutomationInput(BaseModel):
+class AutomationDeleteInput(BaseModel):
     task_id: str = Field(description="The automation ID to delete")
 
 
-class GetAutomationResultInput(BaseModel):
+class AutomationResultInput(BaseModel):
     task_id: str = Field(description="The automation ID to get results for")
 
 
-class RunAutomationInput(BaseModel):
+class AutomationRunInput(BaseModel):
     task_id: str = Field(description="The automation ID to run")
 
 
 # --- Tools ---
 
 
-async def approve_create_automation(execution: ToolExecution, args: CreateAutomationInput) -> ApprovalInfo | None:
+async def approve_automation_create(execution: ToolExecution, args: AutomationCreateInput) -> ApprovalInfo | None:
     next_run = None
     if args.trigger_type == "message":
         chans = ", ".join(f"#{c}" for c in (args.channels or [])) or "(no channel)"
@@ -383,7 +383,7 @@ async def approve_create_automation(execution: ToolExecution, args: CreateAutoma
     )
 
 
-async def create_automation(execution: ToolExecution, args: CreateAutomationInput) -> ToolResult:
+async def automation_create(execution: ToolExecution, args: AutomationCreateInput) -> ToolResult:
     svc = execution.ctx.services["automation"]
     try:
         parent_automation_id, parent_fire_at = await _resolve_parent_context(
@@ -485,7 +485,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
     return ToolResult(content="\n".join(lines), preview=f"Created ({automation.task_id})")
 
 
-async def list_automations(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+async def automation_list(execution: ToolExecution, args: EmptyInput) -> ToolResult:
     automations = await execution.ctx.services["automation"].list_all()
     if not automations:
         return ToolResult(content="No automations.", preview="0 automations")
@@ -494,7 +494,7 @@ async def list_automations(execution: ToolExecution, args: EmptyInput) -> ToolRe
     return ToolResult(content=content, preview=f"{len(automations)} automations")
 
 
-async def list_automation_runs(execution: ToolExecution, args: ListAutomationRunsInput) -> ToolResult:
+async def automation_list_runs(execution: ToolExecution, args: AutomationListRunsInput) -> ToolResult:
     service = execution.ctx.services.get("automation")
     if service is None:
         return _automation_unavailable()
@@ -552,7 +552,7 @@ async def list_automation_runs(execution: ToolExecution, args: ListAutomationRun
     )
 
 
-async def approve_update_automation(execution: ToolExecution, args: UpdateAutomationInput) -> ApprovalInfo | None:
+async def approve_automation_update(execution: ToolExecution, args: AutomationUpdateInput) -> ApprovalInfo | None:
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
     except KeyError:
@@ -591,7 +591,7 @@ async def approve_update_automation(execution: ToolExecution, args: UpdateAutoma
     )
 
 
-async def update_automation(execution: ToolExecution, args: UpdateAutomationInput) -> ToolResult:
+async def automation_update(execution: ToolExecution, args: AutomationUpdateInput) -> ToolResult:
     message_triggers: list[dict] | None = None
     if args.trigger_type == "message":
         message_trigger: dict = {"type": "message", "source": "slack", "channels": args.channels or []}
@@ -646,7 +646,7 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
     return ToolResult(content="\n".join(lines), preview=f"Updated ({automation.task_id})")
 
 
-async def approve_delete_automation(execution: ToolExecution, args: DeleteAutomationInput) -> ApprovalInfo | None:
+async def approve_automation_delete(execution: ToolExecution, args: AutomationDeleteInput) -> ApprovalInfo | None:
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
     except KeyError:
@@ -658,7 +658,7 @@ async def approve_delete_automation(execution: ToolExecution, args: DeleteAutoma
     )
 
 
-async def delete_automation(execution: ToolExecution, args: DeleteAutomationInput) -> ToolResult:
+async def automation_delete(execution: ToolExecution, args: AutomationDeleteInput) -> ToolResult:
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
         await execution.ctx.services["automation"].delete(args.task_id)
@@ -675,7 +675,7 @@ async def delete_automation(execution: ToolExecution, args: DeleteAutomationInpu
     return ToolResult(content=f"Deleted: {_automation_label(automation)} ({args.task_id})", preview="Deleted")
 
 
-async def get_automation_result(execution: ToolExecution, args: GetAutomationResultInput) -> ToolResult:
+async def automation_result(execution: ToolExecution, args: AutomationResultInput) -> ToolResult:
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
     except KeyError:
@@ -696,7 +696,7 @@ async def get_automation_result(execution: ToolExecution, args: GetAutomationRes
     return ToolResult(content=header + automation.last_result, preview=f"Result ({automation.task_id})")
 
 
-async def approve_run_automation(execution: ToolExecution, args: RunAutomationInput) -> ApprovalInfo | None:
+async def approve_automation_run(execution: ToolExecution, args: AutomationRunInput) -> ApprovalInfo | None:
     try:
         automation = await execution.ctx.services["automation"].get(args.task_id)
     except KeyError:
@@ -708,7 +708,7 @@ async def approve_run_automation(execution: ToolExecution, args: RunAutomationIn
     )
 
 
-async def run_automation(execution: ToolExecution, args: RunAutomationInput) -> ToolResult:
+async def automation_run(execution: ToolExecution, args: AutomationRunInput) -> ToolResult:
     try:
         await execution.ctx.services["automation"].run_now(args.task_id)
     except KeyError:
@@ -728,11 +728,11 @@ async def run_automation(execution: ToolExecution, args: RunAutomationInput) -> 
     )
 
 
-create_automation_tool = tool(
+automation_create_tool = tool(
     display_name="CreateAutomation",
     display_description="Create a task that runs automatically on a schedule or event.",
     description=CREATE_AUTOMATION_DESCRIPTION,
-    input_model=CreateAutomationInput,
+    input_model=AutomationCreateInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -740,36 +740,36 @@ create_automation_tool = tool(
         permissions=frozenset({"automation"}),
         deferred=True,
     ),
-    approval=approve_create_automation,
-    execute=create_automation,
+    approval=approve_automation_create,
+    execute=automation_create,
 )
 
-list_automations_tool = tool(
+automation_list_tool = tool(
     display_name="ListAutomations",
     display_description="List configured automations.",
     description=LIST_AUTOMATIONS_DESCRIPTION,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"}), deferred=True
     ),
-    execute=list_automations,
+    execute=automation_list,
 )
 
-list_automation_runs_tool = tool(
+automation_list_runs_tool = tool(
     display_name="ListAutomationRuns",
     display_description="List recent automation executions.",
     description=LIST_AUTOMATION_RUNS_DESCRIPTION,
-    input_model=ListAutomationRunsInput,
+    input_model=AutomationListRunsInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"}), deferred=True
     ),
-    execute=list_automation_runs,
+    execute=automation_list_runs,
 )
 
-update_automation_tool = tool(
+automation_update_tool = tool(
     display_name="UpdateAutomation",
     display_description="Change an automation's trigger, model, permissions, or status.",
     description=UPDATE_AUTOMATION_DESCRIPTION,
-    input_model=UpdateAutomationInput,
+    input_model=AutomationUpdateInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -777,15 +777,15 @@ update_automation_tool = tool(
         permissions=frozenset({"automation"}),
         deferred=True,
     ),
-    approval=approve_update_automation,
-    execute=update_automation,
+    approval=approve_automation_update,
+    execute=automation_update,
 )
 
-delete_automation_tool = tool(
+automation_delete_tool = tool(
     display_name="DeleteAutomation",
     display_description="Delete an automation.",
     description=DELETE_AUTOMATION_DESCRIPTION,
-    input_model=DeleteAutomationInput,
+    input_model=AutomationDeleteInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -793,25 +793,25 @@ delete_automation_tool = tool(
         permissions=frozenset({"automation"}),
         deferred=True,
     ),
-    approval=approve_delete_automation,
-    execute=delete_automation,
+    approval=approve_automation_delete,
+    execute=automation_delete,
 )
 
-get_automation_result_tool = tool(
+automation_result_tool = tool(
     display_name="AutomationResult",
     description=GET_AUTOMATION_RESULT_DESCRIPTION,
-    input_model=GetAutomationResultInput,
+    input_model=AutomationResultInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"}), deferred=True
     ),
-    execute=get_automation_result,
+    execute=automation_result,
 )
 
-run_automation_tool = tool(
+automation_run_tool = tool(
     display_name="RunAutomation",
     display_description="Run an automation now.",
     description=RUN_AUTOMATION_DESCRIPTION,
-    input_model=RunAutomationInput,
+    input_model=AutomationRunInput,
     policy=ToolPolicy(
         action=ToolAction.EXECUTE,
         scope=ToolScope.INTERNAL,
@@ -819,8 +819,8 @@ run_automation_tool = tool(
         permissions=frozenset({"automation"}),
         deferred=True,
     ),
-    approval=approve_run_automation,
-    execute=run_automation,
+    approval=approve_automation_run,
+    execute=automation_run,
 )
 
 
@@ -844,7 +844,7 @@ LOOP_DONE_DESCRIPTION = (
 )
 
 
-class ScheduleWakeupInput(BaseModel):
+class LoopScheduleWakeupInput(BaseModel):
     delay_seconds: int = Field(
         description="Seconds until the next iteration. Minimum 60.",
         ge=60,
@@ -867,7 +867,7 @@ def _loop_task_id_or_error(execution: ToolExecution) -> tuple[str | None, ToolRe
     return task_id, None
 
 
-async def schedule_wakeup(execution: ToolExecution, args: ScheduleWakeupInput) -> ToolResult:
+async def loop_schedule_wakeup(execution: ToolExecution, args: LoopScheduleWakeupInput) -> ToolResult:
     task_id, err = _loop_task_id_or_error(execution)
     if err:
         return err
@@ -888,7 +888,7 @@ async def schedule_wakeup(execution: ToolExecution, args: ScheduleWakeupInput) -
     )
 
 
-async def approve_schedule_wakeup(_execution: ToolExecution, args: ScheduleWakeupInput) -> ApprovalInfo:
+async def approve_loop_schedule_wakeup(_execution: ToolExecution, args: LoopScheduleWakeupInput) -> ApprovalInfo:
     return ApprovalInfo(
         description="Schedule the loop's next iteration",
         preview=f"Delay: {args.delay_seconds} seconds",
@@ -914,11 +914,11 @@ async def approve_loop_done(_execution: ToolExecution, args: LoopDoneInput) -> A
     return ApprovalInfo(description="Stop the current loop", preview=args.reason[:1_500], diff=None)
 
 
-schedule_wakeup_tool = tool(
+loop_schedule_wakeup_tool = tool(
     display_name="ScheduleWakeup",
     display_description="Schedule the current loop's next iteration.",
     description=SCHEDULE_WAKEUP_DESCRIPTION,
-    input_model=ScheduleWakeupInput,
+    input_model=LoopScheduleWakeupInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -926,8 +926,8 @@ schedule_wakeup_tool = tool(
         permissions=frozenset({"automation"}),
         deferred=True,
     ),
-    approval=approve_schedule_wakeup,
-    execute=schedule_wakeup,
+    approval=approve_loop_schedule_wakeup,
+    execute=loop_schedule_wakeup,
 )
 
 loop_done_tool = tool(
@@ -965,7 +965,7 @@ CREATE_LOOP_DESCRIPTION = (
 )
 
 
-class CreateLoopInput(BaseModel):
+class LoopCreateInput(BaseModel):
     prompt: str = Field(
         description="What the loop should do on each iteration. Posted as a user message into this chat. Stand-alone.",
         min_length=1,
@@ -1007,7 +1007,7 @@ class CreateLoopInput(BaseModel):
     )
 
 
-async def approve_create_loop(execution: ToolExecution, args: CreateLoopInput) -> ApprovalInfo | None:
+async def approve_loop_create(execution: ToolExecution, args: LoopCreateInput) -> ApprovalInfo | None:
     lines = [f"Every: {args.every}", ""]
     if args.max_iterations:
         lines.insert(1, f"Max iterations: {args.max_iterations}")
@@ -1037,7 +1037,7 @@ async def approve_create_loop(execution: ToolExecution, args: CreateLoopInput) -
     )
 
 
-async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolResult:
+async def loop_create(execution: ToolExecution, args: LoopCreateInput) -> ToolResult:
     session_id = execution.ctx.session_id
     if not session_id:
         return ToolResult.failure(
@@ -1106,11 +1106,11 @@ async def create_loop(execution: ToolExecution, args: CreateLoopInput) -> ToolRe
     return ToolResult(content="\n".join(lines), preview=f"Loop · every {args.every}")
 
 
-create_loop_tool = tool(
+loop_create_tool = tool(
     display_name="CreateLoop",
     display_description="Create repeated work that stops when a condition is met.",
     description=CREATE_LOOP_DESCRIPTION,
-    input_model=CreateLoopInput,
+    input_model=LoopCreateInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -1118,6 +1118,6 @@ create_loop_tool = tool(
         permissions=frozenset({"automation"}),
         deferred=True,
     ),
-    approval=approve_create_loop,
-    execute=create_loop,
+    approval=approve_loop_create,
+    execute=loop_create,
 )

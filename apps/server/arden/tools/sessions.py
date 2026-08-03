@@ -88,7 +88,7 @@ def _run_header(execution: ToolExecution, session_id: str) -> str | None:
     return " · ".join(parts)
 
 
-class ListRecentSessionsInput(BaseModel):
+class SessionListInput(BaseModel):
     limit: int = Field(
         default=_DEFAULT_LIST_LIMIT,
         ge=1,
@@ -123,7 +123,7 @@ class ListRecentSessionsInput(BaseModel):
     )
 
 
-class SearchTranscriptsInput(BaseModel):
+class SessionSearchTranscriptsInput(BaseModel):
     query: str = Field(
         description=(
             "Full-text query across chat transcripts (FTS5 syntax: bare words "
@@ -155,7 +155,7 @@ class SearchTranscriptsInput(BaseModel):
     )
 
 
-class CreateSessionInput(BaseModel):
+class SessionCreateInput(BaseModel):
     name: str = Field(description="Short human-readable label for the new session (e.g. 'ops-alerts').")
     session_type: Literal["chat", "channel"] = Field(
         default="channel",
@@ -166,7 +166,7 @@ class CreateSessionInput(BaseModel):
     )
 
 
-class ReadSessionInput(BaseModel):
+class SessionReadInput(BaseModel):
     session_id: str = Field(description="The session_id from session_list.")
     limit: int = Field(
         default=_DEFAULT_MESSAGE_LIMIT,
@@ -298,7 +298,7 @@ def _session_unavailable() -> ToolResult:
 # --- Executors ---
 
 
-async def list_recent_sessions(execution: ToolExecution, args: ListRecentSessionsInput) -> ToolResult:
+async def session_list(execution: ToolExecution, args: SessionListInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
         return _session_unavailable()
@@ -377,7 +377,7 @@ async def list_recent_sessions(execution: ToolExecution, args: ListRecentSession
     )
 
 
-async def create_session(execution: ToolExecution, args: CreateSessionInput) -> ToolResult:
+async def session_create(execution: ToolExecution, args: SessionCreateInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
         return _session_unavailable()
@@ -403,7 +403,7 @@ async def create_session(execution: ToolExecution, args: CreateSessionInput) -> 
     )
 
 
-async def read_session(execution: ToolExecution, args: ReadSessionInput) -> ToolResult:
+async def session_read(execution: ToolExecution, args: SessionReadInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
         return _session_unavailable()
@@ -493,7 +493,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
     )
 
 
-async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsInput) -> ToolResult:
+async def session_search_transcripts(execution: ToolExecution, args: SessionSearchTranscriptsInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if svc is None:
         return _session_unavailable()
@@ -596,26 +596,26 @@ CREATE_SESSION_DESCRIPTION = (
 )
 
 
-list_recent_sessions_tool = tool(
+session_list_tool = tool(
     display_name="ListRecentSessions",
     display_description="List recent chat sessions.",
     description=LIST_RECENT_SESSIONS_DESCRIPTION,
-    input_model=ListRecentSessionsInput,
+    input_model=SessionListInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
     ),
-    execute=list_recent_sessions,
+    execute=session_list,
 )
 
-read_session_tool = tool(
+session_read_tool = tool(
     display_name="ReadSession",
     display_description="Read a chat session.",
     description=READ_SESSION_DESCRIPTION,
-    input_model=ReadSessionInput,
+    input_model=SessionReadInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
     ),
-    execute=read_session,
+    execute=session_read,
 )
 
 SEARCH_TRANSCRIPTS_DESCRIPTION = (
@@ -627,24 +627,24 @@ SEARCH_TRANSCRIPTS_DESCRIPTION = (
     "that Area's transcripts are searched. Read-only."
 )
 
-search_transcripts_tool = tool(
+session_search_transcripts_tool = tool(
     display_name="SearchTranscripts",
     display_description="Search across chat transcripts.",
     description=SEARCH_TRANSCRIPTS_DESCRIPTION,
-    input_model=SearchTranscriptsInput,
+    input_model=SessionSearchTranscriptsInput,
     policy=ToolPolicy(
         action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
     ),
-    execute=search_transcripts,
+    execute=session_search_transcripts,
 )
 
-create_session_tool = tool(
+session_create_tool = tool(
     display_name="CreateSession",
     display_description="Create a new chat or channel.",
     description=CREATE_SESSION_DESCRIPTION,
-    input_model=CreateSessionInput,
+    input_model=SessionCreateInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
     ),
-    execute=create_session,
+    execute=session_create,
 )

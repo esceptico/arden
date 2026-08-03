@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from arden.tools.automation import CreateAutomationInput, UpdateAutomationInput
+from arden.tools.automation import AutomationCreateInput, AutomationUpdateInput
 from arden.tools.deferred import LoadToolsInput
 from arden.tools.notify import NotifyInput
 from arden.tools.research import ResearchOutlineInput, ResearchVerifyClaimInput
@@ -32,10 +32,10 @@ def _schema_limit(model, field: str, keyword: str) -> int | None:
 @pytest.mark.parametrize(
     ("model", "field", "limit"),
     [
-        (CreateAutomationInput, "channels", 100),
-        (CreateAutomationInput, "contains", 100),
-        (UpdateAutomationInput, "channels", 100),
-        (UpdateAutomationInput, "contains", 100),
+        (AutomationCreateInput, "channels", 100),
+        (AutomationCreateInput, "contains", 100),
+        (AutomationUpdateInput, "channels", 100),
+        (AutomationUpdateInput, "contains", 100),
         (ResearchOutlineInput, "sections", 50),
         (ResearchVerifyClaimInput, "sources", 50),
         (NotifyInput, "names", 50),

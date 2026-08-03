@@ -2,10 +2,10 @@ from arden.config import Config
 from arden.integrations.base import Integration, IntegrationConnectionSpec
 from arden.integrations.calendar.client import MultiCalendarSource
 from arden.integrations.calendar.tools import (
-    calendar_tool,
-    create_calendar_event_tool,
-    delete_calendar_event_tool,
-    edit_calendar_event_tool,
+    calendar_create_event_tool,
+    calendar_delete_event_tool,
+    calendar_edit_event_tool,
+    calendar_search_tool,
 )
 from arden.integrations.google_auth.auth import google_account_store, scopes_for_google_service
 
@@ -25,10 +25,10 @@ CALENDAR = Integration(
     id="calendar",
     label="Google Calendar",
     tools={
-        "calendar_search": calendar_tool,
-        "calendar_create_event": create_calendar_event_tool,
-        "calendar_edit_event": edit_calendar_event_tool,
-        "calendar_delete_event": delete_calendar_event_tool,
+        "calendar_search": calendar_search_tool,
+        "calendar_create_event": calendar_create_event_tool,
+        "calendar_edit_event": calendar_edit_event_tool,
+        "calendar_delete_event": calendar_delete_event_tool,
     },
     build=_build,
     connection=IntegrationConnectionSpec(

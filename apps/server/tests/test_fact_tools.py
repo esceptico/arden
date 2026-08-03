@@ -18,12 +18,12 @@ from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContex
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.facts import (
     FACT_SERVICE,
-    commit_fact_changes_tool,
-    get_due_fact_reviews_tool,
-    get_fact_history_tool,
-    get_fact_tool,
-    plan_fact_changes_tool,
-    search_facts_tool,
+    fact_commit_changes_tool,
+    fact_due_reviews_tool,
+    fact_get_tool,
+    fact_history_tool,
+    fact_plan_changes_tool,
+    fact_search_tool,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -112,13 +112,13 @@ async def _commit_direct(
 async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(tmp_path: Path) -> None:
     service, connection = await _service(tmp_path)
     try:
-        plan = await plan_fact_changes_tool.execute(
+        plan = await fact_plan_changes_tool.execute(
             _execution(service, tool_id="plan-1", tool_name="fact_plan_changes"),
             changes=[_create(fact_id="one", text="One fact")],
             reason="User stated this.",
         )
         assert not plan.is_error
-        retry = await plan_fact_changes_tool.execute(
+        retry = await fact_plan_changes_tool.execute(
             _execution(
                 service,
                 tool_id="plan-1",
@@ -140,7 +140,7 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
 
         plan_id = plan.content.splitlines()[0].removeprefix("Fact change plan ID: ")
         assert plan_id == plan.data["plan_id"]
-        committed = await commit_fact_changes_tool.execute(
+        committed = await fact_commit_changes_tool.execute(
             _execution(service, tool_id="commit-1", tool_name="fact_commit_changes"),
             plan_id=plan_id,
         )
@@ -149,7 +149,7 @@ async def test_plan_and_commit_use_server_derived_identity_scope_and_provenance(
         assert committed.outcome is not None and committed.outcome.effect is not None
         assert committed.outcome.effect.operation == "commit"
 
-        fact = await get_fact_tool.execute(_execution(service, tool_id="get-1", tool_name="fact_get"), fact_id="one")
+        fact = await fact_get_tool.execute(_execution(service, tool_id="get-1", tool_name="fact_get"), fact_id="one")
         json.dumps(fact.data)
         assert fact.data["fact"]["scope"] == {"kind": "area", "key": "project"}
         assert fact.data["fact"]["sources"]["total"] == 1
@@ -166,13 +166,13 @@ async def test_commit_reports_durable_fact_when_post_commit_refresh_fails(tmp_pa
 
     service.post_commit = fail_refresh
     try:
-        plan = await plan_fact_changes_tool.execute(
+        plan = await fact_plan_changes_tool.execute(
             _execution(service, tool_id="plan-1", tool_name="fact_plan_changes"),
             changes=[_create(fact_id="one", text="One fact")],
             reason="User stated this.",
         )
 
-        result = await commit_fact_changes_tool.execute(
+        result = await fact_commit_changes_tool.execute(
             _execution(service, tool_id="commit-1", tool_name="fact_commit_changes"),
             plan_id=plan.data["plan_id"],
         )
@@ -199,7 +199,7 @@ async def test_planning_surfaces_an_available_session_service_failure(tmp_path: 
         execution = _execution(service, tool_id="plan-1", tool_name="fact_plan_changes")
         execution.ctx.services["session"] = _FailingSessionService()
 
-        result = await plan_fact_changes_tool.execute(
+        result = await fact_plan_changes_tool.execute(
             execution,
             changes=[_create(fact_id="one", text="One fact")],
             reason="User stated this.",
@@ -227,10 +227,10 @@ async def test_read_tools_page_stably_and_enforce_server_derived_area_scope(tmp_
         for fact_id in ("a", "b", "c"):
             await _commit_direct(service, fact_id, fact_id.upper(), scope=("area", "project"))
 
-        first = await search_facts_tool.execute(
+        first = await fact_search_tool.execute(
             _execution(service, tool_id="search-1", tool_name="fact_search"), limit=2
         )
-        second = await search_facts_tool.execute(
+        second = await fact_search_tool.execute(
             _execution(service, tool_id="search-2", tool_name="fact_search"),
             limit=2,
             cursor=first.data["next_cursor"],
@@ -240,7 +240,7 @@ async def test_read_tools_page_stably_and_enforce_server_derived_area_scope(tmp_
         assert first.data["total"] == 3
         assert "items" not in first.data
         json.dumps(first.data)
-        wrong_filter = await search_facts_tool.execute(
+        wrong_filter = await fact_search_tool.execute(
             _execution(service, tool_id="search-wrong", tool_name="fact_search"),
             query="A",
             limit=2,
@@ -249,14 +249,14 @@ async def test_read_tools_page_stably_and_enforce_server_derived_area_scope(tmp_
         assert wrong_filter.outcome.error.code == "invalid_ref"
 
         await _commit_direct(service, "d", "D", scope=("area", "project"))
-        stale = await search_facts_tool.execute(
+        stale = await fact_search_tool.execute(
             _execution(service, tool_id="search-stale", tool_name="fact_search"),
             limit=2,
             cursor=first.data["next_cursor"],
         )
         assert stale.outcome.error.code == "write_conflict"
 
-        history = await get_fact_history_tool.execute(
+        history = await fact_history_tool.execute(
             _execution(service, tool_id="history-1", tool_name="fact_history"), fact_id="a", limit=1
         )
         assert history.data["events"][0]["op"] == "create"
@@ -269,7 +269,7 @@ async def test_read_tools_page_stably_and_enforce_server_derived_area_scope(tmp_
 async def test_due_reviews_return_evidence_not_a_recommended_action(tmp_path: Path) -> None:
     service, connection = await _service(tmp_path)
     try:
-        plan = await plan_fact_changes_tool.execute(
+        plan = await fact_plan_changes_tool.execute(
             _execution(service, tool_id="plan-due", tool_name="fact_plan_changes"),
             changes=[
                 _create(
@@ -281,10 +281,10 @@ async def test_due_reviews_return_evidence_not_a_recommended_action(tmp_path: Pa
             ],
             reason="Temporary item.",
         )
-        await commit_fact_changes_tool.execute(
+        await fact_commit_changes_tool.execute(
             _execution(service, tool_id="commit-due", tool_name="fact_commit_changes"), plan_id=plan.data["plan_id"]
         )
-        due = await get_due_fact_reviews_tool.execute(
+        due = await fact_due_reviews_tool.execute(
             _execution(service, tool_id="due-1", tool_name="fact_due_reviews"), limit=1
         )
         assert due.data["reviews"][0]["fact"]["fact_id"] == "due"
@@ -351,7 +351,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
             review_basis="explicit",
         )
 
-        due = await get_due_fact_reviews_tool.execute(
+        due = await fact_due_reviews_tool.execute(
             retention("retention-due", "fact_due_reviews"),
             limit=10,
         )
@@ -362,7 +362,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         other_review = next(item for item in due.data["reviews"] if item["fact"]["fact_id"] == "due-other")
         assert other_review["explicit_expiry_due"] is False
 
-        descriptive_origin_only = await get_fact_tool.execute(
+        descriptive_origin_only = await fact_get_tool.execute(
             _execution(
                 service,
                 tool_id="interactive-get",
@@ -373,14 +373,14 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         )
         assert descriptive_origin_only.outcome.error.code == "permission_denied"
 
-        forbidden = await plan_fact_changes_tool.execute(
+        forbidden = await fact_plan_changes_tool.execute(
             retention("retention-create", "fact_plan_changes"),
             changes=[_create(fact_id="invented", text="Invented")],
             reason="Retention must not create facts.",
         )
         assert forbidden.outcome.error.code == "invalid_input"
 
-        future = await plan_fact_changes_tool.execute(
+        future = await fact_plan_changes_tool.execute(
             retention("retention-future", "fact_plan_changes"),
             changes=[
                 {
@@ -394,7 +394,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         )
         assert future.outcome.error.code == "invalid_input"
 
-        cross_scope = await plan_fact_changes_tool.execute(
+        cross_scope = await fact_plan_changes_tool.execute(
             retention("retention-cross", "fact_plan_changes"),
             changes=[
                 {
@@ -409,7 +409,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         )
         assert cross_scope.outcome.error.code == "invalid_input"
 
-        old_evidence = await plan_fact_changes_tool.execute(
+        old_evidence = await fact_plan_changes_tool.execute(
             retention("retention-old", "fact_plan_changes"),
             changes=[
                 {
@@ -423,7 +423,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         )
         assert old_evidence.outcome.error.code == "invalid_input"
 
-        self_without_expiry = await plan_fact_changes_tool.execute(
+        self_without_expiry = await fact_plan_changes_tool.execute(
             retention("retention-self", "fact_plan_changes"),
             changes=[
                 {
@@ -437,7 +437,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         )
         assert self_without_expiry.outcome.error.code == "invalid_input"
 
-        plan = await plan_fact_changes_tool.execute(
+        plan = await fact_plan_changes_tool.execute(
             retention("retention-plan", "fact_plan_changes"),
             changes=[
                 {
@@ -466,7 +466,7 @@ async def test_retention_uses_all_scopes_but_only_due_evidence_backed_lifecycle_
         assert supersession["sources"]["items"][1]["ref"] == "successor"
         assert "extra" not in supersession["sources"]["items"][1]
 
-        committed = await commit_fact_changes_tool.execute(
+        committed = await fact_commit_changes_tool.execute(
             retention("retention-commit", "fact_commit_changes"),
             plan_id=plan.data["plan_id"],
         )
@@ -558,7 +558,7 @@ async def test_retention_due_snapshot_and_selected_evidence_are_cas_pinned(tmp_p
             return batch
 
         monkeypatch.setattr(service, "retention_review_batch", raced_batch)
-        stale_due = await plan_fact_changes_tool.execute(
+        stale_due = await fact_plan_changes_tool.execute(
             retention("stale-due", "fact_plan_changes"),
             changes=[
                 {
@@ -591,7 +591,7 @@ async def test_retention_due_snapshot_and_selected_evidence_are_cas_pinned(tmp_p
             scope=("area", "project"),
             occurred_at="2026-07-02T00:00:00Z",
         )
-        plan = await plan_fact_changes_tool.execute(
+        plan = await fact_plan_changes_tool.execute(
             retention("evidence-plan", "fact_plan_changes"),
             changes=[
                 {
@@ -607,7 +607,7 @@ async def test_retention_due_snapshot_and_selected_evidence_are_cas_pinned(tmp_p
         assert not plan.is_error
 
         await mutate("selected-evidence", "evidence-raced")
-        stale_evidence = await commit_fact_changes_tool.execute(
+        stale_evidence = await fact_commit_changes_tool.execute(
             retention("evidence-commit", "fact_commit_changes"),
             plan_id=plan.data["plan_id"],
         )
@@ -631,7 +631,7 @@ async def test_retention_review_window_conflicts_only_for_new_relevant_evidence(
         )
 
     async def review_plan(fact_id: str, tool_id: str):
-        return await plan_fact_changes_tool.execute(
+        return await fact_plan_changes_tool.execute(
             retention(tool_id),
             changes=[
                 {
@@ -669,7 +669,7 @@ async def test_retention_review_window_conflicts_only_for_new_relevant_evidence(
             scope=("area", "project"),
             occurred_at="2026-07-02T00:00:00Z",
         )
-        rejected = await commit_fact_changes_tool.execute(
+        rejected = await fact_commit_changes_tool.execute(
             retention("window-stale-commit"),
             plan_id=stale.data["plan_id"],
         )
@@ -686,7 +686,7 @@ async def test_retention_review_window_conflicts_only_for_new_relevant_evidence(
             subjects=["beta"],
             occurred_at="2026-07-03T00:00:00Z",
         )
-        committed = await commit_fact_changes_tool.execute(
+        committed = await fact_commit_changes_tool.execute(
             retention("window-clean-commit"),
             plan_id=clean.data["plan_id"],
         )
@@ -731,7 +731,7 @@ async def test_retention_scope_race_reaches_cas_and_releases_plan(tmp_path: Path
             "review_basis": "explicit",
             "reason": "No newer evidence.",
         }
-        plan = await plan_fact_changes_tool.execute(
+        plan = await fact_plan_changes_tool.execute(
             retention("scope-race-plan"),
             changes=[review_change],
             reason="Review current scope.",
@@ -745,7 +745,7 @@ async def test_retention_scope_race_reaches_cas_and_releases_plan(tmp_path: Path
             scope=new_scope,
             subjects=["beta"],
         )
-        retry = await plan_fact_changes_tool.execute(
+        retry = await fact_plan_changes_tool.execute(
             retention("scope-race-plan"),
             changes=[review_change],
             reason="Review current scope.",
@@ -772,7 +772,7 @@ async def test_retention_scope_race_reaches_cas_and_releases_plan(tmp_path: Path
         await service.commit(mover, moved.plan_id)
         assert await service.known_scopes() == frozenset({old_scope, new_scope})
 
-        rejected = await commit_fact_changes_tool.execute(
+        rejected = await fact_commit_changes_tool.execute(
             retention("scope-race-commit"),
             plan_id=plan.data["plan_id"],
         )
@@ -795,7 +795,7 @@ async def test_only_six_fact_tools_are_registered_and_model_cannot_supply_author
         "fact_plan_changes",
         "fact_commit_changes",
     }
-    schema = plan_fact_changes_tool.to_dict("fact_plan_changes")["function"]["parameters"]
+    schema = fact_plan_changes_tool.to_dict("fact_plan_changes")["function"]["parameters"]
     encoded = str(schema)
     assert "actor" not in encoded
     assert "origin" not in encoded
@@ -826,12 +826,12 @@ async def test_search_and_due_cursors_page_beyond_one_hundred_and_accept_long_id
         )
         await service.commit(principal, preview.plan_id)
 
-        first = await search_facts_tool.execute(
+        first = await fact_search_tool.execute(
             _execution(service, tool_id="bulk-search-1", tool_name="fact_search"),
             query="Bulk",
             limit=100,
         )
-        second = await search_facts_tool.execute(
+        second = await fact_search_tool.execute(
             _execution(service, tool_id="bulk-search-2", tool_name="fact_search"),
             query="Bulk",
             limit=100,
@@ -843,11 +843,11 @@ async def test_search_and_due_cursors_page_beyond_one_hundred_and_accept_long_id
         assert len(second.data["facts"]) == 1
         assert second.data["has_more"] is False
 
-        due_first = await get_due_fact_reviews_tool.execute(
+        due_first = await fact_due_reviews_tool.execute(
             _execution(service, tool_id="bulk-due-1", tool_name="fact_due_reviews"),
             limit=100,
         )
-        due_second = await get_due_fact_reviews_tool.execute(
+        due_second = await fact_due_reviews_tool.execute(
             _execution(service, tool_id="bulk-due-2", tool_name="fact_due_reviews"),
             limit=100,
             cursor=due_first.data["next_cursor"],
@@ -877,13 +877,13 @@ async def test_search_and_due_cursors_page_beyond_one_hundred_and_accept_long_id
             reason="long cursor proof",
         )
         await service.commit(principal, long_preview.plan_id)
-        long_first = await search_facts_tool.execute(
+        long_first = await fact_search_tool.execute(
             _execution(service, tool_id="long-search-1", tool_name="fact_search"),
             query="Long cursor",
             limit=1,
         )
         assert len(long_first.data["next_cursor"]) > 500
-        long_second = await search_facts_tool.execute(
+        long_second = await fact_search_tool.execute(
             _execution(service, tool_id="long-search-2", tool_name="fact_search"),
             query="Long cursor",
             limit=1,

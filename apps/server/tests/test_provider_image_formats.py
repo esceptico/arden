@@ -6,7 +6,7 @@ from arden.llm.openai import OpenAIClient
 from arden.llm.openai_codex import OpenAICodexClient
 from arden.llm.openai_responses import prepare_responses_request
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
-from arden.tools.app_control import open_in_app_tool
+from arden.tools.app_control import app_open_tool
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.deferred import load_tools_tool
 
@@ -191,7 +191,7 @@ def test_every_tool_schema_converts_for_gemini():
 
 def test_gemini_folds_a_discriminated_union_into_any_of():
     declaration = (
-        GeminiClient(api_key="test")._convert_tools([open_in_app_tool.to_dict("app_open")])[0].function_declarations[0]
+        GeminiClient(api_key="test")._convert_tools([app_open_tool.to_dict("app_open")])[0].function_declarations[0]
     )
 
     destination = declaration.parameters.properties["destination"]

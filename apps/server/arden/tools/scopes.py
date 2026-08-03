@@ -15,7 +15,7 @@ from typing import Literal, get_args
 from arden.memory.facts.capture import FACT_CAPTURE_REVIEW_TOOL_NAME
 from arden.memory.facts.maintenance import FACT_MAINTENANCE_REVIEW_TOOL_NAME
 from arden.tools.core.scope import ToolFilter, tools
-from arden.wiki.constants import PUBLISH_WIKI_GENERATED_TOOL_NAME, WIKI_MAINTENANCE_REVIEW_TOOL_NAME
+from arden.wiki.constants import WIKI_MAINTENANCE_REVIEW_TOOL_NAME, WIKI_PUBLISH_GENERATED_TOOL_NAME
 
 #: The only keys an automation's owner — a person or the agent — may choose.
 #: The HTTP and tool schemas annotate with this directly, so the set of settable
@@ -83,7 +83,7 @@ SCOPES: dict[ScopeKey, ToolFilter] = {
     "daily_notes": tools.read | tools.named("wiki_create_page") | tools.named("wiki_edit_page"),
     # Publishes its own generated wiki region; completion is proof-checked in
     # AutomationRuntime._validate_completed_run.
-    "wiki_producer": tools.read | tools.named(PUBLISH_WIKI_GENERATED_TOOL_NAME),
+    "wiki_producer": tools.read | tools.named(WIKI_PUBLISH_GENERATED_TOOL_NAME),
 }
 
 

@@ -4,13 +4,13 @@ import arden.tools.executor as executor_module
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from arden.integrations.core import DIRECTIVES
 from arden.integrations.web.tools import WebSearchInput
-from arden.tools.app_control import SendMessageInput
+from arden.tools.app_control import SessionSendMessageInput
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.scope import tools
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.tools.discover import discover_user_tools
 from arden.tools.executor import ToolExecutor
-from arden.tools.facts import SearchFactsInput
+from arden.tools.facts import FactSearchInput
 
 
 async def _noop(execution, args):
@@ -97,9 +97,9 @@ def test_create_automation_description_keeps_scope_and_approval_distinct():
 
 
 def test_cross_tool_parameter_names_are_canonical():
-    assert "session_id" in SendMessageInput.model_fields
-    assert "task_id" not in SendMessageInput.model_fields
+    assert "session_id" in SessionSendMessageInput.model_fields
+    assert "task_id" not in SessionSendMessageInput.model_fields
     assert "limit" in WebSearchInput.model_fields
     assert "num_results" not in WebSearchInput.model_fields
-    assert "subject" in SearchFactsInput.model_fields
-    assert "subjects" not in SearchFactsInput.model_fields
+    assert "subject" in FactSearchInput.model_fields
+    assert "subjects" not in FactSearchInput.model_fields

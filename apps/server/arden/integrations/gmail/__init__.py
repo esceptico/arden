@@ -2,7 +2,7 @@ from arden.config import Config
 from arden.integrations.base import Integration, IntegrationConnectionSpec
 from arden.integrations.gmail.client import MultiGmailSource
 from arden.integrations.gmail.notifier import EmailNotifier
-from arden.integrations.gmail.tools import emails_tool, read_email_tool, reply_email_tool, send_email_tool
+from arden.integrations.gmail.tools import email_read_tool, email_reply_tool, email_search_tool, email_send_tool
 from arden.integrations.google_auth.auth import google_account_store, scopes_for_google_service
 
 
@@ -21,10 +21,10 @@ GMAIL = Integration(
     id="gmail",
     label="Gmail",
     tools={
-        "email_search": emails_tool,
-        "email_read": read_email_tool,
-        "email_send": send_email_tool,
-        "email_reply": reply_email_tool,
+        "email_search": email_search_tool,
+        "email_read": email_read_tool,
+        "email_send": email_send_tool,
+        "email_reply": email_reply_tool,
     },
     notifier_class=EmailNotifier,
     build=_build,

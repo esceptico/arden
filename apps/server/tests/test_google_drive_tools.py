@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 from arden.integrations.google_drive.tools import (
     DRIVE_TOOLS,
-    CreateGoogleDocInput,
-    CreateGoogleSheetInput,
-    ReadGoogleDocInput,
-    ReadGoogleSheetInput,
-    read_google_doc,
-    read_google_sheet,
+    DriveCreateDocInput,
+    DriveCreateSheetInput,
+    DriveReadDocInput,
+    DriveReadSheetInput,
+    drive_read_doc,
+    drive_read_sheet,
 )
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction
@@ -57,8 +57,8 @@ def test_drive_write_tools_require_approval():
 
 
 def test_create_inputs_do_not_accept_file_content():
-    assert set(CreateGoogleDocInput.model_fields) == {"title", "account", "idempotency_key"}
-    assert set(CreateGoogleSheetInput.model_fields) == {"title", "account", "idempotency_key"}
+    assert set(DriveCreateDocInput.model_fields) == {"title", "account", "idempotency_key"}
+    assert set(DriveCreateSheetInput.model_fields) == {"title", "account", "idempotency_key"}
 
 
 def test_create_tool_descriptions_require_a_followup_write():
@@ -69,7 +69,7 @@ def test_create_tool_descriptions_require_a_followup_write():
 
 
 async def test_read_doc_returns_source_reference():
-    result = await read_google_doc(_execution(), ReadGoogleDocInput(document_ref="acct:doc-1"))
+    result = await drive_read_doc(_execution(), DriveReadDocInput(document_ref="acct:doc-1"))
 
     assert result.content == "Plan"
     assert result.source_refs[0].provider == "google_drive"
@@ -77,7 +77,7 @@ async def test_read_doc_returns_source_reference():
 
 
 async def test_read_sheet_returns_compact_table_and_structured_rows():
-    result = await read_google_sheet(_execution(), ReadGoogleSheetInput(spreadsheet_ref="acct:sheet-1", range="A1:B2"))
+    result = await drive_read_sheet(_execution(), DriveReadSheetInput(spreadsheet_ref="acct:sheet-1", range="A1:B2"))
 
     assert result.content == "Range: A1:B2\nName | Count\nAda | 2"
     assert result.data == {

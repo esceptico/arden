@@ -21,14 +21,14 @@ class TodoItemInput(BaseModel):
     status: TodoStatus = Field(description="Current task status.")
 
 
-class UpdateTodosInput(BaseModel):
+class TodoUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     explanation: str | None = Field(default=None, max_length=2_000, description="Optional short reason for the update.")
     items: list[TodoItemInput] = Field(min_length=1, max_length=50, description="Complete current todo list.")
 
     @model_validator(mode="after")
-    def validate_single_in_progress(self) -> "UpdateTodosInput":
+    def validate_single_in_progress(self) -> "TodoUpdateInput":
         count = sum(1 for item in self.items if item.status == TodoStatus.IN_PROGRESS)
         if count > 1:
             raise ValueError("At most one todo can be in_progress.")
@@ -39,7 +39,7 @@ def _item_to_dict(item: TodoItemInput) -> dict[str, str]:
     return {"content": item.content, "status": item.status.value}
 
 
-async def update_todos(execution: ToolExecution, args: UpdateTodosInput) -> ToolResult:
+async def todo_update(execution: ToolExecution, args: TodoUpdateInput) -> ToolResult:
     items = [_item_to_dict(item) for item in args.items]
     completed = sum(1 for item in items if item["status"] == TodoStatus.COMPLETED.value)
     preview = f"{completed}/{len(items)} done"
@@ -72,7 +72,7 @@ async def update_todos(execution: ToolExecution, args: UpdateTodosInput) -> Tool
     return ToolResult(content="Todo list updated.", preview=preview, data=data)
 
 
-update_todos_tool = tool(
+todo_update_tool = tool(
     display_name="Update Todos",
     display_description="Update the task todo list.",
     description=(
@@ -82,7 +82,7 @@ update_todos_tool = tool(
         "final list with every item completed — that retires the list. Replace items that became irrelevant instead "
         "of leaving them pending forever."
     ),
-    input_model=UpdateTodosInput,
+    input_model=TodoUpdateInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -90,6 +90,6 @@ update_todos_tool = tool(
         audit=False,
         offload=False,
     ),
-    execute=update_todos,
+    execute=todo_update,
     kind="todo",
 )

@@ -68,7 +68,7 @@ async def _emit_goal_updated(execution: ToolExecution, goal: dict) -> None:
         await execution.ctx.io.emit(GoalUpdatedEvent(session_id=execution.ctx.session_id, goal=goal))
 
 
-async def get_goal(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+async def goal_get(execution: ToolExecution, args: EmptyInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if not svc:
         return _goal_failure()
@@ -76,7 +76,7 @@ async def get_goal(execution: ToolExecution, args: EmptyInput) -> ToolResult:
     return ToolResult(content=_format_goal(goal), preview=goal["status"] if goal else "No goal")
 
 
-async def complete_goal(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+async def goal_complete(execution: ToolExecution, args: EmptyInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if not svc:
         return _goal_failure()
@@ -98,14 +98,14 @@ class BlockGoalInput(BaseModel):
     evidence: str | None = Field(default=None, max_length=20_000, description="Optional evidence for the blocker.")
 
 
-async def block_goal(execution: ToolExecution, args: BlockGoalInput) -> ToolResult:
+async def goal_block(execution: ToolExecution, args: BlockGoalInput) -> ToolResult:
     svc = execution.ctx.services.get("session")
     if not svc:
         return _goal_failure()
-    get_goal = getattr(svc, "get_goal", None)
-    if not get_goal:
+    goal_get = getattr(svc, "get_goal", None)
+    if not goal_get:
         return _goal_failure()
-    current = await get_goal(execution.ctx.session_id)
+    current = await goal_get(execution.ctx.session_id)
     if not current:
         return _goal_failure(missing_goal=True)
     attempts = _consecutive_block_attempts(current, args.reason) + 1
@@ -135,14 +135,14 @@ async def block_goal(execution: ToolExecution, args: BlockGoalInput) -> ToolResu
     return ToolResult(content=_format_goal(goal), preview="Goal blocked")
 
 
-get_goal_tool = tool(
+goal_get_tool = tool(
     display_name="Get Goal",
     description="Read the durable goal for the current session.",
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
-    execute=get_goal,
+    execute=goal_get,
 )
 
-complete_goal_tool = tool(
+goal_complete_tool = tool(
     display_name="Complete Goal",
     display_description="Mark the current goal complete.",
     description=(
@@ -150,10 +150,10 @@ complete_goal_tool = tool(
         "This tool takes no input. Put evidence and verification in the visible assistant report after the tool succeeds."
     ),
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
-    execute=complete_goal,
+    execute=goal_complete,
 )
 
-block_goal_tool = tool(
+goal_block_tool = tool(
     display_name="Block Goal",
     display_description="Report that the current goal is blocked.",
     description=(
@@ -164,5 +164,5 @@ block_goal_tool = tool(
     ),
     input_model=BlockGoalInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
-    execute=block_goal,
+    execute=goal_block,
 )

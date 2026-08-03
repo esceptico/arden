@@ -19,8 +19,8 @@ from arden.context.store import SessionStore
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.base import Integration
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
-from arden.tools.automation import create_automation_tool, loop_done_tool, schedule_wakeup_tool
-from arden.tools.background import cancel_agent_tool
+from arden.tools.automation import automation_create_tool, loop_done_tool, loop_schedule_wakeup_tool
+from arden.tools.background import agent_cancel_tool
 from arden.tools.bash import bash_tool, is_blocked_command
 from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
 from arden.tools.core.context import (
@@ -45,7 +45,7 @@ from arden.tools.core.types import (
 from arden.tools.discover import discover_user_tools
 from arden.tools.executor import ToolExecutor
 from arden.tools.notify import notify_tool
-from arden.tools.todos import update_todos_tool
+from arden.tools.todos import todo_update_tool
 from arden.tools.workflow import workflow_tool
 
 READ_INTERNAL_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
@@ -178,10 +178,10 @@ def test_tool_metadata_can_use_compact_display_copy_without_changing_agent_docs(
 
 
 def test_create_automation_metadata_uses_compact_settings_copy():
-    assert create_automation_tool.get_metadata("automation_create")["description"] == (
+    assert automation_create_tool.get_metadata("automation_create")["description"] == (
         "Create a task that runs automatically on a schedule or event."
     )
-    assert create_automation_tool.to_dict("automation_create")["function"]["description"].startswith(
+    assert automation_create_tool.to_dict("automation_create")["function"]["description"].startswith(
         "Create an automation — a task the agent runs autonomously."
     )
 
@@ -549,7 +549,7 @@ async def test_update_todos_tool_emits_todo_event():
     )
     execution = ToolExecution(tool_id="call-todos", tool_name="todo_update", ctx=ctx)
 
-    result = await update_todos_tool.execute(
+    result = await todo_update_tool.execute(
         execution,
         explanation="Track the rollout.",
         items=[
@@ -576,7 +576,7 @@ async def test_update_todos_tool_emits_todo_event():
 @pytest.mark.asyncio
 async def test_update_todos_rejects_multiple_in_progress_items():
     registry = ToolRegistry()
-    _register_tools(registry, {"todo_update": update_todos_tool})
+    _register_tools(registry, {"todo_update": todo_update_tool})
 
     result = await registry.execute(
         "todo_update",
@@ -1086,9 +1086,9 @@ async def test_approval_gated_tools_render_the_payload():
         body="The release build failed in the signing step.",
         names=["work-telegram"],
     )
-    wakeup = await schedule_wakeup_tool.approval_info(execution, delay_seconds=120)
+    wakeup = await loop_schedule_wakeup_tool.approval_info(execution, delay_seconds=120)
     done = await loop_done_tool.approval_info(execution, reason="The requested condition is satisfied")
-    cancel = await cancel_agent_tool.approval_info(execution, session_id="P::a1")
+    cancel = await agent_cancel_tool.approval_info(execution, session_id="P::a1")
 
     assert notify is not None
     assert notify.description == "Notify via work-telegram: Build failed"

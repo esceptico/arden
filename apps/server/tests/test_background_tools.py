@@ -89,9 +89,9 @@ async def test_cancel_agent_resolves_the_task_from_the_session_id():
     task = await _live_agent(registry, "agent-1", "P::a")
 
     try:
-        result = await background_module.cancel_agent(
+        result = await background_module.agent_cancel(
             ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(registry)),
-            background_module.CancelAgentInput(session_id="P::a"),
+            background_module.AgentCancelInput(session_id="P::a"),
         )
 
         assert not result.is_error
@@ -108,9 +108,9 @@ async def test_cancel_agent_unknown_session_lists_live_agent_sessions():
     task = await _live_agent(registry, "agent-1", "P::a")
 
     try:
-        result = await background_module.cancel_agent(
+        result = await background_module.agent_cancel(
             ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(registry)),
-            background_module.CancelAgentInput(session_id="P::ghost"),
+            background_module.AgentCancelInput(session_id="P::ghost"),
         )
 
         assert result.is_error
@@ -131,9 +131,9 @@ async def test_cancel_agent_cascades_to_grandchildren():
     await rb.record_started(task_id="agent-C", command="c", child_session_id="P::a::b")
 
     try:
-        result = await background_module.cancel_agent(
+        result = await background_module.agent_cancel(
             ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(own, run_registry=reg)),
-            background_module.CancelAgentInput(session_id="P::a"),
+            background_module.AgentCancelInput(session_id="P::a"),
         )
 
         assert not result.is_error
@@ -149,7 +149,7 @@ async def test_cancel_agent_cascades_to_grandchildren():
 
 @pytest.mark.asyncio
 async def test_cancel_agent_approval_preview_names_the_session():
-    approval = await background_module.cancel_agent_tool.approval_info(
+    approval = await background_module.agent_cancel_tool.approval_info(
         ToolExecution(
             tool_id="t",
             tool_name="agent_cancel",

@@ -11,7 +11,7 @@ from arden.server.runtime import get_runtime
 from arden.tools.core import EmptyInput
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.goals import BlockGoalInput, block_goal, complete_goal
+from arden.tools.goals import BlockGoalInput, goal_block, goal_complete
 from tests.helpers import make_text_response
 
 
@@ -163,7 +163,7 @@ async def test_complete_goal_tool_emits_goal_update():
         io=IOBridge(emit=emit),
         services={"session": svc},
     )
-    result = await complete_goal(
+    result = await goal_complete(
         ToolExecution(tool_id="tool-1", tool_name="goal_complete", ctx=ctx),
         EmptyInput(),
     )
@@ -195,9 +195,9 @@ async def test_block_goal_requires_repeated_same_blocker_before_terminal():
     execution = ToolExecution(tool_id="tool-1", tool_name="goal_block", ctx=ctx)
     args = BlockGoalInput(reason="Need credentials", evidence="Login requires user credentials.")
 
-    first = await block_goal(execution, args)
-    second = await block_goal(execution, args)
-    third = await block_goal(execution, args)
+    first = await goal_block(execution, args)
+    second = await goal_block(execution, args)
+    third = await goal_block(execution, args)
 
     assert not first.is_error
     assert not second.is_error

@@ -6,7 +6,7 @@ from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 
-class CancelAgentInput(BaseModel):
+class AgentCancelInput(BaseModel):
     session_id: str = Field(
         min_length=1,
         max_length=200,
@@ -14,7 +14,7 @@ class CancelAgentInput(BaseModel):
     )
 
 
-async def approve_cancel_agent(_execution: ToolExecution, args: CancelAgentInput) -> ApprovalInfo:
+async def approve_agent_cancel(_execution: ToolExecution, args: AgentCancelInput) -> ApprovalInfo:
     return ApprovalInfo(
         description="Stop a running agent",
         preview=f"Agent session: {args.session_id}",
@@ -22,7 +22,7 @@ async def approve_cancel_agent(_execution: ToolExecution, args: CancelAgentInput
     )
 
 
-async def cancel_agent(execution: ToolExecution, args: CancelAgentInput) -> ToolResult:
+async def agent_cancel(execution: ToolExecution, args: AgentCancelInput) -> ToolResult:
     registry = execution.ctx.background_tasks
     task_id = registry.task_for_session(args.session_id)
     if task_id is None:
@@ -64,7 +64,7 @@ async def cancel_agent(execution: ToolExecution, args: CancelAgentInput) -> Tool
     )
 
 
-cancel_agent_tool = tool(
+agent_cancel_tool = tool(
     display_name="CancelAgent",
     display_description="Stop a running agent.",
     description=(
@@ -72,8 +72,8 @@ cancel_agent_tool = tool(
         "Requires approval. A finished agent needs no cancel — its result arrives automatically, "
         "and session_read shows its work."
     ),
-    input_model=CancelAgentInput,
+    input_model=AgentCancelInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True),
-    approval=approve_cancel_agent,
-    execute=cancel_agent,
+    approval=approve_agent_cancel,
+    execute=agent_cancel,
 )

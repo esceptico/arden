@@ -1620,7 +1620,7 @@ class SessionStore:
             client_id = msg.get("client_id") if isinstance(msg.get("client_id"), str) else None
             created_at = str(msg.get("created_at") or datetime.now(UTC).isoformat())
             message_json = await asyncio.to_thread(lambda m=msg: json.dumps(m, default=str))
-            search_text = self._flatten_message_text(msg)
+            file_search_text = self._flatten_message_text(msg)
 
             if message_id in existing:
                 await self.conn.execute(
@@ -1629,7 +1629,7 @@ class SessionStore:
                     SET role = ?, message_json = ?, client_id = ?, created_at = ?, file_search_text = ?
                     WHERE session_id = ? AND message_id = ?
                     """,
-                    (role, message_json, client_id, created_at, search_text, session_id, message_id),
+                    (role, message_json, client_id, created_at, file_search_text, session_id, message_id),
                 )
             else:
                 await self.conn.execute(
@@ -1638,7 +1638,7 @@ class SessionStore:
                         (session_id, message_id, seq, role, message_json, client_id, created_at, file_search_text)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (session_id, message_id, next_seq, role, message_json, client_id, created_at, search_text),
+                    (session_id, message_id, next_seq, role, message_json, client_id, created_at, file_search_text),
                 )
                 next_seq += 1
         await self._rebuild_session_turns(session_id)

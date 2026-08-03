@@ -33,14 +33,14 @@ def _source_ref(data: dict, kind: Literal["document", "spreadsheet"]):
     )
 
 
-class SearchGoogleDriveInput(BaseModel):
+class DriveSearchInput(BaseModel):
     query: str = Field(default="", max_length=500)
     kind: Literal["all", "doc", "sheet"] = "all"
     account: str | None = None
     limit: int = Field(default=20, ge=1, le=100)
 
 
-async def search_google_drive(execution: ToolExecution, args: SearchGoogleDriveInput) -> ToolResult:
+async def drive_search(execution: ToolExecution, args: DriveSearchInput) -> ToolResult:
     items = _drive(execution).search(args.query, kind=args.kind, account_id=args.account, limit=args.limit)
     if not items:
         return ToolResult(content="No matching Google Docs or Sheets", preview="0 files")
@@ -73,11 +73,11 @@ async def search_google_drive(execution: ToolExecution, args: SearchGoogleDriveI
     )
 
 
-class ReadGoogleDocInput(BaseModel):
+class DriveReadDocInput(BaseModel):
     document_ref: str = Field(min_length=1, max_length=500)
 
 
-async def read_google_doc(execution: ToolExecution, args: ReadGoogleDocInput) -> ToolResult:
+async def drive_read_doc(execution: ToolExecution, args: DriveReadDocInput) -> ToolResult:
     client, document_id = _drive(execution).resolve_ref(args.document_ref)
     data = client.read_doc(document_id)
     return ToolResult(
@@ -87,12 +87,12 @@ async def read_google_doc(execution: ToolExecution, args: ReadGoogleDocInput) ->
     )
 
 
-class ReadGoogleSheetInput(BaseModel):
+class DriveReadSheetInput(BaseModel):
     spreadsheet_ref: str = Field(min_length=1, max_length=500)
     range: str = Field(default="A1:Z200", min_length=1, max_length=200)
 
 
-async def read_google_sheet(execution: ToolExecution, args: ReadGoogleSheetInput) -> ToolResult:
+async def drive_read_sheet(execution: ToolExecution, args: DriveReadSheetInput) -> ToolResult:
     client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
     data = client.read_sheet(spreadsheet_id, args.range)
     data["title"] = f"Sheet {data['range']}"
@@ -106,13 +106,13 @@ async def read_google_sheet(execution: ToolExecution, args: ReadGoogleSheetInput
     )
 
 
-class CreateGoogleDocInput(BaseModel):
+class DriveCreateDocInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     account: str | None = None
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-async def create_google_doc(execution: ToolExecution, args: CreateGoogleDocInput) -> ToolResult:
+async def drive_create_doc(execution: ToolExecution, args: DriveCreateDocInput) -> ToolResult:
     async def invoke() -> ToolResult:
         data = _drive(execution).select_account(args.account).create_doc(args.title)
         return mutation_result(
@@ -135,11 +135,11 @@ async def create_google_doc(execution: ToolExecution, args: CreateGoogleDocInput
     )
 
 
-async def approve_create_google_doc(_execution: ToolExecution, args: CreateGoogleDocInput) -> ApprovalInfo:
+async def approve_drive_create_doc(_execution: ToolExecution, args: DriveCreateDocInput) -> ApprovalInfo:
     return ApprovalInfo(description=args.title, preview="Create empty document", diff=None)
 
 
-class EditGoogleDocInput(BaseModel):
+class DriveEditDocInput(BaseModel):
     document_ref: str = Field(min_length=1, max_length=500)
     operation: Literal["append", "replace_all"]
     text: str = Field(max_length=100_000)
@@ -153,7 +153,7 @@ class EditGoogleDocInput(BaseModel):
         return self
 
 
-async def edit_google_doc(execution: ToolExecution, args: EditGoogleDocInput) -> ToolResult:
+async def drive_edit_doc(execution: ToolExecution, args: DriveEditDocInput) -> ToolResult:
     async def invoke() -> ToolResult:
         client, document_id = _drive(execution).resolve_ref(args.document_ref)
         data = client.edit_doc(document_id, operation=args.operation, text=args.text, match=args.match)
@@ -177,18 +177,18 @@ async def edit_google_doc(execution: ToolExecution, args: EditGoogleDocInput) ->
     )
 
 
-async def approve_edit_google_doc(_execution: ToolExecution, args: EditGoogleDocInput) -> ApprovalInfo:
+async def approve_drive_edit_doc(_execution: ToolExecution, args: DriveEditDocInput) -> ApprovalInfo:
     change = f"Append:\n{args.text}" if args.operation == "append" else f"Replace {args.match!r} with:\n{args.text}"
     return ApprovalInfo(description=args.document_ref, preview=change[:1500], diff=None)
 
 
-class CreateGoogleSheetInput(BaseModel):
+class DriveCreateSheetInput(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     account: str | None = None
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-async def create_google_sheet(execution: ToolExecution, args: CreateGoogleSheetInput) -> ToolResult:
+async def drive_create_sheet(execution: ToolExecution, args: DriveCreateSheetInput) -> ToolResult:
     async def invoke() -> ToolResult:
         data = _drive(execution).select_account(args.account).create_sheet(args.title)
         return mutation_result(
@@ -211,7 +211,7 @@ async def create_google_sheet(execution: ToolExecution, args: CreateGoogleSheetI
     )
 
 
-async def approve_create_google_sheet(_execution: ToolExecution, args: CreateGoogleSheetInput) -> ApprovalInfo:
+async def approve_drive_create_sheet(_execution: ToolExecution, args: DriveCreateSheetInput) -> ApprovalInfo:
     return ApprovalInfo(description=args.title, preview="Create empty spreadsheet", diff=None)
 
 
@@ -223,7 +223,7 @@ class SheetWriteInput(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
-async def update_google_sheet(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
+async def drive_update_sheet(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
     async def invoke() -> ToolResult:
         client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
         receipt = client.update_sheet(spreadsheet_id, args.range, args.values, args.value_input_option)
@@ -247,7 +247,7 @@ async def update_google_sheet(execution: ToolExecution, args: SheetWriteInput) -
     )
 
 
-async def append_google_sheet_rows(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
+async def drive_append_sheet_rows(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
     async def invoke() -> ToolResult:
         client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
         receipt = client.append_sheet_rows(spreadsheet_id, args.range, args.values, args.value_input_option)
@@ -289,77 +289,77 @@ def _policy(action: ToolAction, *, approval: bool = False) -> ToolPolicy:
     )
 
 
-search_google_drive_tool = tool(
+drive_search_tool = tool(
     display_name="Search Google Drive",
     description="Search connected Google Docs and Sheets.",
-    input_model=SearchGoogleDriveInput,
+    input_model=DriveSearchInput,
     policy=_policy(ToolAction.READ),
-    execute=search_google_drive,
+    execute=drive_search,
 )
-read_google_doc_tool = tool(
+drive_read_doc_tool = tool(
     display_name="Read Google Doc",
     description="Read a Google Doc by qualified reference.",
-    input_model=ReadGoogleDocInput,
+    input_model=DriveReadDocInput,
     policy=_policy(ToolAction.READ),
-    execute=read_google_doc,
+    execute=drive_read_doc,
 )
-read_google_sheet_tool = tool(
+drive_read_sheet_tool = tool(
     display_name="Read Google Sheet",
     description="Read a bounded A1 range from a Google Sheet.",
-    input_model=ReadGoogleSheetInput,
+    input_model=DriveReadSheetInput,
     policy=_policy(ToolAction.READ),
-    execute=read_google_sheet,
+    execute=drive_read_sheet,
 )
-create_google_doc_tool = tool(
+drive_create_doc_tool = tool(
     display_name="Create Google Doc",
     display_description="Create an empty Google Doc.",
     description="Create an empty Google Doc. Use drive_edit_doc in a separate operation to add content.",
-    input_model=CreateGoogleDocInput,
+    input_model=DriveCreateDocInput,
     policy=_policy(ToolAction.WRITE, approval=True),
-    approval=approve_create_google_doc,
-    execute=create_google_doc,
+    approval=approve_drive_create_doc,
+    execute=drive_create_doc,
 )
-edit_google_doc_tool = tool(
+drive_edit_doc_tool = tool(
     display_name="Edit Google Doc",
     description="Append to or replace exact text in a Google Doc.",
-    input_model=EditGoogleDocInput,
+    input_model=DriveEditDocInput,
     policy=_policy(ToolAction.WRITE, approval=True),
-    approval=approve_edit_google_doc,
-    execute=edit_google_doc,
+    approval=approve_drive_edit_doc,
+    execute=drive_edit_doc,
 )
-create_google_sheet_tool = tool(
+drive_create_sheet_tool = tool(
     display_name="Create Google Sheet",
     display_description="Create an empty Google Sheet.",
     description="Create an empty Google Sheet. Use drive_update_sheet in a separate operation to add values.",
-    input_model=CreateGoogleSheetInput,
+    input_model=DriveCreateSheetInput,
     policy=_policy(ToolAction.WRITE, approval=True),
-    approval=approve_create_google_sheet,
-    execute=create_google_sheet,
+    approval=approve_drive_create_sheet,
+    execute=drive_create_sheet,
 )
-update_google_sheet_tool = tool(
+drive_update_sheet_tool = tool(
     display_name="Update Google Sheet",
     description="Replace values in one exact A1 range.",
     input_model=SheetWriteInput,
     policy=_policy(ToolAction.WRITE, approval=True),
     approval=approve_sheet_write,
-    execute=update_google_sheet,
+    execute=drive_update_sheet,
 )
-append_google_sheet_rows_tool = tool(
+drive_append_sheet_rows_tool = tool(
     display_name="Append Google Sheet Rows",
     description="Append rows to a Google Sheet range.",
     input_model=SheetWriteInput,
     policy=_policy(ToolAction.WRITE, approval=True),
     approval=approve_sheet_write,
-    execute=append_google_sheet_rows,
+    execute=drive_append_sheet_rows,
 )
 
 DRIVE_TOOLS = {
-    "drive_search": search_google_drive_tool,
-    "drive_read_doc": read_google_doc_tool,
-    "drive_read_sheet": read_google_sheet_tool,
-    "drive_create_doc": create_google_doc_tool,
-    "drive_edit_doc": edit_google_doc_tool,
-    "drive_create_sheet": create_google_sheet_tool,
-    "drive_update_sheet": update_google_sheet_tool,
-    "drive_append_sheet_rows": append_google_sheet_rows_tool,
+    "drive_search": drive_search_tool,
+    "drive_read_doc": drive_read_doc_tool,
+    "drive_read_sheet": drive_read_sheet_tool,
+    "drive_create_doc": drive_create_doc_tool,
+    "drive_edit_doc": drive_edit_doc_tool,
+    "drive_create_sheet": drive_create_sheet_tool,
+    "drive_update_sheet": drive_update_sheet_tool,
+    "drive_append_sheet_rows": drive_append_sheet_rows_tool,
 }

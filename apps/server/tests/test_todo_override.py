@@ -62,9 +62,9 @@ async def test_update_todos_clears_user_override():
     )
     execution = ToolExecution(tool_id="t", tool_name="todo_update", ctx=ctx)
 
-    result = await todos_module.update_todos(
+    result = await todos_module.todo_update(
         execution,
-        todos_module.UpdateTodosInput(items=[todos_module.TodoItemInput(content="agent task", status="pending")]),
+        todos_module.TodoUpdateInput(items=[todos_module.TodoItemInput(content="agent task", status="pending")]),
     )
 
     assert "updated" in result.content.lower()
@@ -89,9 +89,9 @@ async def test_update_todos_all_completed_retires_the_list():
     )
     execution = ToolExecution(tool_id="t", tool_name="todo_update", ctx=ctx)
 
-    await todos_module.update_todos(
+    await todos_module.todo_update(
         execution,
-        todos_module.UpdateTodosInput(items=[todos_module.TodoItemInput(content="agent task", status="completed")]),
+        todos_module.TodoUpdateInput(items=[todos_module.TodoItemInput(content="agent task", status="completed")]),
     )
 
     # A fully-completed list retires the session slot instead of persisting.

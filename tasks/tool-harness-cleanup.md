@@ -301,8 +301,8 @@ provider keys.
 
 ## Status (2026-08-03, end of implementation session)
 
-Stages 1-3 DONE, stage 4 (prompt refinement) partially done — all UNCOMMITTED, server
-restart pending:
+Stages 1-4 DONE — COMMITTED as 08b37ac8 + 3268ee05 on main (not pushed); server
+restart pending for live activation:
 
 - Rename SHIPPED: all 96 tools carry namespace-prefix names (codemod over quoted +
   backticked + string-token occurrences; f-strings and JS object keys hand-fixed).
@@ -330,10 +330,9 @@ restart pending:
 - Gates: server pytest 2464 passed, ruff clean+formatted; desktop 1039 tests pass,
   typecheck + eslint clean.
 
-Remaining (stage 4 proper + follow-ups):
-- [ ] Editorial prompt-refinement pass over core/prompts.py (user-directed)
-- [ ] Optional: rename internal Python identifiers (read_session fn, *_tool vars)
-      to match new tool names — deliberately skipped to keep the diff reviewable
+Remaining follow-ups:
 - [ ] Live smoke after server restart (chat loads session group on demand;
-      wiki task never sees session_create)
-- [ ] Commit after user review (no auto-commit)
+      wiki task never sees session_create; desktop labels/icons on :5175)
+- [ ] Optional: rename internal Python identifiers (read_session fn, *_tool vars)
+      to match new tool names — skipped to keep the diff reviewable
+- [x] Committed: 08b37ac8 (rename + deferral flag), 3268ee05 (prompt enumerations)

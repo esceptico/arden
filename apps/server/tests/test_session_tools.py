@@ -19,14 +19,14 @@ from arden.tools.core.context import (
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.sessions import (
     _ITEM_FIELDS,
-    CreateSessionInput,
-    ListRecentSessionsInput,
-    ReadSessionInput,
-    SearchTranscriptsInput,
-    create_session,
-    list_recent_sessions,
-    read_session,
-    search_transcripts,
+    SessionCreateInput,
+    SessionListInput,
+    SessionReadInput,
+    SessionSearchTranscriptsInput,
+    session_create,
+    session_list,
+    session_read,
+    session_search_transcripts,
 )
 
 
@@ -123,7 +123,7 @@ async def test_list_recent_sessions_returns_formatted_list():
     service._sessions.reverse()
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=20))
+    result = await session_list(execution, SessionListInput(limit=20))
 
     assert not result.is_error
     assert "20260510_120000_000" in result.content
@@ -147,8 +147,8 @@ async def test_session_tools_pass_active_project_scope():
     )
     execution = _make_execution(services={"session": service}, area_id="proj-1")
 
-    await list_recent_sessions(execution, ListRecentSessionsInput())
-    await read_session(execution, ReadSessionInput(session_id="s1"))
+    await session_list(execution, SessionListInput())
+    await session_read(execution, SessionReadInput(session_id="s1"))
 
     assert any(name == "list_sessions" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
     assert any(name == "list_messages" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
@@ -175,7 +175,7 @@ async def test_list_recent_sessions_filters_by_within_days():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=20, within_days=7))
+    result = await session_list(execution, SessionListInput(limit=20, within_days=7))
 
     assert "recent" in result.content
     assert "old" not in result.content
@@ -202,7 +202,7 @@ async def test_list_recent_sessions_pages_with_offset():
     service = _StubSessionService(sessions=_session_page(5))
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=2, offset=2))
+    result = await session_list(execution, SessionListInput(limit=2, offset=2))
 
     assert service.calls[-1][1]["offset"] == 2
     assert "s2" in result.content
@@ -219,7 +219,7 @@ async def test_list_recent_sessions_reports_more_on_the_first_page():
     service = _StubSessionService(sessions=_session_page(5))
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=3))
+    result = await session_list(execution, SessionListInput(limit=3))
 
     assert result.data["has_more"] is True
     assert "call again with offset=3." in result.content
@@ -230,7 +230,7 @@ async def test_list_recent_sessions_last_page_does_not_invite_another_call():
     service = _StubSessionService(sessions=_session_page(5))
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=3, offset=3))
+    result = await session_list(execution, SessionListInput(limit=3, offset=3))
 
     assert result.data["has_more"] is False
     assert result.data["next_offset"] is None
@@ -242,7 +242,7 @@ async def test_list_recent_sessions_offset_keeps_area_scope():
     service = _StubSessionService(sessions=_session_page(5))
     execution = _make_execution(services={"session": service}, area_id="ops")
 
-    await list_recent_sessions(execution, ListRecentSessionsInput(limit=2, offset=2))
+    await session_list(execution, SessionListInput(limit=2, offset=2))
 
     assert service.calls[-1][1]["area_id"] == "ops"
     assert service.calls[-1][1]["offset"] == 2
@@ -272,7 +272,7 @@ async def test_list_recent_sessions_within_days_stops_at_the_window_edge():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=1, within_days=7))
+    result = await session_list(execution, SessionListInput(limit=1, within_days=7))
 
     assert "recent" in result.content
     assert result.data["has_more"] is False
@@ -283,7 +283,7 @@ async def test_list_recent_sessions_within_days_stops_at_the_window_edge():
 async def test_list_recent_sessions_missing_service_is_error():
     execution = _make_execution(services={})  # session service absent
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+    result = await session_list(execution, SessionListInput())
 
     assert result.is_error
     assert "unavailable" in result.content.lower()
@@ -303,7 +303,7 @@ async def test_read_session_truncates_long_content():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1", content_chars=100))
+    result = await session_read(execution, SessionReadInput(session_id="s1", content_chars=100))
 
     assert not result.is_error
     assert "[user]" in result.content
@@ -328,7 +328,7 @@ async def test_read_session_role_filter():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1", role_filter=["user"]))
+    result = await session_read(execution, SessionReadInput(session_id="s1", role_filter=["user"]))
 
     assert "[user]" in result.content
     assert "[assistant]" not in result.content
@@ -339,7 +339,7 @@ def test_read_session_rejects_an_unknown_role():
     """A typed enum turns 'usr' into a schema error the model can self-correct,
     instead of a filter that silently matches nothing."""
     with pytest.raises(ValidationError):
-        ReadSessionInput(session_id="s1", role_filter=["usr"])
+        SessionReadInput(session_id="s1", role_filter=["usr"])
 
 
 # --- create_session tool ---
@@ -388,7 +388,7 @@ async def test_create_session_defaults_to_channel():
     svc = _CapturingSessionService()
     execution = _execution_with_loop({"session": svc})
 
-    result = await create_session(execution, CreateSessionInput(name="ops alerts"))
+    result = await session_create(execution, SessionCreateInput(name="ops alerts"))
 
     assert not result.is_error
     assert len(svc.created) == 1
@@ -404,7 +404,7 @@ async def test_create_session_chat_type_when_requested():
     svc = _CapturingSessionService()
     execution = _execution_with_loop({"session": svc})
 
-    result = await create_session(execution, CreateSessionInput(name="adhoc", session_type="chat"))
+    result = await session_create(execution, SessionCreateInput(name="adhoc", session_type="chat"))
 
     assert not result.is_error
     assert svc.created[0].session_type == "chat"
@@ -415,7 +415,7 @@ async def test_create_session_stamps_origin_when_in_loop():
     svc = _CapturingSessionService()
     execution = _execution_with_loop({"session": svc}, loop_task_id="loop-shy-otter")
 
-    result = await create_session(execution, CreateSessionInput(name="from loop"))
+    result = await session_create(execution, SessionCreateInput(name="from loop"))
 
     assert not result.is_error
     assert svc.created[0].origin_automation_id == "loop-shy-otter"
@@ -426,7 +426,7 @@ async def test_create_session_no_origin_when_not_in_loop():
     svc = _CapturingSessionService()
     execution = _execution_with_loop({"session": svc}, loop_task_id=None)
 
-    await create_session(execution, CreateSessionInput(name="standalone"))
+    await session_create(execution, SessionCreateInput(name="standalone"))
 
     assert svc.created[0].origin_automation_id is None
 
@@ -435,7 +435,7 @@ async def test_create_session_no_origin_when_not_in_loop():
 async def test_create_session_missing_service_is_error():
     execution = _execution_with_loop({})  # no session service
 
-    result = await create_session(execution, CreateSessionInput(name="x"))
+    result = await session_create(execution, SessionCreateInput(name="x"))
 
     assert result.is_error
     assert "unavailable" in result.content.lower()
@@ -465,7 +465,7 @@ async def test_read_session_handles_structured_content_blocks():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_id="s1"))
 
     assert "Look at this image" in result.content
     assert "[image]" in result.content
@@ -511,7 +511,7 @@ async def test_list_recent_sessions_renders_live_and_persisted_status():
     )
     execution = _make_execution(services={"session": service}, run_registry=registry)
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+    result = await session_list(execution, SessionListInput())
 
     lines = {line.split(" · ")[0]: line for line in result.content.splitlines()}
     assert lines["- live"].endswith("· running")
@@ -534,7 +534,7 @@ async def test_list_recent_sessions_omits_status_when_run_registry_is_absent():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+    result = await session_list(execution, SessionListInput())
 
     assert result.content.strip().endswith("1 msgs")
 
@@ -544,7 +544,7 @@ async def test_list_recent_sessions_inside_an_area_stays_in_that_area():
     service = _StubSessionService(sessions=[])
     execution = _make_execution(services={"session": service}, area_id="ops")
 
-    await list_recent_sessions(execution, ListRecentSessionsInput())
+    await session_list(execution, SessionListInput())
 
     assert service.calls[-1][0] == "list_sessions"
     assert service.calls[-1][1]["area_id"] == "ops"
@@ -555,7 +555,7 @@ async def test_list_recent_sessions_in_a_plain_chat_sees_every_session():
     service = _StubSessionService(sessions=[])
     execution = _make_execution(services={"session": service})
 
-    await list_recent_sessions(execution, ListRecentSessionsInput())
+    await session_list(execution, SessionListInput())
 
     assert service.calls[-1][1]["area_id"] is AREA_FILTER_UNSET
 
@@ -570,12 +570,12 @@ async def test_an_area_caller_cannot_widen_any_read_beyond_its_area():
     )
     execution = _make_execution(services={"session": service}, area_id="ops")
 
-    for model in (ListRecentSessionsInput, ReadSessionInput, SearchTranscriptsInput):
+    for model in (SessionListInput, SessionReadInput, SessionSearchTranscriptsInput):
         assert "scope" not in model.model_fields
 
-    await list_recent_sessions(execution, ListRecentSessionsInput())
-    await read_session(execution, ReadSessionInput(session_id="s1"))
-    await search_transcripts(execution, SearchTranscriptsInput(query="hi"))
+    await session_list(execution, SessionListInput())
+    await session_read(execution, SessionReadInput(session_id="s1"))
+    await session_search_transcripts(execution, SessionSearchTranscriptsInput(query="hi"))
 
     assert [kwargs["area_id"] for _, kwargs in service.calls] == ["ops", "ops", "ops"]
 
@@ -589,7 +589,7 @@ async def test_read_session_prefixes_a_run_status_header():
     registry = _StubRunRegistry([_StubRun("s1", "run-x", approvals=2, queued=1)])
     execution = _make_execution(services={"session": service}, run_registry=registry)
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_id="s1"))
 
     first = result.content.splitlines()[0]
     assert first.startswith("[session s1] running")
@@ -607,7 +607,7 @@ async def test_read_session_reports_idle_for_a_session_without_a_run():
     )
     execution = _make_execution(services={"session": service}, run_registry=_StubRunRegistry())
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_id="s1"))
 
     assert result.content.splitlines()[0] == "[session s1] idle"
 
@@ -620,7 +620,7 @@ async def test_read_session_omits_the_header_without_a_run_registry():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await read_session(execution, ReadSessionInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_id="s1"))
 
     assert not result.content.startswith("[session")
 
@@ -633,7 +633,7 @@ async def test_list_recent_sessions_oldest_first_for_archival_sweeps():
     service = _StubSessionService(sessions=_session_page(3))
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=3, order="oldest"))
+    result = await session_list(execution, SessionListInput(limit=3, order="oldest"))
 
     assert service.calls[-1][1]["newest_first"] is False
     assert result.content.index("s2") < result.content.index("s1") < result.content.index("s0")
@@ -657,7 +657,7 @@ async def test_oldest_first_keeps_paging_open_under_a_time_window():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput(limit=1, order="oldest", within_days=30))
+    result = await session_list(execution, SessionListInput(limit=1, order="oldest", within_days=30))
 
     assert result.data["has_more"] is True
 
@@ -683,7 +683,7 @@ async def test_list_recent_sessions_projects_only_agent_useful_fields():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await list_recent_sessions(execution, ListRecentSessionsInput())
+    result = await session_list(execution, SessionListInput())
 
     assert set(result.data["items"][0]) == set(_ITEM_FIELDS)
     assert result.data["items"][0]["session_id"] == "s1"
@@ -703,7 +703,7 @@ async def test_search_transcripts_explains_an_fts_syntax_error():
     service = _FailingSearchService(sqlite3.OperationalError('fts5: syntax error near """'))
     execution = _make_execution(services={"session": service})
 
-    result = await search_transcripts(execution, SearchTranscriptsInput(query='invoice "'))
+    result = await session_search_transcripts(execution, SessionSearchTranscriptsInput(query='invoice "'))
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -718,4 +718,4 @@ async def test_search_transcripts_does_not_swallow_other_errors():
     execution = _make_execution(services={"session": service})
 
     with pytest.raises(RuntimeError):
-        await search_transcripts(execution, SearchTranscriptsInput(query="invoice"))
+        await session_search_transcripts(execution, SessionSearchTranscriptsInput(query="invoice"))

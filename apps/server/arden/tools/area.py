@@ -328,7 +328,7 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
     return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
 
 
-async def submit_area_report(execution: ToolExecution, report: AreaCustodianReport) -> ToolResult:
+async def area_submit_report(execution: ToolExecution, report: AreaCustodianReport) -> ToolResult:
     area_id = _custodian_area_id(execution)
     if area_id is None:
         return ToolResult.failure(
@@ -407,7 +407,7 @@ area_run_automation_tool = tool(
     execute=area_run_automation,
 )
 
-submit_area_report_tool = tool(
+area_submit_report_tool = tool(
     display_name="SubmitAreaReport",
     display_description="Commit the current Area custodian report.",
     description=(
@@ -421,5 +421,5 @@ submit_area_report_tool = tool(
         permissions=frozenset({AREA_WORK_SERVICE}),
         idempotent=True,
     ),
-    execute=submit_area_report,
+    execute=area_submit_report,
 )

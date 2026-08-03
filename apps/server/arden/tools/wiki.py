@@ -49,7 +49,7 @@ _WIKI_WRITE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE})
 _WIKI_MOVE_PERMISSIONS = frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE, "session"})
 
 
-class ReadWikiPageInput(BaseModel):
+class WikiReadPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
@@ -57,7 +57,7 @@ class ReadWikiPageInput(BaseModel):
     limit: int = Field(default=500, ge=1, le=_MAX_PAGE_LINES)
 
 
-class ListWikiPagesInput(BaseModel):
+class WikiListPagesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     directory: str = Field(
@@ -69,7 +69,7 @@ class ListWikiPagesInput(BaseModel):
     limit: int = Field(default=100, ge=1, le=_MAX_LIST_ENTRIES)
 
 
-class ListWikiChangesInput(BaseModel):
+class WikiListChangesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     since: AwareDatetime = Field(description="Inclusive ISO timestamp, usually today's local midnight.")
@@ -84,7 +84,7 @@ class WikiLinksInput(BaseModel):
     limit: int = Field(default=100, ge=1, le=_MAX_LINKS)
 
 
-class CreateWikiPageInput(BaseModel):
+class WikiCreatePageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(
@@ -100,21 +100,21 @@ class CreateWikiPageInput(BaseModel):
     body: str = Field(default="", max_length=_MAX_CONTENT_CHARS)
 
 
-class EditWikiPageInput(BaseModel):
+class WikiEditPageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
     body: str = Field(max_length=_MAX_CONTENT_CHARS)
 
 
-class ArchiveWikiPageInput(BaseModel):
+class WikiArchivePageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
     reason: str = Field(default="archive wiki page", min_length=1, max_length=500)
 
 
-class MoveWikiPageInput(BaseModel):
+class WikiMovePageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
@@ -125,7 +125,7 @@ class MoveWikiPageInput(BaseModel):
     )
 
 
-class PublishWikiGeneratedInput(BaseModel):
+class WikiPublishGeneratedInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
@@ -440,7 +440,7 @@ def _bounded_links(
     return result, used, fields_truncated
 
 
-async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) -> ToolResult:
+async def wiki_list_pages(execution: ToolExecution, args: WikiListPagesInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -511,7 +511,7 @@ async def list_wiki_pages(execution: ToolExecution, args: ListWikiPagesInput) ->
     )
 
 
-async def list_wiki_changes(execution: ToolExecution, args: ListWikiChangesInput) -> ToolResult:
+async def wiki_list_changes(execution: ToolExecution, args: WikiListChangesInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -564,7 +564,7 @@ async def list_wiki_changes(execution: ToolExecution, args: ListWikiChangesInput
     )
 
 
-async def read_wiki_page(execution: ToolExecution, args: ReadWikiPageInput) -> ToolResult:
+async def wiki_read_page(execution: ToolExecution, args: WikiReadPageInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -668,7 +668,7 @@ async def wiki_links(execution: ToolExecution, args: WikiLinksInput) -> ToolResu
     )
 
 
-async def create_wiki_page(execution: ToolExecution, args: CreateWikiPageInput) -> ToolResult:
+async def wiki_create_page(execution: ToolExecution, args: WikiCreatePageInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -752,7 +752,7 @@ async def create_wiki_page(execution: ToolExecution, args: CreateWikiPageInput) 
     )
 
 
-async def edit_wiki_page(execution: ToolExecution, args: EditWikiPageInput) -> ToolResult:
+async def wiki_edit_page(execution: ToolExecution, args: WikiEditPageInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -818,7 +818,7 @@ async def edit_wiki_page(execution: ToolExecution, args: EditWikiPageInput) -> T
     )
 
 
-async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput) -> ToolResult:
+async def wiki_archive_page(execution: ToolExecution, args: WikiArchivePageInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -902,7 +902,7 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
     )
 
 
-async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> ToolResult:
+async def wiki_move_page(execution: ToolExecution, args: WikiMovePageInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -1036,9 +1036,9 @@ async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> T
     )
 
 
-async def approve_create_wiki_page(
+async def approve_wiki_create_page(
     _execution: ToolExecution,
-    args: CreateWikiPageInput,
+    args: WikiCreatePageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
         description=f"Create wiki page {args.path}",
@@ -1047,9 +1047,9 @@ async def approve_create_wiki_page(
     )
 
 
-async def approve_edit_wiki_page(
+async def approve_wiki_edit_page(
     _execution: ToolExecution,
-    args: EditWikiPageInput,
+    args: WikiEditPageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
         description=f"Replace the body of wiki page {args.path}",
@@ -1058,9 +1058,9 @@ async def approve_edit_wiki_page(
     )
 
 
-async def approve_archive_wiki_page(
+async def approve_wiki_archive_page(
     _execution: ToolExecution,
-    args: ArchiveWikiPageInput,
+    args: WikiArchivePageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
         description=f"Archive wiki page {args.path}",
@@ -1069,9 +1069,9 @@ async def approve_archive_wiki_page(
     )
 
 
-async def approve_move_wiki_page(
+async def approve_wiki_move_page(
     _execution: ToolExecution,
-    args: MoveWikiPageInput,
+    args: WikiMovePageInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
         description=f"Move wiki page {args.path} to {args.new_path}",
@@ -1080,7 +1080,7 @@ async def approve_move_wiki_page(
     )
 
 
-async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGeneratedInput) -> ToolResult:
+async def wiki_publish_generated(execution: ToolExecution, args: WikiPublishGeneratedInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
@@ -1211,9 +1211,9 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
     )
 
 
-async def approve_publish_wiki_generated(
+async def approve_wiki_publish_generated(
     _execution: ToolExecution,
-    args: PublishWikiGeneratedInput,
+    args: WikiPublishGeneratedInput,
 ) -> ApprovalInfo:
     return ApprovalInfo(
         description=f"Update generated wiki content for {args.path}",
@@ -1222,11 +1222,11 @@ async def approve_publish_wiki_generated(
     )
 
 
-list_wiki_pages_tool = tool(
+wiki_list_pages_tool = tool(
     display_name="ListWikiPages",
     display_description="List one managed wiki directory.",
     description="List direct child directories and active pages in one managed wiki directory.",
-    input_model=ListWikiPagesInput,
+    input_model=WikiListPagesInput,
     policy=ToolPolicy(
         action=ToolAction.READ,
         scope=ToolScope.INTERNAL,
@@ -1234,17 +1234,17 @@ list_wiki_pages_tool = tool(
         max_result_chars=_MAX_LIST_DATA_BYTES,
         deferred=True,
     ),
-    execute=list_wiki_pages,
+    execute=wiki_list_pages,
 )
 
-list_wiki_changes_tool = tool(
+wiki_list_changes_tool = tool(
     display_name="ListWikiChanges",
     display_description="List managed wiki files changed since a timestamp.",
     description=(
         "List managed wiki commits since an inclusive timestamp, including changed paths, time, actor, and reason. "
         "Use this to understand recent wiki activity without inspecting internal revision identifiers."
     ),
-    input_model=ListWikiChangesInput,
+    input_model=WikiListChangesInput,
     policy=ToolPolicy(
         action=ToolAction.READ,
         scope=ToolScope.INTERNAL,
@@ -1252,10 +1252,10 @@ list_wiki_changes_tool = tool(
         max_result_chars=_MAX_LIST_DATA_BYTES,
         deferred=True,
     ),
-    execute=list_wiki_changes,
+    execute=wiki_list_changes,
 )
 
-create_wiki_page_tool = tool(
+wiki_create_page_tool = tool(
     display_name="CreateWikiPage",
     display_description="Create one managed wiki page.",
     description=(
@@ -1266,7 +1266,7 @@ create_wiki_page_tool = tool(
         "Read and specialize any reported bootstrap README before finishing. "
         f"Scheduled automations can create pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
-    input_model=CreateWikiPageInput,
+    input_model=WikiCreatePageInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -1277,11 +1277,11 @@ create_wiki_page_tool = tool(
         idempotent=True,
         deferred=True,
     ),
-    approval=approve_create_wiki_page,
-    execute=create_wiki_page,
+    approval=approve_wiki_create_page,
+    execute=wiki_create_page,
 )
 
-edit_wiki_page_tool = tool(
+wiki_edit_page_tool = tool(
     display_name="EditWikiPage",
     display_description="Replace one managed wiki page body.",
     description=(
@@ -1289,7 +1289,7 @@ edit_wiki_page_tool = tool(
         "Read the page first. Link other pages by path ([[topics/acme|Acme]]); bare title links do not resolve. "
         f"Scheduled automations can edit pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
-    input_model=EditWikiPageInput,
+    input_model=WikiEditPageInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -1300,11 +1300,11 @@ edit_wiki_page_tool = tool(
         idempotent=True,
         deferred=True,
     ),
-    approval=approve_edit_wiki_page,
-    execute=edit_wiki_page,
+    approval=approve_wiki_edit_page,
+    execute=wiki_edit_page,
 )
 
-archive_wiki_page_tool = tool(
+wiki_archive_page_tool = tool(
     display_name="ArchiveWikiPage",
     display_description="Archive one managed wiki page.",
     description=(
@@ -1312,7 +1312,7 @@ archive_wiki_page_tool = tool(
         "Read the page first. "
         f"Scheduled automations can archive pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
-    input_model=ArchiveWikiPageInput,
+    input_model=WikiArchivePageInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -1323,11 +1323,11 @@ archive_wiki_page_tool = tool(
         idempotent=True,
         deferred=True,
     ),
-    approval=approve_archive_wiki_page,
-    execute=archive_wiki_page,
+    approval=approve_wiki_archive_page,
+    execute=wiki_archive_page,
 )
 
-move_wiki_page_tool = tool(
+wiki_move_page_tool = tool(
     display_name="MoveWikiPage",
     display_description="Move one managed wiki page without renaming it.",
     description=(
@@ -1337,7 +1337,7 @@ move_wiki_page_tool = tool(
         "Wikilinks that resolve to the page are rewritten to the new path atomically. "
         "Read the page first."
     ),
-    input_model=MoveWikiPageInput,
+    input_model=WikiMovePageInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -1348,15 +1348,15 @@ move_wiki_page_tool = tool(
         idempotent=True,
         deferred=True,
     ),
-    approval=approve_move_wiki_page,
-    execute=move_wiki_page,
+    approval=approve_wiki_move_page,
+    execute=wiki_move_page,
 )
 
-read_wiki_page_tool = tool(
+wiki_read_page_tool = tool(
     display_name="ReadWikiPage",
     display_description="Read one managed wiki page.",
     description="Read one active managed wiki page by its exact path.",
-    input_model=ReadWikiPageInput,
+    input_model=WikiReadPageInput,
     policy=ToolPolicy(
         action=ToolAction.READ,
         scope=ToolScope.INTERNAL,
@@ -1364,7 +1364,7 @@ read_wiki_page_tool = tool(
         max_result_chars=_MAX_CONTENT_CHARS,
         deferred=True,
     ),
-    execute=read_wiki_page,
+    execute=wiki_read_page,
 )
 
 wiki_links_tool = tool(
@@ -1382,11 +1382,11 @@ wiki_links_tool = tool(
     execute=wiki_links,
 )
 
-publish_wiki_generated_tool = tool(
+wiki_publish_generated_tool = tool(
     display_name="PublishWikiGenerated",
     display_description="Update one page's generated region.",
     description=("Update only the generated region of one existing managed wiki page. Read the page first."),
-    input_model=PublishWikiGeneratedInput,
+    input_model=WikiPublishGeneratedInput,
     policy=ToolPolicy(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
@@ -1397,6 +1397,6 @@ publish_wiki_generated_tool = tool(
         idempotent=False,
         deferred=True,
     ),
-    approval=approve_publish_wiki_generated,
-    execute=publish_wiki_generated,
+    approval=approve_wiki_publish_generated,
+    execute=wiki_publish_generated,
 )

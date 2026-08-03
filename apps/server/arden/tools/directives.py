@@ -29,17 +29,17 @@ Pass the FULL desired directives — this replaces any previous content.
 Read current directives first (if any), then write the updated version."""
 
 
-class SetDirectivesInput(BaseModel):
+class DirectivesSetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     directives: str = Field(description="The full custom directives text.")
 
 
-class GetDirectivesInput(EmptyInput):
+class DirectivesGetInput(EmptyInput):
     pass
 
 
-async def get_directives(execution: ToolExecution, args: GetDirectivesInput) -> ToolResult:
+async def directives_get(execution: ToolExecution, args: DirectivesGetInput) -> ToolResult:
     content, revision, size = await asyncio.to_thread(_load_directives_snapshot)
     result = ToolResult(
         content=content or "",
@@ -55,7 +55,7 @@ async def get_directives(execution: ToolExecution, args: GetDirectivesInput) -> 
     return result
 
 
-async def approve_set_directives(execution: ToolExecution, args: SetDirectivesInput) -> ApprovalInfo:
+async def approve_directives_set(execution: ToolExecution, args: DirectivesSetInput) -> ApprovalInfo:
     current = (await asyncio.to_thread(load_directives)) or ""
     diff = _diff(current, args.directives)
     return ApprovalInfo(
@@ -65,7 +65,7 @@ async def approve_set_directives(execution: ToolExecution, args: SetDirectivesIn
     )
 
 
-async def set_directives(execution: ToolExecution, args: SetDirectivesInput) -> ToolResult:
+async def directives_set(execution: ToolExecution, args: DirectivesSetInput) -> ToolResult:
     try:
         observation = execution.ctx.run.resource_observation(_DIRECTIVES_OBSERVATION_ID)
         revision, unchanged = await asyncio.to_thread(
@@ -122,24 +122,24 @@ async def set_directives(execution: ToolExecution, args: SetDirectivesInput) -> 
     )
 
 
-get_directives_tool = tool(
+directives_get_tool = tool(
     display_name="Get Directives",
     display_description="Read persistent behavior directives.",
     description="Read the current persistent behavior directives.",
-    input_model=GetDirectivesInput,
+    input_model=DirectivesGetInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, deferred=True),
-    execute=get_directives,
+    execute=directives_get,
 )
 
 
-set_directives_tool = tool(
+directives_set_tool = tool(
     display_name="Set Directives",
     display_description="Replace persistent behavior directives.",
     description=DESCRIPTION,
-    input_model=SetDirectivesInput,
+    input_model=DirectivesSetInput,
     policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True),
-    approval=approve_set_directives,
-    execute=set_directives,
+    approval=approve_directives_set,
+    execute=directives_set,
 )
 
 

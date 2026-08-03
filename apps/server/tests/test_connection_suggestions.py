@@ -6,10 +6,10 @@ import pytest
 from arden.context.models import SessionState
 from arden.integrations.base import IntegrationConnectionDescriptor
 from arden.tools.connections import (
+    ConnectionRequestInput,
     ConnectionService,
-    RequestConnectionInput,
+    connection_request,
     render_connection_catalog,
-    request_connection,
 )
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -76,9 +76,9 @@ async def test_request_connection_rejects_unknown_integration_without_prompting(
     service = ConnectionService(_Registry([_descriptor()]))  # type: ignore[arg-type]
     execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=_Context(service))  # type: ignore[arg-type]
 
-    result = await request_connection(
+    result = await connection_request(
         execution,
-        RequestConnectionInput(integration_id="notion", reason="Need project data"),
+        ConnectionRequestInput(integration_id="notion", reason="Need project data"),
     )
 
     assert result.is_error
@@ -92,9 +92,9 @@ async def test_request_connection_rejects_already_connected_integration_without_
     service = ConnectionService(_Registry([_descriptor(state="connected")]))  # type: ignore[arg-type]
     execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=_Context(service))  # type: ignore[arg-type]
 
-    result = await request_connection(
+    result = await connection_request(
         execution,
-        RequestConnectionInput(integration_id="gmail", reason="Need email"),
+        ConnectionRequestInput(integration_id="gmail", reason="Need email"),
     )
 
     assert result.is_error
@@ -126,9 +126,9 @@ async def test_accepted_connection_exposes_registered_tools_to_the_current_run()
     )
     execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=ctx)
     task = asyncio.create_task(
-        request_connection(
+        connection_request(
             execution,
-            RequestConnectionInput(integration_id="gmail", reason="Need email"),
+            ConnectionRequestInput(integration_id="gmail", reason="Need email"),
         )
     )
     for _ in range(20):

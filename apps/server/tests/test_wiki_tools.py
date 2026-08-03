@@ -15,22 +15,22 @@ from arden.services.session import SessionService
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.wiki import (
-    ArchiveWikiPageInput,
-    CreateWikiPageInput,
-    EditWikiPageInput,
-    MoveWikiPageInput,
-    PublishWikiGeneratedInput,
-    ReadWikiPageInput,
+    WikiArchivePageInput,
+    WikiCreatePageInput,
+    WikiEditPageInput,
     WikiLinksInput,
-    archive_wiki_page_tool,
-    create_wiki_page_tool,
-    edit_wiki_page_tool,
-    list_wiki_changes_tool,
-    list_wiki_pages_tool,
-    move_wiki_page_tool,
-    publish_wiki_generated_tool,
-    read_wiki_page_tool,
+    WikiMovePageInput,
+    WikiPublishGeneratedInput,
+    WikiReadPageInput,
+    wiki_archive_page_tool,
+    wiki_create_page_tool,
+    wiki_edit_page_tool,
     wiki_links_tool,
+    wiki_list_changes_tool,
+    wiki_list_pages_tool,
+    wiki_move_page_tool,
+    wiki_publish_generated_tool,
+    wiki_read_page_tool,
 )
 from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE
 from arden.wiki.models import GeneratedPageTarget
@@ -127,7 +127,7 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
         base_head=wiki.repository.head,
     )
 
-    root = await list_wiki_pages_tool.execute(run)
+    root = await wiki_list_pages_tool.execute(run)
     assert root.data == {
         "directory": "",
         "offset": 0,
@@ -140,7 +140,7 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
         "next_offset": None,
     }
 
-    topics = await list_wiki_pages_tool.execute(run, directory="topics")
+    topics = await wiki_list_pages_tool.execute(run, directory="topics")
     assert [(entry["kind"], entry["path"], entry.get("title")) for entry in topics.data["entries"]] == [
         ("directory", "topics/labs/", None),
         ("page", "topics/README.md", "Topics README"),
@@ -149,11 +149,11 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
     ]
     assert "topics/README.md" in topics.content and "retired.md" not in topics.content
 
-    capped = await list_wiki_pages_tool.execute(run, directory="topics", limit=1)
+    capped = await wiki_list_pages_tool.execute(run, directory="topics", limit=1)
     assert capped.data["has_more"] is True
     assert len(capped.data["entries"]) == 1
     assert capped.data["next_offset"] == 1
-    continued = await list_wiki_pages_tool.execute(
+    continued = await wiki_list_pages_tool.execute(
         run,
         directory="topics",
         offset=capped.data["next_offset"],
@@ -163,12 +163,12 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
     assert continued.data["next_offset"] == 2
 
     for directory in (".", "./topics", "topics/.", "../topics", "topics//labs", "/topics", r"topics\labs"):
-        invalid = await list_wiki_pages_tool.execute(run, directory=directory)
+        invalid = await wiki_list_pages_tool.execute(run, directory=directory)
         assert invalid.is_error
         assert invalid.outcome is not None and invalid.outcome.error is not None
         assert invalid.outcome.error.code == "invalid_directory"
 
-    missing = await list_wiki_pages_tool.execute(run, directory="missing")
+    missing = await wiki_list_pages_tool.execute(run, directory="missing")
     assert missing.is_error
     assert missing.outcome is not None and missing.outcome.error is not None
     assert missing.outcome.error.code == "not_found"
@@ -177,7 +177,7 @@ async def test_list_wiki_pages_replaces_folder_index_pages(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_list_wiki_changes_reports_paths_and_reasons_without_revision_ids(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
-    result = await list_wiki_changes_tool.execute(
+    result = await wiki_list_changes_tool.execute(
         _execution(wiki),
         since=datetime.now(UTC) - timedelta(minutes=1),
     )
@@ -187,7 +187,7 @@ async def test_list_wiki_changes_reports_paths_and_reasons_without_revision_ids(
     assert all(entry["reason"] == "seed" for entry in result.data["entries"])
     assert "commit_id" not in json.dumps(result.serialized_payload())
 
-    empty = await list_wiki_changes_tool.execute(
+    empty = await wiki_list_changes_tool.execute(
         _execution(wiki),
         since=datetime.now(UTC) + timedelta(minutes=1),
     )
@@ -199,7 +199,7 @@ async def test_list_wiki_pages_reports_byte_budget_truncation(tmp_path: Path, mo
     wiki = _wiki(tmp_path)
     monkeypatch.setattr(wiki_tools, "_MAX_LIST_DATA_BYTES", 1)
 
-    result = await list_wiki_pages_tool.execute(_execution(wiki), directory="topics")
+    result = await wiki_list_pages_tool.execute(_execution(wiki), directory="topics")
 
     assert result.data["entries"] == []
     assert result.data["total"] == 3
@@ -226,16 +226,16 @@ async def test_list_wiki_pages_continues_after_byte_budget_page(tmp_path: Path, 
         + 1,
     )
 
-    first_page = await list_wiki_pages_tool.execute(_execution(wiki), directory="topics")
+    first_page = await wiki_list_pages_tool.execute(_execution(wiki), directory="topics")
 
     assert [entry["path"] for entry in first_page.data["entries"]] == ["topics/README.md"]
     assert first_page.data["next_offset"] == 1
-    second_page = await list_wiki_pages_tool.execute(
+    second_page = await wiki_list_pages_tool.execute(
         _execution(wiki), directory="topics", offset=first_page.data["next_offset"]
     )
     assert [entry["path"] for entry in second_page.data["entries"]] == ["topics/interaction-lab.md"]
     assert second_page.data["next_offset"] == 2
-    third_page = await list_wiki_pages_tool.execute(
+    third_page = await wiki_list_pages_tool.execute(
         _execution(wiki),
         directory="topics",
         offset=second_page.data["next_offset"],
@@ -250,7 +250,7 @@ async def test_read_wiki_page_uses_paths_without_exposing_storage_ids(tmp_path: 
     wiki = _wiki(tmp_path)
     run = _execution(wiki)
 
-    result = await read_wiki_page_tool.execute(run, path="topics/interaction-lab.md", limit=2)
+    result = await wiki_read_page_tool.execute(run, path="topics/interaction-lab.md", limit=2)
 
     assert not result.is_error
     assert "[" in result.content and "lines" in result.content
@@ -284,11 +284,11 @@ async def test_read_wiki_page_bounds_content_and_reports_missing_or_ambiguous_re
     )
     run = _execution(wiki)
 
-    bounded = await read_wiki_page_tool.execute(run, path="topics/long.md", limit=100)
+    bounded = await wiki_read_page_tool.execute(run, path="topics/long.md", limit=100)
     assert len(bounded.content) <= 40_000
     assert bounded.data["content_truncated"] is True
 
-    missing = await read_wiki_page_tool.execute(run, path="topics/unknown.md")
+    missing = await wiki_read_page_tool.execute(run, path="topics/unknown.md")
     assert missing.is_error
     assert missing.outcome is not None and missing.outcome.error is not None
     assert missing.outcome.error.code == "not_found"
@@ -297,14 +297,14 @@ async def test_read_wiki_page_bounds_content_and_reports_missing_or_ambiguous_re
         raise WikiAmbiguityError("ambiguous wiki name 'lab': a, b")
 
     monkeypatch.setattr(wiki, "snapshot", ambiguous_snapshot)
-    ambiguous = await read_wiki_page_tool.execute(run, path="topics/interaction-lab.md")
+    ambiguous = await wiki_read_page_tool.execute(run, path="topics/interaction-lab.md")
     assert ambiguous.is_error
     assert ambiguous.outcome is not None and ambiguous.outcome.error is not None
     assert ambiguous.outcome.error.code == "ambiguous_ref"
     assert "a, b" not in ambiguous.serialized_payload()
 
     with pytest.raises(ValidationError, match="Extra inputs"):
-        ReadWikiPageInput(path="topics/interaction-lab.md", page_id="interaction-lab")
+        WikiReadPageInput(path="topics/interaction-lab.md", page_id="interaction-lab")
 
 
 @pytest.mark.asyncio
@@ -371,10 +371,10 @@ async def test_wiki_edits_require_a_full_fresh_read(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
     execution = _execution(wiki)
 
-    partial = await read_wiki_page_tool.execute(execution, path="topics/interaction-lab.md", limit=1)
+    partial = await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md", limit=1)
     assert not partial.is_error
 
-    result = await edit_wiki_page_tool.execute(execution, path="topics/interaction-lab.md", body="Replacement.\n")
+    result = await wiki_edit_page_tool.execute(execution, path="topics/interaction-lab.md", body="Replacement.\n")
     assert result.outcome.error.code == "fresh_read_required"
 
 
@@ -382,15 +382,15 @@ async def test_wiki_edits_require_a_full_fresh_read(tmp_path: Path) -> None:
 async def test_listing_or_links_do_not_authorize_a_page_mutation(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
     execution = _execution(wiki, session=SessionService(_AreaStore()))
-    await list_wiki_pages_tool.execute(execution, directory="topics")
+    await wiki_list_pages_tool.execute(execution, directory="topics")
     await wiki_links_tool.execute(execution, path="topics/interaction-lab.md")
 
-    archived = await archive_wiki_page_tool.execute(
+    archived = await wiki_archive_page_tool.execute(
         execution,
         path="topics/interaction-lab.md",
         reason="should require the page",
     )
-    moved = await move_wiki_page_tool.execute(
+    moved = await wiki_move_page_tool.execute(
         execution,
         path="topics/interaction-lab.md",
         new_path="topics/moved.md",
@@ -404,10 +404,10 @@ async def test_listing_or_links_do_not_authorize_a_page_mutation(tmp_path: Path)
 async def test_wiki_edit_ignores_unrelated_commits_after_the_read(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
     execution = _execution(wiki)
-    await read_wiki_page_tool.execute(execution, path="topics/interaction-lab.md")
+    await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
     wiki.create_page(path="topics/unrelated.md", title="Unrelated")
 
-    result = await edit_wiki_page_tool.execute(
+    result = await wiki_edit_page_tool.execute(
         execution,
         path="topics/interaction-lab.md",
         body="Updated after an unrelated commit.\n",
@@ -423,8 +423,8 @@ async def test_wiki_edit_rejects_a_read_that_will_be_offloaded(tmp_path: Path) -
     wiki.create_page(page_id="large-page", path="topics/large.md", title="Large", body=("😀" * 20_000).encode())
     execution = _execution(wiki)
 
-    read = await read_wiki_page_tool.execute(execution, path="topics/large.md")
-    result = await edit_wiki_page_tool.execute(execution, path="topics/large.md", body="Replacement.\n")
+    read = await wiki_read_page_tool.execute(execution, path="topics/large.md")
+    result = await wiki_edit_page_tool.execute(execution, path="topics/large.md", body="Replacement.\n")
 
     assert read.data["content_truncated"] is False
     assert result.outcome.error.code == "fresh_read_required"
@@ -443,13 +443,13 @@ def test_wiki_agent_schemas_never_expose_storage_ids_or_hashes() -> None:
         "blob_id",
     }
     for input_model in (
-        ReadWikiPageInput,
+        WikiReadPageInput,
         WikiLinksInput,
-        CreateWikiPageInput,
-        EditWikiPageInput,
-        ArchiveWikiPageInput,
-        MoveWikiPageInput,
-        PublishWikiGeneratedInput,
+        WikiCreatePageInput,
+        WikiEditPageInput,
+        WikiArchivePageInput,
+        WikiMovePageInput,
+        WikiPublishGeneratedInput,
     ):
         assert not (set(input_model.model_fields) & forbidden)
 
@@ -467,10 +467,10 @@ async def test_wiki_results_never_expose_internal_page_or_revision_ids(tmp_path:
     observed_head = wiki.repository.head
     execution = _execution(wiki)
 
-    listing = await list_wiki_pages_tool.execute(execution, directory="topics")
-    read = await read_wiki_page_tool.execute(execution, path="topics/public.md")
+    listing = await wiki_list_pages_tool.execute(execution, directory="topics")
+    read = await wiki_read_page_tool.execute(execution, path="topics/public.md")
     links = await wiki_links_tool.execute(execution, path="topics/public.md")
-    edited = await edit_wiki_page_tool.execute(execution, path="topics/public.md", body="Updated.\n")
+    edited = await wiki_edit_page_tool.execute(execution, path="topics/public.md", body="Updated.\n")
 
     internal_values = {
         internal_id,
@@ -495,8 +495,8 @@ async def test_create_wiki_page_creates_directory_readmes_with_the_first_child(t
         "body": "Digest.\n",
     }
 
-    created = await create_wiki_page_tool.execute(execution, **child)
-    replayed = await create_wiki_page_tool.execute(execution, **child)
+    created = await wiki_create_page_tool.execute(execution, **child)
+    replayed = await wiki_create_page_tool.execute(execution, **child)
 
     assert not created.is_error
     assert created.data["changed"] is True
@@ -531,7 +531,7 @@ async def test_create_wiki_page_creates_directory_readmes_with_the_first_child(t
         expected_version=coast_readme.resource.version_id,
         base_head=wiki.repository.head,
     )
-    restored = await create_wiki_page_tool.execute(
+    restored = await wiki_create_page_tool.execute(
         _execution(wiki),
         path="automations/coast/2026-07-31.md",
         title="Coast digest 2026-07-31",
@@ -546,9 +546,9 @@ async def test_create_wiki_page_creates_directory_readmes_with_the_first_child(t
 async def test_move_wiki_page_reports_a_new_destination_contract(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
     execution = _execution(wiki, session=SessionService(_AreaStore()))
-    await read_wiki_page_tool.execute(execution, path="topics/interaction-lab.md")
+    await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
 
-    moved = await move_wiki_page_tool.execute(
+    moved = await wiki_move_page_tool.execute(
         execution,
         path="topics/interaction-lab.md",
         new_path="archives/research/interaction-lab.md",
@@ -577,27 +577,27 @@ async def test_agent_wiki_writes_are_cas_safe_and_semantically_idempotent(tmp_pa
         "body": "# 2026-07-29\n\nInitial.\n",
     }
 
-    created = await create_wiki_page_tool.execute(execution, **create_args)
+    created = await wiki_create_page_tool.execute(execution, **create_args)
     assert not created.is_error
     assert created.data["changed"] is True
     assert created.data["page"]["path"] == "daily/2026-07-29.md"
 
-    replayed = await create_wiki_page_tool.execute(execution, **create_args)
+    replayed = await wiki_create_page_tool.execute(execution, **create_args)
     assert not replayed.is_error
     assert replayed.data["changed"] is False
 
-    conflict = await create_wiki_page_tool.execute(execution, **{**create_args, "body": "Different.\n"})
+    conflict = await wiki_create_page_tool.execute(execution, **{**create_args, "body": "Different.\n"})
     assert conflict.is_error
     assert conflict.outcome.error.code == "name_conflict"
 
-    shared_title = await create_wiki_page_tool.execute(
+    shared_title = await wiki_create_page_tool.execute(
         execution,
         **{**create_args, "path": "daily/2026-07-29-copy.md"},
     )
     assert not shared_title.is_error
     assert shared_title.data["changed"] is True
 
-    missing = await edit_wiki_page_tool.execute(
+    missing = await wiki_edit_page_tool.execute(
         execution,
         path="daily/missing.md",
         body="No.",
@@ -611,16 +611,16 @@ async def test_agent_wiki_writes_are_cas_safe_and_semantically_idempotent(tmp_pa
         "body": "# 2026-07-29\n\nUpdated.\n",
     }
     edit_execution = _execution(wiki)
-    unread = await edit_wiki_page_tool.execute(edit_execution, **edit_args)
+    unread = await wiki_edit_page_tool.execute(edit_execution, **edit_args)
     assert unread.outcome.error.code == "fresh_read_required"
-    await read_wiki_page_tool.execute(edit_execution, path="daily/2026-07-29.md")
-    edited = await edit_wiki_page_tool.execute(edit_execution, **edit_args)
+    await wiki_read_page_tool.execute(edit_execution, path="daily/2026-07-29.md")
+    edited = await wiki_edit_page_tool.execute(edit_execution, **edit_args)
     assert not edited.is_error
     assert edited.data["changed"] is True
     current = next(record for record in wiki.snapshot().pages if record.resource.path == "daily/2026-07-29.md")
     assert current.page.body == edit_args["body"].encode()
 
-    replayed_edit = await edit_wiki_page_tool.execute(edit_execution, **edit_args)
+    replayed_edit = await wiki_edit_page_tool.execute(edit_execution, **edit_args)
     assert not replayed_edit.is_error
     assert replayed_edit.data["changed"] is False
 
@@ -631,22 +631,22 @@ async def test_agent_wiki_writes_are_cas_safe_and_semantically_idempotent(tmp_pa
         expected_version=current.resource.version_id,
         expected_head=wiki.repository.head,
     )
-    stale_edit = await edit_wiki_page_tool.execute(edit_execution, **{**edit_args, "body": "Stale overwrite.\n"})
+    stale_edit = await wiki_edit_page_tool.execute(edit_execution, **{**edit_args, "body": "Stale overwrite.\n"})
     assert stale_edit.is_error
     assert stale_edit.outcome.error.code == "revision_conflict"
 
-    await read_wiki_page_tool.execute(edit_execution, path="daily/2026-07-29.md")
+    await wiki_read_page_tool.execute(edit_execution, path="daily/2026-07-29.md")
     wiki.create_page(path="topics/unrelated-before-archive.md", title="Unrelated before archive")
     archive_args = {
         "path": "daily/2026-07-29.md",
         "reason": "retention window elapsed",
     }
-    archived = await archive_wiki_page_tool.execute(edit_execution, **archive_args)
+    archived = await wiki_archive_page_tool.execute(edit_execution, **archive_args)
     assert not archived.is_error
     assert archived.data["changed"] is True
     assert archived.data["page"]["lifecycle"] == "archived"
 
-    replayed_archive = await archive_wiki_page_tool.execute(edit_execution, **archive_args)
+    replayed_archive = await wiki_archive_page_tool.execute(edit_execution, **archive_args)
     assert not replayed_archive.is_error
     assert replayed_archive.data["changed"] is False
 
@@ -667,7 +667,7 @@ async def test_wiki_write_results_return_head_after_projection(tmp_path: Path) -
         )
         return False
 
-    created = await create_wiki_page_tool.execute(
+    created = await wiki_create_page_tool.execute(
         _execution(wiki, post_commit=project_wiki),
         path="automations/result.md",
         title="Automation result",
@@ -693,9 +693,9 @@ async def test_wiki_write_results_return_head_after_projection(tmp_path: Path) -
         origin="wiki.automation.producer",
     )
     producer_execution = _execution(wiki, automation_id="producer", post_commit=project_wiki)
-    await read_wiki_page_tool.execute(producer_execution, path="automations/generated.md")
+    await wiki_read_page_tool.execute(producer_execution, path="automations/generated.md")
     wiki.create_page(path="topics/unrelated-before-publish.md", title="Unrelated before publish")
-    published = await publish_wiki_generated_tool.execute(
+    published = await wiki_publish_generated_tool.execute(
         producer_execution,
         path="automations/generated.md",
         generated="New.",
@@ -710,7 +710,7 @@ async def test_scheduled_automation_writes_stay_in_automation_workspace(tmp_path
     automation = _execution(wiki, automation_id="daily-digest")
     original_head = wiki.repository.head
 
-    denied = await create_wiki_page_tool.execute(
+    denied = await wiki_create_page_tool.execute(
         automation,
         path="daily/outside.md",
         title="Outside",
@@ -721,7 +721,7 @@ async def test_scheduled_automation_writes_stay_in_automation_workspace(tmp_path
     assert wiki.repository.head == original_head
 
     for path in ("automations-old/outside.md", "automations/../topics/outside.md", r"automations\outside.md"):
-        invalid = await create_wiki_page_tool.execute(
+        invalid = await wiki_create_page_tool.execute(
             automation,
             path=path,
             title=f"Invalid {path}",
@@ -730,14 +730,14 @@ async def test_scheduled_automation_writes_stay_in_automation_workspace(tmp_path
         assert invalid.is_error
         assert wiki.repository.head == original_head
 
-    created = await create_wiki_page_tool.execute(
+    created = await wiki_create_page_tool.execute(
         automation,
         path="automations/daily-digest.md",
         title="Daily digest",
         body="First.\n",
     )
     assert not created.is_error
-    denied_edit = await edit_wiki_page_tool.execute(
+    denied_edit = await wiki_edit_page_tool.execute(
         automation,
         path="topics/interaction-lab.md",
         body="No.",
@@ -745,15 +745,15 @@ async def test_scheduled_automation_writes_stay_in_automation_workspace(tmp_path
     assert denied_edit.is_error
     assert denied_edit.outcome.error.code == "automation_path_denied"
 
-    await read_wiki_page_tool.execute(automation, path="automations/daily-digest.md")
-    edited = await edit_wiki_page_tool.execute(
+    await wiki_read_page_tool.execute(automation, path="automations/daily-digest.md")
+    edited = await wiki_edit_page_tool.execute(
         automation,
         path="automations/daily-digest.md",
         body="Second.\n",
     )
     assert not edited.is_error
 
-    archived = await archive_wiki_page_tool.execute(
+    archived = await wiki_archive_page_tool.execute(
         automation,
         path="automations/daily-digest.md",
         reason="replace rolling result",
@@ -766,7 +766,7 @@ async def test_daily_notes_automation_writes_only_dated_daily_pages(tmp_path: Pa
     wiki = _wiki(tmp_path)
     automation = _execution(wiki, automation_id=DAILY_NOTES_AUTOMATION_ID)
 
-    created = await create_wiki_page_tool.execute(
+    created = await wiki_create_page_tool.execute(
         automation,
         path="daily/2026-07-31.md",
         title="2026-07-31",
@@ -774,8 +774,8 @@ async def test_daily_notes_automation_writes_only_dated_daily_pages(tmp_path: Pa
     )
     assert not created.is_error
 
-    await read_wiki_page_tool.execute(automation, path="daily/2026-07-31.md")
-    edited = await edit_wiki_page_tool.execute(
+    await wiki_read_page_tool.execute(automation, path="daily/2026-07-31.md")
+    edited = await wiki_edit_page_tool.execute(
         automation,
         path="daily/2026-07-31.md",
         body="An updated dated note.\n",
@@ -790,7 +790,7 @@ async def test_daily_notes_automation_writes_only_dated_daily_pages(tmp_path: Pa
         "active-work.md",
         "automations/daily-notes.md",
     ):
-        denied = await create_wiki_page_tool.execute(
+        denied = await wiki_create_page_tool.execute(
             automation,
             path=path,
             title="Denied",
@@ -806,7 +806,7 @@ async def test_agent_wiki_writes_preserve_backend_and_producer_boundaries(tmp_pa
     interactive = _execution(wiki)
     automation = _execution(wiki, automation_id="owner")
 
-    health = await create_wiki_page_tool.execute(
+    health = await wiki_create_page_tool.execute(
         interactive,
         path="health.md",
         title="Health",
@@ -824,7 +824,7 @@ async def test_agent_wiki_writes_preserve_backend_and_producer_boundaries(tmp_pa
         metadata={"producer_automation_id": "owner"},
         expected_head=wiki.repository.head,
     )
-    edit = await edit_wiki_page_tool.execute(
+    edit = await wiki_edit_page_tool.execute(
         automation,
         path="automations/producer.md",
         body="Overwrite.",
@@ -832,7 +832,7 @@ async def test_agent_wiki_writes_preserve_backend_and_producer_boundaries(tmp_pa
     assert edit.is_error
     assert edit.outcome.error.code == "producer_page_requires_generated_publish"
 
-    archive = await archive_wiki_page_tool.execute(
+    archive = await wiki_archive_page_tool.execute(
         automation,
         path="automations/producer.md",
         reason="No.",
@@ -870,8 +870,8 @@ async def test_registered_feed_producer_updates_only_its_generated_region(tmp_pa
     )
 
     producer_execution = _execution(wiki, automation_id=producer_id)
-    await read_wiki_page_tool.execute(producer_execution, path="automations/email-updates.md")
-    result = await publish_wiki_generated_tool.execute(
+    await wiki_read_page_tool.execute(producer_execution, path="automations/email-updates.md")
+    result = await wiki_publish_generated_tool.execute(
         producer_execution,
         path="automations/email-updates.md",
         generated="# Email Updates\n\nNew briefing.",
@@ -891,8 +891,8 @@ async def test_registered_feed_producer_updates_only_its_generated_region(tmp_pa
     assert "invalid_generated_from_revision" not in {warning.code for warning in wiki.changes_since(None).warnings}
 
     unchanged_execution = _execution(wiki, automation_id=producer_id)
-    await read_wiki_page_tool.execute(unchanged_execution, path="automations/email-updates.md")
-    unchanged = await publish_wiki_generated_tool.execute(
+    await wiki_read_page_tool.execute(unchanged_execution, path="automations/email-updates.md")
+    unchanged = await wiki_publish_generated_tool.execute(
         unchanged_execution,
         path="automations/email-updates.md",
         generated="# Email Updates\n\nNew briefing.\n",
@@ -905,7 +905,7 @@ async def test_registered_feed_producer_updates_only_its_generated_region(tmp_pa
 @pytest.mark.asyncio
 async def test_generated_publisher_rejects_nonproducer_and_stale_pages(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
-    rejected = await publish_wiki_generated_tool.execute(
+    rejected = await wiki_publish_generated_tool.execute(
         _execution(wiki),
         path="topics/interaction-lab.md",
         generated="Wrong owner.",
@@ -921,14 +921,14 @@ async def test_generated_publisher_rejects_nonproducer_and_stale_pages(tmp_path:
         metadata={"producer_automation_id": "feed-worker"},
     )
     stale_execution = _execution(wiki, automation_id="feed-worker")
-    await read_wiki_page_tool.execute(stale_execution, path="automations/current.md")
+    await wiki_read_page_tool.execute(stale_execution, path="automations/current.md")
     wiki.update_page(
         feed.page.page_id,
         content=feed.content + b"Changed.\n",
         expected_version=feed.resource.version_id,
         expected_head=wiki.repository.head,
     )
-    stale = await publish_wiki_generated_tool.execute(
+    stale = await wiki_publish_generated_tool.execute(
         stale_execution,
         path="automations/current.md",
         generated="Current.",
@@ -947,7 +947,7 @@ async def test_generated_publisher_requires_the_registered_automation_owner(tmp_
         metadata={"producer_automation_id": "owner"},
     )
 
-    no_automation = await publish_wiki_generated_tool.execute(
+    no_automation = await wiki_publish_generated_tool.execute(
         _execution(wiki),
         path="automations/current.md",
         generated="Current.",
@@ -956,7 +956,7 @@ async def test_generated_publisher_requires_the_registered_automation_owner(tmp_
     assert no_automation.outcome.error.code == "automation_required"
     assert no_automation.outcome.error.recovery_action is not None
 
-    wrong_owner = await publish_wiki_generated_tool.execute(
+    wrong_owner = await wiki_publish_generated_tool.execute(
         _execution(wiki, automation_id="intruder"),
         path="automations/current.md",
         generated="Current.",
@@ -970,7 +970,7 @@ async def test_generated_publisher_requires_the_registered_automation_owner(tmp_
 async def test_generated_publisher_exposes_an_exact_approval_preview(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
 
-    approval = await publish_wiki_generated_tool.approval_info(
+    approval = await wiki_publish_generated_tool.approval_info(
         _execution(wiki, automation_id="owner"),
         path="automations/current.md",
         generated="New generated content.",
@@ -986,8 +986,8 @@ async def test_generated_publisher_exposes_an_exact_approval_preview(tmp_path: P
 async def test_wiki_tools_require_the_wiki_capability(tmp_path: Path) -> None:
     del tmp_path
     execution = _execution(None)
-    result = await read_wiki_page_tool.execute(execution, path="missing.md")
-    listing = await list_wiki_pages_tool.execute(execution)
+    result = await wiki_read_page_tool.execute(execution, path="missing.md")
+    listing = await wiki_list_pages_tool.execute(execution)
 
     assert result.is_error
     assert listing.is_error
@@ -1000,10 +1000,10 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     wiki = _wiki(tmp_path)
     session = SessionService(_AreaStore())
     execution = _execution(wiki, session=session)
-    await read_wiki_page_tool.execute(execution, path="topics/interaction-lab.md")
+    await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
     wiki.create_page(path="topics/unrelated-before-move.md", title="Unrelated before move")
 
-    moved = await move_wiki_page_tool.execute(
+    moved = await wiki_move_page_tool.execute(
         execution,
         path="topics/interaction-lab.md",
         new_path="topics/renamed-location.md",
@@ -1015,7 +1015,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     assert b"[[topics/renamed-location]]" in wiki.read_page("peer").content
     assert all(page.page.lifecycle != "redirect" for page in wiki.list_pages(include_redirects=True))
 
-    exact_replay = await move_wiki_page_tool.execute(
+    exact_replay = await wiki_move_page_tool.execute(
         execution,
         path="topics/interaction-lab.md",
         new_path="topics/renamed-location.md",
@@ -1024,7 +1024,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     assert exact_replay.data["changed"] is False
     assert exact_replay.content == "topics/interaction-lab.md was already moved to topics/renamed-location.md."
 
-    replayed = await move_wiki_page_tool.execute(
+    replayed = await wiki_move_page_tool.execute(
         execution,
         path="topics/renamed-location.md",
         new_path="topics/renamed-location.md",
@@ -1032,7 +1032,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     assert replayed.data["changed"] is False
 
     automation = _execution(wiki, automation_id="daily", session=session)
-    denied = await move_wiki_page_tool.execute(
+    denied = await wiki_move_page_tool.execute(
         automation,
         path="topics/renamed-location.md",
         new_path="automations/daily.md",
@@ -1046,7 +1046,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
         page_id="daily-output",
         expected_head=wiki.repository.head,
     )
-    destination_denied = await move_wiki_page_tool.execute(
+    destination_denied = await wiki_move_page_tool.execute(
         automation,
         path="automations/daily.md",
         new_path="topics/daily.md",
@@ -1054,7 +1054,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     assert destination_denied.outcome is not None and destination_denied.outcome.error is not None
     assert destination_denied.outcome.error.code == "automation_path_denied"
 
-    await read_wiki_page_tool.execute(execution, path="topics/renamed-location.md")
+    await wiki_read_page_tool.execute(execution, path="topics/renamed-location.md")
     current = wiki.read_page("interaction-lab")
     wiki.update_page(
         current.page.page_id,
@@ -1062,7 +1062,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
         expected_version=current.resource.version_id,
         expected_head=wiki.repository.head,
     )
-    stale = await move_wiki_page_tool.execute(
+    stale = await wiki_move_page_tool.execute(
         execution,
         path="topics/renamed-location.md",
         new_path="topics/stale.md",
@@ -1071,7 +1071,7 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
     assert stale.outcome.error.code == "revision_conflict"
 
     bound = _execution(wiki, session=SessionService(_AreaStore({"name": "Research"})))
-    blocked = await move_wiki_page_tool.execute(
+    blocked = await wiki_move_page_tool.execute(
         bound,
         path="topics/renamed-location.md",
         new_path="topics/blocked.md",
@@ -1108,8 +1108,8 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
         )
     } == {frozenset({"wiki", WIKI_POST_COMMIT_SERVICE})}
     assert WIKI.tools["wiki_move_page"].policy.permissions == frozenset({"wiki", WIKI_POST_COMMIT_SERVICE, "session"})
-    assert create_wiki_page_tool.policy.idempotent is True
-    assert edit_wiki_page_tool.policy.idempotent is True
-    assert archive_wiki_page_tool.policy.idempotent is True
-    assert move_wiki_page_tool.policy.idempotent is True
-    assert publish_wiki_generated_tool.policy.idempotent is False
+    assert wiki_create_page_tool.policy.idempotent is True
+    assert wiki_edit_page_tool.policy.idempotent is True
+    assert wiki_archive_page_tool.policy.idempotent is True
+    assert wiki_move_page_tool.policy.idempotent is True
+    assert wiki_publish_generated_tool.policy.idempotent is False
