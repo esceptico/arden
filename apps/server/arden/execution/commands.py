@@ -97,6 +97,7 @@ class ExecutorCommandLog:
         )
         await self._conn.commit()
 
+
 def _command_from_row(row: aiosqlite.Row) -> ExecutorCommand:
     return ExecutorCommand(
         seq=row["seq"],
