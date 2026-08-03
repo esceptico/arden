@@ -333,6 +333,11 @@ restart pending for live activation:
 Remaining follow-ups:
 - [ ] Live smoke after server restart (chat loads session group on demand;
       wiki task never sees session_create; desktop labels/icons on :5175)
-- [ ] Optional: rename internal Python identifiers (read_session fn, *_tool vars)
-      to match new tool names — skipped to keep the diff reviewable
+- [x] Internal Python identifiers renamed (bea89e0b): tool fns, approve_* handlers,
+      *_tool vars, Input classes, wiki constants — tokenize pass (NAME tokens only,
+      dot-attribute-safe, per-name blacklists). Same-named NON-tool symbols kept:
+      routers, store/service methods, gmail client, revisions read_file,
+      ToolExecution.request_connection. Traps found: test fixture methods mimicking
+      service interfaces (get_goal fakes), dataclass field + attr-access mismatch
+      (OperatorDeps.create_session), module-attr test refs, quoted annotations.
 - [x] Committed: 08b37ac8 (rename + deferral flag), 3268ee05 (prompt enumerations)
