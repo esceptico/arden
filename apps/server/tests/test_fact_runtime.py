@@ -1168,7 +1168,7 @@ async def _seed_chat_transcript(runtime: Runtime, session_id: str, turns: list[t
     for seq, role, text in turns:
         await store.conn.execute(
             """
-            INSERT INTO session_messages (session_id, message_id, seq, role, message_json, created_at, file_search_text)
+            INSERT INTO session_messages (session_id, message_id, seq, role, message_json, created_at, search_text)
             VALUES (?, ?, ?, ?, '{}', ?, ?)
             """,
             (session_id, f"msg-{seq}", seq, role, MIGRATED_AT.isoformat(), text),

@@ -18,3 +18,16 @@ sibling surface's pattern) and compose from those. Hand-rolling a raw element
 + bespoke CSS when a primitive exists is a defect even if it "works".
 Canonical miss: the full-width "Add trigger" slab vs the app's circle Plus
 IconButton idiom.
+
+## 2026-08-03 — Rename codemods must treat SQL as a separate namespace
+A tool-name string codemod (`search_text` → `file_search_text`) also rewrote a
+SQLite COLUMN with the same name in context/store.py. Every test stayed green —
+fresh test DBs are self-consistent under any spelling — but the live DB kept the
+old column and boot half-migrated it (stray column added, good triggers dropped,
+bad triggers created), killing every message write.
+Rules: (1) before applying a rename map to string literals, grep the map's words
+inside CREATE TABLE/INSERT/UPDATE/PRAGMA strings and exclude those files or
+words; (2) schema-touching renames are only proven by booting against a COPY of
+a real ~/.arden database, never by the test suite alone; (3) when a bad build
+may have mutated user schemas, ship the migration that detects and heals that
+exact damage (see test_migration_heals_stray_file_search_text_column).
