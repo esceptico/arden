@@ -28,7 +28,7 @@ def _descriptor(
         action="oauth",
         settings_tab="integrations",
         state=state,  # type: ignore[arg-type]
-        tool_names=("emails", "read_email", "send_email"),
+        tool_names=("emails", "email_read", "email_send"),
     )
 
 
@@ -74,7 +74,7 @@ class _Context:
 @pytest.mark.asyncio
 async def test_request_connection_rejects_unknown_integration_without_prompting():
     service = ConnectionService(_Registry([_descriptor()]))  # type: ignore[arg-type]
-    execution = ToolExecution(tool_id="call-1", tool_name="request_connection", ctx=_Context(service))  # type: ignore[arg-type]
+    execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=_Context(service))  # type: ignore[arg-type]
 
     result = await request_connection(
         execution,
@@ -90,7 +90,7 @@ async def test_request_connection_rejects_unknown_integration_without_prompting(
 @pytest.mark.asyncio
 async def test_request_connection_rejects_already_connected_integration_without_prompting():
     service = ConnectionService(_Registry([_descriptor(state="connected")]))  # type: ignore[arg-type]
-    execution = ToolExecution(tool_id="call-1", tool_name="request_connection", ctx=_Context(service))  # type: ignore[arg-type]
+    execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=_Context(service))  # type: ignore[arg-type]
 
     result = await request_connection(
         execution,
@@ -114,7 +114,7 @@ async def test_accepted_connection_exposes_registered_tools_to_the_current_run()
     run = RunContext(
         run_id="run-1",
         deferred_tools_enabled=True,
-        allowed_tool_names={"request_connection"},
+        allowed_tool_names={"connection_request"},
     )
     ctx = ToolContext(
         session_state=SessionState(session_id="session-1", started_at=datetime.now(UTC)),
@@ -124,7 +124,7 @@ async def test_accepted_connection_exposes_registered_tools_to_the_current_run()
         services={"connections": service},
         background_tasks=BackgroundTaskRegistry(session_id="session-1"),
     )
-    execution = ToolExecution(tool_id="call-1", tool_name="request_connection", ctx=ctx)
+    execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=ctx)
     task = asyncio.create_task(
         request_connection(
             execution,
@@ -140,5 +140,5 @@ async def test_accepted_connection_exposes_registered_tools_to_the_current_run()
     result = await task
 
     assert not result.is_error
-    assert run.allowed_tool_names == {"request_connection", "emails", "read_email", "send_email"}
-    assert run.loaded_tools == {"emails", "read_email", "send_email"}
+    assert run.allowed_tool_names == {"connection_request", "emails", "email_read", "email_send"}
+    assert run.loaded_tools == {"emails", "email_read", "email_send"}

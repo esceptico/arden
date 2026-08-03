@@ -133,6 +133,7 @@ create_skill_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"skill_service"}),
+        deferred=True,
     ),
     approval=approve_create_skill,
     execute=create_skill,

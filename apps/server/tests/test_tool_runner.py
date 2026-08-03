@@ -47,8 +47,8 @@ def _make_call(call_id: str, name: str) -> PendingToolCall:
 async def test_runner_executes_mutating_and_non_mutating_in_one_batch():
     """All tools should start in parallel — no second phase for mutating."""
     metas = {
-        "read_file": ToolMeta(name="read_file", display_name="Read"),
-        "write_file": ToolMeta(name="write_file", display_name="Write"),
+        "file_read": ToolMeta(name="file_read", display_name="Read"),
+        "file_write": ToolMeta(name="file_write", display_name="Write"),
         "bash": ToolMeta(name="bash", display_name="Bash"),
     }
     release = {cid: asyncio.Event() for cid in ("c1", "c2", "c3")}
@@ -56,8 +56,8 @@ async def test_runner_executes_mutating_and_non_mutating_in_one_batch():
     runner = ToolRunner(executor=executor, depth=0, parent_id=None)
 
     calls = [
-        _make_call("c1", "read_file"),
-        _make_call("c2", "write_file"),
+        _make_call("c1", "file_read"),
+        _make_call("c2", "file_write"),
         _make_call("c3", "bash"),
     ]
 

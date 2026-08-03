@@ -17,8 +17,8 @@ for the result – and picking the wrong one is the most common mistake.
 | `research` | Yes | One investigation whose answer you need now |
 | `background` | No | One detached investigation that delivers itself when done |
 | `workflow` | Yes | A curated multi-agent pipeline over a known shape of work |
-| `create_automation` | No | Recurring scheduled or event-driven work |
-| `create_loop` | No | Adaptive repeated work in this chat that stops on a condition |
+| `automation_create` | No | Recurring scheduled or event-driven work |
+| `loop_create` | No | Adaptive repeated work in this chat that stops on a condition |
 
 ## research
 
@@ -42,9 +42,9 @@ conversation – do not poll for it.
 
 Because it owns a session, you can steer it while it runs:
 
-- `send_message(session_id=...)` to redirect it
-- `read_session(session_id=...)` to watch its work
-- `cancel_agent(session_id=...)` to stop it
+- `session_send_message(session_id=...)` to redirect it
+- `session_read(session_id=...)` to watch its work
+- `agent_cancel(session_id=...)` to stop it
 
 Use it for work that outlives your attention: deep research, multi-source
 investigation, slow data gathering.

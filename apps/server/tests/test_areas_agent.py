@@ -196,30 +196,30 @@ def _facts(*specs: tuple[str, ToolAction, str, bool]) -> tuple[ToolFacts, ...]:
 
 
 READS = _facts(
-    ("search_facts", ToolAction.READ, "_facts", False),
-    ("get_fact", ToolAction.READ, "_facts", False),
-    ("list_recent_sessions", ToolAction.READ, "_sessions", False),
-    ("read_session", ToolAction.READ, "_sessions", False),
+    ("fact_search", ToolAction.READ, "_facts", False),
+    ("fact_get", ToolAction.READ, "_facts", False),
+    ("session_list", ToolAction.READ, "_sessions", False),
+    ("session_read", ToolAction.READ, "_sessions", False),
     ("web_search", ToolAction.READ, "web", True),
     ("emails", ToolAction.READ, "gmail", True),
     ("calendar", ToolAction.READ, "calendar", True),
     ("slack_search", ToolAction.READ, "slack", True),
 )
 WRITES = _facts(
-    ("send_email", ToolAction.WRITE, "gmail", True),
+    ("email_send", ToolAction.WRITE, "gmail", True),
     ("bash", ToolAction.EXECUTE, "_system", False),
-    ("create_calendar_event", ToolAction.WRITE, "calendar", True),
+    ("calendar_create_event", ToolAction.WRITE, "calendar", True),
     ("slack_post_message", ToolAction.WRITE, "slack", True),
-    ("write_file", ToolAction.WRITE, "_system", False),
+    ("file_write", ToolAction.WRITE, "_system", False),
     ("memory_write", ToolAction.WRITE, "_facts", False),
 )
 AREA_OWN = _facts(
-    ("submit_area_report", ToolAction.EXECUTE, "_area", False),
+    ("area_submit_report", ToolAction.EXECUTE, "_area", False),
     ("area_page_patch", ToolAction.WRITE, "_area", False),
     ("area_page_write", ToolAction.WRITE, "_area", False),
     ("area_run_automation", ToolAction.EXECUTE, "_area", False),
 )
-AUTOMATION = _facts(("create_automation", ToolAction.WRITE, "_automation", False))
+AUTOMATION = _facts(("automation_create", ToolAction.WRITE, "_automation", False))
 
 OBSERVE = resolve("area_observe")
 ACT = resolve("area_act")
@@ -230,7 +230,7 @@ def test_observe_scope_is_area_locked_and_uses_canonical_facts():
     tool, so this asserts against what the selector actually resolves to."""
     for fact in READS:
         assert OBSERVE.matches(fact), fact.name
-    for name in ("submit_area_report", "area_page_patch", "area_page_write"):
+    for name in ("area_submit_report", "area_page_patch", "area_page_write"):
         assert OBSERVE.matches(next(f for f in AREA_OWN if f.name == name)), name
 
     # Writes stay out however the floor resolves — these are not read-only, so
@@ -263,9 +263,9 @@ def test_live_autonomy_contracts_are_exact_and_never_globally_auto_approve():
 def test_a_reply_keeps_the_area_scope_minus_the_terminal_report():
     """The narrowing `~` exists for: a reply is a conversation, not a run, so it
     may do everything the custodian may except submit the report."""
-    reply_scope = OBSERVE & ~tools.named("submit_area_report")
+    reply_scope = OBSERVE & ~tools.named("area_submit_report")
 
-    report = next(f for f in AREA_OWN if f.name == "submit_area_report")
+    report = next(f for f in AREA_OWN if f.name == "area_submit_report")
     assert not reply_scope.matches(report)
     assert reply_scope.matches(next(f for f in AREA_OWN if f.name == "area_page_write"))
     for fact in READS:

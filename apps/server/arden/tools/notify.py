@@ -136,6 +136,7 @@ notify_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"notifiers"}),
+        deferred=True,
     ),
     approval=approve_notify,
     execute=notify,

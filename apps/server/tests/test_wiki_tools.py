@@ -62,7 +62,7 @@ def _execution(
         services=services,
         background_tasks=BackgroundTaskRegistry(session_id="wiki-tools"),
     )
-    return ToolExecution(tool_id="wiki-1", tool_name="read_wiki_page", ctx=context)
+    return ToolExecution(tool_id="wiki-1", tool_name="wiki_read_page", ctx=context)
 
 
 class _AreaStore:
@@ -1083,31 +1083,31 @@ async def test_move_wiki_page_is_atomic_scoped_and_area_safe(tmp_path: Path) -> 
 def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert WIKI in CORE_INTEGRATIONS
     assert set(WIKI.tools) == {
-        "list_wiki_pages",
-        "list_wiki_changes",
-        "read_wiki_page",
+        "wiki_list_pages",
+        "wiki_list_changes",
+        "wiki_read_page",
         "wiki_links",
-        "create_wiki_page",
-        "edit_wiki_page",
-        "archive_wiki_page",
-        "move_wiki_page",
-        "publish_wiki_generated",
+        "wiki_create_page",
+        "wiki_edit_page",
+        "wiki_archive_page",
+        "wiki_move_page",
+        "wiki_publish_generated",
     }
     assert {tool.policy.action.value for tool in WIKI.tools.values()} == {"read", "write"}
     assert {
         WIKI.tools[name].policy.permissions
-        for name in ("list_wiki_pages", "list_wiki_changes", "read_wiki_page", "wiki_links")
+        for name in ("wiki_list_pages", "wiki_list_changes", "wiki_read_page", "wiki_links")
     } == {frozenset({"wiki"})}
     assert {
         WIKI.tools[name].policy.permissions
         for name in (
-            "create_wiki_page",
-            "edit_wiki_page",
-            "archive_wiki_page",
-            "publish_wiki_generated",
+            "wiki_create_page",
+            "wiki_edit_page",
+            "wiki_archive_page",
+            "wiki_publish_generated",
         )
     } == {frozenset({"wiki", WIKI_POST_COMMIT_SERVICE})}
-    assert WIKI.tools["move_wiki_page"].policy.permissions == frozenset({"wiki", WIKI_POST_COMMIT_SERVICE, "session"})
+    assert WIKI.tools["wiki_move_page"].policy.permissions == frozenset({"wiki", WIKI_POST_COMMIT_SERVICE, "session"})
     assert create_wiki_page_tool.policy.idempotent is True
     assert edit_wiki_page_tool.policy.idempotent is True
     assert archive_wiki_page_tool.policy.idempotent is True

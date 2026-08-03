@@ -21,7 +21,7 @@ async def _create(store: InvocationStore, invocation_id: str = "inv-1"):
         run_id="run-1",
         session_id="sess-1",
         tool_call_id="call-1",
-        tool_name="read_file",
+        tool_name="file_read",
         placement="client",
         arguments_json='{"path": "/tmp/x"}',
     )

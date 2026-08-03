@@ -1,5 +1,5 @@
-"""Tests for the read-only sessions tools (`list_recent_sessions`,
-`read_session`) used by cross-session audit automations."""
+"""Tests for the read-only sessions tools (`session_list`,
+`session_read`) used by cross-session audit automations."""
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -380,7 +380,7 @@ def _execution_with_loop(services: dict, loop_task_id: str | None = None) -> Too
         background_tasks=BackgroundTaskRegistry(session_id="cur"),
         services=services,
     )
-    return ToolExecution(tool_id="t1", tool_name="create_session", ctx=ctx)
+    return ToolExecution(tool_id="t1", tool_name="session_create", ctx=ctx)
 
 
 @pytest.mark.asyncio

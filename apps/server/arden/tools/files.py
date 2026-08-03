@@ -124,7 +124,7 @@ class ReadFileInput(BaseModel):
 
 
 async def read_file(execution: ToolExecution, args: ReadFileInput) -> ToolResult:
-    return _refuse_in_process("read_file")
+    return _refuse_in_process("file_read")
 
 
 class ListFilesInput(BaseModel):
@@ -134,12 +134,12 @@ class ListFilesInput(BaseModel):
     limit: int = Field(default=_DEFAULT_ENTRY_LIMIT, ge=1, le=1000, description="Maximum entries to return.")
     include_hidden: bool = Field(default=False, description="Include dotfiles and dot-directories.")
     cursor: str | None = Field(
-        default=None, max_length=500, description="Opaque cursor from a previous list_files page."
+        default=None, max_length=500, description="Opaque cursor from a previous file_list page."
     )
 
 
 async def list_files(execution: ToolExecution, args: ListFilesInput) -> ToolResult:
-    return _refuse_in_process("list_files")
+    return _refuse_in_process("file_list")
 
 
 class FindFilesInput(BaseModel):
@@ -153,7 +153,7 @@ class FindFilesInput(BaseModel):
 
 
 async def find_files(execution: ToolExecution, args: FindFilesInput) -> ToolResult:
-    return _refuse_in_process("find_files")
+    return _refuse_in_process("file_find")
 
 
 class SearchTextInput(BaseModel):
@@ -167,7 +167,7 @@ class SearchTextInput(BaseModel):
 
 
 async def search_text(execution: ToolExecution, args: SearchTextInput) -> ToolResult:
-    return _refuse_in_process("search_text")
+    return _refuse_in_process("file_search_text")
 
 
 class WriteFileInput(BaseModel):
@@ -199,7 +199,7 @@ async def approve_write_file(execution: ToolExecution, args: WriteFileInput) -> 
 
 
 async def write_file(execution: ToolExecution, args: WriteFileInput) -> ToolResult:
-    return _refuse_in_process("write_file")
+    return _refuse_in_process("file_write")
 
 
 class EditFileInput(BaseModel):
@@ -231,7 +231,7 @@ async def approve_edit_file(execution: ToolExecution, args: EditFileInput) -> Ap
 
 
 async def edit_file(execution: ToolExecution, args: EditFileInput) -> ToolResult:
-    return _refuse_in_process("edit_file")
+    return _refuse_in_process("file_edit")
 
 
 read_file_tool = tool(
@@ -276,7 +276,11 @@ write_file_tool = tool(
     description=WRITE_FILE_DESCRIPTION,
     input_model=WriteFileInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT, requires_approval=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
+        requires_approval=True,
+        deferred=True,
     ),
     approval=approve_write_file,
     execute=write_file,
@@ -288,7 +292,11 @@ edit_file_tool = tool(
     description=EDIT_FILE_DESCRIPTION,
     input_model=EditFileInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT, requires_approval=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
+        requires_approval=True,
+        deferred=True,
     ),
     approval=approve_edit_file,
     execute=edit_file,

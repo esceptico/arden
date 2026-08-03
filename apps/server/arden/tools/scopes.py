@@ -40,7 +40,7 @@ ScopeKey = (
 
 SETTABLE_SCOPES: tuple[SettableScopeKey, ...] = get_args(SettableScopeKey)
 
-AREA_REPORT_TOOL_NAME = "submit_area_report"
+AREA_REPORT_TOOL_NAME = "area_submit_report"
 
 _AREA_OBSERVE = tools.read | tools.named(AREA_REPORT_TOOL_NAME) | tools.prefix("area_page_")
 
@@ -53,9 +53,9 @@ SCOPES: dict[ScopeKey, ToolFilter] = {
     "area_observe": _AREA_OBSERVE,
     "area_act": (
         _AREA_OBSERVE
-        | tools.named("create_automation")
-        | tools.named("list_automations")
-        | tools.named("get_automation_result")
+        | tools.named("automation_create")
+        | tools.named("automation_list")
+        | tools.named("automation_result")
         | tools.named("area_run_automation")
     ),
     # Answering the user is a conversation, not a custodian run: same reach,
@@ -73,14 +73,14 @@ SCOPES: dict[ScopeKey, ToolFilter] = {
     "fact_maintenance": tools.named(FACT_MAINTENANCE_REVIEW_TOOL_NAME),
     "wiki_maintenance": tools.named(WIKI_MAINTENANCE_REVIEW_TOOL_NAME),
     "fact_retention": (
-        tools.named("search_facts")
-        | tools.named("get_fact")
-        | tools.named("get_fact_history")
-        | tools.named("get_due_fact_reviews")
-        | tools.named("plan_fact_changes")
-        | tools.named("commit_fact_changes")
+        tools.named("fact_search")
+        | tools.named("fact_get")
+        | tools.named("fact_history")
+        | tools.named("fact_due_reviews")
+        | tools.named("fact_plan_changes")
+        | tools.named("fact_commit_changes")
     ),
-    "daily_notes": tools.read | tools.named("create_wiki_page") | tools.named("edit_wiki_page"),
+    "daily_notes": tools.read | tools.named("wiki_create_page") | tools.named("wiki_edit_page"),
     # Publishes its own generated wiki region; completion is proof-checked in
     # AutomationRuntime._validate_completed_run.
     "wiki_producer": tools.read | tools.named(PUBLISH_WIKI_GENERATED_TOOL_NAME),

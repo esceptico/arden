@@ -95,7 +95,7 @@ test("rehydrates update_todos tool calls as task list messages", () => {
       tool_calls: [
         {
           id: "call-todos",
-          name: "update_todos",
+          name: "todo_update",
           arguments: JSON.stringify({
             explanation: "Track rollout",
             items: [
@@ -131,7 +131,7 @@ test("keeps regular activity separate from persisted todo calls", () => {
       tool_calls: [
         {
           id: "call-todos",
-          name: "update_todos",
+          name: "todo_update",
           arguments: JSON.stringify({
             items: [{ content: "Read files", status: "in_progress" }],
           }),
@@ -159,19 +159,19 @@ test("shows all tool args in history activity labels", () => {
       tool_calls: [
         {
           id: "search-1",
-          name: "search_text",
+          name: "file_search_text",
           display_name: "SearchText",
           arguments: '{"query":"ToolCallArgsEvent","path":"."}',
         },
         {
           id: "find-1",
-          name: "find_files",
+          name: "file_find",
           display_name: "FindFiles",
           arguments: '{"path":".","pattern":"*.tsx"}',
         },
         {
           id: "email-1",
-          name: "send_email",
+          name: "email_send",
           display_name: "SendEmail",
           arguments: '{"account":"work","to":["me@example.com"],"subject":"Run summary","body":"..."}',
         },

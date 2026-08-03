@@ -115,7 +115,7 @@ describe("executor client", () => {
               seq: 7,
               type: "execute_tool",
               invocation_id: "inv-1",
-              payload: { invocation_id: "inv-1", tool_name: "read_file", arguments: { path: "/x" } },
+              payload: { invocation_id: "inv-1", tool_name: "file_read", arguments: { path: "/x" } },
             }),
           ],
           hold,
@@ -153,14 +153,14 @@ describe("executor client", () => {
               seq: 3,
               type: "execute_tool",
               invocation_id: "inv-2",
-              payload: { invocation_id: "inv-2", tool_name: "read_file", arguments: { path: "/etc/hosts" } },
+              payload: { invocation_id: "inv-2", tool_name: "file_read", arguments: { path: "/etc/hosts" } },
             }),
           ],
           hold,
         );
       },
     });
-    client.registerHandler("read_file", async (args: { path: string }) => ({
+    client.registerHandler("file_read", async (args: { path: string }) => ({
       status: "succeeded",
       payload: { content: `contents of ${args.path}`, preview: "read" },
     }));

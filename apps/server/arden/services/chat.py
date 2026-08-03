@@ -72,7 +72,7 @@ from arden.wiki.context import WikiContextBuilder
 
 _logger = get_logger(__name__)
 
-INIT_AUTO_APPROVE = {"plan_fact_changes", "commit_fact_changes"}
+INIT_AUTO_APPROVE = {"fact_plan_changes", "fact_commit_changes"}
 
 
 async def _recover_durable_tool_calls(
@@ -1162,7 +1162,7 @@ async def respawn_background_agent(
                 "This is a hidden completion event. The user cannot see this message.\n"
                 f"The agent could not be restarted after a server restart: {failure}\n"
                 "This agent's run failed. If you still need this work, assign a follow-up with "
-                'followup_task(session_id="...") or spawn a fresh agent.\n'
+                'app_followup_task(session_id="...") or spawn a fresh agent.\n'
                 "</background_agent_result>"
             )
             await deps.dispatch_session_message(session_id, notification, f"bg:{task_id}:respawn-failed", True, None)

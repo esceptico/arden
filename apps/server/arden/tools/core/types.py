@@ -39,6 +39,10 @@ class ToolPolicy(BaseModel):
     scope: ToolScope
     placement: ToolPlacement = ToolPlacement.SERVER
     requires_approval: StrictBool = False
+    # Deferred tools are hidden from the model's schema list until loaded via
+    # load_tools / tool_search. Declared here, at the tool definition, so
+    # deferral is a property of the tool — not a hand-maintained registry map.
+    deferred: StrictBool = False
     approval_mode: ApprovalMode | None = None
     permissions: frozenset[str] = Field(default_factory=frozenset)
     timeout_seconds: int | None = None

@@ -53,7 +53,7 @@ def test_interrupted_tool_call_is_closed_before_a_later_turn():
                 {
                     "id": "call-1",
                     "type": "function",
-                    "function": {"name": "send_email", "arguments": "{}"},
+                    "function": {"name": "email_send", "arguments": "{}"},
                 }
             ],
         },
@@ -285,8 +285,8 @@ async def test_prepare_chat_resolves_daily_notes_tool_scope():
     )
 
     names = {schema["function"]["name"] for schema in ctx.tools}
-    assert {"create_wiki_page", "edit_wiki_page"} <= names
-    assert "archive_wiki_page" not in names
+    assert {"wiki_create_page", "wiki_edit_page"} <= names
+    assert "wiki_archive_page" not in names
 
 
 @pytest.mark.asyncio

@@ -127,7 +127,7 @@ async def block_goal(execution: ToolExecution, args: BlockGoalInput) -> ToolResu
             content=(
                 f"Blocker noted ({attempts}/{BLOCKED_CONFIRMATION_ATTEMPTS}). Goal remains active; "
                 f"{remaining} same-blocker report{'s' if remaining != 1 else ''} before terminal blocked. "
-                "Continue automatically and try any viable next step. Call block_goal again only if this same "
+                "Continue automatically and try any viable next step. Call goal_block again only if this same "
                 "missing input still prevents progress."
             ),
             preview="Goal still active",

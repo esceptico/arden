@@ -285,6 +285,7 @@ def _policy(action: ToolAction, *, approval: bool = False) -> ToolPolicy:
         scope=ToolScope.EXTERNAL,
         requires_approval=approval,
         permissions=frozenset({"google_drive"}),
+        deferred=True,
     )
 
 
@@ -312,7 +313,7 @@ read_google_sheet_tool = tool(
 create_google_doc_tool = tool(
     display_name="Create Google Doc",
     display_description="Create an empty Google Doc.",
-    description="Create an empty Google Doc. Use edit_google_doc in a separate operation to add content.",
+    description="Create an empty Google Doc. Use drive_edit_doc in a separate operation to add content.",
     input_model=CreateGoogleDocInput,
     policy=_policy(ToolAction.WRITE, approval=True),
     approval=approve_create_google_doc,
@@ -329,7 +330,7 @@ edit_google_doc_tool = tool(
 create_google_sheet_tool = tool(
     display_name="Create Google Sheet",
     display_description="Create an empty Google Sheet.",
-    description="Create an empty Google Sheet. Use update_google_sheet in a separate operation to add values.",
+    description="Create an empty Google Sheet. Use drive_update_sheet in a separate operation to add values.",
     input_model=CreateGoogleSheetInput,
     policy=_policy(ToolAction.WRITE, approval=True),
     approval=approve_create_google_sheet,
@@ -353,12 +354,12 @@ append_google_sheet_rows_tool = tool(
 )
 
 DRIVE_TOOLS = {
-    "search_google_drive": search_google_drive_tool,
-    "read_google_doc": read_google_doc_tool,
-    "read_google_sheet": read_google_sheet_tool,
-    "create_google_doc": create_google_doc_tool,
-    "edit_google_doc": edit_google_doc_tool,
-    "create_google_sheet": create_google_sheet_tool,
-    "update_google_sheet": update_google_sheet_tool,
-    "append_google_sheet_rows": append_google_sheet_rows_tool,
+    "drive_search": search_google_drive_tool,
+    "drive_read_doc": read_google_doc_tool,
+    "drive_read_sheet": read_google_sheet_tool,
+    "drive_create_doc": create_google_doc_tool,
+    "drive_edit_doc": edit_google_doc_tool,
+    "drive_create_sheet": create_google_sheet_tool,
+    "drive_update_sheet": update_google_sheet_tool,
+    "drive_append_sheet_rows": append_google_sheet_rows_tool,
 }

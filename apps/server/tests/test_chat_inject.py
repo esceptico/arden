@@ -483,7 +483,7 @@ async def test_event_stream_replays_persisted_events_after_bus_recreation(tmp_pa
         StreamRecord(
             seq=4,
             session_id="sess-1",
-            event=ToolCallStartEvent(tool_call_id="tool-1", tool_call_name="read_file"),
+            event=ToolCallStartEvent(tool_call_id="tool-1", tool_call_name="file_read"),
         )
     )
     buses = BusRegistry()

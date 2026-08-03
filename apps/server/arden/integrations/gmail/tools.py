@@ -17,7 +17,7 @@ from arden.utils import truncate
 
 SEND_EMAIL_DESCRIPTION = "Send an email from a specified Gmail account. Requires approval."
 REPLY_EMAIL_DESCRIPTION = (
-    "Reply in an existing Gmail thread using the qualified account:message_id returned by emails or read_email. "
+    "Reply in an existing Gmail thread using the qualified account:message_id returned by emails or email_read. "
     "Preserves the provider thread and reply headers. Requires approval."
 )
 
@@ -30,7 +30,7 @@ EMAILS_DESCRIPTION = """Browse or search emails.
 Without query: lists recent emails (subjects and senders). Use days to control time range.
 With query: searches email content. Use specific keywords like names, subjects, or phrases.
 
-Use read_email(id) to get full content of a specific email."""
+Use email_read(id) to get full content of a specific email."""
 
 
 def _qualified_message_ref(account: str, message_id: str) -> str:
@@ -79,7 +79,7 @@ class SendEmailInput(BaseModel):
 
 
 class ReplyEmailInput(BaseModel):
-    message_ref: str = Field(description="Qualified account:message_id returned by emails or read_email.")
+    message_ref: str = Field(description="Qualified account:message_id returned by emails or email_read.")
     body: str = Field(min_length=1, max_length=100_000, description="Plain-text reply body.")
     idempotency_key: str = Field(min_length=8, max_length=200, description="Unique stable key for this reply attempt.")
 
@@ -284,7 +284,9 @@ emails_tool = tool(
     display_description="Browse and search Gmail messages.",
     description=EMAILS_DESCRIPTION,
     input_model=EmailsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"}), deferred=True
+    ),
     execute=emails,
 )
 
@@ -293,7 +295,9 @@ read_email_tool = tool(
     display_description="Read a Gmail message.",
     description=READ_EMAIL_DESCRIPTION,
     input_model=ReadEmailInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"gmail"}), deferred=True
+    ),
     execute=read_email,
 )
 
@@ -307,6 +311,7 @@ send_email_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"gmail"}),
+        deferred=True,
     ),
     approval=approve_send_email,
     execute=send_email,
@@ -322,6 +327,7 @@ reply_email_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"gmail"}),
+        deferred=True,
     ),
     approval=approve_reply_email,
     execute=reply_email,

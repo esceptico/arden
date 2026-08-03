@@ -205,7 +205,7 @@ async def test_send_message_reports_unknown_session_with_recent_ids():
 @pytest.mark.asyncio
 async def test_unknown_session_hint_stays_inside_the_callers_area():
     """The hint lists real session ids — an Area-scoped agent must not learn
-    about sessions its own list_recent_sessions would never show it."""
+    about sessions its own session_list would never show it."""
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")}, area_id="ops")
 
     result = await send_message(execution, SendMessageInput(session_id="nope", message="go"))
@@ -222,7 +222,7 @@ async def test_send_message_dispatches_with_tool_call_client_id_and_no_approval_
 
     assert not result.is_error
     assert app_control.dispatched == [
-        {"session_id": "s1", "message": "check the digest", "client_id": "send_message:t1"}
+        {"session_id": "s1", "message": "check the digest", "client_id": "session_send_message:t1"}
     ]
     assert "Ops" in result.content
 

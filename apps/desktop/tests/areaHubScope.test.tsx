@@ -50,7 +50,7 @@ test("Area Hub derives its session boundary from AreaDetail", () => {
 });
 
 test("Area Hub never projects an approval from an unrelated current chat", () => {
-  const approvals = [{ toolId: "tool-1", toolName: "write_file" }];
+  const approvals = [{ toolId: "tool-1", toolName: "file_write" }];
 
   expect(areaHubApprovals(areaScope, "area-session-b", approvals)).toEqual(approvals);
   expect(areaHubApprovals(areaScope, "outside-area", approvals)).toEqual([]);

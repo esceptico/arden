@@ -73,7 +73,7 @@ class SearchFactsInput(_Input):
     )
     limit: int = Field(default=20, ge=1, le=_MAX_FACT_RESULTS)
     cursor: str | None = Field(
-        default=None, max_length=_MAX_CURSOR_CHARS, description="Opaque cursor from a prior search_facts page."
+        default=None, max_length=_MAX_CURSOR_CHARS, description="Opaque cursor from a prior fact_search page."
     )
 
 
@@ -186,7 +186,7 @@ class PlanFactChangesInput(_Input):
 
 
 class CommitFactChangesInput(_Input):
-    plan_id: str = Field(min_length=1, max_length=100, description="Exact plan_id returned by plan_fact_changes.")
+    plan_id: str = Field(min_length=1, max_length=100, description="Exact plan_id returned by fact_plan_changes.")
 
 
 def _unavailable() -> ToolResult:
@@ -668,11 +668,11 @@ def _failure(exc: Exception) -> ToolResult:
             code="post_commit_failed",
             message=(
                 f"Fact plan {exc.result.plan_id} committed, but derived memory state did not refresh. "
-                "Retry commit_fact_changes with the same plan_id."
+                "Retry fact_commit_changes with the same plan_id."
             ),
             preview="Facts committed; refresh failed",
             retryable=True,
-            recovery_action="Retry commit_fact_changes with the same plan_id.",
+            recovery_action="Retry fact_commit_changes with the same plan_id.",
             data={
                 "plan_id": exc.result.plan_id,
                 "committed": True,
@@ -707,7 +707,7 @@ def _failure(exc: Exception) -> ToolResult:
             code="request_conflict",
             message="This tool call's plan key was already used for different changes.",
             preview="Plan request changed",
-            recovery_action="Start a new plan_fact_changes call.",
+            recovery_action="Start a new fact_plan_changes call.",
         )
     if isinstance(exc, FactPlanCorruptionError | FactLedgerCorruptionError):
         return ToolResult.failure(
@@ -989,7 +989,9 @@ get_fact_history_tool = tool(
     display_description="Read a fact's immutable event history.",
     description="Read saved fact events and provenance. This does not perform a live source lookup.",
     input_model=GetFactHistoryInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
+    ),
     execute=get_fact_history,
 )
 
@@ -998,7 +1000,9 @@ get_due_fact_reviews_tool = tool(
     display_description="List facts due for evidence-based review.",
     description="List visible due facts with newer shared-subject evidence. It recommends no lifecycle action.",
     input_model=GetDueFactReviewsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
+    ),
     execute=get_due_fact_reviews,
 )
 
@@ -1007,7 +1011,9 @@ plan_fact_changes_tool = tool(
     display_description="Validate fact changes without publishing them.",
     description="Prepare creates, reviews, metadata amendments, supersessions, expiries, or retractions. Returns a durable exact preview; it does not publish facts.",
     input_model=PlanFactChangesInput,
-    policy=ToolPolicy(action=ToolAction.DRAFT, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.DRAFT, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
+    ),
     execute=plan_fact_changes,
 )
 
@@ -1016,6 +1022,8 @@ commit_fact_changes_tool = tool(
     display_description="Publish one previously planned fact change set.",
     description="Commit an exact plan_id only if its affected facts remain unchanged since planning.",
     input_model=CommitFactChangesInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
+    ),
     execute=commit_fact_changes,
 )

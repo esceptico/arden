@@ -1,6 +1,6 @@
 """Where an agent can send the user inside the Arden app.
 
-This is the payload vocabulary of `navigation_requested` (and the `open_in_app`
+This is the payload vocabulary of `navigation_requested` (and the `app_open`
 tool schema). Desktop mirror: apps/desktop/src/api/navigation.ts.
 """
 

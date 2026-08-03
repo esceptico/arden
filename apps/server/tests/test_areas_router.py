@@ -411,7 +411,7 @@ def test_reply_posts_linked_message_to_custodian_channel(client):
     # waives nothing.
     assert skip_approvals is False
     scope = resolve(tool_scope)
-    assert not scope.matches(ToolFacts("submit_area_report", ToolAction.EXECUTE, "_area", False))
+    assert not scope.matches(ToolFacts("area_submit_report", ToolAction.EXECUTE, "_area", False))
     assert scope.matches(ToolFacts("area_page_read", ToolAction.READ, "_area", False))
     assert emitted == [[o1a]]
 
@@ -447,8 +447,8 @@ def test_approving_a_review_runs_its_action_with_minted_internal_reach(client):
     # Touching an outside service is a separate consent from "yes, do this".
     assert tool_scope == "area_action"
     scope = resolve(tool_scope)
-    assert scope.matches(ToolFacts("write_file", ToolAction.WRITE, "_system", False))
-    assert not scope.matches(ToolFacts("send_email", ToolAction.WRITE, "gmail", True))
+    assert scope.matches(ToolFacts("file_write", ToolAction.WRITE, "_system", False))
+    assert not scope.matches(ToolFacts("email_send", ToolAction.WRITE, "gmail", True))
     # The user read the action and approved it. Re-asking per tool call inside
     # it poses the same question again, which stalled approved edits behind a
     # second prompt; bash and app control still block, they refuse a bypass.

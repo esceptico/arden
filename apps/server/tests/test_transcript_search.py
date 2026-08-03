@@ -194,9 +194,9 @@ async def test_search_time_filter(store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_backfill_indexes_preexisting_messages(tmp_path: Path):
-    """A message row whose search_text predates the index (NULL, as legacy
+    """A message row whose file_search_text predates the index (NULL, as legacy
     rows have) must become searchable after init_schema's one-time backfill.
-    Inserting directly with NULL search_text reproduces the legacy condition
+    Inserting directly with NULL file_search_text reproduces the legacy condition
     without disturbing the external-content FTS shadow tables."""
     db = tmp_path / "legacy.db"
     conn = await database.connect(db)
@@ -209,7 +209,7 @@ async def test_backfill_indexes_preexisting_messages(tmp_path: Path):
     await conn.execute(
         """
         INSERT INTO session_messages
-            (session_id, message_id, seq, role, message_json, created_at, search_text)
+            (session_id, message_id, seq, role, message_json, created_at, file_search_text)
         VALUES ('s1', 'm1', 0, 'user', ?, ?, NULL)
         """,
         ('{"role": "user", "content": "legacy backfill token"}', datetime.now(UTC).isoformat()),
@@ -228,7 +228,7 @@ async def test_backfill_indexes_preexisting_messages(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_migration_survives_legacy_rows_with_triggers_active(tmp_path: Path):
-    """Regression: a real upgrade has legacy NULL-search_text rows AND the FTS
+    """Regression: a real upgrade has legacy NULL-file_search_text rows AND the FTS
     triggers in place. The migration's backfill UPDATE must not fire a 'delete'
     against never-indexed rows (which corrupted the external-content index and
     crashed every subsequent boot). Re-running init_schema must stay clean and
@@ -241,7 +241,7 @@ async def test_migration_survives_legacy_rows_with_triggers_active(tmp_path: Pat
     await _seed(store, "s1", ["upgrade path token"])
 
     # Simulate the pre-fix on-disk state: triggers present, rows un-indexed.
-    await conn.execute("UPDATE session_messages SET search_text = NULL")
+    await conn.execute("UPDATE session_messages SET file_search_text = NULL")
     await conn.commit()
 
     # Two consecutive migrations must both succeed (idempotent + no corruption).

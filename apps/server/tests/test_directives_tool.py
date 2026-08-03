@@ -46,7 +46,7 @@ async def test_directives_read_hides_revision_and_stale_write_is_rejected(tmp_pa
     target.write_text(json.dumps({"content": "version A"}), encoding="utf-8")
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
 
-    execution = _execution("get_directives")
+    execution = _execution("directives_get")
     read = await get_directives(execution, GetDirectivesInput())
     approval = await approve_set_directives(
         execution,
@@ -73,10 +73,10 @@ async def test_directives_conflict_stays_hash_free_through_agent_executor(tmp_pa
     target = tmp_path / "directives.json"
     target.write_text(json.dumps({"content": "version A"}), encoding="utf-8")
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
-    registry = ToolRegistry(tool_overrides={"set_directives": ToolOverrideDecision.APPROVE})
-    registry.register("get_directives", get_directives_tool)
-    registry.register("set_directives", set_directives_tool)
-    context = _execution("get_directives").ctx
+    registry = ToolRegistry(tool_overrides={"directives_set": ToolOverrideDecision.APPROVE})
+    registry.register("directives_get", get_directives_tool)
+    registry.register("directives_set", set_directives_tool)
+    context = _execution("directives_get").ctx
     context.registry = registry
     executor = ArdenToolExecutor(
         ToolExecutor().with_registry(registry),
@@ -84,10 +84,10 @@ async def test_directives_conflict_stays_hash_free_through_agent_executor(tmp_pa
         ledger=SharedLedger(),
     )
 
-    await executor.execute("get_directives", {}, "read-call")
+    await executor.execute("directives_get", {}, "read-call")
     target.write_text(json.dumps({"content": "version B"}), encoding="utf-8")
     result = await executor.execute(
-        "set_directives",
+        "directives_set",
         {"directives": "approved replacement"},
         "write-call",
     )
@@ -103,7 +103,7 @@ async def test_directives_create_and_clear_are_idempotent(tmp_path, monkeypatch)
     target = tmp_path / "directives.json"
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
 
-    execution = _execution("set_directives")
+    execution = _execution("directives_set")
     created = await set_directives(execution, SetDirectivesInput(directives="Be concise"))
     cleared = await set_directives(
         execution,
@@ -124,7 +124,7 @@ async def test_directives_require_a_fresh_read_for_replacement(tmp_path, monkeyp
     target.write_text(json.dumps({"content": "existing"}), encoding="utf-8")
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
 
-    result = await set_directives(_execution("set_directives"), SetDirectivesInput(directives="replacement"))
+    result = await set_directives(_execution("directives_set"), SetDirectivesInput(directives="replacement"))
 
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
@@ -137,7 +137,7 @@ async def test_directives_reject_a_read_that_will_be_offloaded(tmp_path, monkeyp
     target = tmp_path / "directives.json"
     target.write_text(json.dumps({"content": "x" * 60_000}), encoding="utf-8")
     monkeypatch.setattr(directives_module, "DIRECTIVES_PATH", target)
-    execution = _execution("set_directives")
+    execution = _execution("directives_set")
 
     await get_directives(execution, GetDirectivesInput())
     result = await set_directives(execution, SetDirectivesInput(directives="replacement"))

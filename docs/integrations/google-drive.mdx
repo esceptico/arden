@@ -21,14 +21,14 @@ Deferred group: `google_drive`.
 
 | Tool | Description |
 |------|-------------|
-| `search_google_drive` | Search connected Google Docs and Sheets |
-| `read_google_doc` | Read a Google Doc by qualified reference |
-| `read_google_sheet` | Read a bounded A1 range |
-| `create_google_doc` | Create an empty Google Doc (requires approval) |
-| `edit_google_doc` | Append to or replace exact text (requires approval) |
-| `create_google_sheet` | Create an empty Google Sheet (requires approval) |
-| `update_google_sheet` | Replace values in an A1 range (requires approval) |
-| `append_google_sheet_rows` | Append rows to a range (requires approval) |
+| `drive_search` | Search connected Google Docs and Sheets |
+| `drive_read_doc` | Read a Google Doc by qualified reference |
+| `drive_read_sheet` | Read a bounded A1 range |
+| `drive_create_doc` | Create an empty Google Doc (requires approval) |
+| `drive_edit_doc` | Append to or replace exact text (requires approval) |
+| `drive_create_sheet` | Create an empty Google Sheet (requires approval) |
+| `drive_update_sheet` | Replace values in an A1 range (requires approval) |
+| `drive_append_sheet_rows` | Append rows to a range (requires approval) |
 
 Mutating tools require an `idempotency_key`. Create and populate are separate
 operations, so a retry cannot duplicate content silently.

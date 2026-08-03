@@ -89,7 +89,7 @@ def test_context_usage_reports_loaded_deferred_tool_counts():
     run = runtime.run_registry.create_run("sess-1")
     run.status = RunStatus.RUNNING
     run.messages = [{"role": "user", "content": "active"}]
-    run.loaded_tools.add("set_directives")
+    run.loaded_tools.add("directives_set")
 
     app.dependency_overrides[get_runtime] = lambda: runtime
     app.dependency_overrides[require_session_service] = lambda: _SessionService()

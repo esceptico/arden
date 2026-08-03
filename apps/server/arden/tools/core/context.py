@@ -444,7 +444,9 @@ class BackgroundTaskRegistry:
         """Queue a new TASK for a running background agent — same inbox and
         delivery as steering, framed so the agent treats it as work to complete
         and cover in its final report, not a nudge on the current work."""
-        return self.queue_injection(task_id, {"role": "user", "content": f"<followup_task>\n{text}\n</followup_task>"})
+        return self.queue_injection(
+            task_id, {"role": "user", "content": f"<app_followup_task>\n{text}\n</app_followup_task>"}
+        )
 
     def roster_note_if_changed(self) -> dict | None:
         """A small hidden context note listing this session's live agents —
@@ -675,7 +677,7 @@ class BackgroundTaskRegistry:
         # Durable completions recorded before child sessions existed carry no id.
         session_attr = f' session_id="{child_session_id}"' if child_session_id else ""
         follow_up = (
-            f'Read that agent\'s session with read_session(session_id="{child_session_id}") if you need more.\n'
+            f'Read that agent\'s session with session_read(session_id="{child_session_id}") if you need more.\n'
             if child_session_id
             else ""
         )
@@ -691,7 +693,7 @@ class BackgroundTaskRegistry:
             target = f'session_id="{child_session_id}"' if child_session_id else "session_id=..."
             failure_guidance = (
                 f"This agent's run {status}. If you still need this work, assign a follow-up with "
-                f"followup_task({target}) or spawn a fresh agent.\n"
+                f"app_followup_task({target}) or spawn a fresh agent.\n"
             )
         undelivered = ""
         if undelivered_steering:

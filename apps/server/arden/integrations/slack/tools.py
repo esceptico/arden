@@ -454,7 +454,9 @@ slack_search_tool = tool(
     display_description="Search connected Slack messages.",
     description=SLACK_SEARCH_DESCRIPTION,
     input_model=SlackSearchInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_search,
 )
 
@@ -462,7 +464,9 @@ slack_channel_tool = tool(
     display_name="SlackChannel",
     description="Read recent message history from a Slack channel.",
     input_model=SlackChannelInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_channel,
 )
 
@@ -471,7 +475,9 @@ slack_thread_tool = tool(
     display_description="Read a Slack message thread.",
     description=SLACK_THREAD_DESCRIPTION,
     input_model=SlackThreadInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_thread,
 )
 
@@ -480,7 +486,9 @@ slack_channels_tool = tool(
     display_description="List accessible Slack channels.",
     description="List Slack channels you can access. Optional query filters by name substring.",
     input_model=SlackChannelsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_channels,
 )
 
@@ -494,6 +502,7 @@ slack_post_message_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"slack"}),
+        deferred=True,
     ),
     approval=approve_slack_post_message,
     execute=slack_post_message,
@@ -509,6 +518,7 @@ slack_post_blocks_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"slack"}),
+        deferred=True,
     ),
     approval=approve_slack_post_blocks,
     execute=slack_post_blocks,
@@ -519,7 +529,9 @@ slack_dms_tool = tool(
     display_description="List Slack direct-message conversations.",
     description="List open Slack direct messages (1-on-1). Shows peer name and DM channel id.",
     input_model=SlackDmsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_dms,
 )
 
@@ -528,7 +540,9 @@ slack_dm_tool = tool(
     display_description="Read a Slack direct-message conversation.",
     description=SLACK_DM_DESCRIPTION,
     input_model=SlackDmInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_dm,
 )
 
@@ -536,7 +550,9 @@ slack_users_tool = tool(
     display_name="SlackUsers",
     description="Search Slack workspace members by name, username, or email.",
     input_model=SlackUsersInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_users,
 )
 
@@ -544,7 +560,9 @@ slack_user_tool = tool(
     display_name="SlackUser",
     description="Read a Slack user's profile (name, email, title, status, timezone).",
     input_model=SlackUserInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_user,
 )
 
@@ -553,6 +571,8 @@ slack_file_tool = tool(
     display_description="Inspect a Slack image attachment.",
     description=SLACK_FILE_DESCRIPTION,
     input_model=SlackFileInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"slack"}), deferred=True
+    ),
     execute=slack_file,
 )

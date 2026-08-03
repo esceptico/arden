@@ -694,7 +694,7 @@ async def test_tool_approval_request_to_approved(store: SessionStore):
         run_id="run-1",
         session_id="s-1",
         tool_call_id="call-1",
-        tool_name="write_file",
+        tool_name="file_write",
         action="write",
         scope="internal",
         preview="write a file",
@@ -1067,7 +1067,7 @@ async def test_run_sidecars_persist_context_and_derive_evidence_from_durable_fac
         run_id="run-1",
         session_id="s-1",
         tool_call_id="call-1",
-        tool_name="send_email",
+        tool_name="email_send",
         action="write",
         scope="external",
     )
@@ -1087,7 +1087,7 @@ async def test_run_sidecars_persist_context_and_derive_evidence_from_durable_fac
         run_id="run-1",
         session_id="s-1",
         tool_call_id="call-1",
-        tool_name="send_email",
+        tool_name="email_send",
         action="write",
         scope="external",
     )
@@ -1174,7 +1174,7 @@ async def test_list_tool_call_outcomes_returns_only_requested_session_calls(stor
             run_id=run_id,
             session_id=session_id,
             tool_call_id=call_id,
-            tool_name="write_file",
+            tool_name="file_write",
             action="write",
             scope="internal",
         )
@@ -1676,7 +1676,7 @@ async def test_small_tool_result_event_stays_inline(store: SessionStore):
         StreamRecord(
             seq=13,
             session_id="sess-small",
-            event=ToolCallResultEvent(tool_call_id="call-small", name="read_file", content="small raw result"),
+            event=ToolCallResultEvent(tool_call_id="call-small", name="file_read", content="small raw result"),
         )
     )
 
@@ -2055,14 +2055,14 @@ async def test_latest_session_messages_include_visible_user_anchor_for_tool_heav
             "role": "assistant",
             "content": "",
             "tool_calls": [
-                {"id": "call-1", "type": "function", "function": {"name": "search_text", "arguments": "{}"}}
+                {"id": "call-1", "type": "function", "function": {"name": "file_search_text", "arguments": "{}"}}
             ],
         },
         {"role": "tool", "tool_call_id": "call-1", "content": "result 1"},
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+            "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "file_read", "arguments": "{}"}}],
         },
         {"role": "tool", "tool_call_id": "call-2", "content": "result 2"},
     ]
@@ -2464,7 +2464,7 @@ async def test_session_runtime_run_and_pending_approvals(store: SessionStore):
         run_id="run-1",
         session_id="sess-runtime",
         tool_call_id="tool-1",
-        tool_name="write_file",
+        tool_name="file_write",
         action="write",
         scope="internal",
         preview="preview text",

@@ -51,7 +51,7 @@ async def _client_invocation(gateway: ExecutorGateway, invocation_id: str = "inv
         run_id="run-1",
         session_id="sess-1",
         tool_call_id="call-1",
-        tool_name="read_file",
+        tool_name="file_read",
         placement="client",
         arguments_json='{"path": "/tmp/x"}',
     )
@@ -87,7 +87,7 @@ async def test_dispatch_execute_result_roundtrip(gateway):
     commands = await gateway.pending_commands(device.executor_id, 0)
     assert len(commands) == 1
     assert commands[0].command_type == COMMAND_EXECUTE_TOOL
-    assert commands[0].payload["tool_name"] == "read_file"
+    assert commands[0].payload["tool_name"] == "file_read"
     assert commands[0].payload["arguments"] == {"path": "/tmp/x"}
 
     await gateway.accept_started(device, lease.lease_id, "inv-1")
@@ -118,7 +118,7 @@ async def test_cursor_replay_after_reconnect(gateway):
             run_id="run-1",
             session_id="sess-1",
             tool_call_id="call-2",
-            tool_name="read_file",
+            tool_name="file_read",
             placement="client",
             arguments_json="{}",
         ),
@@ -352,7 +352,7 @@ def test_result_flow_over_http(http):
             run_id="run-1",
             session_id="sess-1",
             tool_call_id="call-1",
-            tool_name="read_file",
+            tool_name="file_read",
             placement="client",
             arguments_json="{}",
         )

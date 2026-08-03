@@ -11,7 +11,7 @@ const message = (items: ActivityItem[]): UiMessage => ({
 
 const call = (over: Partial<ActivityItem>): ActivityItem => ({
   id: "t1",
-  kind: "read_file",
+  kind: "file_read",
   target: "wiki/pages/areas.md",
   ...over,
 });
@@ -62,13 +62,13 @@ test("a target that restates the tool name renders once", () => {
   // the display name again — bare while args stream, with args once parsed.
   // Either way the strip must not stutter "ReadSession ReadSession".
   expect(workingLabel(message([
-    call({ status: "ongoing", kind: "read_session", displayName: "ReadSession", target: "ReadSession" }),
+    call({ status: "ongoing", kind: "session_read", displayName: "ReadSession", target: "ReadSession" }),
   ]))).toEqual({ verb: "ReadSession", target: "" });
 
   expect(workingLabel(message([
     call({
       status: "ongoing",
-      kind: "read_session",
+      kind: "session_read",
       displayName: "ReadSession",
       target: 'ReadSession(session_id="abc")',
     }),

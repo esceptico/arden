@@ -3,8 +3,8 @@
 AUTOMATIONS_PATH_PREFIX = "automations/"
 README_FILENAME = "README.md"
 SYSTEM_DIRECTORIES = frozenset({"topics", "daily", "automations", "insights", "projects"})
-READ_WIKI_PAGE_TOOL_NAME = "read_wiki_page"
-PUBLISH_WIKI_GENERATED_TOOL_NAME = "publish_wiki_generated"
+READ_WIKI_PAGE_TOOL_NAME = "wiki_read_page"
+PUBLISH_WIKI_GENERATED_TOOL_NAME = "wiki_publish_generated"
 WIKI_MAINTENANCE_REVIEW_TOOL_NAME = "wiki_maintenance_review"
 WIKI_POST_COMMIT_SERVICE = "wiki_post_commit"
 WIKI_PROJECTION_CONSUMER_ID = "wiki.projection"

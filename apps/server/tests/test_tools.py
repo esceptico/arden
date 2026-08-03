@@ -141,6 +141,7 @@ def test_function_tool_metadata_exposes_policy():
         "placement": "server",
         "requires_approval": False,
         "approval_mode": "never",
+        "deferred": False,
         "permissions": [],
         "timeout_seconds": None,
         "audit": True,
@@ -169,18 +170,18 @@ def test_tool_metadata_can_use_compact_display_copy_without_changing_agent_docs(
         policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL),
     )
 
-    assert t.get_metadata("create_automation")["description"] == display_description
-    assert t.to_dict("create_automation")["function"]["description"] == agent_description
-    registry = ToolRegistry(tool_overrides={"create_automation": ToolOverrideDecision.ASK})
-    registry.register("create_automation", t, source="_automation")
+    assert t.get_metadata("automation_create")["description"] == display_description
+    assert t.to_dict("automation_create")["function"]["description"] == agent_description
+    registry = ToolRegistry(tool_overrides={"automation_create": ToolOverrideDecision.ASK})
+    registry.register("automation_create", t, source="_automation")
     assert registry.get_metadata()[0]["description"] == display_description
 
 
 def test_create_automation_metadata_uses_compact_settings_copy():
-    assert create_automation_tool.get_metadata("create_automation")["description"] == (
+    assert create_automation_tool.get_metadata("automation_create")["description"] == (
         "Create a task that runs automatically on a schedule or event."
     )
-    assert create_automation_tool.to_dict("create_automation")["function"]["description"].startswith(
+    assert create_automation_tool.to_dict("automation_create")["function"]["description"].startswith(
         "Create an automation — a task the agent runs autonomously."
     )
 
@@ -546,7 +547,7 @@ async def test_update_todos_tool_emits_todo_event():
         io=IOBridge(emit=emit),
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
-    execution = ToolExecution(tool_id="call-todos", tool_name="update_todos", ctx=ctx)
+    execution = ToolExecution(tool_id="call-todos", tool_name="todo_update", ctx=ctx)
 
     result = await update_todos_tool.execute(
         execution,
@@ -575,11 +576,11 @@ async def test_update_todos_tool_emits_todo_event():
 @pytest.mark.asyncio
 async def test_update_todos_rejects_multiple_in_progress_items():
     registry = ToolRegistry()
-    _register_tools(registry, {"update_todos": update_todos_tool})
+    _register_tools(registry, {"todo_update": update_todos_tool})
 
     result = await registry.execute(
-        "update_todos",
-        _make_execution("update_todos"),
+        "todo_update",
+        _make_execution("todo_update"),
         {
             "items": [
                 {"content": "First", "status": "in_progress"},
@@ -1224,7 +1225,7 @@ async def test_arden_tool_executor_policy_offload_false_keeps_retrieval_pointer(
     result = await executor.execute("large_result", {}, "call-1")
 
     assert result.content != large_content
-    assert "read_file" in result.content
+    assert "file_read" in result.content
     assert result.data["truncated"] is True
     assert result.data["raw_ref"].startswith("sha256:")
     assert result.preview == "large"
@@ -1266,7 +1267,7 @@ async def test_arden_tool_executor_bounds_large_structured_data():
     assert result.data["has_more"] is True
     assert result.data["next_offset"] == 100
     assert "next_secret" not in result.data
-    assert "read_file" in result.content
+    assert "file_read" in result.content
     emitted = json.dumps({"content": result.content, "data": result.data, "model_content": result.model_content})
     assert len(emitted) < 20_000
 
@@ -1327,7 +1328,7 @@ async def test_arden_tool_executor_offload_clamps_single_long_line_preview():
     assert len(result.content) < OFFLOAD_PREVIEW_CHARS + 500
     assert "truncated" in result.content
     assert "saved to" in result.content
-    assert "read_file" in result.content
+    assert "file_read" in result.content
 
 
 @pytest.mark.asyncio
@@ -1354,7 +1355,7 @@ async def test_arden_tool_executor_policy_max_result_chars_truncates_before_mode
     result = await executor.execute("long_error", {}, "call-1")
 
     assert result.content.startswith("abcdefghij... [truncated]")
-    assert "read_file" in result.content
+    assert "file_read" in result.content
     assert result.data["truncated"] is True
     assert result.data["raw_ref"].startswith("sha256:")
     assert result.preview == "original"
@@ -1509,7 +1510,7 @@ async def test_offloaded_result_persisted_to_file(session_store: SessionStore):
     result = await executor.execute("big_offload", {}, "call-7")
 
     # full result saved to a durable file, recovered via the normal read_file tool by path
-    assert "read_file" in result.content
+    assert "file_read" in result.content
     path = trf.result_file_path("sess-1", "call-7")
     assert str(path) in result.content
     assert path.exists()

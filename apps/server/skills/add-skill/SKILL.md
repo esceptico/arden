@@ -64,7 +64,7 @@ ls ~/.agents/skills/
 ## After creating
 
 - Restart the server so the new skill appears in `<available_skills>`
-- Test by asking the agent to use the skill or by invoking `use_skill(skill="<name>")`
+- Test by asking the agent to use the skill or by invoking `skill_use(skill="<name>")`
 
 ## Tips
 

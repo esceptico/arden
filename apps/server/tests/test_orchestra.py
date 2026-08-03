@@ -208,8 +208,8 @@ async def test_agent_forwards_tool_name_allowlist():
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
-    await o.agent("do x", tools=["slack_search", "read_file"])
-    assert captured["tools"] == ["slack_search", "read_file"]
+    await o.agent("do x", tools=["slack_search", "file_read"])
+    assert captured["tools"] == ["slack_search", "file_read"]
 
 
 async def test_workflow_agents_exclude_spawn_tools():

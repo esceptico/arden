@@ -25,10 +25,10 @@ BASH_DESCRIPTION = """Execute a bash command on the user's device (the machine r
 Each command runs in a fresh subprocess — no state (env vars, shell functions, cwd) persists between calls. Commands run in the area's default cwd when set, otherwise in the executor's working directory. Use the working_dir parameter to run in a different directory instead of 'cd'.
 
 PREFER OTHER TOOLS:
-- For listing/finding files: use list_files() or find_files()
-- For searching file content: use search_text()
-- For reading files: use read_file()
-- For editing/writing files: load the files group, then use edit_file() or write_file()
+- For listing/finding files: use file_list() or file_find()
+- For searching file content: use file_search_text()
+- For reading files: use file_read()
+- For editing/writing files: load the files group, then use file_edit() or file_write()
 
 USE bash FOR:
 - System commands: git, npm, pip, brew

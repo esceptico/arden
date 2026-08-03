@@ -1,5 +1,5 @@
 """Tests for the subagent team harness: the shared child identity fragment,
-the live <agent_roster> note, the followup_task tool (queue vs wake), and the
+the live <agent_roster> note, the app_followup_task tool (queue vs wake), and the
 failure-path truncation + guidance in deliver_result."""
 
 import asyncio
@@ -62,7 +62,7 @@ async def test_child_system_prompt_carries_the_team_identity_fragment(monkeypatc
     assert TEAM_CHILD_BLOCK in prompt
     # The envelope names the child must recognize are stated verbatim.
     assert "<steering_message>" in prompt
-    assert "<followup_task>" in prompt
+    assert "<app_followup_task>" in prompt
     assert "<background_agent_result" in prompt
     assert "<agent_roster>" in prompt
 
@@ -163,7 +163,7 @@ def _execution(
         background_tasks=registry,
         services={"session": _StubSessionService(sessions or {}), "app_control": app_control},
     )
-    return ToolExecution(tool_id="t1", tool_name="followup_task", ctx=ctx), app_control
+    return ToolExecution(tool_id="t1", tool_name="app_followup_task", ctx=ctx), app_control
 
 
 @pytest.mark.asyncio
@@ -179,7 +179,7 @@ async def test_followup_task_queues_into_a_live_agents_inbox():
         assert app_control.dispatched == []
         drained = registry.drain_injections("agent-1")
         assert len(drained) == 1
-        assert "<followup_task>" in drained[0]["content"]
+        assert "<app_followup_task>" in drained[0]["content"]
         assert "also audit invoices" in drained[0]["content"]
     finally:
         await _cancel(task)
@@ -196,7 +196,7 @@ async def test_followup_task_wakes_a_finished_agent_with_a_hidden_continuation()
     assert len(app_control.dispatched) == 1
     dispatched = app_control.dispatched[0]
     assert dispatched["session_id"] == "cur::a1"
-    assert "<followup_task>" in dispatched["message"]
+    assert "<app_followup_task>" in dispatched["message"]
     assert "re-check the totals" in dispatched["message"]
     # bg: prefix = the continuation run's input is meta-hidden in the transcript.
     assert dispatched["client_id"].startswith("bg:")
@@ -265,7 +265,7 @@ async def test_deliver_result_truncates_failed_bodies_and_appends_guidance(tmp_p
     assert "x" * 3_600 in content
     assert "x" * 3_601 not in content
     assert "This agent's run failed." in content
-    assert 'followup_task(session_id="cur::a1")' in content
+    assert 'app_followup_task(session_id="cur::a1")' in content
 
 
 @pytest.mark.asyncio
@@ -277,4 +277,4 @@ async def test_deliver_result_never_truncates_completed_results(tmp_path, monkey
 
     assert body in content
     assert "[truncated]" not in content
-    assert "followup_task(" not in content
+    assert "app_followup_task(" not in content

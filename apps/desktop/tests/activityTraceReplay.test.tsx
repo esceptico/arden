@@ -25,7 +25,7 @@ const items = [
   },
   {
     id: "tool-1",
-    kind: "read_file",
+    kind: "file_read",
     target: 'read_file(path="a")',
     args: "{}",
     depth: 1,
@@ -65,7 +65,7 @@ test("rolling activity renders orphaned child rows from restored tails", () => {
       items={[
         {
           id: "child-1",
-          kind: "read_file",
+          kind: "file_read",
           target: 'read_file(path="a")',
           parentToolId: "missing-research",
           depth: 1,
@@ -236,7 +236,7 @@ test("session-backed agent rows do not inline child tool rows", () => {
         },
         {
           id: "child-tool",
-          kind: "read_file",
+          kind: "file_read",
           target: 'read_file(path="inside-child")',
           parentToolId: "call-research",
           depth: 1,
@@ -312,7 +312,7 @@ test("liftWorkflows: a live domain row wins and is pulled out, rest stays", () =
   const { workflowRows, rowItems } = liftWorkflows(
     [
       { id: "wf-tool-call", kind: "workflow", target: 'workflow(title="x")' },
-      { id: "plain-tool", kind: "read_file", target: 'read_file(path="keep")' },
+      { id: "plain-tool", kind: "file_read", target: 'read_file(path="keep")' },
     ],
     [makeWorkflow()],
     "sess-1",
@@ -336,7 +336,7 @@ test("liftWorkflows lifts a workflow item even with an EMPTY domain (synthesized
         args: '{"title":"Dex Slack research"}',
         status: "executed",
       },
-      { id: "plain", kind: "read_file", target: "read_file" },
+      { id: "plain", kind: "file_read", target: "file_read" },
     ],
     [],
     "sess-1",
@@ -356,9 +356,9 @@ test("liftWorkflows contains a workflow's leaked subtree (no parent tool rows)",
   const { workflowRows, rowItems } = liftWorkflows(
     [
       { id: "wf", kind: "workflow", semanticKind: "workflow", target: "workflow(...)", args: '{"title":"X"}', status: "ongoing" },
-      { id: "t1", kind: "list_files", target: "ListFiles(...)", parentToolId: "wf", depth: 1, status: "executed" },
+      { id: "t1", kind: "file_list", target: "ListFiles(...)", parentToolId: "wf", depth: 1, status: "executed" },
       { id: "t2", kind: "bash", target: "Bash(...)", parentToolId: "t1", depth: 2, status: "executed" }, // transitive
-      { id: "outside", kind: "read_file", target: "read_file", status: "executed" },
+      { id: "outside", kind: "file_read", target: "file_read", status: "executed" },
     ],
     [],
     "sess-1",
@@ -369,7 +369,7 @@ test("liftWorkflows contains a workflow's leaked subtree (no parent tool rows)",
 });
 
 test("liftWorkflows leaves non-workflow items untouched", () => {
-  const items = [{ id: "a", kind: "read_file", target: "read_file" }];
+  const items = [{ id: "a", kind: "file_read", target: "file_read" }];
   const plain = liftWorkflows(items, [], "sess-1");
   expect(plain.workflowRows).toEqual([]);
   expect(plain.rowItems.map((i) => i.id)).toEqual(["a"]);
@@ -387,7 +387,7 @@ test("orderedTraceEntries keeps the workflow card at its chronological position"
       { id: "a", kind: "slack_thread", target: "SlackThread(...)" },
       { id: "b", kind: "load_tools", target: 'Load Tools(group="slack")' },
       { id: "wf-tool-call", kind: "workflow", target: "workflow(...)" },
-      { id: "c", kind: "read_file", target: "read_file" },
+      { id: "c", kind: "file_read", target: "file_read" },
     ],
     [makeWorkflow()],
     "sess-1",

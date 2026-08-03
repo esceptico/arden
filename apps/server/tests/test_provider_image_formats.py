@@ -191,9 +191,7 @@ def test_every_tool_schema_converts_for_gemini():
 
 def test_gemini_folds_a_discriminated_union_into_any_of():
     declaration = (
-        GeminiClient(api_key="test")
-        ._convert_tools([open_in_app_tool.to_dict("open_in_app")])[0]
-        .function_declarations[0]
+        GeminiClient(api_key="test")._convert_tools([open_in_app_tool.to_dict("app_open")])[0].function_declarations[0]
     )
 
     destination = declaration.parameters.properties["destination"]

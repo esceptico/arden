@@ -387,7 +387,9 @@ calendar_tool = tool(
     display_description="Browse and search calendar events.",
     description=CALENDAR_DESCRIPTION,
     input_model=CalendarInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"calendar"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.EXTERNAL, permissions=frozenset({"calendar"}), deferred=True
+    ),
     execute=calendar,
 )
 
@@ -401,6 +403,7 @@ create_calendar_event_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"calendar"}),
+        deferred=True,
     ),
     approval=approve_create_calendar_event,
     execute=create_calendar_event,
@@ -416,6 +419,7 @@ edit_calendar_event_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"calendar"}),
+        deferred=True,
     ),
     approval=approve_edit_calendar_event,
     execute=edit_calendar_event,
@@ -431,6 +435,7 @@ delete_calendar_event_tool = tool(
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"calendar"}),
+        deferred=True,
     ),
     approval=approve_delete_calendar_event,
     execute=delete_calendar_event,

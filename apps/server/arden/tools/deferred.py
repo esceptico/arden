@@ -9,108 +9,61 @@ from arden.tools.core.context import ToolExecution
 from arden.tools.core.registry import ToolRegistry, tool_changes_state
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
-DEFERRED_SOURCES = frozenset(
-    {
-        "gmail",
-        "calendar",
-        "google_drive",
-        "_wiki",
-        "slack",
-        "_automation",
-        "_background",
-        "_notifications",
-        "_directives",
-        "_app_control",
-        "mcp",
-    }
-)
-
-DEFERRED_TOOL_GROUP_BY_NAME = {
-    "write_file": "_file_actions",
-    "edit_file": "_file_actions",
-}
-
-GROUP_ALIASES: dict[str, str] = {
-    "email": "gmail",
-    "emails": "gmail",
-    "gmail": "gmail",
-    "mail": "gmail",
-    "calendar": "calendar",
-    "cal": "calendar",
-    "schedule": "calendar",
-    "google_drive": "google_drive",
-    "drive": "google_drive",
-    "docs": "google_drive",
-    "sheets": "google_drive",
-    "spreadsheets": "google_drive",
-    "wiki": "_wiki",
-    "slack": "slack",
-    "automations": "_automation",
-    "automation": "_automation",
-    "reminders": "_automation",
-    "reminder": "_automation",
-    "background": "_background",
-    "backgrounds": "_background",
-    "background_tasks": "_background",
-    "background task": "_background",
-    "notifications": "_notifications",
-    "notification": "_notifications",
-    "notify": "_notifications",
-    "directives": "_directives",
-    "directive": "_directives",
-    "rules": "_directives",
-    "behavior": "_directives",
-    "file": "_file_actions",
-    "files": "_file_actions",
-    "file_actions": "_file_actions",
-    "filesystem": "_file_actions",
-    "app": "_app_control",
-    "app_control": "_app_control",
-    "navigate": "_app_control",
-    "navigation": "_app_control",
-    "attention": "_app_control",
-    "mcp": "mcp",
-}
+# Deferral is declared per tool (ToolPolicy.deferred); MCP tools are always
+# deferred. A deferred tool's group is DERIVED from its name's namespace prefix
+# (the first `_` segment), so the tool name is the single source of truth for
+# grouping — there is no membership map to maintain.
 
 GROUP_DESCRIPTIONS: dict[str, str] = {
-    "gmail": "Search/list/read/send Gmail messages. Use for inbox, emails, Gmail, sending/replying, or communication history.",
+    "email": "Search/list/read/send Gmail messages. Use for inbox, emails, Gmail, sending/replying, or communication history.",
     "calendar": "Search/create/edit/delete calendar events. Use for meetings, schedule, availability, appointments, reminders, or rescheduling.",
-    "google_drive": "Search/read/create/edit Google Docs and Sheets. Use for Drive documents, spreadsheets, tables, ranges, and rows.",
-    "_wiki": "List, read, create, edit, and archive managed wiki pages; inspect links; and publish automation-owned generated regions.",
+    "drive": "Search/read/create/edit Google Docs and Sheets. Use for Drive documents, spreadsheets, tables, ranges, and rows.",
+    "wiki": "List, read, create, edit, and archive managed wiki pages; inspect links; and publish automation-owned generated regions.",
     "slack": "Search Slack and read channels, DMs, threads, image files, and user profiles. Use for Slack messages, workspace history, coworkers, channels, DMs, threads, screenshots, images, or file IDs.",
-    "_automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, notifications, scheduled agents, or automation management.",
-    "_background": "Stop a running agent you spawned. Spawning uses the always-available background() tool; its result arrives automatically, and read_session shows its work.",
-    "_notifications": "Send a user-facing notification. Use when the user explicitly asks to be notified or an automation/background flow needs to alert them.",
-    "_directives": "Update persistent behavior directives injected into the system prompt. Use when the user asks to change standing behavior, tone, or operating rules.",
-    "_file_actions": "Write or edit local files. Use after inspecting files with read_file/list_files/find_files/search_text and deciding an exact file change is needed.",
-    "_app_control": "Drive the Arden app itself: message another chat or an agent you spawned, rename or archive a chat, raise a needs-you item on the user's Home, or open a place in the UI. Use when the user asks you to act on another conversation, flag something for later, or take them somewhere in the app.",
+    "automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, scheduled agents, or automation management.",
+    "loop": "Repeat work in THIS chat on a cadence: loop_create starts one, loop_schedule_wakeup paces it, loop_done ends it.",
+    "session": "Create, rename, archive, list, and read chats; search transcripts. Load only when the user explicitly works with sessions as such — creating a chat is never part of a content task like wiki or file edits.",
+    "app": "Drive the Arden app itself: assign work to an agent you spawned, raise a needs-you item on the user's Home, or open a place in the UI.",
+    "agent": "Stop a running agent you spawned. Its result arrives automatically, and session_read shows its work.",
+    "notify": "Send a user-facing notification. Use when the user explicitly asks to be notified or an automation/background flow needs to alert them.",
+    "directives": "Update persistent behavior directives injected into the system prompt. Use when the user asks to change standing behavior, tone, or operating rules.",
+    "file": "Write or edit local files. Use after inspecting files with file_read/file_list/file_find/file_search_text and deciding an exact file change is needed.",
+    "fact": "Fact history and mutations: provenance lookups plus the prepare-then-commit change pair. fact_search and fact_get are always available without loading.",
+    "skill": "Create a new reusable skill from the current conversation. skill_use is always available without loading.",
     "mcp": "Connected MCP server tools. Use for external apps/servers not covered by core tools. Load by server, e.g. mcp:obsidian.",
 }
 
-DEFERRED_GROUP_ORDER = (
-    "gmail",
-    "calendar",
-    "google_drive",
-    "_wiki",
-    "slack",
-    "_automation",
-    "_background",
-    "_notifications",
-    "_directives",
-    "_file_actions",
-    "_app_control",
-)
+DEFERRED_GROUP_ORDER = tuple(group for group in GROUP_DESCRIPTIONS if group != "mcp")
 
-DEFERRED_GROUP_LABELS = {
+GROUP_ALIASES: dict[str, str] = {
+    "emails": "email",
     "gmail": "email",
-    "google_drive": "google_drive",
-    "_wiki": "wiki",
-    "_automation": "automations",
-    "_background": "background",
-    "_notifications": "notifications",
-    "_directives": "directives",
-    "_file_actions": "files",
-    "_app_control": "app",
+    "mail": "email",
+    "cal": "calendar",
+    "schedule": "calendar",
+    "google_drive": "drive",
+    "docs": "drive",
+    "sheets": "drive",
+    "automations": "automation",
+    "reminders": "automation",
+    "reminder": "automation",
+    "loops": "loop",
+    "sessions": "session",
+    "chats": "session",
+    "background": "agent",
+    "agents": "agent",
+    "notifications": "notify",
+    "notification": "notify",
+    "directive": "directives",
+    "rules": "directives",
+    "behavior": "directives",
+    "files": "file",
+    "filesystem": "file",
+    "facts": "fact",
+    "memory": "fact",
+    "skills": "skill",
+    "app_control": "app",
+    "navigation": "app",
 }
 
 _env = Environment(trim_blocks=True, lstrip_blocks=True)
@@ -165,10 +118,15 @@ Connected MCP server tools:
 
 
 def is_deferred_tool(name: str, registry: ToolRegistry) -> bool:
-    if name in DEFERRED_TOOL_GROUP_BY_NAME:
-        return True
-    source = registry.get_source(name)
-    return source in DEFERRED_SOURCES
+    tool_obj = registry.get(name)
+    if tool_obj is None:
+        return False
+    return tool_obj.policy.deferred or registry.get_source(name) == "mcp"
+
+
+def deferred_group(name: str) -> str:
+    """A deferred tool's group is its namespace prefix — the first `_` segment."""
+    return name.split("_", 1)[0]
 
 
 def _tool_summary(name: str, registry: ToolRegistry) -> str:
@@ -222,14 +180,14 @@ def build_deferred_catalog(
             continue
         if not tool_obj.policy.permissions.issubset(capabilities):
             continue
-        source = registry.get_source(name)
-        group = DEFERRED_TOOL_GROUP_BY_NAME.get(name, source)
-        if group not in DEFERRED_SOURCES and name not in DEFERRED_TOOL_GROUP_BY_NAME:
+        if not is_deferred_tool(name, registry):
             continue
-        by_group[group].append(name)
-        if source == "mcp":
+        if registry.get_source(name) == "mcp":
+            by_group["mcp"].append(name)
             server = _mcp_server_from_name(name) or "default"
             mcp_by_server[server].append(name)
+        else:
+            by_group[deferred_group(name)].append(name)
     return DeferredCatalog(
         by_group={k: sorted(v) for k, v in by_group.items()},
         mcp_by_server={k: sorted(v) for k, v in mcp_by_server.items()},
@@ -256,15 +214,15 @@ def visible_tool_names(
 
 
 def _deferred_prompt_groups(catalog: DeferredCatalog, registry: ToolRegistry) -> list[dict]:
+    known = [group for group in DEFERRED_GROUP_ORDER if group in catalog.by_group]
+    unknown = sorted(group for group in catalog.by_group if group not in GROUP_DESCRIPTIONS and group != "mcp")
     groups: list[dict] = []
-    for source in DEFERRED_GROUP_ORDER:
-        names = catalog.by_group.get(source)
-        if not names:
-            continue
+    for group in (*known, *unknown):
+        names = catalog.by_group[group]
         groups.append(
             {
-                "label": DEFERRED_GROUP_LABELS.get(source, source),
-                "description": GROUP_DESCRIPTIONS[source],
+                "label": group,
+                "description": GROUP_DESCRIPTIONS.get(group, "Deferred tools."),
                 "tool_names": names,
                 "requires_approval": any(
                     (tool_obj := registry.get(name)) is not None and tool_changes_state(tool_obj) for name in names
@@ -364,7 +322,7 @@ def append_deferred_tools_prompt(
 class LoadToolsInput(BaseModel):
     group: str | None = Field(
         default=None,
-        description="Deferred group to load, e.g. 'email', 'calendar', 'wiki', 'slack', 'automations', 'background', 'notifications', 'directives', 'files', 'app', or 'mcp:obsidian'.",
+        description="Deferred group to load, e.g. 'email', 'calendar', 'wiki', 'slack', 'automation', 'loop', 'session', 'app', 'notify', 'directives', 'file', 'fact', 'skill', or 'mcp:obsidian'.",
     )
     names: list[str] | None = Field(
         default=None,
@@ -412,18 +370,7 @@ def _names_for_group(
 
     names = catalog.by_group.get(normalized, [])
     if not names:
-        groups = [
-            "email",
-            "calendar",
-            "wiki",
-            "slack",
-            "automations",
-            "background",
-            "notifications",
-            "directives",
-            "files",
-            "app",
-        ]
+        groups = [g for g in DEFERRED_GROUP_ORDER if g in catalog.by_group]
         groups.extend(f"mcp:{s}" for s in sorted(catalog.mcp_by_server))
         return [], "No deferred group {group!r}. Available groups: {groups}.".format(
             group=group,
@@ -598,8 +545,8 @@ load_tools_tool = tool(
         "Load deferred tool schemas into the current run by exact group or tool name. "
         "Use proactively when the user's request needs a deferred capability listed in the DEFERRED TOOLS prompt section. "
         "Loading tools does not execute them; it only makes them callable on the next model step. "
-        "Examples: group='slack', group='email', group='calendar', group='automations', group='background', "
-        "group='notifications', group='directives', group='files', group='app', group='mcp:obsidian', "
+        "Examples: group='slack', group='email', group='calendar', group='automation', group='session', "
+        "group='notify', group='directives', group='file', group='app', group='mcp:obsidian', "
         "or names=['slack_search','slack_thread','slack_file']."
     ),
     input_model=LoadToolsInput,

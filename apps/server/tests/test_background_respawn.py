@@ -283,6 +283,6 @@ async def test_respawn_host_failure_settles_row_and_notifies(store: SessionStore
     assert dispatched, "the session must be told the agent is gone"
     _sid, content, client_id, is_meta = dispatched[0]
     assert 'status="failed"' in content
-    assert "followup_task" in content
+    assert "app_followup_task" in content
     assert client_id == "bg:bg-crash:respawn-failed"
     assert is_meta is True

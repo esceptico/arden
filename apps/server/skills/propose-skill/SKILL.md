@@ -1,11 +1,11 @@
 ---
 name: propose-skill
-description: Use this skill when the user wants to capture the current conversation as a reusable skill. Analyze the session and call create_skill to propose one — the user reviews the full body in the approval card before it's written to disk.
+description: Use this skill when the user wants to capture the current conversation as a reusable skill. Analyze the session and call skill_create to propose one — the user reviews the full body in the approval card before it's written to disk.
 ---
 
 # Propose Skill
 
-The user wants to capture the work in this conversation as a reusable skill — a procedure the agent can re-run on demand via `/<skill-name>`. Your job: analyze the session, then call `create_skill` once with the proposed parameters. The user will see your proposal in the approval card and accept or reject.
+The user wants to capture the work in this conversation as a reusable skill — a procedure the agent can re-run on demand via `/<skill-name>`. Your job: analyze the session, then call `skill_create` once with the proposed parameters. The user will see your proposal in the approval card and accept or reject.
 
 ## When a skill (vs. an automation)
 
@@ -21,7 +21,7 @@ The user wants to capture the work in this conversation as a reusable skill — 
 
 ## What to call
 
-Call `create_skill` exactly once with:
+Call `skill_create` exactly once with:
 
 - **`name`**: lowercase, hyphens only, must start with a letter, max 48 chars. Example: `"refactor-component"`.
 - **`description`**: one line — what the skill does AND when to use it. This is what the agent reads to decide whether to activate the skill, so include keywords that match user intent.
@@ -44,4 +44,4 @@ The user reads your prose first, then sees the structured args in the approval c
 
 ## If there's nothing reusable
 
-If the conversation is a one-off Q&A or exploration with no procedure worth codifying, say so plainly in 1-2 sentences and DO NOT call `create_skill`. Don't manufacture a proposal.
+If the conversation is a one-off Q&A or exploration with no procedure worth codifying, say so plainly in 1-2 sentences and DO NOT call `skill_create`. Don't manufacture a proposal.

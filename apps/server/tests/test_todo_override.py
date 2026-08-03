@@ -60,7 +60,7 @@ async def test_update_todos_clears_user_override():
         io=IOBridge(),
         services={"session": svc},
     )
-    execution = ToolExecution(tool_id="t", tool_name="update_todos", ctx=ctx)
+    execution = ToolExecution(tool_id="t", tool_name="todo_update", ctx=ctx)
 
     result = await todos_module.update_todos(
         execution,
@@ -87,7 +87,7 @@ async def test_update_todos_all_completed_retires_the_list():
         io=IOBridge(),
         services={"session": svc},
     )
-    execution = ToolExecution(tool_id="t", tool_name="update_todos", ctx=ctx)
+    execution = ToolExecution(tool_id="t", tool_name="todo_update", ctx=ctx)
 
     await todos_module.update_todos(
         execution,

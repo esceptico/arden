@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS session_messages (
     message_json TEXT NOT NULL,
     client_id TEXT,
     created_at TEXT NOT NULL,
-    search_text TEXT,
+    file_search_text TEXT,
     PRIMARY KEY (session_id, message_id),
     UNIQUE (session_id, seq)
 );
@@ -1236,22 +1236,22 @@ class SessionStore:
     _FTS_TRIGGERS = """
         CREATE TRIGGER IF NOT EXISTS session_messages_ai
         AFTER INSERT ON session_messages BEGIN
-            INSERT INTO session_messages_fts(rowid, search_text)
-            VALUES (new.rowid, new.search_text);
+            INSERT INTO session_messages_fts(rowid, file_search_text)
+            VALUES (new.rowid, new.file_search_text);
         END;
 
         CREATE TRIGGER IF NOT EXISTS session_messages_ad
         AFTER DELETE ON session_messages BEGIN
-            INSERT INTO session_messages_fts(session_messages_fts, rowid, search_text)
-            VALUES ('delete', old.rowid, old.search_text);
+            INSERT INTO session_messages_fts(session_messages_fts, rowid, file_search_text)
+            VALUES ('delete', old.rowid, old.file_search_text);
         END;
 
         CREATE TRIGGER IF NOT EXISTS session_messages_au
         AFTER UPDATE ON session_messages BEGIN
-            INSERT INTO session_messages_fts(session_messages_fts, rowid, search_text)
-            VALUES ('delete', old.rowid, old.search_text);
-            INSERT INTO session_messages_fts(rowid, search_text)
-            VALUES (new.rowid, new.search_text);
+            INSERT INTO session_messages_fts(session_messages_fts, rowid, file_search_text)
+            VALUES ('delete', old.rowid, old.file_search_text);
+            INSERT INTO session_messages_fts(rowid, file_search_text)
+            VALUES (new.rowid, new.file_search_text);
         END;
     """
 
@@ -1259,7 +1259,7 @@ class SessionStore:
         """Full-text index over transcript messages. External-content FTS5
         keyed to session_messages.rowid, kept in sync by triggers so every
         write path stays correct. Indexes the flattened text projection
-        (search_text), not the JSON envelope.
+        (file_search_text), not the JSON envelope.
 
         Ordering matters: triggers are dropped before the column backfill so
         the AFTER UPDATE trigger can't issue a 'delete' against rows that were
@@ -1268,8 +1268,8 @@ class SessionStore:
         rather than crashing boot."""
         # 1. Ensure the search_text column (CREATE TABLE only adds it fresh).
         cols = await self.conn.execute_fetchall("PRAGMA table_info(session_messages)")
-        if "search_text" not in {c["name"] for c in cols}:
-            await self.conn.execute("ALTER TABLE session_messages ADD COLUMN search_text TEXT")
+        if "file_search_text" not in {c["name"] for c in cols}:
+            await self.conn.execute("ALTER TABLE session_messages ADD COLUMN file_search_text TEXT")
             await self.conn.commit()
 
         # 2. Drop sync triggers so the backfill below runs without touching a
@@ -1285,7 +1285,7 @@ class SessionStore:
 
         # 3. Backfill flattened text for legacy rows (no triggers active).
         legacy = await self.conn.execute_fetchall(
-            "SELECT rowid, message_json FROM session_messages WHERE search_text IS NULL"
+            "SELECT rowid, message_json FROM session_messages WHERE file_search_text IS NULL"
         )
         for row in legacy:
             try:
@@ -1293,7 +1293,7 @@ class SessionStore:
             except Exception:
                 msg = {}
             await self.conn.execute(
-                "UPDATE session_messages SET search_text = ? WHERE rowid = ?",
+                "UPDATE session_messages SET file_search_text = ? WHERE rowid = ?",
                 (self._flatten_message_text(msg), row["rowid"]),
             )
         if legacy:
@@ -1321,7 +1321,7 @@ class SessionStore:
             await self.conn.execute(
                 """
                 CREATE VIRTUAL TABLE IF NOT EXISTS session_messages_fts USING fts5(
-                    search_text,
+                    file_search_text,
                     content='session_messages',
                     content_rowid='rowid'
                 )
@@ -1626,7 +1626,7 @@ class SessionStore:
                 await self.conn.execute(
                     """
                     UPDATE session_messages
-                    SET role = ?, message_json = ?, client_id = ?, created_at = ?, search_text = ?
+                    SET role = ?, message_json = ?, client_id = ?, created_at = ?, file_search_text = ?
                     WHERE session_id = ? AND message_id = ?
                     """,
                     (role, message_json, client_id, created_at, search_text, session_id, message_id),
@@ -1635,7 +1635,7 @@ class SessionStore:
                 await self.conn.execute(
                     """
                     INSERT INTO session_messages
-                        (session_id, message_id, seq, role, message_json, client_id, created_at, search_text)
+                        (session_id, message_id, seq, role, message_json, client_id, created_at, file_search_text)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (session_id, message_id, next_seq, role, message_json, client_id, created_at, search_text),
@@ -2551,7 +2551,7 @@ class SessionStore:
             suspension_id=tool_call_id,
             kind="integration_connection",
             payload={
-                "tool_name": "request_connection",
+                "tool_name": "connection_request",
                 "action": descriptor.action,
                 "scope": "external",
                 "integration_id": descriptor.integration_id,
@@ -3574,7 +3574,7 @@ class SessionStore:
     async def list_transcript_messages_after(self, session_id: str, after_seq: int, limit: int) -> list[dict]:
         rows = await self.read_conn.execute_fetchall(
             """
-            SELECT seq, role, COALESCE(search_text, '') AS text, message_id, created_at
+            SELECT seq, role, COALESCE(file_search_text, '') AS text, message_id, created_at
             FROM session_messages
             WHERE session_id = ? AND seq > ? AND role IN ('user', 'assistant')
             ORDER BY seq ASC
@@ -3587,7 +3587,7 @@ class SessionStore:
     async def list_latest_transcript_messages(self, session_id: str, limit: int) -> list[dict]:
         rows = await self.read_conn.execute_fetchall(
             """
-            SELECT seq, role, COALESCE(search_text, '') AS text, message_id, created_at
+            SELECT seq, role, COALESCE(file_search_text, '') AS text, message_id, created_at
             FROM session_messages
             WHERE session_id = ? AND role IN ('user', 'assistant')
             ORDER BY seq DESC

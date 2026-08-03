@@ -122,11 +122,11 @@ and never expands it.
 A wiki-writing prompt should list the target directory before creating a page,
 and read the exact path before editing one. The backend protects a fresh read
 from being overwritten; on a write conflict, list/read again before retrying.
-Ordinary automation pages belong under `automations/`. `publish_wiki_generated`
+Ordinary automation pages belong under `automations/`. `wiki_publish_generated`
 is separate: use it only for a section owned by that automation.
 
 Responses also carry `tool_scope_label`, a rendering of what the scope actually
-grants (for example `read | create_wiki_page | edit_wiki_page`). It is
+grants (for example `read | wiki_create_page | wiki_edit_page`). It is
 informational — the server owns the wording.
 
 Arden's own custodians and workers run under finer contracts assigned in code

@@ -7,7 +7,7 @@ description: Create a custom user tool in ~/.arden/tools/ using the current tool
 
 Help the user create a custom tool. User tools live in `~/.arden/tools/` as Python files and are discovered when the server starts.
 
-**Important**: Use `bash` to run the scaffold script and apply edits. Use `read_file` to read and verify. Do not create class-based tools. The only supported user-tool registration shape is a module-level `tools: dict[str, Tool]` built with `tool(...)`.
+**Important**: Use `bash` to run the scaffold script and apply edits. Use `file_read` to read and verify. Do not create class-based tools. The only supported user-tool registration shape is a module-level `tools: dict[str, Tool]` built with `tool(...)`.
 
 ## Step 1: Gather requirements
 
@@ -30,7 +30,7 @@ This creates `~/.arden/tools/<tool_name>.py` from the current `tool(...)` templa
 
 ## Step 3: Customize
 
-Use `read_file` on `~/.arden/tools/<tool_name>.py`, then use `bash` to apply edits:
+Use `file_read` on `~/.arden/tools/<tool_name>.py`, then use `bash` to apply edits:
 
 - Rename `ToolInput` and `execute_tool` if clearer
 - Fill in `display_name` and `description`
@@ -172,7 +172,7 @@ Policy fields:
 
 ## Step 4: Verify and inform
 
-1. Use `read_file` to verify the final tool file
+1. Use `file_read` to verify the final tool file
 2. Tell the user to restart the server (`arden-server serve`) for discovery
 3. Name conflicts with built-ins are skipped with a warning; import errors are logged and skipped
 

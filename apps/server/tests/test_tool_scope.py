@@ -35,7 +35,7 @@ def _tool(action: ToolAction) -> Tool:
 FACTS = (
     ToolFacts("slack_search", ToolAction.READ, "slack", True),
     ToolFacts("slack_post_message", ToolAction.WRITE, "slack", True),
-    ToolFacts("send_email", ToolAction.WRITE, "gmail", True),
+    ToolFacts("email_send", ToolAction.WRITE, "gmail", True),
     ToolFacts("recall", ToolAction.READ, "_facts", False),
     ToolFacts("memory_patch", ToolAction.WRITE, "_facts", False),
 )
@@ -48,7 +48,7 @@ def _granted(scope, facts=FACTS) -> set[str]:
 def test_leaves_select_on_registry_facts_not_on_the_name_string():
     assert _granted(tools.read) == {"slack_search", "recall"}
     assert _granted(tools.system) == {"recall", "memory_patch"}
-    assert _granted(tools.integrations) == {"slack_search", "slack_post_message", "send_email"}
+    assert _granted(tools.integrations) == {"slack_search", "slack_post_message", "email_send"}
     assert _granted(tools.source("slack")) == {"slack_search", "slack_post_message"}
     assert _granted(tools.named("recall")) == {"recall"}
     assert _granted(tools.prefix("slack_")) == {"slack_search", "slack_post_message"}
@@ -61,11 +61,11 @@ def test_union_intersection_and_narrowing_compose():
         "recall",
         "memory_patch",
     }
-    assert _granted(tools.integrations & ~tools.source("slack")) == {"send_email"}
+    assert _granted(tools.integrations & ~tools.source("slack")) == {"email_send"}
 
 
 def test_expressions_render_with_correct_precedence():
-    assert str(tools.read | tools.named("send_email") | tools.prefix("slack_")) == "read | send_email | slack_*"
+    assert str(tools.read | tools.named("email_send") | tools.prefix("slack_")) == "read | email_send | slack_*"
     assert str(tools.system | (tools.integrations & tools.read)) == "system | integrations & read"
     # `&` binds tighter, so a nested union must carry its own parens.
     assert str((tools.read | tools.write) & ~tools.source("slack")) == "(read | write) & ~source(slack)"
@@ -155,8 +155,8 @@ def test_read_only_never_smuggles_in_a_write():
     executor = ToolExecutor(get_services=lambda: {"wiki": object(), "wiki_post_commit": object()})
     granted = {s["function"]["name"] for s in executor.get_tools(scope=resolve("read_only"))}
 
-    assert {"list_wiki_pages", "read_wiki_page", "wiki_links"} <= granted
-    for name in ("create_wiki_page", "edit_wiki_page", "archive_wiki_page", "send_email"):
+    assert {"wiki_list_pages", "wiki_read_page", "wiki_links"} <= granted
+    for name in ("wiki_create_page", "wiki_edit_page", "wiki_archive_page", "email_send"):
         assert name not in granted, name
 
 

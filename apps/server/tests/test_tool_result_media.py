@@ -40,7 +40,7 @@ class NonDurableDataRunner:
     async def execute_all(self, _calls):
         yield ToolCompleted(
             tool_id="call_large",
-            name="search_text",
+            name="file_search_text",
             result="many matches",
             preview="Matches",
             duration_ms=1,
@@ -96,9 +96,9 @@ async def test_dispatch_tools_omits_non_durable_tool_result_data():
     raw = ToolCall(
         id="call_large",
         type="function",
-        function=FunctionCall(name="search_text", arguments='{"query":"x"}'),
+        function=FunctionCall(name="file_search_text", arguments='{"query":"x"}'),
     )
-    pending = PendingToolCall(tool_call=raw, name="search_text", args={"query": "x"})
+    pending = PendingToolCall(tool_call=raw, name="file_search_text", args={"query": "x"})
     messages = []
 
     async for _event in dispatch_tools(NonDurableDataRunner(), messages, [pending], [raw]):

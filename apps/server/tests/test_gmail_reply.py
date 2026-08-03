@@ -104,7 +104,7 @@ async def test_reply_tool_returns_idempotent_receipt_and_refs(tmp_path, monkeypa
             IDEMPOTENCY_LEDGER_SERVICE: IdempotencyLedger(tmp_path / "ledger.sqlite3"),
         },
     )
-    execution = ToolExecution(tool_id="reply-call-1", tool_name="reply_email", ctx=ctx)
+    execution = ToolExecution(tool_id="reply-call-1", tool_name="email_reply", ctx=ctx)
     args = ReplyEmailInput(
         message_ref="me@example.test:message-1",
         body="Thanks — confirmed.",

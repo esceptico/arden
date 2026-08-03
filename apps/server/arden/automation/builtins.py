@@ -45,7 +45,7 @@ class BuiltinSpec:
 _FACT_RETENTION_DESCRIPTION = "Review temporary canonical facts when their lifecycle review is due."
 _FACT_RETENTION_PROMPT = (
     "Review only canonical facts that are due for lifecycle review. Start with "
-    "get_due_fact_reviews, then inspect any candidate facts and their saved "
+    "fact_due_reviews, then inspect any candidate facts and their saved "
     "provenance before acting. Never treat silence or age alone as evidence. "
     "Only confirm, supersede, or expire when the available evidence "
     "supports that exact decision, and pass its exact fact IDs as "

@@ -29,7 +29,7 @@ from arden.tools.executor import ToolExecutor
 # The live agent-status listing must not be deduped by SharedLedger: a second
 # caller needs the CURRENT state, not the first caller's snapshot. read_session
 # stays deduped — it is a cursor-keyed transcript read.
-LIVE_READ_TOOLS = frozenset({"list_recent_sessions"})
+LIVE_READ_TOOLS = frozenset({"session_list"})
 AUDIT_PREVIEW_MAX_CHARS = 500
 OFFLOAD_CONTINUATION_FIELDS = frozenset({"has_more", "next_cursor", "next_offset"})
 _logger = logging.get_logger(__name__)
@@ -381,7 +381,7 @@ class ArdenToolExecutor:
                 "raw_bytes": blob.content_bytes,
                 **blob.to_internal_data(),
             }
-            note = f"\n[Full result saved to {path}. Use read_file(path={str(path)!r}) to retrieve it.]"
+            note = f"\n[Full result saved to {path}. Use file_read(path={str(path)!r}) to retrieve it.]"
         return ToolResult(
             content=f"{result.content[:max_chars]}... [truncated]{note}",
             preview=result.preview,
@@ -419,7 +419,7 @@ class ArdenToolExecutor:
         compact = (
             f"{preview}\n\n"
             f"[Full tool result payload ({blob.content_bytes} bytes) saved to {path}.]\n"
-            f"Use read_file(path={str(path)!r}, offset=N, limit=M) to retrieve it."
+            f"Use file_read(path={str(path)!r}, offset=N, limit=M) to retrieve it."
         )
         return ToolResult(
             content=compact,
@@ -464,8 +464,8 @@ class ArdenToolExecutor:
         compact = (
             f"{preview}\n\n"
             f"[Full result ({total} lines, {hidden_lines} not shown here) saved to {path}.]\n"
-            f"Use read_file(path={str(path)!r}, offset=N, limit=M) to read more, "
-            f"or search_text / bash grep over that file to find specific content."
+            f"Use file_read(path={str(path)!r}, offset=N, limit=M) to read more, "
+            f"or file_search_text / bash grep over that file to find specific content."
         )
         return ToolResult(
             content=compact,

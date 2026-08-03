@@ -164,7 +164,7 @@ async def test_complete_goal_tool_emits_goal_update():
         services={"session": svc},
     )
     result = await complete_goal(
-        ToolExecution(tool_id="tool-1", tool_name="complete_goal", ctx=ctx),
+        ToolExecution(tool_id="tool-1", tool_name="goal_complete", ctx=ctx),
         EmptyInput(),
     )
 
@@ -192,7 +192,7 @@ async def test_block_goal_requires_repeated_same_blocker_before_terminal():
         io=IOBridge(emit=emit),
         services={"session": svc},
     )
-    execution = ToolExecution(tool_id="tool-1", tool_name="block_goal", ctx=ctx)
+    execution = ToolExecution(tool_id="tool-1", tool_name="goal_block", ctx=ctx)
     args = BlockGoalInput(reason="Need credentials", evidence="Login requires user credentials.")
 
     first = await block_goal(execution, args)

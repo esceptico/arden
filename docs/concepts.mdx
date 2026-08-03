@@ -63,7 +63,7 @@ An **area** is what turns that into something you don't have to check.
 An area is a domain – health, research, a job search, or a side project. It may attach one
 managed wiki page and delegate a standing custodian. The custodian is a channel
 automation with an observe-only scope and one terminal action,
-`submit_area_report`, which atomically commits its work, evidence, at most three
+`area_submit_report`, which atomically commits its work, evidence, at most three
 salient asks, and when to look again.
 
 Every run re-decides the area's requests against stable keys, so you get a
@@ -80,8 +80,8 @@ mistake:
 | `research` | One investigation you want to wait for |
 | `background` | One detached investigation that delivers itself when done |
 | `workflow` | A curated multi-agent pipeline (find→verify, diverge→judge) |
-| `create_automation` | Recurring scheduled or event-driven work |
-| `create_loop` | Adaptive repeated work in this chat that stops on a condition |
+| `automation_create` | Recurring scheduled or event-driven work |
+| `loop_create` | Adaptive repeated work in this chat that stops on a condition |
 
 See [Workflows and subagents](/guides/workflows) for what each one actually does.
 

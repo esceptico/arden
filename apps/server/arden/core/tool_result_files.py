@@ -42,10 +42,10 @@ def result_file_path(session_id: str, tool_call_id: str) -> Path:
 
 
 def _ensure_ignore_marker() -> None:
-    """Drop a ripgrep `.ignore` at the store root so search_text/find_files never
+    """Drop a ripgrep `.ignore` at the store root so file_search_text/file_find never
     walk offloaded results — the result store is not a search corpus. ripgrep
     honors this even when a search is rooted AT the store (returns nothing instead
-    of grepping GBs), while an explicit single-file read_file still works."""
+    of grepping GBs), while an explicit single-file file_read still works."""
     marker = RESULTS_BASE / ".ignore"
     if not marker.exists():
         RESULTS_BASE.mkdir(parents=True, exist_ok=True)

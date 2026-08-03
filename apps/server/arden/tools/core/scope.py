@@ -3,7 +3,7 @@
 A scope is a predicate over tools, composed with `&`, `|`, `~` — the shape
 python-telegram-bot uses for update filters.
 
-    tools.read | tools.named("submit_area_report") | tools.prefix("area_page_")
+    tools.read | tools.named("area_submit_report") | tools.prefix("area_page_")
     tools.system | (tools.integrations & tools.read)
 
 Filters are built in code and never serialized. What persists is a scope *key*

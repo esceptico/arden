@@ -9,7 +9,7 @@ def _spec(**overrides) -> SpawnSpec:
             {"role": "user", "content": "Scan the docs."},
         ),
         "agent_type": "research",
-        "tools": ("read_file", "web_search"),
+        "tools": ("file_read", "web_search"),
         "model": "claude-sonnet-5",
         "reasoning_effort": "high",
         "timeout_seconds": 1800,

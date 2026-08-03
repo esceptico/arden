@@ -112,8 +112,8 @@ async def test_runtime_does_not_initialize_canonical_memory_when_disabled(tmp_pa
 
         assert runtime.executor is not None
         names = {schema["function"]["name"] for schema in runtime.executor.get_tools()}
-        assert "search_facts" not in names
-        assert "list_wiki_pages" not in names
+        assert "fact_search" not in names
+        assert "wiki_list_pages" not in names
     finally:
         await runtime.close()
 
@@ -139,14 +139,14 @@ async def test_runtime_wires_canonical_facts_and_survives_restart(tmp_path) -> N
         assert runtime.executor is not None
         names = {schema["function"]["name"] for schema in runtime.executor.get_tools()}
         assert {
-            "search_facts",
-            "get_fact",
-            "plan_fact_changes",
-            "commit_fact_changes",
-            "list_wiki_pages",
-            "create_wiki_page",
-            "edit_wiki_page",
-            "archive_wiki_page",
+            "fact_search",
+            "fact_get",
+            "fact_plan_changes",
+            "fact_commit_changes",
+            "wiki_list_pages",
+            "wiki_create_page",
+            "wiki_edit_page",
+            "wiki_archive_page",
         } <= names
         assert "remember" not in names
 
@@ -315,7 +315,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             run_id=event.run_id,
             session_id=event.session_id,
             tool_call_id="read-page",
-            tool_name="read_wiki_page",
+            tool_name="wiki_read_page",
             action="read",
             scope="internal",
         )
@@ -332,7 +332,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             run_id=event.run_id,
             session_id=event.session_id,
             tool_call_id="read-owned-page",
-            tool_name="read_wiki_page",
+            tool_name="wiki_read_page",
             action="read",
             scope="internal",
         )
@@ -1168,7 +1168,7 @@ async def _seed_chat_transcript(runtime: Runtime, session_id: str, turns: list[t
     for seq, role, text in turns:
         await store.conn.execute(
             """
-            INSERT INTO session_messages (session_id, message_id, seq, role, message_json, created_at, search_text)
+            INSERT INTO session_messages (session_id, message_id, seq, role, message_json, created_at, file_search_text)
             VALUES (?, ?, ?, ?, '{}', ?, ?)
             """,
             (session_id, f"msg-{seq}", seq, role, MIGRATED_AT.isoformat(), text),

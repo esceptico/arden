@@ -103,7 +103,7 @@ test("normalizeActivityGroups dedupes same-id items when merging two builds of o
       items: [
         { id: "call_lt1", kind: "load_tools", target: 'Load Tools(group="slack")', status: "executed", result: "ok" },
         { id: "call_wf", kind: "workflow", semanticKind: "workflow", target: "workflow(...)", status: "executed" },
-        { id: "call_new", kind: "read_file", target: "read_file", status: "executed" },
+        { id: "call_new", kind: "file_read", target: "file_read", status: "executed" },
       ],
     },
   };

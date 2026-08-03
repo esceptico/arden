@@ -31,7 +31,7 @@ CREATE_AUTOMATION_DESCRIPTION = (
     "substitute a scheduled scan. "
     "Time triggers support two modes: schedule ('at' a specific time) or interval ('every' N hours/minutes). "
     "Optional model override per automation (falls back to default chat model when omitted). "
-    "Each automation gets its own dedicated channel for results; use create_loop to repeat work in this chat. "
+    "Each automation gets its own dedicated channel for results; use loop_create to repeat work in this chat. "
     "Runs are read-only by default. Set all_tools=true when the prompt must act; auto_approve=true only skips "
     "approvals, it never widens what the run may use. "
     "Always provide one stable idempotency_key and reuse it unchanged after an ambiguous retry; standalone "
@@ -48,21 +48,21 @@ LIST_AUTOMATION_RUNS_DESCRIPTION = (
 
 UPDATE_AUTOMATION_DESCRIPTION = (
     "Update an existing automation. Only provide the fields you want to change. "
-    "Use list_automations to find IDs. "
+    "Use automation_list to find IDs. "
     "Trigger fields (trigger_type, at, days, every, event_type, lead_minutes, start, end, and for "
     "trigger_type='message': channels, from_user, contains) are merged with the current trigger — only "
     "provide what should change. "
     "Set enabled=false to pause or enabled=true to resume."
 )
 
-DELETE_AUTOMATION_DESCRIPTION = "Delete an automation by its ID. Use list_automations to find IDs."
+DELETE_AUTOMATION_DESCRIPTION = "Delete an automation by its ID. Use automation_list to find IDs."
 
 GET_AUTOMATION_RESULT_DESCRIPTION = "Get the last execution result of an automation by its ID."
 
 RUN_AUTOMATION_DESCRIPTION = (
     "Trigger an immediate execution of an automation. "
-    "The automation runs in the background — use get_automation_result to check the outcome. "
-    "Use list_automations to find IDs."
+    "The automation runs in the background — use automation_result to check the outcome. "
+    "Use automation_list to find IDs."
 )
 
 
@@ -78,7 +78,7 @@ def _automation_not_found(task_id: str) -> ToolResult:
         code="not_found",
         message=f"Automation not found: {task_id}",
         preview="Not found",
-        recovery_action="Call list_automations and retry with an exact returned task_id.",
+        recovery_action="Call automation_list and retry with an exact returned task_id.",
     )
 
 
@@ -457,7 +457,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
             ]
             if existing.thread_id:
                 lines.append(f"Channel: {existing.thread_id}")
-            lines.append("No changes made. Reuse this ID; call update_automation to change it.")
+            lines.append("No changes made. Reuse this ID; call automation_update to change it.")
             return ToolResult(content="\n".join(lines), preview=f"Already exists ({existing.task_id})")
         return ToolResult.failure(
             code="write_conflict",
@@ -465,7 +465,7 @@ async def create_automation(execution: ToolExecution, args: CreateAutomationInpu
                 f"Idempotency key {args.idempotency_key!r} is already claimed, but its automation is unavailable."
             ),
             preview="Idempotency conflict",
-            recovery_action="Call list_automations, then retry once with the same key; do not rotate the key.",
+            recovery_action="Call automation_list, then retry once with the same key; do not rotate the key.",
         )
 
     lines = [
@@ -630,7 +630,7 @@ async def update_automation(execution: ToolExecution, args: UpdateAutomationInpu
             code="invalid_arguments",
             message=str(e),
             preview="Invalid update",
-            recovery_action="Call list_automations, inspect the current trigger, and retry with valid fields.",
+            recovery_action="Call automation_list, inspect the current trigger, and retry with valid fields.",
         )
 
     label = _automation_label(automation)
@@ -669,7 +669,7 @@ async def delete_automation(execution: ToolExecution, args: DeleteAutomationInpu
             code="write_conflict",
             message="The automation could not be deleted in its current state.",
             preview="Cannot delete",
-            recovery_action="Call list_automations and retry with a current automation ID.",
+            recovery_action="Call automation_list and retry with a current automation ID.",
         )
 
     return ToolResult(content=f"Deleted: {_automation_label(automation)} ({args.task_id})", preview="Deleted")
@@ -719,7 +719,7 @@ async def run_automation(execution: ToolExecution, args: RunAutomationInput) -> 
             message="The automation could not be started.",
             preview="Unavailable",
             retryable=True,
-            recovery_action="Check get_automation_result or list_automations before retrying.",
+            recovery_action="Check automation_result or automation_list before retrying.",
         )
 
     return ToolResult(
@@ -738,6 +738,7 @@ create_automation_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_create_automation,
     execute=create_automation,
@@ -747,7 +748,9 @@ list_automations_tool = tool(
     display_name="ListAutomations",
     display_description="List configured automations.",
     description=LIST_AUTOMATIONS_DESCRIPTION,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"}), deferred=True
+    ),
     execute=list_automations,
 )
 
@@ -756,7 +759,9 @@ list_automation_runs_tool = tool(
     display_description="List recent automation executions.",
     description=LIST_AUTOMATION_RUNS_DESCRIPTION,
     input_model=ListAutomationRunsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"}), deferred=True
+    ),
     execute=list_automation_runs,
 )
 
@@ -770,6 +775,7 @@ update_automation_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_update_automation,
     execute=update_automation,
@@ -785,6 +791,7 @@ delete_automation_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_delete_automation,
     execute=delete_automation,
@@ -794,7 +801,9 @@ get_automation_result_tool = tool(
     display_name="AutomationResult",
     description=GET_AUTOMATION_RESULT_DESCRIPTION,
     input_model=GetAutomationResultInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"}), deferred=True
+    ),
     execute=get_automation_result,
 )
 
@@ -808,6 +817,7 @@ run_automation_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_run_automation,
     execute=run_automation,
@@ -852,7 +862,7 @@ def _loop_task_id_or_error(execution: ToolExecution) -> tuple[str | None, ToolRe
             code="invalid_context",
             message="This tool is only available inside a loop iteration.",
             preview="Not a loop",
-            recovery_action="Call create_loop from an active chat instead.",
+            recovery_action="Call loop_create from an active chat instead.",
         )
     return task_id, None
 
@@ -914,6 +924,7 @@ schedule_wakeup_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_schedule_wakeup,
     execute=schedule_wakeup,
@@ -929,6 +940,7 @@ loop_done_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_loop_done,
     execute=loop_done,
@@ -945,7 +957,7 @@ CREATE_LOOP_DESCRIPTION = (
     "Two modes: "
     "(a) fixed interval: pass 'every' (e.g. '5m', '1h', '2h30m'). "
     "(b) self-paced: pass 'every' as the initial cadence; inside each iteration, "
-    "the agent calls schedule_wakeup to adjust the next interval, or loop_done "
+    "the agent calls loop_schedule_wakeup to adjust the next interval, or loop_done "
     "to terminate when the goal is reached. "
     "Optional max_iterations caps the loop. "
     "Optional stop_when is a natural-language predicate the agent checks each iteration."
@@ -1104,6 +1116,7 @@ create_loop_tool = tool(
         scope=ToolScope.INTERNAL,
         requires_approval=True,
         permissions=frozenset({"automation"}),
+        deferred=True,
     ),
     approval=approve_create_loop,
     execute=create_loop,

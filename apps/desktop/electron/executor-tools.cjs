@@ -771,12 +771,12 @@ async function editFile(args, { context } = {}) {
 
 function registerDeviceTools(executorClient) {
   executorClient.registerHandler("bash", runBash);
-  executorClient.registerHandler("read_file", readFile);
-  executorClient.registerHandler("list_files", listFiles);
-  executorClient.registerHandler("find_files", findFiles);
-  executorClient.registerHandler("search_text", searchText);
-  executorClient.registerHandler("write_file", writeFile);
-  executorClient.registerHandler("edit_file", editFile);
+  executorClient.registerHandler("file_read", readFile);
+  executorClient.registerHandler("file_list", listFiles);
+  executorClient.registerHandler("file_find", findFiles);
+  executorClient.registerHandler("file_search_text", searchText);
+  executorClient.registerHandler("file_write", writeFile);
+  executorClient.registerHandler("file_edit", editFile);
 }
 
 module.exports = {

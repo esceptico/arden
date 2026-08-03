@@ -27,7 +27,7 @@ test("approval file diffs use the compact mockup patch surface", async () => {
     reviewingApprovalToolId: "tool-1",
     pendingApprovals: [{
       toolId: "tool-1",
-      toolName: "write_file",
+      toolName: "file_write",
       path: "notes/a.md",
       status: "pending",
       diff: "--- a/notes/a.md\n+++ b/notes/a.md\n@@ -1 +1 @@\n-old\n+new",

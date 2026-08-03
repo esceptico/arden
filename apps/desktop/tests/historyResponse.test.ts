@@ -98,7 +98,7 @@ test("history rebuild keeps durable tool outcomes", () => {
         id: "assistant-tools",
         tool_calls: [{
           id: "call-1",
-          name: "write_file",
+          name: "file_write",
           arguments: '{"path":"a.txt"}',
           outcome: {
             status: "succeeded",

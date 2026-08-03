@@ -25,10 +25,10 @@ CALENDAR = Integration(
     id="calendar",
     label="Google Calendar",
     tools={
-        "calendar": calendar_tool,
-        "create_calendar_event": create_calendar_event_tool,
-        "edit_calendar_event": edit_calendar_event_tool,
-        "delete_calendar_event": delete_calendar_event_tool,
+        "calendar_search": calendar_tool,
+        "calendar_create_event": create_calendar_event_tool,
+        "calendar_edit_event": edit_calendar_event_tool,
+        "calendar_delete_event": delete_calendar_event_tool,
     },
     build=_build,
     connection=IntegrationConnectionSpec(

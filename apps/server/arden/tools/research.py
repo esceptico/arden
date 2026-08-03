@@ -339,8 +339,8 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
 
     content = (
         f"Started a {args.depth} research agent on: {args.task}\n"
-        f"Its session is {spawn.child_session_id} — steer it with send_message(session_id=...), "
-        "inspect its work with read_session(session_id=...). "
+        f"Its session is {spawn.child_session_id} — steer it with session_send_message(session_id=...), "
+        "inspect its work with session_read(session_id=...). "
         "The research report is delivered here automatically when done — do not poll for it; "
         "continue other work or end your turn and wait."
     )
@@ -565,7 +565,7 @@ RESEARCH_AGENT_TOOLS = {
 RESEARCH_AGENT_TYPE = AgentType(
     name="research",
     scope=tools.read,
-    exclude=frozenset({"cancel_agent", "workflow"}),
+    exclude=frozenset({"agent_cancel", "workflow"}),
     extra_tools=RESEARCH_AGENT_TOOLS,
 )
 register_agent_type(RESEARCH_AGENT_TYPE)

@@ -250,9 +250,9 @@ def _producer_page_error(execution: ToolExecution, record: WikiPageRecord) -> To
         return None
     return ToolResult.failure(
         code="producer_page_requires_generated_publish",
-        message="Automation-owned generated regions must be changed with publish_wiki_generated.",
+        message="Automation-owned generated regions must be changed with wiki_publish_generated.",
         preview="Use generated-region publishing",
-        recovery_action="Read the page, then call publish_wiki_generated again.",
+        recovery_action="Read the page, then call wiki_publish_generated again.",
     )
 
 
@@ -351,14 +351,14 @@ def _resolve(wiki: WikiService, path: str) -> tuple[WikiPageRecord, str | None] 
             code="ambiguous_ref",
             message="The wiki contains an ambiguous page name.",
             preview="Ambiguous wiki reference",
-            recovery_action="Call list_wiki_pages and retry with an exact page path.",
+            recovery_action="Call wiki_list_pages and retry with an exact page path.",
         )
     except WikiValidationError:
         return ToolResult.failure(
             code="invalid_ref",
             message="The wiki cannot resolve this page path.",
             preview="Invalid wiki reference",
-            recovery_action="Call list_wiki_pages and retry with one exact returned page path.",
+            recovery_action="Call wiki_list_pages and retry with one exact returned page path.",
         )
 
     pages = tuple(record for record in snapshot.pages if record.page.lifecycle == "active")
@@ -369,7 +369,7 @@ def _resolve(wiki: WikiService, path: str) -> tuple[WikiPageRecord, str | None] 
             code="not_found",
             message=f"No active wiki page exists at {path!r}.",
             preview="Wiki page not found",
-            recovery_action="Call list_wiki_pages and retry with an exact active page path.",
+            recovery_action="Call wiki_list_pages and retry with an exact active page path.",
         )
     return matches[0], snapshot.head
 
@@ -767,7 +767,7 @@ async def edit_wiki_page(execution: ToolExecution, args: EditWikiPageInput) -> T
                 code="not_found",
                 message=f"No active wiki page exists at {args.path!r}.",
                 preview="Wiki page not found",
-                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page path.",
+                recovery_action="Call wiki_list_pages or wiki_read_page and retry with an exact active page path.",
             )
         if error := _automation_path_error(execution, record.resource.path):
             return error
@@ -837,14 +837,14 @@ async def archive_wiki_page(execution: ToolExecution, args: ArchiveWikiPageInput
                     code="not_found",
                     message=f"No wiki page exists at {args.path!r}.",
                     preview="Wiki page not found",
-                    recovery_action="Call list_wiki_pages and retry with an exact page path.",
+                    recovery_action="Call wiki_list_pages and retry with an exact page path.",
                 )
             if resource.state is not ResourceState.ARCHIVED:
                 return ToolResult.failure(
                     code="not_found",
                     message=f"No active wiki page exists at {args.path!r}.",
                     preview="Wiki page not found",
-                    recovery_action="Call list_wiki_pages and retry with an exact active page path.",
+                    recovery_action="Call wiki_list_pages and retry with an exact active page path.",
                 )
             if error := _automation_path_error(execution, resource.path):
                 return error
@@ -955,7 +955,7 @@ async def move_wiki_page(execution: ToolExecution, args: MoveWikiPageInput) -> T
                 code="not_found",
                 message=f"No active wiki page exists at {args.path!r}.",
                 preview="Wiki page not found",
-                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page path.",
+                recovery_action="Call wiki_list_pages or wiki_read_page and retry with an exact active page path.",
             )
         if record.resource.path == args.new_path:
             _observe_page(execution, record, snapshot.head, content_read=False)
@@ -1098,7 +1098,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 code="not_found",
                 message=f"No active wiki page exists at {args.path!r}.",
                 preview="Wiki page not found",
-                recovery_action="Call list_wiki_pages or read_wiki_page and retry with an exact active page path.",
+                recovery_action="Call wiki_list_pages or wiki_read_page and retry with an exact active page path.",
             )
         if not record.resource.path.startswith((AUTOMATIONS_PATH_PREFIX, "insights/")) or "fact_citations" in (
             record.page.metadata
@@ -1107,7 +1107,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 code="not_producer_page",
                 message="Only registered automation or insight producer pages can be updated with this tool.",
                 preview="Page is not producer-owned",
-                recovery_action="Use edit_wiki_page for an ordinary page, or select a registered producer page.",
+                recovery_action="Use wiki_edit_page for an ordinary page, or select a registered producer page.",
             )
         automation_id = execution.ctx.run.automation_id
         if automation_id is None:
@@ -1115,7 +1115,7 @@ async def publish_wiki_generated(execution: ToolExecution, args: PublishWikiGene
                 code="automation_required",
                 message="Generated wiki publishing is available only to a scheduled automation run.",
                 preview="Automation required",
-                recovery_action="Use edit_wiki_page interactively, or run the owning scheduled automation.",
+                recovery_action="Use wiki_edit_page interactively, or run the owning scheduled automation.",
             )
         producer_automation_id = record.page.metadata.get("producer_automation_id")
         if producer_automation_id != automation_id:
@@ -1232,6 +1232,7 @@ list_wiki_pages_tool = tool(
         scope=ToolScope.INTERNAL,
         permissions=_WIKI_PERMISSION,
         max_result_chars=_MAX_LIST_DATA_BYTES,
+        deferred=True,
     ),
     execute=list_wiki_pages,
 )
@@ -1249,6 +1250,7 @@ list_wiki_changes_tool = tool(
         scope=ToolScope.INTERNAL,
         permissions=_WIKI_PERMISSION,
         max_result_chars=_MAX_LIST_DATA_BYTES,
+        deferred=True,
     ),
     execute=list_wiki_changes,
 )
@@ -1273,6 +1275,7 @@ create_wiki_page_tool = tool(
         max_result_chars=4_000,
         destructive=False,
         idempotent=True,
+        deferred=True,
     ),
     approval=approve_create_wiki_page,
     execute=create_wiki_page,
@@ -1295,6 +1298,7 @@ edit_wiki_page_tool = tool(
         max_result_chars=4_000,
         destructive=False,
         idempotent=True,
+        deferred=True,
     ),
     approval=approve_edit_wiki_page,
     execute=edit_wiki_page,
@@ -1317,6 +1321,7 @@ archive_wiki_page_tool = tool(
         max_result_chars=4_000,
         destructive=True,
         idempotent=True,
+        deferred=True,
     ),
     approval=approve_archive_wiki_page,
     execute=archive_wiki_page,
@@ -1341,6 +1346,7 @@ move_wiki_page_tool = tool(
         max_result_chars=4_000,
         destructive=False,
         idempotent=True,
+        deferred=True,
     ),
     approval=approve_move_wiki_page,
     execute=move_wiki_page,
@@ -1356,6 +1362,7 @@ read_wiki_page_tool = tool(
         scope=ToolScope.INTERNAL,
         permissions=_WIKI_PERMISSION,
         max_result_chars=_MAX_CONTENT_CHARS,
+        deferred=True,
     ),
     execute=read_wiki_page,
 )
@@ -1370,6 +1377,7 @@ wiki_links_tool = tool(
         scope=ToolScope.INTERNAL,
         permissions=_WIKI_PERMISSION,
         max_result_chars=_MAX_LINK_DATA_BYTES,
+        deferred=True,
     ),
     execute=wiki_links,
 )
@@ -1387,6 +1395,7 @@ publish_wiki_generated_tool = tool(
         max_result_chars=4_000,
         destructive=False,
         idempotent=False,
+        deferred=True,
     ),
     approval=approve_publish_wiki_generated,
     execute=publish_wiki_generated,

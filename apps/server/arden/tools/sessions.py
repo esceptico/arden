@@ -6,10 +6,10 @@ on what the user actually repeats. The agent gets enough to identify
 patterns without dumping every byte of history into context.
 
 Three tools:
-- `list_recent_sessions` — index of sessions: id, name, when, message count.
-- `read_session` — messages for one session, with content trimmed by default
+- `session_list` — index of sessions: id, name, when, message count.
+- `session_read` — messages for one session, with content trimmed by default
   so a single huge session can't blow the context window.
-- `create_session` — spawn a new session (defaults to a channel) the agent
+- `session_create` — spawn a new session (defaults to a channel) the agent
   can post into for channel-aware automations.
 """
 
@@ -129,7 +129,7 @@ class SearchTranscriptsInput(BaseModel):
             "Full-text query across chat transcripts (FTS5 syntax: bare words "
             'are AND-ed; quote "exact phrases"). Searches the readable message '
             "text, not JSON. Returns ranked snippets with session_id + seq so "
-            "you can read_session(around_seq=...) for context."
+            "you can session_read(around_seq=...) for context."
         )
     )
     limit: int = Field(
@@ -167,7 +167,7 @@ class CreateSessionInput(BaseModel):
 
 
 class ReadSessionInput(BaseModel):
-    session_id: str = Field(description="The session_id from list_recent_sessions.")
+    session_id: str = Field(description="The session_id from session_list.")
     limit: int = Field(
         default=_DEFAULT_MESSAGE_LIMIT,
         ge=1,
@@ -213,7 +213,7 @@ class ReadSessionInput(BaseModel):
     around_seq: int | None = Field(
         default=None,
         description=(
-            "Center the page on this seq (e.g. a hit's seq from search_transcripts) to read the surrounding context."
+            "Center the page on this seq (e.g. a hit's seq from session_search_transcripts) to read the surrounding context."
         ),
     )
 
@@ -433,7 +433,7 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
             message=f"Failed to read session {args.session_id}.",
             preview="Read failed",
             retryable=True,
-            recovery_action="Call list_recent_sessions and retry with an exact readable session ID.",
+            recovery_action="Call session_list and retry with an exact readable session ID.",
         )
 
     raw_messages = page.get("messages") if isinstance(page, dict) else page
@@ -477,9 +477,9 @@ async def read_session(execution: ToolExecution, args: ReadSessionInput) -> Tool
     footer: list[str] = []
     if isinstance(page, dict):
         if page.get("has_more_after") and last_seq is not None:
-            footer.append(f"More after: read_session(after_seq={last_seq})")
+            footer.append(f"More after: session_read(after_seq={last_seq})")
         if page.get("has_more_before") and first_seq is not None:
-            footer.append(f"More before: read_session(before_seq={first_seq})")
+            footer.append(f"More before: session_read(before_seq={first_seq})")
     body_text = "\n".join(lines)
     if header := _run_header(execution, args.session_id):
         body_text = f"{header}\n\n{body_text}"
@@ -540,7 +540,7 @@ async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsIn
 
     footer = ""
     if result.get("has_more"):
-        footer = f"\n\nMore results: search_transcripts(offset={args.offset + args.limit})"
+        footer = f"\n\nMore results: session_search_transcripts(offset={args.offset + args.limit})"
     return ToolResult(
         content="\n".join(lines) + footer,
         preview=f"{len(hits)} hit{'s' if len(hits) != 1 else ''}",
@@ -563,7 +563,7 @@ async def search_transcripts(execution: ToolExecution, args: SearchTranscriptsIn
 LIST_RECENT_SESSIONS_DESCRIPTION = (
     "List recent chat sessions (most recent first) with id, name, last "
     "activity, and message count. Read-only. Use to find sessions worth "
-    "inspecting before calling read_session. Useful for cross-session "
+    "inspecting before calling session_read. Useful for cross-session "
     "pattern detection (audit automations, propose-* skills running in "
     "a scheduled context with no current conversation). Each row ends with "
     "its live state when one applies — running, needs approval, or the agent "
@@ -601,7 +601,9 @@ list_recent_sessions_tool = tool(
     display_description="List recent chat sessions.",
     description=LIST_RECENT_SESSIONS_DESCRIPTION,
     input_model=ListRecentSessionsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+    ),
     execute=list_recent_sessions,
 )
 
@@ -610,7 +612,9 @@ read_session_tool = tool(
     display_description="Read a chat session.",
     description=READ_SESSION_DESCRIPTION,
     input_model=ReadSessionInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+    ),
     execute=read_session,
 )
 
@@ -618,7 +622,7 @@ SEARCH_TRANSCRIPTS_DESCRIPTION = (
     "Full-text search across chat transcripts, ranked by relevance. Searches "
     "the readable message text (not JSON/images). Filter to one chat with "
     "session_id, bound by time with within_days, page with limit+offset. Each "
-    "hit gives session_id + seq — follow up with read_session(session_id, "
+    "hit gives session_id + seq — follow up with session_read(session_id, "
     "around_seq=seq) to read the surrounding conversation. Inside an Area, only "
     "that Area's transcripts are searched. Read-only."
 )
@@ -628,7 +632,9 @@ search_transcripts_tool = tool(
     display_description="Search across chat transcripts.",
     description=SEARCH_TRANSCRIPTS_DESCRIPTION,
     input_model=SearchTranscriptsInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+    ),
     execute=search_transcripts,
 )
 
@@ -637,6 +643,8 @@ create_session_tool = tool(
     display_description="Create a new chat or channel.",
     description=CREATE_SESSION_DESCRIPTION,
     input_model=CreateSessionInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+    ),
     execute=create_session,
 )

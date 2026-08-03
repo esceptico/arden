@@ -46,9 +46,14 @@ from arden.tools.executor import ToolExecutor
 from tests.helpers import MockCompletionClient, MockLLMClient, make_text_response, make_tool_response
 
 READ_INTERNAL_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL)
-WRITE_INTERNAL_POLICY = ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True)
-READ_EXTERNAL_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL)
-WRITE_EXTERNAL_POLICY = ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.EXTERNAL, requires_approval=True)
+READ_INTERNAL_DEFERRED = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, deferred=True)
+WRITE_INTERNAL_DEFERRED = ToolPolicy(
+    action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True
+)
+READ_EXTERNAL_DEFERRED = ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTERNAL, deferred=True)
+WRITE_EXTERNAL_DEFERRED = ToolPolicy(
+    action=ToolAction.WRITE, scope=ToolScope.EXTERNAL, requires_approval=True, deferred=True
+)
 
 
 class SearchInput(BaseModel):
@@ -82,22 +87,22 @@ def _registry() -> ToolRegistry:
         source="_system",
     )
     registry.register(
-        "write_file",
+        "file_write",
         tool(
             description="Write a local file",
             input_model=SearchInput,
-            policy=WRITE_INTERNAL_POLICY,
+            policy=WRITE_INTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
         source="_system",
     )
     registry.register(
-        "edit_file",
+        "file_edit",
         tool(
             description="Edit a local file",
             input_model=SearchInput,
-            policy=WRITE_INTERNAL_POLICY,
+            policy=WRITE_INTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
@@ -115,11 +120,11 @@ def _registry() -> ToolRegistry:
         source="_system",
     )
     registry.register(
-        "cancel_agent",
+        "agent_cancel",
         tool(
             description="Stop a running agent",
             input_model=SearchInput,
-            policy=WRITE_INTERNAL_POLICY,
+            policy=WRITE_INTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
@@ -130,18 +135,18 @@ def _registry() -> ToolRegistry:
         tool(
             description="Send a notification",
             input_model=SearchInput,
-            policy=WRITE_EXTERNAL_POLICY,
+            policy=WRITE_EXTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
         source="_notifications",
     )
     registry.register(
-        "set_directives",
+        "directives_set",
         tool(
             description="Update persistent behavior directives",
             input_model=SearchInput,
-            policy=WRITE_INTERNAL_POLICY,
+            policy=WRITE_INTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
@@ -152,7 +157,7 @@ def _registry() -> ToolRegistry:
         tool(
             description="Search Slack messages across the workspace",
             input_model=SearchInput,
-            policy=READ_EXTERNAL_POLICY,
+            policy=READ_EXTERNAL_DEFERRED,
             execute=fake_search,
         ),
         source="slack",
@@ -316,7 +321,7 @@ async def test_model_context_budget_stubs_oversized_tool_tail_after_compaction()
                         {
                             "id": "call-1",
                             "type": "function",
-                            "function": {"name": "search_text", "arguments": "{}"},
+                            "function": {"name": "file_search_text", "arguments": "{}"},
                         }
                     ],
                 },
@@ -377,11 +382,11 @@ async def test_deferred_middleware_hides_then_reveals_loaded_tools():
     assert "load_tools" in names
     assert "echo" in names
     assert "background" in names
-    assert "write_file" not in names
-    assert "edit_file" not in names
-    assert "cancel_agent" not in names
+    assert "file_write" not in names
+    assert "file_edit" not in names
+    assert "agent_cancel" not in names
     assert "notify" not in names
-    assert "set_directives" not in names
+    assert "directives_set" not in names
     assert "slack_search" not in names
 
     ctx = ToolContext(
@@ -407,21 +412,21 @@ async def test_deferred_middleware_hides_then_reveals_loaded_tools():
 async def test_deferred_middleware_uses_native_loading_for_supported_models():
     registry = _registry()
     registry.register(
-        "read_wiki_page",
+        "wiki_read_page",
         tool(
             description="Read one wiki page",
             input_model=SearchInput,
-            policy=READ_INTERNAL_POLICY,
+            policy=READ_INTERNAL_DEFERRED,
             execute=fake_search,
         ),
         source="_wiki",
     )
     registry.register(
-        "publish_wiki_generated",
+        "wiki_publish_generated",
         tool(
             description="Publish one generated wiki region",
             input_model=SearchInput,
-            policy=WRITE_INTERNAL_POLICY,
+            policy=WRITE_INTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
@@ -438,11 +443,11 @@ async def test_deferred_middleware_uses_native_loading_for_supported_models():
     assert "tool_search" in names
     assert "echo" in names
     assert "slack_search" not in names
-    assert "read_wiki_page" not in names
-    assert "publish_wiki_generated" not in names
+    assert "wiki_read_page" not in names
+    assert "wiki_publish_generated" not in names
     assert "slack_search" in deferred_names
-    assert "read_wiki_page" in deferred_names
-    assert "publish_wiki_generated" in deferred_names
+    assert "wiki_read_page" in deferred_names
+    assert "wiki_publish_generated" in deferred_names
     assert run.deferred_tool_loader == "tool_search"
 
 
@@ -626,21 +631,21 @@ async def test_agent_accepts_provider_loaded_deferred_tool_call():
 async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step():
     registry = _registry()
     registry.register(
-        "emails",
+        "email_search",
         tool(
             description="List emails",
             input_model=SearchInput,
-            policy=READ_EXTERNAL_POLICY,
+            policy=READ_EXTERNAL_DEFERRED,
             execute=fake_search,
         ),
         source="gmail",
     )
     registry.register(
-        "read_email",
+        "email_read",
         tool(
             description="Read an email",
             input_model=SearchInput,
-            policy=READ_EXTERNAL_POLICY,
+            policy=READ_EXTERNAL_DEFERRED,
             execute=fake_search,
         ),
         source="gmail",
@@ -653,7 +658,7 @@ async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step
         io=IOBridge(),
     )
     executor = _Executor(registry)
-    first = make_tool_response("emails", {"query": "newer_than:1d"}, call_id="call_emails", model="gpt-5.5")
+    first = make_tool_response("email_search", {"query": "newer_than:1d"}, call_id="call_emails", model="gpt-5.5")
     first.choices[0] = replace(
         first.choices[0],
         message=replace(
@@ -662,12 +667,12 @@ async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step
                 ProviderToolCall(
                     id="tsc_1",
                     name="tool_search",
-                    arguments='{"tools":["emails"]}',
+                    arguments='{"tools":["email_search"]}',
                     provider_item={
                         "type": "tool_search_call",
                         "id": "tsc_1",
                         "status": "completed",
-                        "arguments": {"paths": ["read_email"]},
+                        "arguments": {"paths": ["email_read"]},
                     },
                 )
             ],
@@ -691,31 +696,31 @@ async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step
     result = await agent.run([{"role": "system", "content": "test"}, {"role": "user", "content": "read email"}])
 
     assert result.text == "done"
-    assert "emails" in run.loaded_tools
-    assert "read_email" in run.loaded_tools
+    assert "email_search" in run.loaded_tools
+    assert "email_read" in run.loaded_tools
     second_tools = {t["function"]["name"] for t in llm.calls[1]["tools"]}
-    assert "read_email" in second_tools
+    assert "email_read" in second_tools
 
 
 @pytest.mark.asyncio
 async def test_agent_continues_after_provider_only_tool_search_loads_names():
     registry = _registry()
     registry.register(
-        "read_wiki_page",
+        "wiki_read_page",
         tool(
             description="Read one wiki page",
             input_model=SearchInput,
-            policy=READ_INTERNAL_POLICY,
+            policy=READ_INTERNAL_DEFERRED,
             execute=fake_search,
         ),
         source="_wiki",
     )
     registry.register(
-        "publish_wiki_generated",
+        "wiki_publish_generated",
         tool(
             description="Publish one generated wiki region",
             input_model=SearchInput,
-            policy=WRITE_INTERNAL_POLICY,
+            policy=WRITE_INTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
@@ -741,8 +746,8 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
                         ProviderToolCall(
                             id="tsc_1",
                             name="tool_search",
-                            arguments='{"tools":["read_wiki_page"]}',
-                            result="Matched tools: read_wiki_page",
+                            arguments='{"tools":["wiki_read_page"]}',
+                            result="Matched tools: wiki_read_page",
                         )
                     ],
                 ),
@@ -756,7 +761,7 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
         [
             first,
             make_tool_response(
-                "read_wiki_page",
+                "wiki_read_page",
                 {"query": "automations/email-updates.md"},
                 call_id="call_wiki",
                 model="gpt-5.5",
@@ -765,7 +770,7 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
         ]
     )
     agent = Agent(
-        tools=registry.get_schemas(scope=tools.named("read_wiki_page") | tools.named("publish_wiki_generated")),
+        tools=registry.get_schemas(scope=tools.named("wiki_read_page") | tools.named("wiki_publish_generated")),
         client=MockLLMClient(llm),
         executor=ArdenToolExecutor(executor, ctx),
         model="gpt-5.5",
@@ -781,12 +786,12 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
     result = await agent.run([{"role": "system", "content": "test"}, {"role": "user", "content": "read wiki page"}])
 
     assert result.text == "done"
-    assert "read_wiki_page" in run.loaded_tools
+    assert "wiki_read_page" in run.loaded_tools
     first_deferred = {tool["function"]["name"] for tool in llm.calls[0]["deferred_tools"]}
     second_tools = {tool["function"]["name"] for tool in llm.calls[1]["tools"]}
-    assert first_deferred == {"read_wiki_page", "publish_wiki_generated"}
-    assert "read_wiki_page" in second_tools
-    assert "publish_wiki_generated" not in second_tools
+    assert first_deferred == {"wiki_read_page", "wiki_publish_generated"}
+    assert "wiki_read_page" in second_tools
+    assert "wiki_publish_generated" not in second_tools
 
 
 @pytest.mark.asyncio
@@ -900,7 +905,7 @@ async def test_load_group_respects_run_allowed_names():
         tool(
             description="Post to Slack",
             input_model=SearchInput,
-            policy=WRITE_EXTERNAL_POLICY,
+            policy=WRITE_EXTERNAL_DEFERRED,
             approval=fake_approval,
             execute=fake_search,
         ),
@@ -933,11 +938,11 @@ async def test_load_group_respects_run_allowed_names():
 def test_deferred_prompt_lists_groups_and_tools():
     registry = _registry()
     registry.register(
-        "read_wiki_page",
+        "wiki_read_page",
         tool(
             description="Read one wiki page",
             input_model=SearchInput,
-            policy=READ_INTERNAL_POLICY,
+            policy=READ_INTERNAL_DEFERRED,
             execute=fake_search,
         ),
         source="_wiki",
@@ -946,17 +951,17 @@ def test_deferred_prompt_lists_groups_and_tools():
     assert prompt is not None
     assert 'name="slack"' in prompt
     assert "slack_search" in prompt
-    assert 'name="background"' in prompt
-    assert "cancel_agent" in prompt
-    assert 'name="notifications"' in prompt
+    assert 'name="agent"' in prompt
+    assert "agent_cancel" in prompt
+    assert 'name="notify"' in prompt
     assert "notify" in prompt
     assert 'name="directives"' in prompt
-    assert "set_directives" in prompt
-    assert 'name="files"' in prompt
-    assert "write_file" in prompt
-    assert "edit_file" in prompt
+    assert "directives_set" in prompt
+    assert 'name="file"' in prompt
+    assert "file_write" in prompt
+    assert "file_edit" in prompt
     assert 'name="wiki"' in prompt
-    assert "read_wiki_page" in prompt
+    assert "wiki_read_page" in prompt
     assert "load_tools" in prompt
     assert 'load_tools(group="slack")' in prompt
     assert "Do not use filesystem/time/no-op tool calls" in prompt
@@ -978,8 +983,8 @@ def test_deferred_prompt_respects_allowed_tool_schemas():
     assert "slack_search" in prompt
     assert "background" not in prompt
     assert "notify" not in prompt
-    assert "set_directives" not in prompt
-    assert "write_file" not in prompt
+    assert "directives_set" not in prompt
+    assert "file_write" not in prompt
 
 
 def test_native_deferred_prompt_lists_exact_tool_names_without_group_loader():
@@ -1029,10 +1034,10 @@ async def test_background_controls_notifications_and_directives_load_by_group_al
     assert not background_result.is_error
     assert not notify_result.is_error
     assert not directives_result.is_error
-    assert "cancel_agent" in run.loaded_tools
+    assert "agent_cancel" in run.loaded_tools
     assert "background" not in run.loaded_tools
     assert "notify" in run.loaded_tools
-    assert "set_directives" in run.loaded_tools
+    assert "directives_set" in run.loaded_tools
 
 
 @pytest.mark.asyncio
@@ -1053,8 +1058,8 @@ async def test_file_actions_load_by_files_group():
     )
 
     assert not result.is_error
-    assert "write_file" in run.loaded_tools
-    assert "edit_file" in run.loaded_tools
+    assert "file_write" in run.loaded_tools
+    assert "file_edit" in run.loaded_tools
 
 
 @pytest.mark.asyncio
@@ -1370,7 +1375,7 @@ async def test_spawned_agent_clamps_tool_tail_after_compaction(monkeypatch):
                         {
                             "id": "call-1",
                             "type": "function",
-                            "function": {"name": "search_text", "arguments": "{}"},
+                            "function": {"name": "file_search_text", "arguments": "{}"},
                         }
                     ],
                 },
@@ -1445,19 +1450,52 @@ async def test_app_control_loads_by_app_group():
         services={"session": object(), "app_control": object()},
     )
 
-    result = await registry.execute(
+    app_result = await registry.execute(
         "load_tools",
         ToolExecution(tool_id="call_app", tool_name="load_tools", ctx=ctx),
         {"group": "app"},
     )
 
-    assert not result.is_error
-    assert set(APP_CONTROL.tools) <= run.loaded_tools
+    app_names = {name for name in APP_CONTROL.tools if name.startswith("app_")}
+    session_names = set(APP_CONTROL.tools) - app_names
+    assert not app_result.is_error
+    assert app_names <= run.loaded_tools
+    assert not (session_names & run.loaded_tools)
+
+    session_result = await registry.execute(
+        "load_tools",
+        ToolExecution(tool_id="call_session", tool_name="load_tools", ctx=ctx),
+        {"group": "session"},
+    )
+
+    assert not session_result.is_error
+    assert session_names <= run.loaded_tools
 
 
-def test_session_read_tools_are_not_deferred():
+@pytest.mark.asyncio
+async def test_session_tools_are_deferred_and_load_by_group():
     registry = ToolRegistry()
+    registry.register("load_tools", load_tools_tool, source="_system")
     for name, tool_obj in SESSIONS.tools.items():
         registry.register(name, tool_obj, source=SESSIONS.id)
 
-    assert all(not is_deferred_tool(name, registry) for name in SESSIONS.tools)
+    assert all(is_deferred_tool(name, registry) for name in SESSIONS.tools)
+
+    for call_id, group in (("call_session", "session"), ("call_sessions_alias", "sessions")):
+        run = RunContext(run_id=f"run-{group}", deferred_tools_enabled=True)
+        ctx = ToolContext(
+            session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+            registry=registry,
+            run=run,
+            io=IOBridge(),
+            services={"session": object()},
+        )
+
+        result = await registry.execute(
+            "load_tools",
+            ToolExecution(tool_id=call_id, tool_name="load_tools", ctx=ctx),
+            {"group": group},
+        )
+
+        assert not result.is_error
+        assert set(SESSIONS.tools) <= run.loaded_tools

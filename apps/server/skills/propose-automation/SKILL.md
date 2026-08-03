@@ -1,11 +1,11 @@
 ---
 name: propose-automation
-description: Use this skill when the user wants to turn the current conversation into a scheduled automation. Analyze the session and call create_automation to propose one — the user reviews the full prompt + schedule in the approval card before it's saved.
+description: Use this skill when the user wants to turn the current conversation into a scheduled automation. Analyze the session and call automation_create to propose one — the user reviews the full prompt + schedule in the approval card before it's saved.
 ---
 
 # Propose Automation
 
-The user wants to capture the work in this conversation as a reusable scheduled automation. Your job: analyze the session, then call `create_automation` once with the proposed parameters. The user will see your proposal in the approval card and accept or reject.
+The user wants to capture the work in this conversation as a reusable scheduled automation. Your job: analyze the session, then call `automation_create` once with the proposed parameters. The user will see your proposal in the approval card and accept or reject.
 
 ## What to look at
 
@@ -16,7 +16,7 @@ The user wants to capture the work in this conversation as a reusable scheduled 
 
 ## What to call
 
-Call `create_automation` exactly once with:
+Call `automation_create` exactly once with:
 
 - **`name`**: a short imperative phrase, max 60 chars. Example: `"Morning standup digest"`.
 - **`prompt`**: the full instructions the automation should run on each tick. Stand-alone — the future agent has no memory of this conversation. Be explicit about what to do, which sources to check, and what output to produce.
@@ -36,7 +36,7 @@ Call `create_automation` exactly once with:
   - Detection is near-real-time (~1 min) and reads via the bot token. A time/interval "scan Slack" is the wrong shape and may not even work without a user token.
 - **`tool_scope`** (optional): list only the write/action tools the standalone prompt needs. Read-only tools are always available; `auto_approve` does not grant tools by itself.
 - **`auto_approve`** (default false): set true ONLY if the automation must run autonomously. It skips per-run approvals for tools already in `tool_scope`. For a Slack watcher acting on untrusted messages, also set `from_user` as a sender gate.
-- **`idempotency_key`**: a stable semantic key for this exact recurring job, such as `automation:morning-standup-digest`; set **`idempotency_scope`** to `"global"`. Reuse the exact key for an ambiguous retry. Do not create a date/version suffix; inspect with `list_automations` and use `update_automation` if that job already exists.
+- **`idempotency_key`**: a stable semantic key for this exact recurring job, such as `automation:morning-standup-digest`; set **`idempotency_scope`** to `"global"`. Reuse the exact key for an ambiguous retry. Do not create a date/version suffix; inspect with `automation_list` and use `automation_update` if that job already exists.
 
 ## Before calling — say what and why
 
@@ -56,4 +56,4 @@ The user reads your prose first, then sees the structured args in the approval c
 
 ## If there's nothing reusable
 
-If the conversation isn't a good automation candidate (one-off Q&A, exploratory chat with no shape), say so plainly in 1-2 sentences and DO NOT call `create_automation`. Don't manufacture a proposal.
+If the conversation isn't a good automation candidate (one-off Q&A, exploratory chat with no shape), say so plainly in 1-2 sentences and DO NOT call `automation_create`. Don't manufacture a proposal.

@@ -1,11 +1,11 @@
 ---
 name: loop
-description: Use when the user types /loop or asks to repeat/poll/babysit something on a cadence inside THIS chat. Examples — "/loop 5m check the deploy", "watch CI until green", "every 30 minutes summarize my inbox". Sets up a recurring prompt that fires into this session via the create_loop tool.
+description: Use when the user types /loop or asks to repeat/poll/babysit something on a cadence inside THIS chat. Examples — "/loop 5m check the deploy", "watch CI until green", "every 30 minutes summarize my inbox". Sets up a recurring prompt that fires into this session via the loop_create tool.
 ---
 
 # /loop — schedule a recurring prompt in this chat
 
-The user wants a repeating task scoped to THIS conversation. Parse their input and call `create_loop` once. It attaches the current active chat automatically; it cannot target another chat.
+The user wants a repeating task scoped to THIS conversation. Parse their input and call `loop_create` once. It attaches the current active chat automatically; it cannot target another chat.
 
 ## Parsing (in priority order)
 
@@ -27,13 +27,13 @@ Intervals support days, hours, and minutes only; the minimum is `1m`. If the use
 
 When the user says "until X" or describes a stop condition (CI green, deploy done, file appears), this is a **self-paced** loop. Include the wake-up/done logic inside the prompt:
 
-> "Check if GitHub Actions run for branch `feature/foo` is green. If yes, call `loop_done` with the reason. If still running, call `schedule_wakeup` with `delay_seconds=120`. If failed, summarise the failure briefly."
+> "Check if GitHub Actions run for branch `feature/foo` is green. If yes, call `loop_done` with the reason. If still running, call `loop_schedule_wakeup` with `delay_seconds=120`. If failed, summarise the failure briefly."
 
 Self-paced is the default for any "until X" framing. Fixed intervals are right for "every N just do Y forever" tasks.
 
-## Calling create_loop
+## Calling loop_create
 
-Call `create_loop` once with:
+Call `loop_create` once with:
 
 - `prompt`: the parsed prompt verbatim. Slash commands pass through unchanged. This must be standalone — future iterations don't see THIS conversation.
 - `every`: interval string from parsing.
@@ -41,9 +41,9 @@ Call `create_loop` once with:
 - `max_age_days` (optional): if the user implied a deadline ("for the next week", "today only").
 - `stop_when` (optional): natural-language predicate when there's a clear stop condition.
 
-`create_loop` always attaches this current chat. Do not create a separate channel or use `create_automation` when the user asked for a loop here.
+`loop_create` always attaches this current chat. Do not create a separate channel or use `automation_create` when the user asked for a loop here.
 
-## After create_loop succeeds — confirm and stop
+## After loop_create succeeds — confirm and stop
 
 The scheduler will fire the first iteration as soon as this turn ends — it renders as a fresh chat turn so the user can see the agent's work clearly instead of buried inside this turn's tool-activity collapse.
 
@@ -51,13 +51,13 @@ The scheduler will fire the first iteration as soon as this turn ends — it ren
 
 ## Rules
 
-- **Single call.** One `create_loop` per user request.
+- **Single call.** One `loop_create` per user request.
 - **Prompt is standalone.** Future iterations have no memory of this chat.
 - **Default to self-paced** when there's any "until X" framing. Use fixed-interval only for clear `every N forever` tasks.
 - **Don't second-guess the cadence the user gave.** If they said `5m`, use `5m`. Suggest a different cadence only when their interval is clearly broken (e.g. `1s` for a CI check that takes minutes).
-- **One-line confirmation.** After `create_loop` succeeds, end with one short line like "Loop set · every X · first fire in a few seconds." Don't restate the prompt — they wrote it.
+- **One-line confirmation.** After `loop_create` succeeds, end with one short line like "Loop set · every X · first fire in a few seconds." Don't restate the prompt — they wrote it.
 
 ## When loop is the wrong tool
 
-- If the user wants a standalone task that runs in its own session (cron-like, no chat continuation): use `create_automation` instead.
+- If the user wants a standalone task that runs in its own session (cron-like, no chat continuation): use `automation_create` instead.
 - If the user wants something done once now, not recurring: just do it, don't loop.

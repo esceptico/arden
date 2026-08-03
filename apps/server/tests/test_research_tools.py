@@ -175,7 +175,7 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     # excludes), not a pre-built tool list — the spawner builds the toolset from it.
     assert "tools" not in captured
     assert captured["scope"] == tools.read
-    assert {"cancel_agent", "workflow"} <= captured["exclude_tools"]
+    assert {"agent_cancel", "workflow"} <= captured["exclude_tools"]
     assert captured["agent_type"] == "research"
     assert captured["wait"] is False
     assert result.data is not None

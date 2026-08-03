@@ -48,7 +48,7 @@ def _descriptor() -> IntegrationConnectionDescriptor:
         state="auth_required",
         detail="Reconnect Gmail",
         required_scopes=("gmail.readonly",),
-        tool_names=("emails", "read_email", "send_email"),
+        tool_names=("email_search", "email_read", "email_send"),
     )
 
 
@@ -60,7 +60,7 @@ def _make_execution(io: IOBridge, tool_id: str = "call-1") -> ToolExecution:
         io=io,
         background_tasks=BackgroundTaskRegistry(session_id="session-1"),
     )
-    return ToolExecution(tool_id=tool_id, tool_name="request_connection", ctx=ctx)
+    return ToolExecution(tool_id=tool_id, tool_name="connection_request", ctx=ctx)
 
 
 @pytest.mark.asyncio
@@ -136,7 +136,7 @@ async def test_declined_connection_is_not_prompted_again_in_same_run():
     pending["call-1"].set_result({"approved": False, "result": "not now"})
     assert await task is False
 
-    second = ToolExecution(tool_id="call-2", tool_name="request_connection", ctx=first.ctx)
+    second = ToolExecution(tool_id="call-2", tool_name="connection_request", ctx=first.ctx)
     assert await second.request_connection(_descriptor(), source="suggestion") is False
     assert len(emitted) == 1
 

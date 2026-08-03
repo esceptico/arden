@@ -80,17 +80,17 @@ def test_all_external_state_changes_require_approval():
 
 
 def test_directives_group_exposes_read_before_replace_pair():
-    assert set(DIRECTIVES.tools) == {"get_directives", "set_directives"}
+    assert set(DIRECTIVES.tools) == {"directives_get", "directives_set"}
 
 
 def test_shared_spawn_guidance_reaches_each_spawn_surface():
     executor = ToolExecutor()
-    for name in ("research", "workflow", "create_automation", "create_loop"):
+    for name in ("research", "workflow", "automation_create", "loop_create"):
         assert SPAWN_SURFACE_GUIDANCE in executor.registry.get(name).description
 
 
 def test_create_automation_description_keeps_scope_and_approval_distinct():
-    description = ToolExecutor().registry.get("create_automation").description
+    description = ToolExecutor().registry.get("automation_create").description
 
     assert "Set all_tools=true when the prompt must act" in description
     assert "auto_approve=true only skips approvals, it never widens" in description

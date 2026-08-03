@@ -29,12 +29,12 @@ from arden.tools.files import (
 )
 
 ALL_FILE_TOOLS = {
-    "read_file": read_file_tool,
-    "list_files": list_files_tool,
-    "find_files": find_files_tool,
-    "search_text": search_text_tool,
-    "write_file": write_file_tool,
-    "edit_file": edit_file_tool,
+    "file_read": read_file_tool,
+    "file_list": list_files_tool,
+    "file_find": find_files_tool,
+    "file_search_text": search_text_tool,
+    "file_write": write_file_tool,
+    "file_edit": edit_file_tool,
 }
 
 
@@ -60,11 +60,11 @@ def test_all_file_tools_are_client_placed():
 
 @pytest.mark.asyncio
 async def test_read_tools_refuse_in_process_execution(tmp_path):
-    result = await read_file_tool.execute(_make_execution("read_file"), path=str(tmp_path / "x.txt"))
+    result = await read_file_tool.execute(_make_execution("file_read"), path=str(tmp_path / "x.txt"))
     assert result.is_error
     assert result.outcome.error.code == "no_client_execution"
 
-    result = await list_files_tool.execute(_make_execution("list_files"), path=str(tmp_path))
+    result = await list_files_tool.execute(_make_execution("file_list"), path=str(tmp_path))
     assert result.is_error
     assert result.outcome.error.code == "no_client_execution"
 
@@ -72,7 +72,7 @@ async def test_read_tools_refuse_in_process_execution(tmp_path):
 @pytest.mark.asyncio
 async def test_write_tools_refuse_in_process_execution_without_touching_disk(tmp_path):
     target = tmp_path / "note.txt"
-    result = await write_file_tool.execute(_make_execution("write_file"), path=str(target), content="hello")
+    result = await write_file_tool.execute(_make_execution("file_write"), path=str(target), content="hello")
     assert result.is_error
     assert result.outcome.error.code == "no_client_execution"
     assert not target.exists()
@@ -142,7 +142,7 @@ async def test_write_approval_builds_diff_without_hashes(tmp_path):
     target.write_text("version A\n", encoding="utf-8")
 
     approval = await write_file_tool.approval_info(
-        _make_execution("write_file"),
+        _make_execution("file_write"),
         path=str(target),
         content="approved replacement\n",
     )
@@ -158,7 +158,7 @@ async def test_write_approval_builds_diff_without_hashes(tmp_path):
 @pytest.mark.asyncio
 async def test_write_approval_for_new_file_says_create(tmp_path):
     approval = await write_file_tool.approval_info(
-        _make_execution("write_file"),
+        _make_execution("file_write"),
         path=str(tmp_path / "new.txt"),
         content="hello",
     )
@@ -172,7 +172,7 @@ async def test_edit_approval_requires_unique_match(tmp_path):
     target.write_text("same\nsame\n", encoding="utf-8")
 
     approval = await edit_file_tool.approval_info(
-        _make_execution("edit_file"),
+        _make_execution("file_edit"),
         path=str(target),
         old_text="same",
         new_text="different",
@@ -181,7 +181,7 @@ async def test_edit_approval_requires_unique_match(tmp_path):
 
     target.write_text("hello old world\n", encoding="utf-8")
     approval = await edit_file_tool.approval_info(
-        _make_execution("edit_file"),
+        _make_execution("file_edit"),
         path=str(target),
         old_text="old",
         new_text="new",
@@ -196,7 +196,7 @@ async def test_area_approvals_display_relative_paths(tmp_path):
     (tmp_path / "notes.txt").write_text("hello\n", encoding="utf-8")
 
     approval = await edit_file_tool.approval_info(
-        _make_execution("edit_file", area_cwd=str(tmp_path)),
+        _make_execution("file_edit", area_cwd=str(tmp_path)),
         path="notes.txt",
         old_text="hello",
         new_text="bye",
@@ -215,24 +215,24 @@ def test_file_tools_are_registered_as_core_tools():
 
     names = set(executor.registry.tools)
 
-    assert {"read_file", "list_files", "find_files", "search_text", "write_file", "edit_file"}.issubset(names)
-    assert not is_deferred_tool("read_file", executor.registry)
-    assert not is_deferred_tool("list_files", executor.registry)
-    assert not is_deferred_tool("find_files", executor.registry)
-    assert not is_deferred_tool("search_text", executor.registry)
-    assert is_deferred_tool("write_file", executor.registry)
-    assert is_deferred_tool("edit_file", executor.registry)
+    assert {"file_read", "file_list", "file_find", "file_search_text", "file_write", "file_edit"}.issubset(names)
+    assert not is_deferred_tool("file_read", executor.registry)
+    assert not is_deferred_tool("file_list", executor.registry)
+    assert not is_deferred_tool("file_find", executor.registry)
+    assert not is_deferred_tool("file_search_text", executor.registry)
+    assert is_deferred_tool("file_write", executor.registry)
+    assert is_deferred_tool("file_edit", executor.registry)
 
 
 @pytest.mark.asyncio
 async def test_write_file_requires_approval_through_registry(tmp_path):
     target = tmp_path / "new.txt"
     registry = ToolRegistry()
-    registry.register("write_file", write_file_tool)
-    execution = _make_execution("write_file")
+    registry.register("file_write", write_file_tool)
+    execution = _make_execution("file_write")
 
     result = await registry.execute(
-        "write_file",
+        "file_write",
         execution,
         {"path": str(target), "content": "hello"},
     )

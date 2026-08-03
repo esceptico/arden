@@ -67,7 +67,7 @@ async def test_history_includes_runtime_snapshot_for_active_session(session_serv
         run_id="run-1",
         session_id="sess-runtime",
         tool_call_id="tool-1",
-        tool_name="write_file",
+        tool_name="file_write",
         action="write",
         scope="internal",
         diff="diff",
@@ -251,7 +251,7 @@ async def test_history_clamps_huge_persisted_tool_content(session_service: Sessi
                     {
                         "id": "call-1",
                         "type": "function",
-                        "function": {"name": "search_text", "arguments": "{}"},
+                        "function": {"name": "file_search_text", "arguments": "{}"},
                     }
                 ],
             },
@@ -310,7 +310,7 @@ async def test_history_skips_malformed_tool_calls_but_keeps_valid_calls(session_
                     {"id": 123, "function": {"name": "bash", "arguments": "{}"}},
                     {"id": "missing-name", "function": {"arguments": "{}"}},
                     {"id": "call-1", "function": {"name": "bash", "arguments": {"cmd": "date"}}},
-                    {"id": "call-2", "function": {"name": "read_file", "arguments": '{"path":"a"}'}},
+                    {"id": "call-2", "function": {"name": "file_read", "arguments": '{"path":"a"}'}},
                 ],
             },
         ],
@@ -324,7 +324,7 @@ async def test_history_skips_malformed_tool_calls_but_keeps_valid_calls(session_
     assistant = result["messages"][-1]
     assert assistant["tool_calls"] == [
         {"id": "call-1", "name": "bash", "arguments": "{}", "kind": "tool"},
-        {"id": "call-2", "name": "read_file", "arguments": '{"path":"a"}', "kind": "tool"},
+        {"id": "call-2", "name": "file_read", "arguments": '{"path":"a"}', "kind": "tool"},
     ]
 
 
@@ -342,7 +342,7 @@ async def test_history_includes_tool_display_name_when_executor_knows_tool(sessi
                     {
                         "id": "call-1",
                         "function": {
-                            "name": "search_text",
+                            "name": "file_search_text",
                             "arguments": '{"query":"ToolCallArgsEvent","path":"."}',
                         },
                     },
@@ -353,7 +353,7 @@ async def test_history_includes_tool_display_name_when_executor_knows_tool(sessi
 
     class Registry:
         def get(self, name: str):
-            if name == "search_text":
+            if name == "file_search_text":
                 return SimpleNamespace(kind="tool", display_name="SearchText")
             return None
 
@@ -365,7 +365,7 @@ async def test_history_includes_tool_display_name_when_executor_knows_tool(sessi
     assert result["messages"][-1]["tool_calls"] == [
         {
             "id": "call-1",
-            "name": "search_text",
+            "name": "file_search_text",
             "arguments": '{"query":"ToolCallArgsEvent","path":"."}',
             "kind": "tool",
             "display_name": "SearchText",
@@ -431,7 +431,7 @@ async def test_history_hydrates_tool_outcomes_from_durable_calls(session_service
                 "tool_calls": [
                     {
                         "id": "call-1",
-                        "function": {"name": "write_file", "arguments": '{"path":"a.txt"}'},
+                        "function": {"name": "file_write", "arguments": '{"path":"a.txt"}'},
                     }
                 ],
             },
@@ -442,7 +442,7 @@ async def test_history_hydrates_tool_outcomes_from_durable_calls(session_service
         run_id="run-1",
         session_id="sess-tool-outcome",
         tool_call_id="call-1",
-        tool_name="write_file",
+        tool_name="file_write",
         action="write",
         scope="internal",
     )
@@ -519,7 +519,7 @@ async def test_history_omits_non_durable_tool_result_data(session_service: Sessi
                 "tool_calls": [
                     {
                         "id": "call-1",
-                        "function": {"name": "search_text", "arguments": '{"query":"x"}'},
+                        "function": {"name": "file_search_text", "arguments": '{"query":"x"}'},
                     },
                 ],
             },

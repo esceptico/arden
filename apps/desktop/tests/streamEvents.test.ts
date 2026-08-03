@@ -71,7 +71,7 @@ test("live tool activity labels show all args after args arrive", () => {
   handleServerEvent({
     type: "TOOL_CALL_START",
     tool_call_id: "search-1",
-    tool_call_name: "search_text",
+    tool_call_name: "file_search_text",
     display_name: "SearchText",
   });
 
@@ -93,7 +93,7 @@ test("live tool activity extracts the canonical display title and hides metadata
   handleServerEvent({
     type: "TOOL_CALL_START",
     tool_call_id: "search-title",
-    tool_call_name: "search_text",
+    tool_call_name: "file_search_text",
     display_name: "SearchText",
   });
   handleServerEvent({
@@ -331,7 +331,7 @@ test("update_todos tool stream stays out of activity trace", () => {
   handleServerEvent({
     type: "TOOL_CALL_START",
     tool_call_id: "call-todos",
-    tool_call_name: "update_todos",
+    tool_call_name: "todo_update",
   });
   handleServerEvent({
     type: "TOOL_CALL_ARGS",
@@ -342,7 +342,7 @@ test("update_todos tool stream stays out of activity trace", () => {
   handleServerEvent({
     type: "TOOL_CALL_RESULT",
     tool_call_id: "call-todos",
-    name: "update_todos",
+    name: "todo_update",
     content: "Todo list updated.",
   });
 

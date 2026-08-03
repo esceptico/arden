@@ -32,7 +32,7 @@ export interface TranscriptProjectionRuntime {
   setProjectionState: (state: TranscriptProjectionState) => void;
 }
 
-export const TODO_TOOL_NAME = "update_todos";
+export const TODO_TOOL_NAME = "todo_update";
 
 export type TaskLifecycleEvent = Extract<
   ServerEvent,

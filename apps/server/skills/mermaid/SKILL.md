@@ -8,7 +8,7 @@ description: Produce a clean Mermaid diagram (flowchart / sequence / class / sta
 ## Workflow
 
 1. **Pick the diagram type** from the table below.
-2. **Read the matching reference file** with `read_file` for syntax details and examples — *only* the file you actually need, to keep context small.
+2. **Read the matching reference file** with `file_read` for syntax details and examples — *only* the file you actually need, to keep context small.
 3. **Emit a single fenced ```mermaid block** with the diagram. No prose unless the user explicitly asked for an explanation.
 
 ## Type → reference

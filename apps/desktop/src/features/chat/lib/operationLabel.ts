@@ -47,28 +47,29 @@ interface ToolMeta {
 // falls back to a category icon (PREFIX_ICON) + the server display_name, humanized.
 const TOOL_META: Record<string, ToolMeta> = {
   // System / files
-  read_file: { verb: "Read", icon: "file", noun: "file" },
-  write_file: { verb: "Wrote", icon: "file-plus", noun: "file" },
-  edit_file: { verb: "Edited", icon: "edit", noun: "file" },
-  list_files: { verb: "Listed files", icon: "folder" },
-  find_files: { verb: "Found files", icon: "search" },
-  search_text: { verb: "Searched code", icon: "search" },
+  file_read: { verb: "Read", icon: "file", noun: "file" },
+  file_write: { verb: "Wrote", icon: "file-plus", noun: "file" },
+  file_edit: { verb: "Edited", icon: "edit", noun: "file" },
+  file_list: { verb: "Listed files", icon: "folder" },
+  file_find: { verb: "Found files", icon: "search" },
+  file_search_text: { verb: "Searched code", icon: "search" },
   bash: { verb: "Ran", icon: "terminal", noun: "command" },
   current_time: { verb: "Checked the time", icon: "clock" },
   render_html: { verb: "Rendered a view", icon: "image" },
   load_tools: { verb: "Loaded tools", icon: "wrench" },
   tool_search: { verb: "Searched tools", icon: "search" },
   notify: { verb: "Notified you", icon: "bell" },
-  update_todos: { verb: "Updated the plan", icon: "list" },
+  todo_update: { verb: "Updated the plan", icon: "list" },
 
   // Web
   web_search: { verb: "Searched the web", icon: "globe" },
   web_fetch: { verb: "Fetched a page", icon: "globe", noun: "page" },
 
   // Gmail
-  emails: { verb: "Searched email", icon: "mail" },
-  read_email: { verb: "Read an email", icon: "mail", noun: "email" },
-  send_email: { verb: "Sent an email", icon: "mail" },
+  email_search: { verb: "Searched email", icon: "mail" },
+  email_read: { verb: "Read an email", icon: "mail", noun: "email" },
+  email_send: { verb: "Sent an email", icon: "mail" },
+  email_reply: { verb: "Replied to an email", icon: "mail" },
 
   // Slack
   slack_search: { verb: "Searched Slack", icon: "slack" },
@@ -84,40 +85,39 @@ const TOOL_META: Record<string, ToolMeta> = {
   slack_post_blocks: { verb: "Posted to Slack", icon: "slack" },
 
   // Calendar
-  calendar: { verb: "Checked the calendar", icon: "calendar" },
-  create_calendar_event: { verb: "Created an event", icon: "calendar" },
-  edit_calendar_event: { verb: "Edited an event", icon: "calendar" },
-  delete_calendar_event: { verb: "Deleted an event", icon: "calendar" },
+  calendar_search: { verb: "Checked the calendar", icon: "calendar" },
+  calendar_create_event: { verb: "Created an event", icon: "calendar" },
+  calendar_edit_event: { verb: "Edited an event", icon: "calendar" },
+  calendar_delete_event: { verb: "Deleted an event", icon: "calendar" },
 
   // Memory
-  memory_search: { verb: "Searched memory", icon: "brain" },
-  recall: { verb: "Recalled memory", icon: "brain" },
-  remember: { verb: "Saved to memory", icon: "brain" },
-  forget: { verb: "Forgot a memory", icon: "brain" },
-  memory_read: { verb: "Read memory", icon: "brain" },
-  memory_patch: { verb: "Updated memory", icon: "brain" },
-  memory_tree: { verb: "Viewed the memory tree", icon: "brain" },
-  memory_rebuild: { verb: "Rebuilt memory", icon: "brain" },
+  fact_search: { verb: "Searched memory", icon: "brain" },
+  fact_get: { verb: "Recalled a fact", icon: "brain" },
+  fact_history: { verb: "Read fact history", icon: "brain" },
+  fact_plan_changes: { verb: "Planned memory changes", icon: "brain" },
+  fact_commit_changes: { verb: "Updated memory", icon: "brain" },
+  wiki_read_page: { verb: "Read a page", icon: "brain" },
+  wiki_list_pages: { verb: "Listed pages", icon: "brain" },
 
   // Sessions
-  search_transcripts: { verb: "Searched transcripts", icon: "history" },
-  read_session: { verb: "Read a session", icon: "history" },
-  list_recent_sessions: { verb: "Listed sessions", icon: "history" },
+  session_search_transcripts: { verb: "Searched transcripts", icon: "history" },
+  session_read: { verb: "Read a session", icon: "history" },
+  session_list: { verb: "Listed sessions", icon: "history" },
 };
 
 // Category by tool-name shape, for the long tail not in TOOL_META.
 const PREFIX_ICON: ReadonlyArray<readonly [RegExp, StepIconKey]> = [
   [/^slack_/, "slack"],
-  [/calendar|event/, "calendar"],
-  [/^memory_|^recall$|^remember$|^forget$/, "brain"],
+  [/^calendar_/, "calendar"],
+  [/^fact_|^wiki_/, "brain"],
   [/^web_/, "globe"],
   [/^research/, "brain"],
-  [/email/, "mail"],
-  [/session|transcript/, "history"],
-  [/automation|loop|wakeup|schedule|cron/, "clock"],
-  [/skill/, "wrench"],
+  [/^email_/, "mail"],
+  [/^session_/, "history"],
+  [/^automation_|^loop_|cron/, "clock"],
+  [/^skill_/, "wrench"],
   [/notif/, "bell"],
-  [/todo|goal|directive/, "list"],
+  [/^todo_|^goal_|^directives_/, "list"],
 ];
 
 // Last-resort verb heuristic (user/MCP tools with no useful display_name).

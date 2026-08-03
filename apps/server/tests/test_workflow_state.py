@@ -21,7 +21,7 @@ def test_event_types_map_to_normalized_workflow_states():
 
 
 def test_sse_payload_includes_additive_workflow_state():
-    payload = json.loads(ApprovalNeededEvent(tool_id="tool-1", name="write_file").to_sse()["data"])
+    payload = json.loads(ApprovalNeededEvent(tool_id="tool-1", name="file_write").to_sse()["data"])
 
     assert payload["type"] == "approval_needed"
     assert payload["workflow_state"] == "waiting_for_approval"

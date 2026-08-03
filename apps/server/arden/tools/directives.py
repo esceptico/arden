@@ -79,14 +79,14 @@ async def set_directives(execution: ToolExecution, args: SetDirectivesInput) -> 
             code="fresh_read_required",
             message="Read the current directives before replacing them.",
             preview="Read directives first",
-            recovery_action="Call get_directives, then retry.",
+            recovery_action="Call directives_get, then retry.",
         )
     except RevisionConflict:
         return ToolResult.failure(
             code="write_conflict",
             message="Directives changed since they were read.",
             preview="Write conflict",
-            recovery_action="Call get_directives, recompute the update, and retry.",
+            recovery_action="Call directives_get, recompute the update, and retry.",
         )
     execution.ctx.run.observe_resource(
         _DIRECTIVES_OBSERVATION_ID,
@@ -127,7 +127,7 @@ get_directives_tool = tool(
     display_description="Read persistent behavior directives.",
     description="Read the current persistent behavior directives.",
     input_model=GetDirectivesInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL),
+    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, deferred=True),
     execute=get_directives,
 )
 
@@ -137,7 +137,7 @@ set_directives_tool = tool(
     display_description="Replace persistent behavior directives.",
     description=DESCRIPTION,
     input_model=SetDirectivesInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True),
     approval=approve_set_directives,
     execute=set_directives,
 )

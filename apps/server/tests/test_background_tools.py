@@ -90,7 +90,7 @@ async def test_cancel_agent_resolves_the_task_from_the_session_id():
 
     try:
         result = await background_module.cancel_agent(
-            ToolExecution(tool_id="t", tool_name="cancel_agent", ctx=_ctx(registry)),
+            ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(registry)),
             background_module.CancelAgentInput(session_id="P::a"),
         )
 
@@ -109,7 +109,7 @@ async def test_cancel_agent_unknown_session_lists_live_agent_sessions():
 
     try:
         result = await background_module.cancel_agent(
-            ToolExecution(tool_id="t", tool_name="cancel_agent", ctx=_ctx(registry)),
+            ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(registry)),
             background_module.CancelAgentInput(session_id="P::ghost"),
         )
 
@@ -132,7 +132,7 @@ async def test_cancel_agent_cascades_to_grandchildren():
 
     try:
         result = await background_module.cancel_agent(
-            ToolExecution(tool_id="t", tool_name="cancel_agent", ctx=_ctx(own, run_registry=reg)),
+            ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(own, run_registry=reg)),
             background_module.CancelAgentInput(session_id="P::a"),
         )
 
@@ -152,7 +152,7 @@ async def test_cancel_agent_approval_preview_names_the_session():
     approval = await background_module.cancel_agent_tool.approval_info(
         ToolExecution(
             tool_id="t",
-            tool_name="cancel_agent",
+            tool_name="agent_cancel",
             ctx=_ctx(BackgroundTaskRegistry(session_id="test")),
         ),
         session_id="P::a1",

@@ -1,10 +1,10 @@
 """Tools that drive the Arden app itself rather than the outside world.
 
-`send_message` delivers a message to a session — another chat, or an agent this
-run spawned; `rename_session` and `archive_session` curate the sidebar;
-`request_attention` raises a needs-you item on Home; `open_in_app` takes the
+`session_send_message` delivers a message to a session — another chat, or an agent this
+run spawned; `session_rename` and `session_archive` curate the sidebar;
+`app_request_attention` raises a needs-you item on Home; `app_open` takes the
 user somewhere in the UI. They exist because the agent can already *read* every
-session (`list_recent_sessions`/`read_session`) but had no way to act on one,
+session (`session_list`/`session_read`) but had no way to act on one,
 and no way to reach the user outside its own reply.
 """
 
@@ -38,9 +38,9 @@ class SendMessageInput(BaseModel):
         min_length=1,
         max_length=200,
         description=(
-            "Target session id: another chat from list_recent_sessions, or the "
+            "Target session id: another chat from session_list, or the "
             "session background() returned for an agent you spawned. Must not be "
-            "the session you are running in — use create_loop for another turn here."
+            "the session you are running in — use loop_create for another turn here."
         ),
     )
     message: str = Field(
@@ -74,7 +74,7 @@ class FollowupTaskInput(BaseModel):
 
 
 class RenameSessionInput(BaseModel):
-    session_id: str = Field(min_length=1, max_length=200, description="Session id from list_recent_sessions.")
+    session_id: str = Field(min_length=1, max_length=200, description="Session id from session_list.")
     name: str = Field(
         min_length=1,
         max_length=120,
@@ -87,7 +87,7 @@ class ArchiveSessionInput(BaseModel):
         min_length=1,
         max_length=50,
         description=(
-            "Session ids from list_recent_sessions to archive. A single "
+            "Session ids from session_list to archive. A single "
             "session is a one-element list; an archival sweep passes the "
             "whole batch at once."
         ),
@@ -162,7 +162,7 @@ async def _unknown_session(execution: ToolExecution, session_id: str) -> ToolRes
         code="not_found",
         message=f"No session {session_id}. Recent session ids: {known}.",
         preview="Unknown session",
-        recovery_action="Call list_recent_sessions and retry with an exact session_id.",
+        recovery_action="Call session_list and retry with an exact session_id.",
     )
 
 
@@ -202,10 +202,10 @@ async def send_message(execution: ToolExecution, args: SendMessageInput) -> Tool
     if args.session_id == execution.ctx.session_id:
         return ToolResult.failure(
             code="invalid_arguments",
-            message="send_message cannot target its own session.",
+            message="session_send_message cannot target its own session.",
             preview="Same session",
             recovery_action=(
-                "Use create_loop to give yourself another turn in this chat, or target a different session_id."
+                "Use loop_create to give yourself another turn in this chat, or target a different session_id."
             ),
         )
 
@@ -223,8 +223,8 @@ async def send_message(execution: ToolExecution, args: SendMessageInput) -> Tool
             message=f"The agent in {args.session_id} finished before the message landed.",
             preview="Agent finished",
             recovery_action=(
-                "Its result is delivered automatically; read_session(session_id=...) for detail. "
-                "Call send_message again only if you want a new run in that session."
+                "Its result is delivered automatically; session_read(session_id=...) for detail. "
+                "Call session_send_message again only if you want a new run in that session."
             ),
         )
 
@@ -241,7 +241,7 @@ async def send_message(execution: ToolExecution, args: SendMessageInput) -> Tool
     await execution.ctx.services["app_control"].dispatch(
         args.session_id,
         args.message,
-        client_id=f"send_message:{execution.tool_id}",
+        client_id=f"session_send_message:{execution.tool_id}",
     )
     label = data.state.name or args.session_id
     return ToolResult(
@@ -271,9 +271,9 @@ async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> To
     if args.session_id == ctx.session_id:
         return ToolResult.failure(
             code="invalid_arguments",
-            message="followup_task cannot target its own session.",
+            message="app_followup_task cannot target its own session.",
             preview="Same session",
-            recovery_action="Use create_loop for another turn here, or target an agent session you spawned.",
+            recovery_action="Use loop_create for another turn here, or target an agent session you spawned.",
         )
 
     registry = ctx.background_tasks
@@ -292,7 +292,7 @@ async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> To
             code="conflict",
             message=f"The agent in {args.session_id} finished before the task landed.",
             preview="Agent finished",
-            recovery_action="Call followup_task again — it will wake the idle agent, with the user's approval.",
+            recovery_action="Call app_followup_task again — it will wake the idle agent, with the user's approval.",
         )
 
     svc = ctx.services["session"]
@@ -310,7 +310,7 @@ async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> To
             ),
             preview="Not your agent",
             recovery_action=(
-                "Target a session id research()/background() returned to you; use send_message for any other chat."
+                "Target a session id research()/background() returned to you; use session_send_message for any other chat."
             ),
         )
     if await svc.is_archived(args.session_id):
@@ -321,14 +321,14 @@ async def followup_task(execution: ToolExecution, args: FollowupTaskInput) -> To
 
     await ctx.services["app_control"].dispatch(
         args.session_id,
-        f"<followup_task>\n{args.task}\n</followup_task>",
+        f"<app_followup_task>\n{args.task}\n</app_followup_task>",
         client_id=f"bg:followup:{execution.tool_id}",
     )
     label = data.state.name or args.session_id
     return ToolResult(
         content=(
             f"Woke the idle agent {label} ({args.session_id}) with the task. It runs in its own "
-            "session with its prior context; read_session(session_id=...) shows the outcome."
+            "session with its prior context; session_read(session_id=...) shows the outcome."
         ),
         preview=f"Woke {label}",
         source_refs=(session_ref(args.session_id, label),),
@@ -391,7 +391,7 @@ async def archive_session(execution: ToolExecution, args: ArchiveSessionInput) -
             code="conflict",
             message="\n".join([summary, *lines]),
             preview="Nothing archived",
-            recovery_action="Check each skip reason; ids come from list_recent_sessions.",
+            recovery_action="Check each skip reason; ids come from session_list.",
         )
     return ToolResult(
         content="\n".join([f"{summary} Restore from Settings → Archive.", *lines]),
@@ -469,7 +469,7 @@ async def _invalid_destination(execution: ToolExecution, destination: AppDestina
                     code="not_found",
                     message=f"No automation {task_id}.",
                     preview="Unknown automation",
-                    recovery_action="Call list_automations and retry with an exact task_id.",
+                    recovery_action="Call automation_list and retry with an exact task_id.",
                 )
         case MemoryDestination(path=str() as path):
             svc = execution.ctx.services.get("wiki")
@@ -505,7 +505,7 @@ async def open_in_app(execution: ToolExecution, args: OpenInAppInput) -> ToolRes
 
 SEND_MESSAGE_DESCRIPTION = (
     "Deliver a message to a session — the single address for anything you can talk to. "
-    "Delivers guidance promptly; it does NOT wake a finished agent — followup_task does. "
+    "Delivers guidance promptly; it does NOT wake a finished agent — app_followup_task does. "
     "Two behaviours, chosen from the target:\n\n"
     "- An agent you spawned that is still running (the session id background() returned): the "
     "message is queued as steering and the agent reads it at its next step. No approval.\n"
@@ -515,19 +515,19 @@ SEND_MESSAGE_DESCRIPTION = (
     "Fire and forget either way: nothing is waited for and no answer comes back here. The chat's "
     "reply lands in that chat; the agent's result is delivered to you automatically when it finishes. "
     "If you need an answer inside this turn, use research() instead.\n\n"
-    "Find ids with list_recent_sessions; inspect what a session did with read_session."
+    "Find ids with session_list; inspect what a session did with session_read."
 )
 
 FOLLOWUP_TASK_DESCRIPTION = (
     "Assign a new task to an agent you spawned, addressed by its session id. Works whether the "
     "agent is running or finished:\n\n"
-    "- Still running: the task is queued as a <followup_task> the agent reads at its next step, "
+    "- Still running: the task is queued as a <app_followup_task> the agent reads at its next step, "
     "and its report covers it — delivered here automatically. No approval.\n"
     "- Finished/idle: the agent is WOKEN — a fresh hidden run starts in its session with the task "
-    "as input, keeping its context. Requires the user's approval, like send_message to a chat.\n\n"
-    "This is the difference from send_message: send_message delivers guidance promptly but never "
-    "wakes a finished agent; followup_task assigns work and wakes an idle one. Fire and forget — "
-    "nothing is waited for here. A woken agent's reply lands in its session; read_session shows it."
+    "as input, keeping its context. Requires the user's approval, like session_send_message to a chat.\n\n"
+    "This is the difference from session_send_message: session_send_message delivers guidance promptly but never "
+    "wakes a finished agent; app_followup_task assigns work and wakes an idle one. Fire and forget — "
+    "nothing is waited for here. A woken agent's reply lands in its session; session_read shows it."
 )
 
 RENAME_SESSION_DESCRIPTION = (
@@ -542,8 +542,8 @@ ARCHIVE_SESSION_DESCRIPTION = (
     "of session_ids; each id succeeds or is skipped independently (the session you "
     "are running in, one with a live run, an unknown id, or one already archived is "
     "skipped, never fatal), and the result reports every outcome. The archival "
-    "chain: list_recent_sessions(order='oldest', within_days=…) → drop rows you must "
-    "keep ([channel], [agent], anything running) → archive_session(session_ids=[…]) "
+    "chain: session_list(order='oldest', within_days=…) → drop rows you must "
+    "keep ([channel], [agent], anything running) → session_archive(session_ids=[…]) "
     "once with the whole batch."
 )
 
@@ -584,6 +584,7 @@ send_message_tool = tool(
         requires_approval=True,
         allow_approval_bypass=False,
         permissions=frozenset({"session", "app_control"}),
+        deferred=True,
     ),
     approval=approve_send_message,
     execute=send_message,
@@ -600,6 +601,7 @@ followup_task_tool = tool(
         requires_approval=True,
         allow_approval_bypass=False,
         permissions=frozenset({"session", "app_control"}),
+        deferred=True,
     ),
     approval=approve_followup_task,
     execute=followup_task,
@@ -610,7 +612,9 @@ rename_session_tool = tool(
     display_description="Rename a chat session.",
     description=RENAME_SESSION_DESCRIPTION,
     input_model=RenameSessionInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+    ),
     execute=rename_session,
 )
 
@@ -619,7 +623,9 @@ archive_session_tool = tool(
     display_description="Archive a chat session.",
     description=ARCHIVE_SESSION_DESCRIPTION,
     input_model=ArchiveSessionInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+    ),
     execute=archive_session,
 )
 
@@ -628,7 +634,9 @@ request_attention_tool = tool(
     display_description="Raise a needs-you item on Home.",
     description=REQUEST_ATTENTION_DESCRIPTION,
     input_model=RequestAttentionInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"app_control"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"app_control"}), deferred=True
+    ),
     execute=request_attention,
 )
 
@@ -641,6 +649,7 @@ open_in_app_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({"app_control", "session"}),
+        deferred=True,
     ),
     execute=open_in_app,
 )

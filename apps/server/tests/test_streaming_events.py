@@ -978,7 +978,7 @@ async def test_event_stream_emits_stream_reset_on_future_cursor():
 async def test_event_stream_replays_pending_approval():
     buses = BusRegistry()
     bus = buses.get_or_create("sess-1")
-    await bus.emit(ApprovalNeededEvent(tool_id="tool-1", name="edit_file"))
+    await bus.emit(ApprovalNeededEvent(tool_id="tool-1", name="file_edit"))
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1001,7 +1001,7 @@ async def test_event_stream_replays_pending_approval():
 async def test_event_stream_skips_resolved_approval_replay():
     buses = BusRegistry()
     bus = buses.get_or_create("sess-1")
-    await bus.emit(ApprovalNeededEvent(tool_id="tool-1", name="edit_file"))
+    await bus.emit(ApprovalNeededEvent(tool_id="tool-1", name="file_edit"))
     await bus.emit(ThinkingEvent(status="tail"))
 
     registry = RunRegistry()

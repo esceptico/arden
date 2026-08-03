@@ -94,7 +94,7 @@ def _registry() -> ToolRegistry:
     # tool_scope patterns are validated against registered names — mirror the
     # runtime registry for the names these tests grant.
     registry = ToolRegistry()
-    for name in ("slack_search", "slack_post_message", "gmail_search", "read_email", "archive_session"):
+    for name in ("slack_search", "slack_post_message", "gmail_search", "email_read", "session_archive"):
         registry.register(name, _FakeTool())
     return registry
 
@@ -108,7 +108,7 @@ def _execution(svc: AutomationService, loop_task_id: str | None, session_id: str
         services={"automation": svc},
         background_tasks=BackgroundTaskRegistry(session_id="sess-1"),
     )
-    return ToolExecution(tool_id="t1", tool_name="schedule_wakeup", ctx=ctx)
+    return ToolExecution(tool_id="t1", tool_name="loop_schedule_wakeup", ctx=ctx)
 
 
 @pytest.mark.asyncio
@@ -621,7 +621,7 @@ async def test_create_automation_run_scope_missing_parent_errors(store_and_svc):
 
 @pytest.mark.asyncio
 async def test_create_loop_attempt_scope_missing_parent_errors(store_and_svc):
-    """Same protection on create_loop."""
+    """Same protection on loop_create."""
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
@@ -666,7 +666,7 @@ async def test_approve_create_automation_flags_missing_parent(store_and_svc):
 
 @pytest.mark.asyncio
 async def test_approve_create_loop_flags_missing_parent(store_and_svc):
-    """Same preview-vs-execute alignment for create_loop."""
+    """Same preview-vs-execute alignment for loop_create."""
     _, svc = store_and_svc
     execution = _execution(svc, loop_task_id=None)
 
@@ -700,7 +700,7 @@ async def test_the_agent_can_only_choose_read_only_or_everything(store_and_svc):
                 "trigger_type": "time",
                 "every": "1d",
                 "idempotency_key": "x",
-                "tool_scope": ["archive_session"],
+                "tool_scope": ["session_archive"],
             }
         )
 

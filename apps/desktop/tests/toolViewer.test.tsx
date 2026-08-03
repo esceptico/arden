@@ -268,8 +268,8 @@ test("tool viewer stacks above its approval review owner", async () => {
   const { appEl, root, restore } = setupDom();
   const item: ActivityItem = {
     id: "call-review",
-    kind: "write_file",
-    target: "write_file",
+    kind: "file_write",
+    target: "file_write",
     args: "{}",
     result: "Waiting for approval.",
     status: "executed",

@@ -61,7 +61,7 @@ def test_compacted_messages_record_tool_result_refs():
     messages = [
         {"role": Role.SYSTEM, "content": "system", "message_id": "sys"},
         {"role": Role.ASSISTANT, "content": "calling", "message_id": "m-1"},
-        {"role": Role.TOOL, "content": "big output", "tool_call_id": "call-A", "name": "read_file"},
+        {"role": Role.TOOL, "content": "big output", "tool_call_id": "call-A", "name": "file_read"},
         {"role": Role.TOOL, "content": "more output", "tool_call_id": "call-B", "name": "bash"},
         {"role": Role.USER, "content": "tail", "message_id": "m-4"},
     ]

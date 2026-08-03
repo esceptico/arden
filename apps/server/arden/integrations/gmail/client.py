@@ -670,7 +670,7 @@ class MultiGmailSource:
         if not separator or not account.strip() or not message_id.strip():
             raise IntegrationOperationError(
                 code="invalid_ref",
-                safe_message="Use the qualified account:message_id returned by emails or read_email.",
+                safe_message="Use the qualified account:message_id returned by emails or email_read.",
             )
         for src in self.sources:
             source_account = src.get_email_address()

@@ -94,7 +94,7 @@ test("structured tool outcomes do not add a transcript card", async () => {
           done: true,
           items: [{
             id: "call-1",
-            kind: "write_file",
+            kind: "file_write",
             target: "a.txt",
             outcome: { status: "succeeded", effect: { operation: "write", target: "a.txt" } },
           }],

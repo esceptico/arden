@@ -38,16 +38,16 @@ class Drive:
 def _execution():
     drive = Drive()
     ctx = SimpleNamespace(get_client=lambda _name, _type=None: drive)
-    return ToolExecution(tool_id="call-1", tool_name="read_google_doc", ctx=ctx)
+    return ToolExecution(tool_id="call-1", tool_name="drive_read_doc", ctx=ctx)
 
 
 def test_drive_write_tools_require_approval():
     write_names = {
-        "create_google_doc",
-        "edit_google_doc",
-        "create_google_sheet",
-        "update_google_sheet",
-        "append_google_sheet_rows",
+        "drive_create_doc",
+        "drive_edit_doc",
+        "drive_create_sheet",
+        "drive_update_sheet",
+        "drive_append_sheet_rows",
     }
     for name in write_names:
         registered = DRIVE_TOOLS[name]
@@ -62,10 +62,10 @@ def test_create_inputs_do_not_accept_file_content():
 
 
 def test_create_tool_descriptions_require_a_followup_write():
-    assert "empty" in DRIVE_TOOLS["create_google_doc"].description.lower()
-    assert "edit_google_doc" in DRIVE_TOOLS["create_google_doc"].description
-    assert "empty" in DRIVE_TOOLS["create_google_sheet"].description.lower()
-    assert "update_google_sheet" in DRIVE_TOOLS["create_google_sheet"].description
+    assert "empty" in DRIVE_TOOLS["drive_create_doc"].description.lower()
+    assert "drive_edit_doc" in DRIVE_TOOLS["drive_create_doc"].description
+    assert "empty" in DRIVE_TOOLS["drive_create_sheet"].description.lower()
+    assert "drive_update_sheet" in DRIVE_TOOLS["drive_create_sheet"].description
 
 
 async def test_read_doc_returns_source_reference():

@@ -28,7 +28,7 @@ test("respondToApproval forwards the deny reason as the tool result + approved:f
   setState({
     config: { serverUrl: "http://localhost:6877", apiKey: "" },
     currentRunId: "run-1",
-    pendingApprovals: [{ toolId: "tool-1", toolName: "write_file", status: "pending" }],
+    pendingApprovals: [{ toolId: "tool-1", toolName: "file_write", status: "pending" }],
   });
 
   await respondToApproval("tool-1", false, "use the API, not a raw file write");
@@ -66,8 +66,8 @@ test("respondToApproval swallows an already-resolved 409 but still reports real 
     config: { serverUrl: "http://localhost:6877", apiKey: "" },
     currentRunId: "run-1",
     pendingApprovals: [
-      { toolId: "tool-1", toolName: "write_file", status: "pending" },
-      { toolId: "tool-2", toolName: "write_file", status: "pending" },
+      { toolId: "tool-1", toolName: "file_write", status: "pending" },
+      { toolId: "tool-2", toolName: "file_write", status: "pending" },
     ],
     messages: new Map(),
     order: [],
@@ -95,7 +95,7 @@ test("ApprovalBanner exposes a deny-with-reason input", async () => {
     config: { serverUrl: "http://localhost:6877", apiKey: "" },
     currentRunId: "run-1",
     reviewingApprovalToolId: null,
-    pendingApprovals: [{ toolId: "tool-1", toolName: "write_file", status: "pending" }],
+    pendingApprovals: [{ toolId: "tool-1", toolName: "file_write", status: "pending" }],
   });
 
   await act(async () => {

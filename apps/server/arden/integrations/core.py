@@ -91,17 +91,17 @@ SYSTEM = Integration(
     label="System",
     tools={
         "bash": bash_tool,
-        "read_file": read_file_tool,
-        "list_files": list_files_tool,
-        "find_files": find_files_tool,
-        "search_text": search_text_tool,
-        "write_file": write_file_tool,
-        "edit_file": edit_file_tool,
+        "file_read": read_file_tool,
+        "file_list": list_files_tool,
+        "file_find": find_files_tool,
+        "file_search_text": search_text_tool,
+        "file_write": write_file_tool,
+        "file_edit": edit_file_tool,
         "current_time": current_time_tool,
         "render_html": render_html_tool,
         "research": research_tool,
         "workflow": workflow_tool,
-        "request_connection": request_connection_tool,
+        "connection_request": request_connection_tool,
         "load_tools": load_tools_tool,
         "tool_search": tool_search_tool,
     },
@@ -111,9 +111,9 @@ GOALS = Integration(
     id="_goals",
     label="Goals",
     tools={
-        "get_goal": get_goal_tool,
-        "complete_goal": complete_goal_tool,
-        "block_goal": block_goal_tool,
+        "goal_get": get_goal_tool,
+        "goal_complete": complete_goal_tool,
+        "goal_block": block_goal_tool,
     },
 )
 
@@ -121,15 +121,15 @@ AUTOMATION = Integration(
     id="_automation",
     label="Automation",
     tools={
-        "create_automation": create_automation_tool,
-        "list_automations": list_automations_tool,
-        "list_automation_runs": list_automation_runs_tool,
-        "update_automation": update_automation_tool,
-        "delete_automation": delete_automation_tool,
-        "get_automation_result": get_automation_result_tool,
-        "run_automation": run_automation_tool,
-        "create_loop": create_loop_tool,
-        "schedule_wakeup": schedule_wakeup_tool,
+        "automation_create": create_automation_tool,
+        "automation_list": list_automations_tool,
+        "automation_list_runs": list_automation_runs_tool,
+        "automation_update": update_automation_tool,
+        "automation_delete": delete_automation_tool,
+        "automation_result": get_automation_result_tool,
+        "automation_run": run_automation_tool,
+        "loop_create": create_loop_tool,
+        "loop_schedule_wakeup": schedule_wakeup_tool,
         "loop_done": loop_done_tool,
     },
 )
@@ -137,7 +137,7 @@ AUTOMATION = Integration(
 BACKGROUND = Integration(
     id="_background",
     label="Background task controls",
-    tools={"cancel_agent": cancel_agent_tool},
+    tools={"agent_cancel": cancel_agent_tool},
 )
 
 NOTIFICATIONS = Integration(
@@ -149,21 +149,21 @@ NOTIFICATIONS = Integration(
 DIRECTIVES = Integration(
     id="_directives",
     label="Directives",
-    tools={"get_directives": get_directives_tool, "set_directives": set_directives_tool},
+    tools={"directives_get": get_directives_tool, "directives_set": set_directives_tool},
 )
 
 TASK_TRACKING = Integration(
     id="_task_tracking",
     label="Task tracking",
-    tools={"update_todos": update_todos_tool},
+    tools={"todo_update": update_todos_tool},
 )
 
 SKILLS = Integration(
     id="_skills",
     label="Skills",
     tools={
-        "use_skill": use_skill_tool,
-        "create_skill": create_skill_tool,
+        "skill_use": use_skill_tool,
+        "skill_create": create_skill_tool,
     },
 )
 
@@ -171,25 +171,23 @@ SESSIONS = Integration(
     id="_sessions",
     label="Sessions",
     tools={
-        "list_recent_sessions": list_recent_sessions_tool,
-        "read_session": read_session_tool,
-        "search_transcripts": search_transcripts_tool,
-        "create_session": create_session_tool,
+        "session_list": list_recent_sessions_tool,
+        "session_read": read_session_tool,
+        "session_search_transcripts": search_transcripts_tool,
+        "session_create": create_session_tool,
     },
 )
 
-# Separate from SESSIONS so the read tools stay always-loaded: DEFERRED_SOURCES
-# keys on the integration id, and `_sessions` must not be in it.
 APP_CONTROL = Integration(
     id="_app_control",
     label="App control",
     tools={
-        "send_message": send_message_tool,
-        "followup_task": followup_task_tool,
-        "rename_session": rename_session_tool,
-        "archive_session": archive_session_tool,
-        "request_attention": request_attention_tool,
-        "open_in_app": open_in_app_tool,
+        "session_send_message": send_message_tool,
+        "app_followup_task": followup_task_tool,
+        "session_rename": rename_session_tool,
+        "session_archive": archive_session_tool,
+        "app_request_attention": request_attention_tool,
+        "app_open": open_in_app_tool,
     },
 )
 
@@ -197,7 +195,7 @@ AREA = Integration(
     id="_area",
     label="Area",
     tools={
-        "submit_area_report": submit_area_report_tool,
+        "area_submit_report": submit_area_report_tool,
         "area_page_read": area_page_read_tool,
         "area_page_patch": area_page_patch_tool,
         "area_page_write": area_page_write_tool,
@@ -227,12 +225,12 @@ FACTS = Integration(
     id="_facts",
     label="Facts",
     tools={
-        "search_facts": search_facts_tool,
-        "get_fact": get_fact_tool,
-        "get_fact_history": get_fact_history_tool,
-        "get_due_fact_reviews": get_due_fact_reviews_tool,
-        "plan_fact_changes": plan_fact_changes_tool,
-        "commit_fact_changes": commit_fact_changes_tool,
+        "fact_search": search_facts_tool,
+        "fact_get": get_fact_tool,
+        "fact_history": get_fact_history_tool,
+        "fact_due_reviews": get_due_fact_reviews_tool,
+        "fact_plan_changes": plan_fact_changes_tool,
+        "fact_commit_changes": commit_fact_changes_tool,
     },
 )
 
@@ -240,15 +238,15 @@ WIKI = Integration(
     id="_wiki",
     label="Wiki",
     tools={
-        "list_wiki_pages": list_wiki_pages_tool,
-        "list_wiki_changes": list_wiki_changes_tool,
-        "read_wiki_page": read_wiki_page_tool,
+        "wiki_list_pages": list_wiki_pages_tool,
+        "wiki_list_changes": list_wiki_changes_tool,
+        "wiki_read_page": read_wiki_page_tool,
         "wiki_links": wiki_links_tool,
-        "create_wiki_page": create_wiki_page_tool,
-        "edit_wiki_page": edit_wiki_page_tool,
-        "archive_wiki_page": archive_wiki_page_tool,
-        "move_wiki_page": move_wiki_page_tool,
-        "publish_wiki_generated": publish_wiki_generated_tool,
+        "wiki_create_page": create_wiki_page_tool,
+        "wiki_edit_page": edit_wiki_page_tool,
+        "wiki_archive_page": archive_wiki_page_tool,
+        "wiki_move_page": move_wiki_page_tool,
+        "wiki_publish_generated": publish_wiki_generated_tool,
     },
 )
 

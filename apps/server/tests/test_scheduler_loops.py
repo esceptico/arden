@@ -1811,7 +1811,7 @@ async def test_iteration_loop_with_only_thread_id_fires(store: AutomationStore, 
 
 @pytest.mark.asyncio
 async def test_create_loop_sets_thread_id_and_read_history(store: AutomationStore, session_service):
-    """`svc.create_loop` must align new rows with the canonical model:
+    """`svc.loop_create` must align new rows with the canonical model:
     thread_id is the sole session binding. read_history must be True so the
     row routes through the iteration dispatcher (loops re-enter the session
     with full history)."""

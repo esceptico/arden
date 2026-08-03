@@ -37,7 +37,7 @@ async def cancel_agent(execution: ToolExecution, args: CancelAgentInput) -> Tool
             preview="Not found",
             recovery_action=(
                 "Retry with one of the listed sessions. A finished agent needs no cancel — "
-                "read_session shows what it did. Only agents you spawned can be stopped here; "
+                "session_read shows what it did. Only agents you spawned can be stopped here; "
                 "the user stops their own chats from the app."
             ),
         )
@@ -70,10 +70,10 @@ cancel_agent_tool = tool(
     description=(
         "Stop an agent you spawned, addressed by its session id. Anything it spawned stops too. "
         "Requires approval. A finished agent needs no cancel — its result arrives automatically, "
-        "and read_session shows its work."
+        "and session_read shows its work."
     ),
     input_model=CancelAgentInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True),
+    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True),
     approval=approve_cancel_agent,
     execute=cancel_agent,
 )

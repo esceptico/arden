@@ -3,7 +3,7 @@ import { orderedTraceEntries } from "@/features/chat/components/ActivityTrace";
 import type { ActivityItem } from "@/stores/index";
 
 function toolRow(id: string): ActivityItem {
-  return { id, kind: "read_file", target: `read_file(${id})`, status: "executed" };
+  return { id, kind: "file_read", target: `read_file(${id})`, status: "executed" };
 }
 
 test("html widget items lift out of the rows into their own entry", () => {

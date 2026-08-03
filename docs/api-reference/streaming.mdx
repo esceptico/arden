@@ -74,7 +74,7 @@ Agent invoked a tool.
 ```json
 {
   "type": "TOOL_CALL_START",
-  "tool_call_name": "search_facts",
+  "tool_call_name": "fact_search",
   "tool_call_id": "tc_abc123",
   "depth": 0
 }
@@ -118,7 +118,7 @@ Tool requires user approval before executing.
 {
   "type": "approval_needed",
   "tool_id": "tc_abc123",
-  "name": "send_email",
+  "name": "email_send",
   "content_preview": "Send email to alice@example.com"
 }
 ```

@@ -265,7 +265,7 @@ class Runtime:
         if self.automation_service:
             services["automation"] = self.automation_service
         if self.session_service:
-            # Exposed so tools (read-only `list_recent_sessions` / `read_session`)
+            # Exposed so tools (read-only `session_list` / `session_read`)
             # can query session history. Used by the propose-* skills when
             # running inside a scheduled automation that needs cross-session
             # pattern detection.

@@ -41,7 +41,7 @@ def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
     Recency-first (the field's consensus: keep the active tail, evict the stale) and monotonic —
     a result only ever transitions full→stub as newer results arrive, never back — so each stub is
     byte-stable across turns and the prompt prefix stays cache-friendly. Results above the blob
-    threshold remain exactly re-readable via read_file using the persisted result path.
+    threshold remain exactly re-readable via file_read using the persisted result path.
     """
     tool_indices = [i for i, m in enumerate(messages) if _is_tool_message(m)]
     keep_full: set[int] = set()
@@ -73,7 +73,7 @@ def _tool_result_stub(message: dict) -> str:
     if tool_call_id:
         path = find_result_file(tool_call_id)
         if path is not None:
-            retrieval = f" Full output: read_file(path={str(path)!r}, offset=N)."
+            retrieval = f" Full output: file_read(path={str(path)!r}, offset=N)."
     return f"[Older {name} result cleared from context — {len(content)} chars, {line_count} lines.{retrieval}]"
 
 
