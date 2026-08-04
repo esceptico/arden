@@ -149,7 +149,9 @@ export function Home() {
         )}
         <header className="mission-control__answer" data-page-enter-item>
           <h1>
-            <BlurSwap swapKey={answer.text}>{answerContent(answer)}</BlurSwap>
+            <BlurSwap swapKey={answer.text}>
+              <span className="mission-control__answer-copy">{answerContent(answer)}</span>
+            </BlurSwap>
           </h1>
         </header>
         <HeroInput inputRef={captureInputRef} omniboxActionsRef={omniboxActionsRef} />

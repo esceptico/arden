@@ -1652,6 +1652,96 @@ async def test_background_agent_schema_migrates_old_task_id_primary_key(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp_path: Path):
+    db = tmp_path / "v3-sessions.db"
+    conn = await database.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE session_store_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '3');
+        CREATE TABLE background_agent_runs (
+            task_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            parent_run_id TEXT,
+            parent_tool_call_id TEXT,
+            child_session_id TEXT,
+            agent_type TEXT NOT NULL DEFAULT 'background_research',
+            wait INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            command TEXT NOT NULL,
+            detail TEXT,
+            result_ref TEXT,
+            result_text TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            updated_at TEXT NOT NULL,
+            ended_at TEXT,
+            cancel_requested_at TEXT,
+            notified_at TEXT,
+            completion_id TEXT,
+            spawn_spec TEXT,
+            spawn_attempts INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, task_id)
+        );
+        INSERT INTO background_agent_runs (
+            task_id, session_id, parent_run_id, status, command,
+            created_at, started_at, updated_at
+        ) VALUES ('bg-1', 'sess-1', 'run-1', 'running', 'research', 'now', 'now', 'now');
+        """
+    )
+    await conn.commit()
+    read_conn = await database.connect(db, readonly=True)
+    store = SessionStore(conn, read_conn)
+
+    await store.init_schema()
+
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")}
+    assert {
+        "suspension_id",
+        "cancel_actor",
+        "terminal_cause",
+        "cancel_generation",
+        "cancel_idempotency_key",
+    } <= columns
+    assert await store.list_background_agent_runs("sess-1") == [
+        {
+            "task_id": "bg-1",
+            "child_run_id": "bg-1",
+            "child_session_id": None,
+            "session_id": "sess-1",
+            "parent_run_id": "run-1",
+            "parent_tool_call_id": None,
+            "suspension_id": None,
+            "agent_type": "background_research",
+            "wait": False,
+            "status": "running",
+            "command": "research",
+            "detail": None,
+            "result_ref": None,
+            "created_at": "now",
+            "started_at": "now",
+            "updated_at": "now",
+            "ended_at": None,
+            "cancel_requested_at": None,
+            "cancel_actor": None,
+            "terminal_cause": None,
+            "cancel_generation": 0,
+            "cancel_idempotency_key": None,
+            "notified_at": None,
+            "completion_id": None,
+        }
+    ]
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "4"
+
+    await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_background_agent_event_schema_adds_delivery_columns_before_index(tmp_path: Path):
     conn = await database.connect(tmp_path / "old-events.db")
     await conn.execute(

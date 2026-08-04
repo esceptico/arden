@@ -131,6 +131,19 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
+test("Home headline preserves spaces around its accented count", async () => {
+  installBridge();
+  seed([ask("First", "question"), ask("Second", "question"), ask("Third", "question")]);
+  const app = await renderHome();
+  await waitFor(() => requests.some((request) => request.path === "/areas/overview"));
+
+  const copy = app.querySelector(".mission-control__answer-copy");
+  expect(copy?.textContent).toBe("Three things need you");
+  expect(copy?.parentElement?.children).toHaveLength(1);
+  expect(copy?.querySelector(".mission-control__answer-count")?.nextSibling?.textContent)
+    .toBe(" things need you");
+});
+
 test("Home shortcut dispatcher mirrors deck verbs while preserving typing and modifier guards", () => {
   const capture = document.createElement("input");
   capture.value = "replace me";

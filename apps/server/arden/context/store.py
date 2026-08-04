@@ -38,7 +38,7 @@ from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 3
+_SESSION_SCHEMA_VERSION = 4
 
 LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
 # Hard bound on the string handed to the FTS5 MATCH parser. A very long query
@@ -846,6 +846,10 @@ class SessionStore:
                 except aiosqlite.OperationalError as error:
                     if "duplicate column name" not in str(error).lower():
                         raise
+            await self.conn.commit()
+            version = 3
+        if version == 3:
+            await self._migrate_background_agent_runs_schema()
             await self.conn.execute(
                 "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
                 (str(_SESSION_SCHEMA_VERSION),),
