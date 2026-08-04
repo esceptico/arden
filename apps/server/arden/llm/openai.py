@@ -16,6 +16,7 @@ from arden.agent import (
     ToolCallStreamDelta,
     Usage,
 )
+from arden.agent.types.tools import tool_result_content_for_model
 from arden.core.content import render_context
 from arden.llm.base import CompletionClient, EmbeddingClient
 from arden.llm.models import Provider, get_model, supports_native_deferred_tools
@@ -29,7 +30,17 @@ from arden.observability.judgment import trace_client
 
 # Keys we attach for arden internals that must be stripped before an API call.
 _INTERNAL_MESSAGE_KEYS = frozenset(
-    {"client_id", "created_at", "message_id", "compaction", "data", "anthropic_content", "provider_tool_calls"}
+    {
+        "client_id",
+        "created_at",
+        "message_id",
+        "compaction",
+        "data",
+        "outcome",
+        "anthropic_content",
+        "provider_tool_calls",
+        "background_status",
+    }
 )
 
 
@@ -372,6 +383,8 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
         result = []
         for msg in messages:
             stripped = {k: v for k, v in msg.items() if k not in _INTERNAL_MESSAGE_KEYS}
+            if msg.get("role") == Role.TOOL:
+                stripped["content"] = tool_result_content_for_model(stripped.get("content") or "", msg.get("outcome"))
             content = stripped["content"]
             if not isinstance(content, list):
                 result.append(stripped)

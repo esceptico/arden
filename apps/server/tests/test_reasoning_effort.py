@@ -100,12 +100,13 @@ def test_anthropic_request_uses_native_deferred_tool_search():
         response_format=None,
     )
 
-    assert request["tools"][0] == {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+    assert request["tools"][0]["type"] == "tool_search_tool_bm25_20251119"
+    assert request["tools"][0]["name"] == "tool_search_tool_bm25"
     deferred = next(tool for tool in request["tools"] if tool.get("name") == "slack_search")
     assert deferred["defer_loading"] is True
 
 
-def test_anthropic_request_allows_visible_tool_search_loader_with_native_deferred_tools():
+def test_anthropic_request_omits_function_loader_with_native_deferred_tools():
     client = AnthropicClient(api_key="test")
 
     _, request = client._prepare(
@@ -129,9 +130,9 @@ def test_anthropic_request_allows_visible_tool_search_loader_with_native_deferre
         response_format=None,
     )
 
-    assert request["tools"][0] == {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
-    function_loader = next(tool for tool in request["tools"] if tool.get("name") == "tool_search")
-    assert function_loader["input_schema"]["properties"]["query"]["type"] == "string"
+    assert request["tools"][0]["type"] == "tool_search_tool_bm25_20251119"
+    assert request["tools"][0]["name"] == "tool_search_tool_bm25"
+    assert not any(tool.get("name") == "tool_search" for tool in request["tools"])
     assert next(tool for tool in request["tools"] if tool.get("name") == "slack_search")["defer_loading"] is True
 
 
@@ -212,6 +213,32 @@ def test_anthropic_preserves_tool_search_blocks_for_next_request():
     assert assistant["provider_tool_calls"][0]["arguments"] == '{"tools": ["slack_search"]}'
     assert assistant["provider_tool_calls"][0]["result"] == "Matched tools: slack_search"
     assert client._convert_assistant(assistant)["content"] == anthropic_content
+
+
+def test_anthropic_tool_error_exposes_structured_recovery_to_model():
+    client = AnthropicClient(api_key="test")
+
+    messages = client._convert_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_1",
+                "content": "Read required.",
+                "outcome": {
+                    "status": "failed",
+                    "error": {
+                        "code": "fresh_read_required",
+                        "retryable": False,
+                        "recovery_action": "Read the page again.",
+                    },
+                },
+            }
+        ]
+    )
+
+    content = messages[0]["content"][0]["content"]
+    assert "<tool_outcome>" in content
+    assert "fresh_read_required" in content
 
 
 class _AsyncAnthropicStream:

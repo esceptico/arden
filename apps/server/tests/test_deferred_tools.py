@@ -257,10 +257,10 @@ def test_run_context_rehydration_snapshot_round_trip():
     restored = RunContext(run_id="run", deferred_tools_enabled=True)
     restored.apply_rehydration_state(snapshot)
 
-    assert restored.loaded_tools == set()
+    assert restored.loaded_tools == {"slack_search", "background"}
     assert restored.loop_task_id == "loop-1"
     assert restored.active_plan_ref == "plan:abc"
-    assert "loaded_tools" not in snapshot
+    assert snapshot["loaded_tools"] == ["background", "slack_search"]
     assert snapshot["pending_approval_ids"] == ["call-1"]
     assert snapshot["background_tasks"] == [{"task_id": "bg-1", "command": "research"}]
 
@@ -285,6 +285,7 @@ def test_tool_context_builds_compaction_rehydration_state():
         "active_plan_ref": "plan:abc",
         "loop_task_id": None,
         "declined_connections": [],
+        "loaded_tools": ["slack_search"],
     }
 
 
@@ -441,7 +442,7 @@ async def test_deferred_middleware_uses_native_loading_for_supported_models():
     deferred_names = {t["function"]["name"] for t in prepared.deferred_tools}
 
     assert "load_tools" not in names
-    assert "tool_search" in names
+    assert "tool_search" not in names
     assert "echo" in names
     assert "slack_search" not in names
     assert "wiki_read_page" not in names
@@ -473,7 +474,102 @@ async def test_hidden_tool_recovery_names_the_exposed_loader():
     await middleware(replace(_request(registry), model="gpt-5.5"), _identity)
     native = await executor.execute("slack_search", {"query": "x"}, "native")
     assert native.is_error
-    assert "tool_search" in native.content
+    assert "provider-native tool search" in native.content
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_middleware_rehydrates_discovery_from_structured_history():
+    registry = _registry()
+    run = RunContext(run_id="new-run", deferred_tools_enabled=True)
+    middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
+    request = replace(
+        _request(registry),
+        model="gpt-5.5",
+        messages=[
+            {"role": "system", "content": "test"},
+            {
+                "role": "assistant",
+                "content": "",
+                "provider_tool_calls": [
+                    {"id": "tsc_1", "name": "tool_search", "arguments": '{"tools":["slack_search"]}'}
+                ],
+            },
+            {"role": "user", "content": "continue"},
+        ],
+    )
+
+    prepared = await middleware(request, _identity)
+
+    assert run.loaded_tools == {"slack_search"}
+    assert "slack_search" in {tool["function"]["name"] for tool in prepared.tools}
+    assert "tool_search" not in {tool["function"]["name"] for tool in prepared.tools}
+
+
+@pytest.mark.asyncio
+async def test_native_wiki_mutation_discovery_also_exposes_required_reader():
+    registry = _registry()
+    for name, policy in (
+        ("wiki_read_page", READ_INTERNAL_DEFERRED),
+        ("wiki_edit_page", WRITE_INTERNAL_DEFERRED),
+    ):
+        registry.register(
+            name,
+            tool(
+                description=name,
+                input_model=SearchInput,
+                policy=policy,
+                approval=fake_approval if policy.requires_approval else None,
+                execute=fake_search,
+            ),
+            source="_wiki",
+        )
+    run = RunContext(run_id="new-run", deferred_tools_enabled=True)
+    middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
+    request = replace(
+        _request(registry),
+        model="gpt-5.5",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "",
+                "provider_tool_calls": [
+                    {"id": "tsc_wiki", "name": "tool_search", "arguments": '{"tools":["wiki_edit_page"]}'}
+                ],
+            }
+        ],
+    )
+
+    prepared = await middleware(request, _identity)
+    visible = {tool["function"]["name"] for tool in prepared.tools}
+
+    assert {"wiki_edit_page", "wiki_read_page"} <= run.loaded_tools
+    assert {"wiki_edit_page", "wiki_read_page"} <= visible
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_middleware_rehydrates_discovery_after_compaction():
+    registry = _registry()
+    run = RunContext(run_id="new-run", deferred_tools_enabled=True)
+    middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
+    request = replace(
+        _request(registry),
+        model="gpt-5.5",
+        messages=[
+            {"role": "system", "content": "test"},
+            {
+                "role": "assistant",
+                "content": "[Session State Handoff]",
+                "compaction": {"rehydration": {"loaded_tools": ["slack_search", "removed_tool"]}},
+            },
+            {"role": "user", "content": "continue"},
+        ],
+    )
+
+    prepared = await middleware(request, _identity)
+
+    assert "slack_search" in run.loaded_tools
+    assert "removed_tool" not in run.loaded_tools
+    assert "slack_search" in {tool["function"]["name"] for tool in prepared.tools}
 
 
 @pytest.mark.asyncio
@@ -564,7 +660,7 @@ async def test_agent_load_tools_reveals_slack_on_next_model_step():
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_search_reveals_slack_on_next_native_model_step():
+async def test_native_provider_tool_search_reveals_slack_on_next_model_step():
     registry = _registry()
     run = RunContext(run_id="run", deferred_tools_enabled=True)
     ctx = ToolContext(
@@ -574,9 +670,32 @@ async def test_agent_tool_search_reveals_slack_on_next_native_model_step():
         io=IOBridge(),
     )
     executor = _Executor(registry)
+    first = CompletionResponse(
+        choices=[
+            Choice(
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=None,
+                    reasoning_content=None,
+                    provider_tool_calls=[
+                        ProviderToolCall(
+                            id="tsc_1",
+                            name="tool_search",
+                            arguments='{"tools":["slack_search"]}',
+                            result="Matched tools: slack_search",
+                        )
+                    ],
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            )
+        ],
+        usage=Usage(),
+        model="gpt-5.5",
+    )
     llm = MockCompletionClient(
         [
-            make_tool_response("tool_search", {"query": "select:slack_search"}, call_id="call_search", model="gpt-5.5"),
+            first,
             make_tool_response("slack_search", {"query": "hello"}, call_id="call_slack", model="gpt-5.5"),
             make_text_response("done", model="gpt-5.5"),
         ]
@@ -602,7 +721,7 @@ async def test_agent_tool_search_reveals_slack_on_next_native_model_step():
     first_tools = {t["function"]["name"] for t in llm.calls[0]["tools"]}
     first_deferred = {t["function"]["name"] for t in llm.calls[0]["deferred_tools"]}
     second_tools = {t["function"]["name"] for t in llm.calls[1]["tools"]}
-    assert "tool_search" in first_tools
+    assert "tool_search" not in first_tools
     assert "load_tools" not in first_tools
     assert "slack_search" not in first_tools
     assert "slack_search" in first_deferred
@@ -866,7 +985,7 @@ async def test_load_tools_preloads_multiple_exact_names_in_one_call():
 
 
 @pytest.mark.asyncio
-async def test_compaction_unloads_deferred_tools_and_refreshes_schema():
+async def test_compaction_preserves_loaded_deferred_tools_and_refreshes_schema():
     registry = _registry()
     run = RunContext(
         run_id="run",
@@ -877,7 +996,6 @@ async def test_compaction_unloads_deferred_tools_and_refreshes_schema():
     deferred = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
     compaction = CompactionModelRequestMiddleware(
         compactor=AlwaysCompacts(),
-        on_compact=run.loaded_tools.clear,
         get_rehydration_state=lambda: run.to_rehydration_state(),
         apply_rehydration_state=run.apply_rehydration_state,
     )
@@ -885,15 +1003,15 @@ async def test_compaction_unloads_deferred_tools_and_refreshes_schema():
     prepared = await apply_model_request_middlewares(_request(registry), (deferred, compaction))
     names = {t["function"]["name"] for t in prepared.tools}
     assert "load_tools" in names
-    assert "slack_search" not in names
+    assert "slack_search" in names
     assert prepared.messages == [{"role": "system", "content": "compacted"}]
-    assert run.loaded_tools == set()
+    assert run.loaded_tools == {"slack_search"}
     assert run.active_plan_ref == "plan:abc"
 
     next_prepared = await deferred(_request(registry), _identity)
     next_names = {t["function"]["name"] for t in next_prepared.tools}
     assert "load_tools" in next_names
-    assert "slack_search" not in next_names
+    assert "slack_search" in next_names
 
 
 @pytest.mark.asyncio
@@ -915,10 +1033,10 @@ async def test_create_agent_compaction_refreshes_deferred_schema():
     names = {t["function"]["name"] for t in tools}
     deferred_names = {t["function"]["name"] for t in deferred_tools}
     assert messages == [{"role": "system", "content": "compacted"}]
-    assert loaded == set()
+    assert loaded == {"slack_search"}
     assert "load_tools" in names
-    assert "slack_search" not in names
-    assert "slack_search" in deferred_names
+    assert "slack_search" in names
+    assert "slack_search" not in deferred_names
 
 
 def test_create_agent_wires_child_io_factory_onto_run_context():
@@ -1041,8 +1159,8 @@ def test_native_deferred_prompt_lists_exact_tool_names_without_group_loader():
     )
 
     assert prompt is not None
-    assert "tool_search" in prompt
-    assert 'tool_search(query="select:slack_search")' in prompt
+    assert "provider-native search tool" in prompt
+    assert 'tool_search(query="select:slack_search")' not in prompt
     assert "slack_search" in prompt
     assert "load_tools" not in prompt
     assert "load_group" not in prompt
@@ -1227,7 +1345,7 @@ async def test_spawned_agent_compaction_refreshes_deferred_schema(monkeypatch):
     names = {t["function"]["name"] for t in prepared.tools}
     assert prepared.messages == [{"role": "system", "content": "compacted"}]
     assert "load_tools" in names
-    assert "slack_search" not in names
+    assert "slack_search" in names
     assert [event.type.value for event in emitted] == ["task_started", "task_finished"]
 
     emitted.clear()
@@ -1248,7 +1366,7 @@ async def test_spawned_agent_compaction_refreshes_deferred_schema(monkeypatch):
     names = {t["function"]["name"] for t in prepared.tools}
     assert prepared.messages == [{"role": "system", "content": "compacted"}]
     assert "load_tools" in names
-    assert "slack_search" not in names
+    assert "slack_search" in names
     compaction_events = [event for event in emitted if event.type.value.startswith("compaction_")]
     assert [event.type.value for event in compaction_events] == [
         "compaction_started",

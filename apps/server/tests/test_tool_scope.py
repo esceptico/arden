@@ -156,7 +156,7 @@ def test_read_only_never_smuggles_in_a_write():
     granted = {s["function"]["name"] for s in executor.get_tools(scope=resolve("read_only"))}
 
     assert {"wiki_list_pages", "wiki_read_page", "wiki_links"} <= granted
-    for name in ("wiki_create_page", "wiki_edit_page", "wiki_archive_page", "email_send"):
+    for name in ("wiki_create_page", "wiki_edit_page", "wiki_patch_page", "wiki_archive_page", "email_send"):
         assert name not in granted, name
 
 

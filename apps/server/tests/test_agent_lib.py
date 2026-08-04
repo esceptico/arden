@@ -774,6 +774,29 @@ async def test_three_non_retryable_failure_only_steps_stop_as_no_progress():
 
 
 @pytest.mark.asyncio
+async def test_failed_tool_message_preserves_structured_recovery_outcome():
+    llm = FakeLLM([_response(tool_calls=[_tc("c1", "t", {})]), _response(text="done")])
+    executor = FakeExecutor(
+        {
+            "t": ToolResult.failure(
+                code="fresh_read_required",
+                message="Read required.",
+                preview="Read required",
+                recovery_action="Read the page again.",
+            )
+        }
+    )
+    messages = _msgs()
+
+    await _make_agent(llm, executor).run(messages)
+
+    tool_message = next(message for message in messages if message["role"] == "tool")
+    assert tool_message["content"] == "Read required."
+    assert tool_message["outcome"]["error"]["code"] == "fresh_read_required"
+    assert tool_message["outcome"]["error"]["recovery_action"] == "Read the page again."
+
+
+@pytest.mark.asyncio
 async def test_success_resets_no_progress_counter():
     outcomes = iter(
         [

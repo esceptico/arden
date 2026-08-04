@@ -17,6 +17,7 @@ from arden.agent import (
     ToolCall,
     Usage,
 )
+from arden.agent.types.tools import ToolOutcomeStatus
 from arden.core.content import render_context
 from arden.llm.base import CompletionClient, EmbeddingClient
 from arden.llm.utils import blocks_to_text, parse_args
@@ -170,6 +171,9 @@ class GeminiClient(CompletionClient, EmbeddingClient):
             result_dict = json.loads(content_str)
         except (json.JSONDecodeError, TypeError):
             result_dict = {"result": content_str}
+        outcome = msg.get("outcome")
+        if isinstance(outcome, dict) and outcome.get("status") != ToolOutcomeStatus.SUCCEEDED:
+            result_dict["outcome"] = outcome
 
         return types.Part(
             function_response=types.FunctionResponse(

@@ -8,7 +8,7 @@ from arden.agent.types.tools import normalize_source_refs
 from arden.context.models import SessionState
 from arden.core.ids import generate_run_id
 from arden.integrations.base import IntegrationConnectionDescriptor
-from arden.tools.core.context import ApprovalControls, BackgroundTaskRegistry
+from arden.tools.core.context import ApprovalControls, BackgroundTaskRegistry, ResourceObservation
 
 
 class RunStatus(StrEnum):
@@ -59,6 +59,9 @@ class RunState:
     # small run-local receipt so DELETE cannot mislabel that race as cancelled.
     _drained_injection_client_ids: set[str] = field(default_factory=set, init=False, repr=False)
     loaded_tools: set[str] = field(default_factory=set)
+    # Shared by every run belonging to this session. Wiki mutation gates use
+    # the recorded version for CAS, so a read remains valid across user turns.
+    resource_observations: dict[str, ResourceObservation] = field(default_factory=dict, repr=False)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     cancelled: bool = False
@@ -221,6 +224,7 @@ class RunRegistry:
         self._active_by_session: dict[str, str] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._bg_registries: dict[str, BackgroundTaskRegistry] = {}
+        self._resource_observations: dict[str, dict[str, ResourceObservation]] = {}
         # `(session_id, client_id) -> (run_id, registered_at)`. A duplicate
         # `/chat/message` POST within OTID_DEDUP_TTL returns the existing
         # run_id instead of starting a second run. Covers network retries
@@ -263,7 +267,8 @@ class RunRegistry:
         run_id = run_id or generate_run_id()
         if run_id in self._runs:
             raise ValueError(f"Run {run_id!r} already exists")
-        run = RunState(run_id=run_id, session_id=session_id)
+        observations = self._resource_observations.setdefault(session_id, {})
+        run = RunState(run_id=run_id, session_id=session_id, resource_observations=observations)
         self._runs[run_id] = run
         self._active_by_session[session_id] = run_id
         return run
@@ -510,6 +515,7 @@ class RunRegistry:
             if not has_runs:
                 self._bg_registries.pop(session_id, None)
                 self._session_locks.pop(session_id, None)
+                self._resource_observations.pop(session_id, None)
 
         return len(to_remove)
 

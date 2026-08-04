@@ -17,6 +17,7 @@ from arden.agent import (
     ToolCallStreamDelta,
     Usage,
 )
+from arden.agent.types.tools import tool_result_content_for_model
 from arden.core.content import render_context
 from arden.llm.base import CompletionClient
 from arden.llm.models import get_model
@@ -331,7 +332,7 @@ class AnthropicClient(CompletionClient):
         block = {
             "type": "tool_result",
             "tool_use_id": msg["tool_call_id"],
-            "content": msg["content"],
+            "content": tool_result_content_for_model(msg["content"], msg.get("outcome")),
         }
         # Merge consecutive tool results into one user message
         if result and result[-1]["role"] == Role.USER and isinstance(result[-1]["content"], list):
@@ -349,6 +350,7 @@ class AnthropicClient(CompletionClient):
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
             }
             for tool in (tools or [])
+            if not (deferred_tools and (tool.get("function", tool)).get("name") == "tool_search")
         ]
         if deferred_tools:
             result.insert(0, {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"})

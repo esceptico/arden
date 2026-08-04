@@ -785,6 +785,48 @@ async def test_function_tool_supports_approval_callback():
     assert result.content == "User rejected this action and said: No UI connected — cannot approve"
 
 
+@pytest.mark.asyncio
+async def test_function_tool_preflight_runs_before_approval_and_execution():
+    events: list[str] = []
+
+    async def preflight(execution: ToolExecution, args: EchoInput) -> ToolResult:
+        events.append("preflight")
+        return ToolResult.failure(
+            code="precondition_required",
+            message="Read first.",
+            preview="Read required",
+        )
+
+    async def approve(execution: ToolExecution, args: EchoInput) -> ApprovalInfo:
+        events.append("approval")
+        return ApprovalInfo(description="Echo", preview=args.text, diff=None)
+
+    async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
+        events.append("execute")
+        return ToolResult(content=args.text, preview=args.text)
+
+    registry = ToolRegistry(tool_overrides={"echo": ToolOverrideDecision.ASK})
+    _register_tools(
+        registry,
+        {
+            "echo": tool(
+                description="Echo text.",
+                input_model=EchoInput,
+                execute=echo,
+                preflight=preflight,
+                approval=approve,
+                policy=WRITE_INTERNAL_APPROVAL_POLICY,
+            )
+        },
+    )
+
+    result = await registry.execute("echo", _make_execution("echo"), {"text": "hello"})
+
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "precondition_required"
+    assert events == ["preflight"]
+
+
 def test_function_tool_requires_explicit_approval_preview_callback():
     async def echo(execution: ToolExecution, args: EchoInput) -> ToolResult:
         return ToolResult(content=args.text, preview=args.text)

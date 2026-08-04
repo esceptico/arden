@@ -112,6 +112,7 @@ This group is deferred: load it with `load_tools(group="wiki")`.
 | `wiki_links` | Read a page's outgoing links and backlinks. | – |
 | `wiki_create_page` | Create one common page from its path, title, and body. | 🔒 |
 | `wiki_edit_page` | Replace one page body by its exact managed path. | 🔒 |
+| `wiki_patch_page` | Replace one exact, uniquely matching text block in a page body. | 🔒 |
 | `wiki_archive_page` | Recoverably archive one page by its exact managed path. | 🔒 |
 | `wiki_move_page` | Move one page by its exact managed path and rewrite its wiki links atomically. | 🔒 |
 | `wiki_publish_generated` | Update one automation-owned section without touching the rest of its page. | 🔒 |

@@ -85,8 +85,20 @@ async def request_approval(call: ToolCall, next_call: ToolNext) -> ToolResult:
     return await next_call(call)
 
 
+async def check_preconditions(call: ToolCall, next_call: ToolNext) -> ToolResult:
+    if call.execution is None:
+        return await next_call(call)
+    result = await call.tool.preflight(call.execution, **call.arguments)
+    if result is not None:
+        if not result.is_error:
+            raise TypeError("tool preflight handlers may return only failures")
+        return result
+    return await next_call(call)
+
+
 DEFAULT_TOOL_MIDDLEWARE: tuple[ToolMiddleware, ...] = (
     validate_arguments,
     require_capabilities,
+    check_preconditions,
     request_approval,
 )

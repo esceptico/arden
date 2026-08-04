@@ -1,9 +1,9 @@
 import asyncio
 import hashlib
-from typing import Any
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints, ValidationError
 
 from arden.context.models import BackgroundStartDisposition
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
@@ -14,7 +14,7 @@ from arden.orchestra.engine import Orchestra
 from arden.orchestra.journal import WorkflowJournal
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 _logger = get_logger(__name__)
 
@@ -36,6 +36,53 @@ class WorkflowInput(BaseModel):
         description="Optional phase labels rendered before the preset starts.",
     )
     args: dict = Field(default_factory=dict, max_length=100, description="Parameters passed to the curated preset.")
+
+
+NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class _WorkflowArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _InvestigateArgs(_WorkflowArgs):
+    target: NonEmpty = "."
+    question: NonEmpty
+    breadth: Literal["focused", "normal", "wide"] = "normal"
+    reader_model: NonEmpty | None = None
+    synth_model: NonEmpty | None = None
+
+
+class _AuditArgs(_WorkflowArgs):
+    target: NonEmpty = "."
+    dimensions: list[NonEmpty] | None = Field(default=None, min_length=1, max_length=8)
+    depth: Literal["quick", "normal", "deep"] = "normal"
+    finder_model: NonEmpty | None = None
+    synth_model: NonEmpty | None = None
+
+
+class _PanelArgs(_WorkflowArgs):
+    question: NonEmpty
+    n: StrictInt = Field(default=3, ge=1, le=5)
+    criteria: list[NonEmpty] | None = Field(default=None, min_length=1, max_length=10)
+    gen_model: NonEmpty | None = None
+    synth_model: NonEmpty | None = None
+
+
+class _ImplementArgs(_WorkflowArgs):
+    spec: NonEmpty
+    target: NonEmpty = "."
+    depth: Literal["quick", "normal", "deep"] = "normal"
+    recon_model: NonEmpty | None = None
+    build_model: NonEmpty | None = None
+
+
+_BUILTIN_WORKFLOW_ARGS: dict[str, type[_WorkflowArgs]] = {
+    "audit": _AuditArgs,
+    "implement": _ImplementArgs,
+    "investigate": _InvestigateArgs,
+    "panel": _PanelArgs,
+}
 
 
 def _jsonable(value: Any) -> Any:
@@ -79,6 +126,15 @@ def _render_lines(value: Any, indent: int = 0) -> list[str]:
 
 def _render(result: Any) -> str:
     return "\n".join(_render_lines(result))
+
+
+async def approve_workflow(_execution: ToolExecution, args: WorkflowInput) -> ApprovalInfo:
+    name = args.name or "workflow"
+    return ApprovalInfo(
+        description=f"Run multi-agent workflow {name!r}",
+        preview=_render(args.args),
+        diff=None,
+    )
 
 
 async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolResult:
@@ -129,6 +185,19 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
             preview="No preset",
             recovery_action="Choose a built-in preset name from the workflow registry.",
         )
+
+    validator = _BUILTIN_WORKFLOW_ARGS.get(args.name or "")
+    if validator is not None:
+        try:
+            validated_args = validator.model_validate(args.args).model_dump(exclude_none=True)
+        except ValidationError as error:
+            return ToolResult.failure(
+                code="invalid_arguments",
+                message=f"Invalid arguments for workflow {args.name!r}: {error}",
+                preview="Invalid workflow arguments",
+                recovery_action=f"Retry {args.name!r} with the required typed arguments.",
+            )
+        args = args.model_copy(update={"args": validated_args})
 
     workflow_id = f"wf-{uuid4().hex[:10]}"
     title = args.title or args.name or "workflow"
@@ -301,7 +370,10 @@ workflow_tool = tool(
         scope=ToolScope.INTERNAL,
         permissions=frozenset({"skill_registry"}),
         concurrency_group="workflow_agents",
+        requires_approval=True,
+        deferred=True,
     ),
+    approval=approve_workflow,
     execute=run_workflow,
     # "workflow" (not "agent") so the desktop renders it as a workflow card from
     # the tool call itself — independent of the streamed workflow-domain events.

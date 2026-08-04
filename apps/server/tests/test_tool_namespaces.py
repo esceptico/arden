@@ -52,7 +52,6 @@ ALWAYS_ON = {
     "fact_get",
     # spawn surfaces
     "research",
-    "workflow",
     "skill_use",
     # chat output & connections
     "render_html",

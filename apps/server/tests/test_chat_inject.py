@@ -1163,6 +1163,33 @@ async def test_background_result_after_parent_finished_dispatches_meta_run():
 
 
 @pytest.mark.asyncio
+async def test_cancelled_background_result_does_not_dispatch_a_meta_run():
+    run = RunState(run_id="cool-otter", session_id="sess-1", cancelled=True)
+    calls = []
+
+    async def dispatch(*args):
+        calls.append(args)
+
+    await _handle_background_result(
+        run=run,
+        session_id="sess-1",
+        messages=[
+            {
+                "role": "user",
+                "content": '<background_agent_result status="cancelled">cancelled</background_agent_result>',
+                "is_meta": True,
+                "client_id": "bg:bg-1:cancelled",
+                "background_status": "cancelled",
+            }
+        ],
+        dispatch_session_message=dispatch,
+        run_finished=True,
+    )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_background_result_during_parent_run_queues_injection():
     run = RunState(run_id="cool-otter", session_id="sess-1")
     calls = []

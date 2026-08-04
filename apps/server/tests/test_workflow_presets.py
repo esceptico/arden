@@ -21,7 +21,7 @@ from arden.tools.core.context import (
     ToolExecution,
 )
 from arden.tools.core.registry import ToolRegistry
-from arden.tools.workflow import WorkflowInput, run_workflow
+from arden.tools.workflow import WorkflowInput, run_workflow, workflow_tool
 
 PRESET_DESCRIPTION = "Echo preset returning args x."
 PRESET_SCRIPT = 'return args.get("x", "ok")'
@@ -136,6 +136,31 @@ async def test_run_workflow_unknown_preset_lists_available(registry: SkillRegist
 
 def test_workflow_schema_has_no_executable_script_field():
     assert "script" not in WorkflowInput.model_fields
+
+
+def test_workflow_requires_approval_and_deferred_loading():
+    assert workflow_tool.policy.requires_approval is True
+    assert workflow_tool.policy.deferred is True
+
+
+@pytest.mark.asyncio
+async def test_investigate_rejects_missing_question_before_spawning():
+    registry = SkillRegistry()
+    registry.load([(BUILTIN_SKILLS_DIR, "builtin")])
+    events: list = []
+    ctx = make_ctx(registry, events)
+    execution = ToolExecution(tool_id="t1", tool_name="workflow", ctx=ctx)
+
+    result = await run_workflow(
+        execution,
+        WorkflowInput(name="investigate", title="noop", args={"target": "none"}),
+    )
+
+    assert result.is_error is True
+    assert result.outcome.error.code == "invalid_arguments"
+    assert "question" in result.content
+    assert ctx.background_tasks.list_pending() == []
+    assert events == []
 
 
 @pytest.mark.asyncio

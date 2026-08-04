@@ -285,7 +285,7 @@ async def test_prepare_chat_resolves_daily_notes_tool_scope():
     )
 
     names = {schema["function"]["name"] for schema in ctx.tools}
-    assert {"wiki_create_page", "wiki_edit_page"} <= names
+    assert {"wiki_create_page", "wiki_edit_page", "wiki_patch_page"} <= names
     assert "wiki_archive_page" not in names
 
 

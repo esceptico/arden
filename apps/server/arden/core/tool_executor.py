@@ -106,13 +106,17 @@ class ArdenToolExecutor:
                 message=(
                     f"Tool {name!r} is deferred and has not been loaded in this run. "
                     + (
-                        f"Call tool_search(query='select:{name}') first, then retry."
+                        f"Use the provider-native tool search for {name!r} first, then retry."
                         if loader == "tool_search"
                         else f"Call load_tools(names=['{name}']) first, then retry."
                     )
                 ),
                 preview="Tool not loaded",
-                recovery_action=f"Load {name!r} with {loader}, then retry.",
+                recovery_action=(
+                    f"Search for {name!r} with the provider-native tool search, then retry."
+                    if loader == "tool_search"
+                    else f"Load {name!r} with {loader}, then retry."
+                ),
             )
 
         # Presentation metadata must not change execution, audit identity,

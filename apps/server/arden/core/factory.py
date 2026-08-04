@@ -20,6 +20,7 @@ from arden.tools.core.context import (
     BackgroundTaskRegistry,
     ChildIOFactory,
     IOBridge,
+    ResourceObservation,
     RunContext,
     ToolContext,
 )
@@ -85,6 +86,7 @@ def create_agent(
     extra_auto_approve: set[str] | None = None,
     background_tasks: BackgroundTaskRegistry | None = None,
     loaded_tools: set[str] | None = None,
+    resource_observations: dict[str, ResourceObservation] | None = None,
     loop_task_id: str | None = None,
     automation_id: str | None = None,
     parent_tracker: UsageTracker | None = None,
@@ -118,6 +120,7 @@ def create_agent(
         workflow_reasoning_effort=config.workflow_reasoning_effort,
         deferred_tools_enabled=config.deferred_tools,
         loaded_tools=loaded_tools if loaded_tools is not None else set(),
+        _resource_observations=resource_observations if resource_observations is not None else {},
         allowed_tool_names=tool_schema_names(tools),
         loop_task_id=loop_task_id,
         automation_id=automation_id,
@@ -178,7 +181,7 @@ def create_agent(
             ToolResultContextBudgetMiddleware(),
             CompactionModelRequestMiddleware(
                 compactor=config.compactor,
-                on_compact=run_ctx.loaded_tools.clear,
+                on_compact=run_ctx.downgrade_resource_observations,
                 get_rehydration_state=tool_ctx.to_rehydration_state,
                 apply_rehydration_state=run_ctx.apply_rehydration_state,
                 emit=tool_ctx.io.emit,

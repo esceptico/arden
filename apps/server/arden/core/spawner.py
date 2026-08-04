@@ -544,6 +544,7 @@ def create_spawn_fn(
             deferred_tools_enabled=calling_ctx.run.deferred_tools_enabled,
             deferred_tool_loader=calling_ctx.run.deferred_tool_loader,
             loaded_tools=set(calling_ctx.run.loaded_tools),
+            _resource_observations=(calling_ctx.run._resource_observations if not has_child_session else {}),
             allowed_tool_names=allowed_tool_names,
             research_scope_id=research_scope_id or calling_ctx.run.research_scope_id,
             child_io_factory=calling_ctx.run.child_io_factory,
@@ -657,7 +658,7 @@ def create_spawn_fn(
                 *middlewares,
                 CompactionModelRequestMiddleware(
                     compactor=agent_compactor,
-                    on_compact=child_run.loaded_tools.clear,
+                    on_compact=child_run.downgrade_resource_observations,
                     get_rehydration_state=child_ctx.to_rehydration_state,
                     apply_rehydration_state=child_run.apply_rehydration_state,
                     emit=compaction_emit,

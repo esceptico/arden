@@ -12,7 +12,14 @@ from arden.context.models import SessionState
 from arden.integrations.core import CORE_INTEGRATIONS, WIKI
 from arden.revisions import ManagedFileRepository
 from arden.services.session import SessionService
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.context import (
+    BackgroundTaskRegistry,
+    IOBridge,
+    ResourceObservation,
+    RunContext,
+    ToolContext,
+    ToolExecution,
+)
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.wiki import (
     WikiArchivePageInput,
@@ -20,6 +27,7 @@ from arden.tools.wiki import (
     WikiEditPageInput,
     WikiLinksInput,
     WikiMovePageInput,
+    WikiPatchPageInput,
     WikiPublishGeneratedInput,
     WikiReadPageInput,
     wiki_archive_page_tool,
@@ -29,6 +37,7 @@ from arden.tools.wiki import (
     wiki_list_changes_tool,
     wiki_list_pages_tool,
     wiki_move_page_tool,
+    wiki_patch_page_tool,
     wiki_publish_generated_tool,
     wiki_read_page_tool,
 )
@@ -44,6 +53,7 @@ def _execution(
     automation_id: str | None = None,
     post_commit: Callable[[], Awaitable[bool]] | None = None,
     session: SessionService | None = None,
+    resource_observations: dict[str, ResourceObservation] | None = None,
 ) -> ToolExecution:
     services = {} if wiki is None else {"wiki": wiki}
     if wiki is not None:
@@ -57,7 +67,11 @@ def _execution(
     context = ToolContext(
         session_state=SessionState(session_id="wiki-tools", started_at=datetime.now(UTC)),
         registry=ToolRegistry(),
-        run=RunContext(run_id="run-1", automation_id=automation_id),
+        run=RunContext(
+            run_id="run-1",
+            automation_id=automation_id,
+            _resource_observations=resource_observations if resource_observations is not None else {},
+        ),
         io=IOBridge(),
         services=services,
         background_tasks=BackgroundTaskRegistry(session_id="wiki-tools"),
@@ -418,6 +432,136 @@ async def test_wiki_edit_ignores_unrelated_commits_after_the_read(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_wiki_read_authorizes_edit_in_a_later_session_run(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    observations: dict[str, ResourceObservation] = {}
+    read_run = _execution(wiki, resource_observations=observations)
+    edit_run = _execution(wiki, resource_observations=observations)
+
+    read = await wiki_read_page_tool.execute(read_run, path="topics/interaction-lab.md")
+    edited = await wiki_edit_page_tool.execute(
+        edit_run,
+        path="topics/interaction-lab.md",
+        body="Updated in a later run.\n",
+    )
+
+    assert not read.is_error
+    assert not edited.is_error
+    assert wiki.read_page("interaction-lab").page.body == b"Updated in a later run.\n"
+
+
+@pytest.mark.asyncio
+async def test_wiki_edit_preflight_rejects_before_requesting_approval(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    registry = ToolRegistry()
+    registry.register("wiki_edit_page", wiki_edit_page_tool)
+    registry.register("wiki_patch_page", wiki_patch_page_tool)
+
+    result = await registry.execute(
+        "wiki_edit_page",
+        _execution(wiki),
+        {"path": "topics/interaction-lab.md", "body": "Replacement.\n"},
+    )
+
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "fresh_read_required"
+
+    missing_patch = await registry.execute(
+        "wiki_patch_page",
+        _execution(wiki),
+        {"path": "topics/interaction-lab.md", "old_text": "not present", "new_text": "replacement"},
+    )
+    assert missing_patch.outcome is not None and missing_patch.outcome.error is not None
+    assert missing_patch.outcome.error.code == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_wiki_patch_uses_exact_current_text_without_a_full_read(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    execution = _execution(wiki)
+    current = wiki.read_page("interaction-lab")
+    wiki.update_page(
+        "interaction-lab",
+        content=current.page.with_body(current.page.body + b"External unrelated line.\n").to_bytes(),
+        expected_version=current.resource.version_id,
+    )
+
+    result = await wiki_patch_page_tool.execute(
+        execution,
+        path="topics/interaction-lab.md",
+        old_text="# Interaction Lab",
+        new_text="# Interaction Laboratory",
+    )
+
+    assert not result.is_error
+    assert result.data["changed"] is True
+    assert wiki.read_page("interaction-lab").page.body == (
+        b"# Interaction Laboratory\n\n[[topics/peer]]\n[[Missing]]\nExternal unrelated line.\n"
+    )
+    observation = execution.ctx.run.resource_observation("wiki:page:interaction-lab")
+    assert observation is not None and observation.content_read is False
+
+
+@pytest.mark.asyncio
+async def test_wiki_patch_rejects_missing_and_ambiguous_exact_text(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    execution = _execution(wiki)
+
+    missing = await wiki_patch_page_tool.execute(
+        execution,
+        path="topics/interaction-lab.md",
+        old_text="not present",
+        new_text="replacement",
+    )
+    ambiguous = await wiki_patch_page_tool.execute(
+        execution,
+        path="topics/interaction-lab.md",
+        old_text="[[",
+        new_text="{{",
+    )
+
+    assert missing.outcome is not None and missing.outcome.error is not None
+    assert missing.outcome.error.code == "not_found"
+    assert ambiguous.outcome is not None and ambiguous.outcome.error is not None
+    assert ambiguous.outcome.error.code == "invalid_ref"
+
+
+@pytest.mark.asyncio
+async def test_wiki_patch_rechecks_version_at_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    wiki = _wiki(tmp_path)
+    original_update = wiki.update_page_with_commit
+
+    def update_after_concurrent_change(page_id: str, **kwargs):
+        current = wiki.read_page(page_id)
+        concurrent = current.page.with_body(current.page.body.replace(b"[[Missing]]", b"Concurrent change")).to_bytes()
+        original_update(page_id, content=concurrent, expected_version=current.resource.version_id)
+        return original_update(page_id, **kwargs)
+
+    monkeypatch.setattr(wiki, "update_page_with_commit", update_after_concurrent_change)
+
+    result = await wiki_patch_page_tool.execute(
+        _execution(wiki),
+        path="topics/interaction-lab.md",
+        old_text="# Interaction Lab",
+        new_text="# Interaction Laboratory",
+    )
+
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "revision_conflict"
+    assert wiki.read_page("interaction-lab").page.body.startswith(b"# Interaction Lab\n")
+    assert b"Concurrent change" in wiki.read_page("interaction-lab").page.body
+
+
+def test_compaction_downgrades_full_read_observations() -> None:
+    run = RunContext(run_id="run")
+    run.observe_resource("wiki:page", version="v1", container_version="head-1", content_read=True)
+
+    run.downgrade_resource_observations()
+
+    assert run.resource_observation("wiki:page") == ResourceObservation("v1", "head-1", False)
+
+
+@pytest.mark.asyncio
 async def test_wiki_edit_rejects_a_read_that_will_be_offloaded(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
     wiki.create_page(page_id="large-page", path="topics/large.md", title="Large", body=("😀" * 20_000).encode())
@@ -447,6 +591,7 @@ def test_wiki_agent_schemas_never_expose_storage_ids_or_hashes() -> None:
         WikiLinksInput,
         WikiCreatePageInput,
         WikiEditPageInput,
+        WikiPatchPageInput,
         WikiArchivePageInput,
         WikiMovePageInput,
         WikiPublishGeneratedInput,
@@ -1089,6 +1234,7 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
         "wiki_links",
         "wiki_create_page",
         "wiki_edit_page",
+        "wiki_patch_page",
         "wiki_archive_page",
         "wiki_move_page",
         "wiki_publish_generated",
@@ -1103,6 +1249,7 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
         for name in (
             "wiki_create_page",
             "wiki_edit_page",
+            "wiki_patch_page",
             "wiki_archive_page",
             "wiki_publish_generated",
         )
@@ -1110,6 +1257,7 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert WIKI.tools["wiki_move_page"].policy.permissions == frozenset({"wiki", WIKI_POST_COMMIT_SERVICE, "session"})
     assert wiki_create_page_tool.policy.idempotent is True
     assert wiki_edit_page_tool.policy.idempotent is True
+    assert wiki_patch_page_tool.policy.idempotent is True
     assert wiki_archive_page_tool.policy.idempotent is True
     assert wiki_move_page_tool.policy.idempotent is True
     assert wiki_publish_generated_tool.policy.idempotent is False

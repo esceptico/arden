@@ -98,6 +98,7 @@ async def test_background_registry_injects_hidden_meta_completion_with_result():
             ),
             "is_meta": True,
             "client_id": "bg:bg-1:completed",
+            "background_status": "completed",
         }
     ]
 

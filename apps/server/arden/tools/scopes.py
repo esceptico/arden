@@ -80,7 +80,9 @@ SCOPES: dict[ScopeKey, ToolFilter] = {
         | tools.named("fact_plan_changes")
         | tools.named("fact_commit_changes")
     ),
-    "daily_notes": tools.read | tools.named("wiki_create_page") | tools.named("wiki_edit_page"),
+    "daily_notes": (
+        tools.read | tools.named("wiki_create_page") | tools.named("wiki_edit_page") | tools.named("wiki_patch_page")
+    ),
     # Publishes its own generated wiki region; completion is proof-checked in
     # AutomationRuntime._validate_completed_run.
     "wiki_producer": tools.read | tools.named(WIKI_PUBLISH_GENERATED_TOOL_NAME),

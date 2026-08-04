@@ -21,12 +21,15 @@ async def dispatch_tools(
     recovered_results = recovered_results or {}
     results: dict[str, str] = {tool_id: result.content for tool_id, result in recovered_results.items()}
     result_data: dict[str, dict] = {}
+    outcomes: dict[str, dict[str, object]] = {}
     model_content: dict[str, tuple[ContentBlock, ...]] = {}
     for tool_id, result in recovered_results.items():
         if data := persistable_tool_result_data(result.data, result.source_refs):
             result_data[tool_id] = data
         if result.model_content:
             model_content[tool_id] = result.model_content
+        if result.outcome:
+            outcomes[tool_id] = result.outcome.to_dict()
 
     try:
         event_stream = runner.reject_all(calls, rejection) if rejection is not None else runner.execute_all(calls)
@@ -37,13 +40,19 @@ async def dispatch_tools(
                     result_data[event.tool_id] = data
                 if event.model_content:
                     model_content[event.tool_id] = event.model_content
+                if event.outcome:
+                    outcomes[event.tool_id] = event.outcome.to_dict()
             yield event
     except asyncio.CancelledError:
-        _append_results(messages, raw_tool_calls, results, result_data, missing_content="Tool call cancelled.")
+        _append_results(
+            messages, raw_tool_calls, results, result_data, outcomes, missing_content="Tool call cancelled."
+        )
         _append_model_content(messages, raw_tool_calls, model_content)
         raise
 
-    _append_results(messages, raw_tool_calls, results, result_data, missing_content="Tool call result missing.")
+    _append_results(
+        messages, raw_tool_calls, results, result_data, outcomes, missing_content="Tool call result missing."
+    )
     _append_model_content(messages, raw_tool_calls, model_content)
 
 
@@ -52,6 +61,7 @@ def _append_results(
     tool_calls: list[ToolCall],
     results: dict[str, str],
     result_data: dict[str, dict] | None = None,
+    outcomes: dict[str, dict[str, object]] | None = None,
     *,
     missing_content: str,
 ) -> None:
@@ -63,6 +73,8 @@ def _append_results(
         }
         if result_data and tc.id in result_data:
             message["data"] = result_data[tc.id]
+        if outcomes and tc.id in outcomes:
+            message["outcome"] = outcomes[tc.id]
         messages.append(message)
 
 

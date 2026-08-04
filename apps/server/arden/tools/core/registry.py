@@ -180,6 +180,9 @@ class _PolicyOverrideTool(Tool):
     async def approval_info(self, execution: ToolExecution, **kwargs: Any):
         return await self._inner.approval_info(execution, **kwargs)
 
+    async def preflight(self, execution: ToolExecution, **kwargs: Any) -> ToolResult | None:
+        return await self._inner.preflight(execution, **kwargs)
+
     async def execute(self, execution: ToolExecution, **kwargs: Any) -> ToolResult:
         return await self._inner.execute(execution, **kwargs)
 

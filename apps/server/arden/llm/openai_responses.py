@@ -21,6 +21,7 @@ from arden.agent import (
     ToolCallStreamDelta,
     Usage,
 )
+from arden.agent.types.tools import tool_result_content_for_model
 from arden.core.content import render_context
 from arden.llm.utils import blocks_to_text
 
@@ -75,7 +76,11 @@ def prepare_responses_request(
         request["store"] = store
     if instructions:
         request["instructions"] = instructions
-    api_tools = [_convert_tool(tool) for tool in (tools or [])]
+    api_tools = [
+        _convert_tool(tool)
+        for tool in (tools or [])
+        if not (deferred_tools and _tool_schema_name(tool) == "tool_search")
+    ]
     if deferred_tools:
         api_tools.extend(_convert_tool(tool, defer_loading=True) for tool in deferred_tools)
         api_tools.append({"type": "tool_search"})
@@ -508,7 +513,7 @@ def _convert_messages(messages: list[dict]) -> tuple[str | None, list[dict[str, 
                 {
                     "type": "function_call_output",
                     "call_id": msg["tool_call_id"],
-                    "output": _content_to_text(content),
+                    "output": tool_result_content_for_model(_content_to_text(content), msg.get("outcome")),
                 }
             )
 
@@ -587,6 +592,12 @@ def _convert_tool(tool: dict, *, defer_loading: bool = False) -> dict[str, Any]:
     if defer_loading:
         result["defer_loading"] = True
     return result
+
+
+def _tool_schema_name(tool: dict) -> str | None:
+    fn = tool.get("function", tool)
+    name = fn.get("name") if isinstance(fn, dict) else None
+    return name if isinstance(name, str) else None
 
 
 def _convert_tool_choice(tool_choice: str | dict | None) -> str | dict[str, str]:

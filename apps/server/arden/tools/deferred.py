@@ -18,7 +18,7 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
     "email": "Search/list/read/send Gmail messages. Use for inbox, emails, Gmail, sending/replying, or communication history.",
     "calendar": "Search/create/edit/delete calendar events. Use for meetings, schedule, availability, appointments, reminders, or rescheduling.",
     "drive": "Search/read/create/edit Google Docs and Sheets. Use for Drive documents, spreadsheets, tables, ranges, and rows.",
-    "wiki": "List, read, create, edit, and archive managed wiki pages; inspect links; and publish automation-owned generated regions.",
+    "wiki": "List and read managed wiki pages; patch exact text; replace full bodies; move/archive pages; inspect links; and publish automation-owned generated regions. Full-body replacement requires wiki_read_page first.",
     "slack": "Search Slack and read channels, DMs, threads, image files, and user profiles. Use for Slack messages, workspace history, coworkers, channels, DMs, threads, screenshots, images, or file IDs.",
     "automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, scheduled agents, or automation management.",
     "loop": "Repeat work in THIS chat on a cadence: loop_create starts one, loop_schedule_wakeup paces it, loop_done ends it.",
@@ -30,6 +30,7 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
     "file": "Write or edit local files. Use after inspecting files with file_read/file_list/file_find/file_search_text and deciding an exact file change is needed.",
     "fact": "Fact history and mutations: provenance lookups plus the prepare-then-commit change pair. fact_search and fact_get are always available without loading.",
     "skill": "Create a new reusable skill from the current conversation. skill_use is always available without loading.",
+    "workflow": "Run a curated multi-agent workflow. Load only when parallel investigation, review, planning, or implementation is explicitly needed.",
     "mcp": "Connected MCP server tools. Use for external apps/servers not covered by core tools. Load by server, e.g. mcp:obsidian.",
 }
 
@@ -62,6 +63,7 @@ GROUP_ALIASES: dict[str, str] = {
     "facts": "fact",
     "memory": "fact",
     "skills": "skill",
+    "workflows": "workflow",
     "app_control": "app",
     "navigation": "app",
 }
@@ -93,14 +95,14 @@ Connected MCP servers:
 </deferred_tool_group>
 {% endif %}""")
 
-_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools are deferred to reduce prompt noise. Use native tool search by exact tool name before calling these tools. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, sessions, fact history or corrections, skills, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
-MANDATORY PREREQUISITE: call `tool_search(query="select:<tool_name>")` before calling a listed deferred tool. Loading tools does not execute them; it only makes selected tools callable on the next model step. Do not use filesystem/time/no-op tool calls to discover or unlock deferred tools.
+_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools are deferred to reduce prompt noise. Use the provider's native tool search by exact tool name before calling these tools. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, sessions, fact history or corrections, skills, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
+MANDATORY PREREQUISITE: use native tool search before calling a listed deferred tool. Loading tools does not execute them; it only makes selected tools callable on the next model step. Do not use filesystem/time/no-op tool calls to discover or unlock deferred tools.
 
 {% for group in groups %}
 <native_deferred_tool_group name="{{ group.label }}">
 {{ group.description }}
 Tool names: {{ group.tool_names | join(", ") }}.
-Load exact names with `tool_search(query="select:{{ group.tool_names[0] }}")`.
+Search exact listed tool names with the provider-native search tool.
 </native_deferred_tool_group>
 {% if not loop.last or mcp_servers %}
 

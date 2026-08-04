@@ -21,6 +21,17 @@ class ToolOutcomeStatus(StrEnum):
     UNCERTAIN = "uncertain"
 
 
+def tool_result_content_for_model(content: str, outcome: Mapping[str, object] | None) -> str:
+    """Attach machine-readable recovery metadata without changing the UI result."""
+    if not outcome or outcome.get("status") == ToolOutcomeStatus.SUCCEEDED:
+        return content
+    error = outcome.get("error")
+    payload: dict[str, object] = {"status": outcome.get("status")}
+    if isinstance(error, Mapping):
+        payload["error"] = dict(error)
+    return f"{content}\n\n<tool_outcome>{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}</tool_outcome>"
+
+
 @dataclass(frozen=True, slots=True)
 class ToolError:
     code: str

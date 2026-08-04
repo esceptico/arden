@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from arden.agent import ToolResult
 from arden.tools.core.base import Tool
 from arden.tools.core.context import ToolExecution
-from arden.tools.core.types import ApprovalInfo, ApprovalWaived, ToolPolicy
+from arden.tools.core.types import ApprovalInfo, ApprovalWaived, ToolPlacement, ToolPolicy
 
 ToolSet = dict[str, Tool]
 
@@ -17,6 +17,7 @@ class EmptyInput(BaseModel):
 
 ToolHandler = Callable[[ToolExecution, BaseModel], Awaitable[ToolResult]]
 ApprovalHandler = Callable[[ToolExecution, BaseModel], Awaitable[ApprovalInfo | ApprovalWaived | None]]
+PreflightHandler = Callable[[ToolExecution, BaseModel], Awaitable[ToolResult | None]]
 
 
 class _FunctionTool(Tool):
@@ -32,6 +33,7 @@ class _FunctionTool(Tool):
         display_name: str | None = None,
         display_description: str | None = None,
         approval: ApprovalHandler | None = None,
+        preflight: PreflightHandler | None = None,
         kind: str = "tool",
     ):
         self.display_name = display_name
@@ -41,8 +43,11 @@ class _FunctionTool(Tool):
         self.policy = policy
         if policy.requires_approval and approval is None:
             raise ValueError("approval-gated tools require an approval preview callback")
+        if preflight is not None and policy.placement is ToolPlacement.CLIENT:
+            raise ValueError("preflight handlers currently support only server-placed tools")
         self._execute = execute
         self._approval = approval
+        self._preflight = preflight
         self.kind = kind
 
     async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | ApprovalWaived | None:
@@ -50,6 +55,12 @@ class _FunctionTool(Tool):
             return None
         args = self.input_model(**kwargs)
         return await self._approval(execution, args)
+
+    async def preflight(self, execution: ToolExecution, **kwargs: Any) -> ToolResult | None:
+        if self._preflight is None:
+            return None
+        args = self.input_model(**kwargs)
+        return await self._preflight(execution, args)
 
     async def execute(self, execution: ToolExecution, **kwargs: Any) -> ToolResult:
         args = self.input_model(**kwargs)
@@ -68,6 +79,7 @@ def tool(
     display_name: str | None = None,
     display_description: str | None = None,
     approval: ApprovalHandler | None = None,
+    preflight: PreflightHandler | None = None,
     kind: str = "tool",
 ) -> Tool:
     return _FunctionTool(
@@ -78,5 +90,6 @@ def tool(
         display_name=display_name,
         display_description=display_description,
         approval=approval,
+        preflight=preflight,
         kind=kind,
     )

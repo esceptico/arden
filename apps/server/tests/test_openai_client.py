@@ -50,6 +50,40 @@ def test_openai_compatible_request_omits_prompt_cache_key():
     assert "prompt_cache_key" not in request
 
 
+def test_openai_tool_error_exposes_structured_recovery_to_model():
+    client = OpenAIClient(api_key="test", base_url="https://example.test", native_openai=False)
+    request = client._prepare(
+        messages=[
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "Read this wiki page before changing it.",
+                "outcome": {
+                    "status": "failed",
+                    "error": {
+                        "code": "fresh_read_required",
+                        "retryable": False,
+                        "recovery_action": "Read the page again, then retry the change.",
+                    },
+                },
+            }
+        ],
+        model="custom-model",
+        tools=None,
+        tool_choice=None,
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort=None,
+        response_format=None,
+    )
+
+    content = request["messages"][0]["content"]
+    assert "<tool_outcome>" in content
+    assert "fresh_read_required" in content
+    assert "recovery_action" in content
+    assert "outcome" not in request["messages"][0]
+
+
 def test_chat_completions_request_formats_image_blocks_as_data_urls():
     client = OpenAIClient(api_key="test")
 
@@ -162,7 +196,7 @@ def test_responses_request_uses_native_deferred_tool_search():
     assert deferred["defer_loading"] is True
 
 
-def test_responses_request_allows_visible_tool_search_loader_with_native_deferred_tools():
+def test_responses_request_omits_function_loader_with_native_deferred_tools():
     client = OpenAIClient(api_key="test")
 
     request = client._prepare_responses(
@@ -186,8 +220,7 @@ def test_responses_request_allows_visible_tool_search_loader_with_native_deferre
         response_format=None,
     )
 
-    function_loader = next(tool for tool in request["tools"] if tool.get("name") == "tool_search")
-    assert function_loader["type"] == "function"
+    assert not any(tool.get("name") == "tool_search" for tool in request["tools"])
     assert {"type": "tool_search"} in request["tools"]
     assert next(tool for tool in request["tools"] if tool.get("name") == "slack_search")["defer_loading"] is True
 

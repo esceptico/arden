@@ -12,6 +12,7 @@ from arden.tools.wiki import (
     WikiCreatePageInput,
     WikiEditPageInput,
     WikiMovePageInput,
+    WikiPatchPageInput,
     WikiPublishGeneratedInput,
 )
 from arden.wiki.maintenance.runner import WikiMaintenanceDecision
@@ -41,6 +42,7 @@ def test_agent_wiki_mutations_hide_backend_revision_hashes():
     for input_model in (
         WikiCreatePageInput,
         WikiEditPageInput,
+        WikiPatchPageInput,
         WikiArchivePageInput,
         WikiMovePageInput,
         WikiPublishGeneratedInput,

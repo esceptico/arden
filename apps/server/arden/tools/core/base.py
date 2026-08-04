@@ -25,6 +25,10 @@ class Tool(ABC):
     async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | ApprovalWaived | None:
         return None
 
+    async def preflight(self, execution: ToolExecution, **kwargs: Any) -> ToolResult | None:
+        """Return a failure to stop before approval, or None to continue."""
+        return None
+
     @abstractmethod
     async def execute(self, execution: ToolExecution, **kwargs: Any) -> ToolResult: ...
 

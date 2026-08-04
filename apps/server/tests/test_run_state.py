@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from arden.server.state import RunRegistry, RunState, RunStatus
+from arden.tools.core.context import ResourceObservation
 
 
 def test_run_registry_restores_explicit_run_id():
@@ -13,6 +14,18 @@ def test_run_registry_restores_explicit_run_id():
 
     assert run.run_id == "original-run"
     assert registry.get_run("original-run") is run
+
+
+def test_run_registry_shares_resource_observations_across_session_runs():
+    registry = RunRegistry()
+    first = registry.create_run("sess-x")
+    first.resource_observations["wiki:page"] = ResourceObservation("v1", "head-1", True)
+
+    second = registry.create_run("sess-x")
+    other_session = registry.create_run("sess-y")
+
+    assert second.resource_observations["wiki:page"] == ResourceObservation("v1", "head-1", True)
+    assert other_session.resource_observations == {}
 
 
 @pytest.mark.asyncio

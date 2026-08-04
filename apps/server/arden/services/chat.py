@@ -1125,6 +1125,7 @@ async def respawn_background_agent(
             run_id=host_run.run_id,
             io=io,
             background_tasks=bg_registry,
+            resource_observations=host_run.resource_observations,
             run_registry=run_registry,
             child_io_factory=child_io_factory,
         )
@@ -1665,6 +1666,13 @@ async def _handle_background_result(
     if not run_finished and not run.cancelled:
         run.queue_injections(messages)
         return
+    # A user Stop cascades cancellation to children. Their settlement events
+    # must not start fresh model runs after the parent has been cancelled.
+    if any(
+        message.get("background_status") == "cancelled" or str(message.get("client_id") or "").endswith(":cancelled")
+        for message in messages
+    ):
+        return
     if not dispatch_session_message:
         return
     for message in messages:
@@ -1909,6 +1917,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 extra_auto_approve=INIT_AUTO_APPROVE if ctx.is_init else None,
                 background_tasks=bg_registry,
                 loaded_tools=run.loaded_tools,
+                resource_observations=run.resource_observations,
                 loop_task_id=run.loop_task_id,
                 automation_id=run.automation_id,
                 parent_tracker=tracker,

@@ -107,6 +107,18 @@ class WikiEditPageInput(BaseModel):
     body: str = Field(max_length=_MAX_CONTENT_CHARS)
 
 
+class WikiPatchPageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
+    old_text: str = Field(
+        min_length=1,
+        max_length=_MAX_CONTENT_CHARS,
+        description="Exact existing body text to replace. It must match exactly once.",
+    )
+    new_text: str = Field(default="", max_length=_MAX_CONTENT_CHARS, description="Literal replacement text.")
+
+
 class WikiArchivePageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -199,8 +211,65 @@ def _require_page_observation(
         code="fresh_read_required",
         message="Read this wiki page before changing it.",
         preview="Read required",
-        recovery_action="Read the page again, then retry the change.",
+        recovery_action="Call wiki_read_page for this exact path, then retry the change.",
     )
+
+
+def _active_page(snapshot: WikiSnapshot, path: str) -> WikiPageRecord | None:
+    return next(
+        (item for item in snapshot.pages if item.resource.path == path and item.page.lifecycle == "active"),
+        None,
+    )
+
+
+def _active_page_not_found(path: str) -> ToolResult:
+    return ToolResult.failure(
+        code="not_found",
+        message=f"No active wiki page exists at {path!r}.",
+        preview="Wiki page not found",
+        recovery_action="Call wiki_list_pages or wiki_read_page and retry with an exact active page path.",
+    )
+
+
+def _unchanged_page(record: WikiPageRecord) -> ToolResult:
+    return ToolResult(
+        content=f"{record.resource.path} already has the requested body.",
+        preview="Wiki page unchanged",
+        source_refs=(_page_ref(record),),
+        data={
+            "page": _page_data(record),
+            "changed": False,
+            "projection_pending": False,
+        },
+    )
+
+
+def _patch_body(record: WikiPageRecord, old_text: str, new_text: str) -> str | ToolResult:
+    body = record.page.body.decode("utf-8", errors="strict")
+    matches = body.count(old_text)
+    if matches == 0:
+        return ToolResult.failure(
+            code="not_found",
+            message="The exact old_text was not found in the current wiki page body.",
+            preview="Patch text not found",
+            recovery_action="Call wiki_read_page, copy the exact current text with more context, and retry.",
+        )
+    if matches > 1:
+        return ToolResult.failure(
+            code="invalid_ref",
+            message=f"old_text matched {matches} places in the current wiki page body.",
+            preview="Patch text is ambiguous",
+            recovery_action="Include more surrounding text so old_text matches exactly once.",
+        )
+    patched = body.replace(old_text, new_text, 1)
+    if len(patched) > _MAX_CONTENT_CHARS:
+        return ToolResult.failure(
+            code="invalid_input",
+            message=f"The patched wiki page body exceeds {_MAX_CONTENT_CHARS} characters.",
+            preview="Wiki patch too large",
+            recovery_action="Use a smaller replacement and retry.",
+        )
+    return patched
 
 
 def _write_identity(execution: ToolExecution) -> tuple[str, str]:
@@ -752,23 +821,40 @@ async def wiki_create_page(execution: ToolExecution, args: WikiCreatePageInput) 
     )
 
 
+async def preflight_wiki_edit_page(execution: ToolExecution, args: WikiEditPageInput) -> ToolResult | None:
+    wiki = _wiki(execution)
+    if isinstance(wiki, ToolResult):
+        return wiki
+    snapshot = await asyncio.to_thread(wiki.snapshot)
+    record = _active_page(snapshot, args.path)
+    if record is None:
+        return _active_page_not_found(args.path)
+    if error := _automation_path_error(execution, record.resource.path):
+        return error
+    if error := _producer_page_error(execution, record):
+        return error
+    if record.page.page_id == WIKI_HEALTH_RESOURCE_ID:
+        return _invalid_page(WikiValidationError("health page is backend-managed"))
+    replacement = record.page.with_body(args.body.encode("utf-8")).to_bytes()
+    if replacement == record.content:
+        return None
+    observation = _require_page_observation(execution, record.page.page_id, content_read=True)
+    if isinstance(observation, ToolResult):
+        return observation
+    if record.resource.version_id != observation.version:
+        return _revision_conflict()
+    return None
+
+
 async def wiki_edit_page(execution: ToolExecution, args: WikiEditPageInput) -> ToolResult:
     wiki = _wiki(execution)
     if isinstance(wiki, ToolResult):
         return wiki
     try:
         snapshot = await asyncio.to_thread(wiki.snapshot)
-        record = next(
-            (item for item in snapshot.pages if item.resource.path == args.path and item.page.lifecycle == "active"),
-            None,
-        )
+        record = _active_page(snapshot, args.path)
         if record is None:
-            return ToolResult.failure(
-                code="not_found",
-                message=f"No active wiki page exists at {args.path!r}.",
-                preview="Wiki page not found",
-                recovery_action="Call wiki_list_pages or wiki_read_page and retry with an exact active page path.",
-            )
+            return _active_page_not_found(args.path)
         if error := _automation_path_error(execution, record.resource.path):
             return error
         if error := _producer_page_error(execution, record):
@@ -776,16 +862,7 @@ async def wiki_edit_page(execution: ToolExecution, args: WikiEditPageInput) -> T
         replacement = record.page.with_body(args.body.encode("utf-8")).to_bytes()
         if replacement == record.content:
             _observe_page(execution, record, snapshot.head, content_read=True)
-            return ToolResult(
-                content=f"{record.resource.path} already has the requested body.",
-                preview="Wiki page unchanged",
-                source_refs=(_page_ref(record),),
-                data={
-                    "page": _page_data(record),
-                    "changed": False,
-                    "projection_pending": False,
-                },
-            )
+            return _unchanged_page(record)
         observation = _require_page_observation(execution, record.page.page_id, content_read=True)
         if isinstance(observation, ToolResult):
             return observation
@@ -809,6 +886,84 @@ async def wiki_edit_page(execution: ToolExecution, args: WikiEditPageInput) -> T
     return ToolResult(
         content=f"Updated {updated.resource.path}.",
         preview="Wiki page updated",
+        source_refs=(_page_ref(updated),),
+        data={
+            "page": _page_data(updated),
+            "changed": True,
+            "projection_pending": projection_pending,
+        },
+    )
+
+
+async def preflight_wiki_patch_page(execution: ToolExecution, args: WikiPatchPageInput) -> ToolResult | None:
+    wiki = _wiki(execution)
+    if isinstance(wiki, ToolResult):
+        return wiki
+    snapshot = await asyncio.to_thread(wiki.snapshot)
+    record = _active_page(snapshot, args.path)
+    if record is None:
+        return _active_page_not_found(args.path)
+    if error := _automation_path_error(execution, record.resource.path):
+        return error
+    if error := _producer_page_error(execution, record):
+        return error
+    if record.page.page_id == WIKI_HEALTH_RESOURCE_ID:
+        return _invalid_page(WikiValidationError("health page is backend-managed"))
+    patched = _patch_body(record, args.old_text, args.new_text)
+    if isinstance(patched, ToolResult):
+        return patched
+    if patched.encode("utf-8") == record.page.body:
+        return None
+    return None
+
+
+async def wiki_patch_page(execution: ToolExecution, args: WikiPatchPageInput) -> ToolResult:
+    wiki = _wiki(execution)
+    if isinstance(wiki, ToolResult):
+        return wiki
+    try:
+        snapshot = await asyncio.to_thread(wiki.snapshot)
+        record = _active_page(snapshot, args.path)
+        if record is None:
+            return _active_page_not_found(args.path)
+        if error := _automation_path_error(execution, record.resource.path):
+            return error
+        if error := _producer_page_error(execution, record):
+            return error
+        if record.page.page_id == WIKI_HEALTH_RESOURCE_ID:
+            return _invalid_page(WikiValidationError("health page is backend-managed"))
+        patched = _patch_body(record, args.old_text, args.new_text)
+        if isinstance(patched, ToolResult):
+            return patched
+        if patched.encode("utf-8") == record.page.body:
+            return _unchanged_page(record)
+        replacement = record.page.with_body(patched.encode("utf-8")).to_bytes()
+        actor, origin = _write_identity(execution)
+        updated, _commit_id = await asyncio.to_thread(
+            wiki.update_page_with_commit,
+            record.page.page_id,
+            content=replacement,
+            expected_version=record.resource.version_id,
+            actor=actor,
+            origin=origin,
+            reason=f"patch wiki page {record.resource.path}",
+        )
+    except RevisionConflictError:
+        return _revision_conflict()
+    except (PageValidationError, WikiValidationError, UnicodeError) as error:
+        return _invalid_page(error)
+
+    projection_pending = await execution.ctx.services[WIKI_POST_COMMIT_SERVICE]()
+    prior = execution.ctx.run.resource_observation(wiki_page_observation_id(record.page.page_id))
+    _observe_page(
+        execution,
+        updated,
+        wiki.repository.head,
+        content_read=False if prior is None else prior.content_read,
+    )
+    return ToolResult(
+        content=f"Patched {updated.resource.path}.",
+        preview="Wiki page patched",
         source_refs=(_page_ref(updated),),
         data={
             "page": _page_data(updated),
@@ -1058,6 +1213,18 @@ async def approve_wiki_edit_page(
     )
 
 
+async def approve_wiki_patch_page(
+    _execution: ToolExecution,
+    args: WikiPatchPageInput,
+) -> ApprovalInfo:
+    diff = f"Replace exact text in {args.path}:\n- {args.old_text}\n+ {args.new_text}"
+    return ApprovalInfo(
+        description=f"Patch wiki page {args.path}",
+        preview=args.new_text[:1_500],
+        diff=diff[:12_000],
+    )
+
+
 async def approve_wiki_archive_page(
     _execution: ToolExecution,
     args: WikiArchivePageInput,
@@ -1285,8 +1452,10 @@ wiki_edit_page_tool = tool(
     display_name="EditWikiPage",
     display_description="Replace one managed wiki page body.",
     description=(
-        "Replace only the Markdown body of one active managed wiki page while preserving its identity and metadata. "
-        "Read the page first. Link other pages by path ([[topics/acme|Acme]]); bare title links do not resolve. "
+        "FULL-BODY REPLACEMENT. Required prerequisite: call wiki_read_page for the exact path first. "
+        "That read remains valid across later turns while the page version is unchanged; a conflict requires rereading. "
+        "For a localized exact-text change, prefer wiki_patch_page instead. Replace only the Markdown body while "
+        "preserving identity and metadata. Link other pages by path ([[topics/acme|Acme]]); bare title links do not resolve. "
         f"Scheduled automations can edit pages only under {AUTOMATIONS_PATH_PREFIX}."
     ),
     input_model=WikiEditPageInput,
@@ -1300,8 +1469,35 @@ wiki_edit_page_tool = tool(
         idempotent=True,
         deferred=True,
     ),
+    preflight=preflight_wiki_edit_page,
     approval=approve_wiki_edit_page,
     execute=wiki_edit_page,
+)
+
+wiki_patch_page_tool = tool(
+    display_name="PatchWikiPage",
+    display_description="Replace one exact text block in a managed wiki page.",
+    description=(
+        "Apply one localized exact-text replacement to an active managed wiki page body. A prior full read is not "
+        "required, but old_text must match the current body exactly once. The runtime rechecks current content and "
+        "uses compare-and-swap, preserving unrelated changes and rejecting conflicts. Use wiki_edit_page only for a "
+        "full-body replacement after wiki_read_page. "
+        f"Scheduled automations can patch pages only under {AUTOMATIONS_PATH_PREFIX}."
+    ),
+    input_model=WikiPatchPageInput,
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        permissions=_WIKI_WRITE_PERMISSIONS,
+        max_result_chars=4_000,
+        destructive=False,
+        idempotent=True,
+        deferred=True,
+    ),
+    preflight=preflight_wiki_patch_page,
+    approval=approve_wiki_patch_page,
+    execute=wiki_patch_page,
 )
 
 wiki_archive_page_tool = tool(
