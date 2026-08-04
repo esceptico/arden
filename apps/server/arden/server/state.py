@@ -382,6 +382,7 @@ class RunRegistry:
         # own detached spawns must not outlive it. Pairs are returned so the
         # caller can mirror the cancels durably.
         cancelled_children: list[tuple[str, str]] = []
+        cancelled_roots: list[tuple[str, str]] = []
         registry = self._bg_registries.get(run.session_id)
         if registry:
             for task_id, _command in registry.list_pending():
@@ -391,11 +392,17 @@ class RunRegistry:
                 if registry.cancel(task_id) is not None:
                     cancel_requested = True
                     cancelled_children.append((run.session_id, task_id))
+                    cancelled_roots.append((run.session_id, task_id))
                 cancelled_children.extend(self.cancel_subtree(child_session))
         if cancelled_children:
             cancel_requested = True
 
-        return {"found": True, "cancel_requested": cancel_requested, "cancelled_children": cancelled_children}
+        return {
+            "found": True,
+            "cancel_requested": cancel_requested,
+            "cancelled_children": cancelled_children,
+            "cancelled_roots": cancelled_roots,
+        }
 
     def register_subagent(self, run_id: str, tool_call_id: str, task: asyncio.Task) -> SubagentHandle | None:
         run = self._runs.get(run_id)

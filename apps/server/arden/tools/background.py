@@ -53,9 +53,13 @@ async def agent_cancel(execution: ToolExecution, args: AgentCancelInput) -> Tool
     if (run_registry := execution.ctx.run_registry) is not None:
         cancelled.extend(run_registry.cancel_subtree(args.session_id))
     if (session_service := execution.ctx.services.get("session")) is not None:
-        if (store := getattr(session_service, "store", None)) is not None:
-            for cancelled_session, cancelled_task in cancelled:
-                await store.request_background_agent_cancel(cancelled_session, cancelled_task)
+        await session_service.store.request_background_agent_cancel_cascade(
+            session_id=registry.session_id,
+            task_id=task_id,
+            actor="agent",
+            cause="user_cancelled",
+            idempotency_key=f"agent-cancel:{execution.ctx.run.run_id}:{execution.tool_id}",
+        )
     cascaded = len(cancelled) - 1
     tail = f" Also stopped {cascaded} agent(s) it had spawned." if cascaded else ""
     return ToolResult(

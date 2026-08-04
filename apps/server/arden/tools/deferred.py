@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from jinja2 import Environment
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
@@ -320,6 +320,8 @@ def append_deferred_tools_prompt(
 
 
 class LoadToolsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     group: str | None = Field(
         default=None,
         description="Deferred group to load, e.g. 'email', 'calendar', 'wiki', 'slack', 'automation', 'loop', 'session', 'app', 'notify', 'directives', 'file', 'fact', 'skill', or 'mcp:obsidian'.",
@@ -338,10 +340,26 @@ class LoadToolsInput(BaseModel):
 
 
 class ToolSearchInput(BaseModel):
-    query: str = Field(
-        description='Query to find deferred tools. Use "select:<tool_name>" for direct selection.',
+    model_config = ConfigDict(extra="forbid")
+
+    query: str | None = Field(
+        default=None,
+        description=(
+            'Query to find deferred tools. Use "select:<tool_name>,<tool_name>" to load multiple exact names.'
+        ),
+    )
+    names: list[str] | None = Field(
+        default=None,
+        max_length=25,
+        description="Exact deferred tool names to preload together, without maintaining a persistent toolset.",
     )
     max_results: int = Field(default=5, ge=1, le=25, description="Maximum number of matches to load.")
+
+    @model_validator(mode="after")
+    def _require_query_or_names(self):
+        if not self.query and not self.names:
+            raise ValueError("Provide query or names")
+        return self
 
 
 def _names_for_group(
@@ -525,13 +543,18 @@ async def load_tools(execution: ToolExecution, args: LoadToolsInput) -> ToolResu
 
 
 async def tool_search(execution: ToolExecution, args: ToolSearchInput) -> ToolResult:
-    matches = _search_tool_names(
-        args.query,
-        execution.ctx.registry,
-        execution.ctx.capabilities,
-        allowed_names=execution.ctx.run.allowed_tool_names,
-        max_results=args.max_results,
-    )
+    matches = list(args.names or [])
+    if args.query:
+        matches.extend(
+            _search_tool_names(
+                args.query,
+                execution.ctx.registry,
+                execution.ctx.capabilities,
+                allowed_names=execution.ctx.run.allowed_tool_names,
+                max_results=args.max_results,
+            )
+        )
+    matches = _dedupe(matches)
     if not matches:
         return ToolResult(content="No matching deferred tools found.", preview="No matches")
 
@@ -545,6 +568,7 @@ load_tools_tool = tool(
         "Load deferred tool schemas into the current run by exact group or tool name. "
         "Use proactively when the user's request needs a deferred capability listed in the DEFERRED TOOLS prompt section. "
         "Loading tools does not execute them; it only makes them callable on the next model step. "
+        "Load every known tool needed for the next phase in one names=[...] call. "
         "Examples: group='slack', group='email', group='calendar', group='automation', group='session', "
         "group='notify', group='directives', group='file', group='app', group='mcp:obsidian', "
         "or names=['slack_search','slack_thread','slack_file']."
@@ -560,7 +584,8 @@ tool_search_tool = tool(
     description=(
         "Fetch full schemas for deferred tools so they can be called. "
         "MANDATORY PREREQUISITE: use this before calling any deferred tool listed in the DEFERRED TOOLS prompt. "
-        "Use query='select:<tool_name>' for exact names, or keywords to search by name/description. "
+        "Use names=['tool_a','tool_b'] to preload multiple exact names in one call, or query keywords to search by "
+        "name/description. query='select:<tool_name>,<tool_name>' remains supported. "
         "Loading tools does not execute them; selected tools become callable on the next model step."
     ),
     input_model=ToolSearchInput,

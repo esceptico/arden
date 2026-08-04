@@ -326,3 +326,5 @@ class ToolMeta:
     icon: str | None = None
     noun: str | None = None
     source: str | None = None
+    changes_state: bool = False
+    concurrency_group: str | None = None

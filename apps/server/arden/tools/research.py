@@ -483,7 +483,7 @@ research_tool = tool(
     display_description="Run a focused research agent.",
     description=RESEARCH_DESCRIPTION,
     input_model=ResearchInput,
-    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL),
+    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, concurrency_group="research_agents"),
     execute=research,
     kind="agent",
 )

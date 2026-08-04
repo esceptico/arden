@@ -11,7 +11,7 @@ import pytest_asyncio
 import arden.database as database
 from arden.agent import Usage
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
-from arden.context.models import SessionState
+from arden.context.models import BackgroundStartDisposition, SessionState
 from arden.context.store import SessionStore
 from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
 from arden.events.internal import RunCompleted, RunFailed
@@ -1465,6 +1465,131 @@ async def test_background_agent_cancel_request_is_session_scoped_and_evented(sto
 
 
 @pytest.mark.asyncio
+async def test_background_agent_cancel_cascade_uses_durable_spawn_edges_and_is_idempotent(store: SessionStore):
+    await store.record_background_agent_started(
+        task_id="root",
+        session_id="parent",
+        parent_run_id="run",
+        child_session_id="parent::child",
+        command="root",
+    )
+    await store.record_background_agent_started(
+        task_id="child",
+        session_id="parent::child",
+        parent_run_id="run",
+        child_session_id="parent::grandchild",
+        command="child",
+    )
+    await store.record_background_agent_started(
+        task_id="grandchild",
+        session_id="parent::grandchild",
+        parent_run_id="run",
+        command="grandchild",
+    )
+
+    first = await store.request_background_agent_cancel_cascade(
+        session_id="parent",
+        task_id="root",
+        actor="user",
+        cause="user_cancelled",
+        idempotency_key="cancel-1",
+    )
+    repeated = await store.request_background_agent_cancel_cascade(
+        session_id="parent",
+        task_id="root",
+        actor="user",
+        cause="user_cancelled",
+        idempotency_key="cancel-1",
+    )
+
+    assert sorted(first) == [
+        ("parent", "root"),
+        ("parent::child", "child"),
+        ("parent::grandchild", "grandchild"),
+    ]
+    assert repeated == []
+    for session_id in ("parent", "parent::child", "parent::grandchild"):
+        row = (await store.list_background_agent_runs(session_id))[0]
+        assert row["status"] == "cancel_requested"
+        assert row["cancel_actor"] == "user"
+        assert row["terminal_cause"] == "user_cancelled"
+        assert row["cancel_generation"] == 1
+
+
+@pytest.mark.asyncio
+async def test_late_descendant_inherits_existing_session_cancellation(store: SessionStore):
+    await store.record_background_agent_started(
+        task_id="root",
+        session_id="parent",
+        parent_run_id="run",
+        child_session_id="parent::child",
+        command="root",
+    )
+    await store.request_background_agent_cancel_cascade(
+        session_id="parent",
+        task_id="root",
+        actor="user",
+        cause="user_cancelled",
+        idempotency_key="cancel-1",
+    )
+
+    disposition = await store.record_background_agent_started(
+        task_id="late-child",
+        session_id="parent::child",
+        parent_run_id="child-run",
+        child_session_id="parent::grandchild",
+        command="late",
+    )
+
+    assert disposition is BackgroundStartDisposition.CANCELLED
+    row = (await store.list_background_agent_runs("parent::child"))[0]
+    assert row["status"] == "cancelled"
+    assert row["terminal_cause"] == "user_cancelled"
+    assert row["completion_id"].startswith("cancel-before-start:")
+    events = await store.list_background_agent_events("parent::child")
+    assert [(event["status"], event["terminal"]) for event in events] == [("cancelled", True)]
+    scope = await store.read_conn.execute_fetchall(
+        "SELECT cause FROM execution_cancellation_scopes WHERE session_id = 'parent::grandchild'"
+    )
+    assert scope[0]["cause"] == "user_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_awaited_child_completion_atomically_resolves_parent_suspension(store: SessionStore):
+    await store.record_run_suspension(
+        run_id="parent-run",
+        session_id="parent",
+        suspension_id="spawn-1",
+        kind="subagent_result",
+        payload={"task": "research"},
+    )
+    await store.record_background_agent_started(
+        task_id="child",
+        session_id="parent",
+        parent_run_id="parent-run",
+        parent_tool_call_id="tool-call",
+        suspension_id="spawn-1",
+        child_session_id="parent::child",
+        wait=True,
+        command="research",
+    )
+
+    await store.record_background_agent_finished(
+        task_id="child",
+        session_id="parent",
+        status="completed",
+        result_text="child result",
+    )
+
+    child = (await store.list_background_agent_runs("parent"))[0]
+    suspension = await store.get_run_suspension(run_id="parent-run", suspension_id="spawn-1")
+    assert child["completion_id"] == "bg:child:completed"
+    assert suspension is not None
+    assert suspension["status"] == "completed"
+    assert suspension["resolution"] == {"status": "completed", "result": "child result"}
+
+
+@pytest.mark.asyncio
 async def test_background_agent_schema_migrates_old_task_id_primary_key(tmp_path: Path):
     conn = await database.connect(tmp_path / "old-sessions.db")
     read_conn = await database.connect(tmp_path / "old-sessions.db", readonly=True)
@@ -1566,12 +1691,81 @@ async def test_marks_running_background_agents_interrupted_on_startup(store: Ses
         parent_run_id="run-1",
         command="research task",
     )
+    await store.record_background_agent_event(
+        task_id="bg-1",
+        session_id="sess-1",
+        status="activity",
+        detail="read 12 files",
+    )
 
     changed = await store.mark_interrupted_background_agent_runs()
     runs = await store.list_background_agent_runs("sess-1")
 
     assert changed == 1
     assert runs[0]["status"] == "interrupted"
+    assert runs[0]["detail"] == "read 12 files"
+
+
+@pytest.mark.asyncio
+async def test_startup_preserves_durable_cancel_cause(store: SessionStore):
+    await store.record_background_agent_started(
+        task_id="bg-1",
+        session_id="sess-1",
+        parent_run_id="run-1",
+        command="research task",
+    )
+    await store.request_background_agent_cancel_cascade(
+        session_id="sess-1",
+        task_id="bg-1",
+        actor="user",
+        cause="user_cancelled",
+        idempotency_key="cancel-1",
+    )
+
+    await store.mark_interrupted_background_agent_runs()
+    run = (await store.list_background_agent_runs("sess-1"))[0]
+    events = await store.list_background_agent_events("sess-1")
+
+    assert run["status"] == "cancelled"
+    assert run["detail"] == "user_cancelled"
+    assert events[-1]["status"] == "cancelled"
+    assert events[-1]["detail"] == "user_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_startup_cancel_resolves_awaited_parent_suspension(store: SessionStore):
+    await store.record_run_suspension(
+        run_id="parent-run",
+        session_id="parent",
+        suspension_id="spawn-1",
+        kind="subagent_result",
+        payload={"child_run_id": "child"},
+    )
+    await store.record_background_agent_started(
+        task_id="child",
+        session_id="parent",
+        parent_run_id="parent-run",
+        suspension_id="spawn-1",
+        child_session_id="parent::child",
+        wait=True,
+        command="research",
+    )
+    await store.request_background_agent_cancel_cascade(
+        session_id="parent",
+        task_id="child",
+        actor="user",
+        cause="user_cancelled",
+        idempotency_key="cancel-1",
+    )
+
+    await store.mark_interrupted_background_agent_runs()
+
+    suspension = await store.get_run_suspension(run_id="parent-run", suspension_id="spawn-1")
+    assert suspension is not None
+    assert suspension["status"] == "cancelled"
+    assert suspension["resolution"] == {"status": "cancelled", "result": "user_cancelled"}
+    row = (await store.list_background_agent_runs("parent"))[0]
+    assert row["completion_id"].startswith("restart-cancel:")
 
 
 @pytest.mark.asyncio
@@ -1668,6 +1862,33 @@ async def test_large_tool_result_event_spills_raw_content_to_manifest(store: Ses
     assert events[0].event.tool_call_id == "call-raw"
     assert events[0].event.raw_ref == payload["raw_ref"]
     assert events[0].event.content != raw
+
+
+@pytest.mark.asyncio
+async def test_large_file_search_result_gets_short_retention(store: SessionStore):
+    raw = "search evidence\n" * 5000
+    before = datetime.now(UTC)
+
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="sess-search",
+            event=ToolCallResultEvent(
+                tool_call_id="call-search",
+                name="file_search_text",
+                content=raw,
+            ),
+        )
+    )
+
+    row = (
+        await store.read_conn.execute_fetchall(
+            "SELECT retention_class, expires_at FROM tool_results WHERE session_id = 'sess-search'"
+        )
+    )[0]
+    assert row["retention_class"] == "search_temporary"
+    expiry = datetime.fromisoformat(row["expires_at"])
+    assert before + timedelta(days=6) < expiry < before + timedelta(days=8)
 
 
 @pytest.mark.asyncio

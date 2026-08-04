@@ -15,6 +15,7 @@ from arden.tools.wiki_maintenance import (
     WIKI_MAINTENANCE_SERVICE,
     wiki_maintenance_review_tool,
 )
+from arden.wiki.exceptions import GeneratedRegionConflictError
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService
 from arden.wiki.maintenance.runner import (
     WikiMaintenanceDecision,
@@ -130,6 +131,30 @@ async def test_maintenance_tool_rejects_invalid_decision_without_advancing() -> 
     still_pending = await wiki_maintenance_review_tool.execute(execution, action="next")
     assert still_pending.data == {"completed": False}
     await review.aclose()
+
+
+@pytest.mark.asyncio
+async def test_maintenance_tool_exposes_generated_region_conflict_as_terminal_failure() -> None:
+    class _ConflictingMaintenance:
+        def validate_prepared_decision(self, report, decision) -> None:
+            del report, decision
+
+        async def run(self) -> WikiMaintenanceResult:
+            raise GeneratedRegionConflictError("generated region changed by a user: dex.md")
+
+    review = WikiMaintenanceReviewService(_ConflictingMaintenance())
+    execution = _execution(review, BUILTIN_WIKI_MAINTENANCE_ID)
+
+    first = await wiki_maintenance_review_tool.execute(execution, action="next")
+    repeated = await wiki_maintenance_review_tool.execute(execution, action="next")
+
+    for result in (first, repeated):
+        assert result.is_error
+        assert result.outcome is not None and result.outcome.error is not None
+        assert result.outcome.error.code == "wiki_generated_region_conflict"
+        assert result.outcome.error.retryable is False
+        assert "manual repair" in result.outcome.error.recovery_action
+    assert review.done
 
 
 @pytest.mark.asyncio

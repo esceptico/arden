@@ -148,6 +148,7 @@ def test_function_tool_metadata_exposes_policy():
         "max_result_chars": None,
         "offload": True,
         "allow_approval_bypass": True,
+        "concurrency_group": None,
         "destructive": None,
         "open_world": None,
         "idempotent": None,

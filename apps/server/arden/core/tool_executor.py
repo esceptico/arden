@@ -14,6 +14,7 @@ from arden.constants import (
     OFFLOAD_PREVIEW_CHARS,
     OFFLOAD_PREVIEW_LINES,
     OFFLOAD_THRESHOLD,
+    is_external_source,
 )
 from arden.core.raw_tool_results import persist_raw_tool_result
 from arden.core.tool_result_files import persist_result
@@ -437,6 +438,7 @@ class ArdenToolExecutor:
             if tool:
                 source = self._executor.registry.get_source(name)
                 icon, noun = tool_presentation(name, source)
+                default_concurrency_group = source if source and is_external_source(source) else name
                 self._meta_cache[name] = ToolMeta(
                     name=name,
                     display_name=tool.display_name or name,
@@ -444,6 +446,8 @@ class ArdenToolExecutor:
                     icon=icon,
                     noun=noun,
                     source=source,
+                    changes_state=tool.policy.action in {ToolAction.DRAFT, ToolAction.WRITE, ToolAction.EXECUTE},
+                    concurrency_group=tool.policy.concurrency_group or default_concurrency_group,
                 )
             else:
                 self._meta_cache[name] = None

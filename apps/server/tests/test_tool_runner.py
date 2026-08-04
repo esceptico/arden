@@ -1,10 +1,4 @@
-"""Tests for the unified parallel tool runner.
-
-Mutating + non-mutating calls now run in one TaskGroup instead of being
-split into sequential mutating + parallel non-mutating phases. Approvals
-are routed per tool_id via Future, so multiple mutating tools can each
-await their own approval without racing on a shared queue.
-"""
+"""Tests for bounded, conflict-aware parallel tool execution."""
 
 import asyncio
 
@@ -29,6 +23,9 @@ class _FakeExecutor:
     def get_meta(self, name: str) -> ToolMeta | None:
         return self._metas.get(name)
 
+    def mark_provider_loaded_tools(self, names: set[str]) -> None:
+        del names
+
     async def execute(self, name: str, args: dict, tool_call_id: str) -> ToolResult:
         self.arrived.append(tool_call_id)
         await self._release[tool_call_id].wait()
@@ -44,12 +41,16 @@ def _make_call(call_id: str, name: str) -> PendingToolCall:
 
 
 @pytest.mark.asyncio
-async def test_runner_executes_mutating_and_non_mutating_in_one_batch():
-    """All tools should start in parallel — no second phase for mutating."""
+async def test_runner_serializes_mutation_against_reads_in_same_group():
     metas = {
-        "file_read": ToolMeta(name="file_read", display_name="Read"),
-        "file_write": ToolMeta(name="file_write", display_name="Write"),
-        "bash": ToolMeta(name="bash", display_name="Bash"),
+        "file_read": ToolMeta(name="file_read", display_name="Read", concurrency_group="files"),
+        "file_write": ToolMeta(
+            name="file_write",
+            display_name="Write",
+            changes_state=True,
+            concurrency_group="files",
+        ),
+        "file_find": ToolMeta(name="file_find", display_name="Find", concurrency_group="files"),
     }
     release = {cid: asyncio.Event() for cid in ("c1", "c2", "c3")}
     executor = _FakeExecutor(metas, release)
@@ -58,7 +59,7 @@ async def test_runner_executes_mutating_and_non_mutating_in_one_batch():
     calls = [
         _make_call("c1", "file_read"),
         _make_call("c2", "file_write"),
-        _make_call("c3", "bash"),
+        _make_call("c3", "file_find"),
     ]
 
     started: list[str] = []
@@ -73,22 +74,106 @@ async def test_runner_executes_mutating_and_non_mutating_in_one_batch():
 
     consumer = asyncio.create_task(consume())
 
-    # Yield until every tool has reached executor.execute() — proves
-    # they're all dispatched concurrently before any has returned.
+    # The first read starts. The queued writer blocks the later read so it
+    # cannot starve behind an unbounded stream of new readers.
+    for _ in range(20):
+        if executor.arrived:
+            break
+        await asyncio.sleep(0)
+    assert executor.arrived == ["c1"]
+    assert started == ["c1", "c2", "c3"]
+    assert completed == []
+
+    release["c1"].set()
+    for _ in range(20):
+        if executor.arrived == ["c1", "c2"]:
+            break
+        await asyncio.sleep(0)
+    assert executor.arrived == ["c1", "c2"]
+    release["c2"].set()
     for _ in range(20):
         if len(executor.arrived) == 3:
             break
         await asyncio.sleep(0)
-    assert set(executor.arrived) == {"c1", "c2", "c3"}
-    assert started == ["c1", "c2", "c3"]
-    assert completed == []  # nobody finished yet — gating on release events
-
-    # Release in reverse order; results should arrive in completion order.
+    assert executor.arrived == ["c1", "c2", "c3"]
     release["c3"].set()
+    await consumer
+    assert completed == ["c1", "c2", "c3"]
+
+
+@pytest.mark.asyncio
+async def test_runner_keeps_unrelated_resource_groups_parallel():
+    metas = {
+        "file_write": ToolMeta(
+            name="file_write",
+            display_name="Write",
+            changes_state=True,
+            concurrency_group="filesystem",
+        ),
+        "current_time": ToolMeta(
+            name="current_time",
+            display_name="Time",
+            concurrency_group="current_time",
+        ),
+    }
+    release = {cid: asyncio.Event() for cid in ("c1", "c2")}
+    executor = _FakeExecutor(metas, release)
+    runner = ToolRunner(executor=executor, depth=0, parent_id=None)
+    consumer = asyncio.create_task(
+        _consume(runner.execute_all([_make_call("c1", "file_write"), _make_call("c2", "current_time")]))
+    )
+
+    for _ in range(20):
+        if len(executor.arrived) == 2:
+            break
+        await asyncio.sleep(0)
+    assert set(executor.arrived) == {"c1", "c2"}
     release["c1"].set()
     release["c2"].set()
     await consumer
-    assert set(completed) == {"c1", "c2", "c3"}
+
+
+@pytest.mark.asyncio
+async def test_runner_caps_active_tool_executions():
+    class _CountingExecutor:
+        def __init__(self) -> None:
+            self.active = 0
+            self.peak = 0
+            self.release = asyncio.Event()
+
+        def get_meta(self, name: str) -> ToolMeta:
+            return ToolMeta(name=name, display_name=name, concurrency_group=name)
+
+        def mark_provider_loaded_tools(self, names: set[str]) -> None:
+            del names
+
+        async def execute(self, name: str, args: dict, tool_call_id: str) -> ToolResult:
+            del name, args, tool_call_id
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await self.release.wait()
+            self.active -= 1
+            return ToolResult(content="ok", preview="ok")
+
+    executor = _CountingExecutor()
+    runner = ToolRunner(executor=executor, depth=0, parent_id=None, max_concurrency=6)
+    calls = [_make_call(f"c{i}", f"tool_{i}") for i in range(12)]
+
+    stream = runner.execute_all(calls)
+    consume_task = asyncio.create_task(_consume(stream))
+    for _ in range(50):
+        if executor.peak == 6:
+            break
+        await asyncio.sleep(0)
+    assert executor.peak == 6
+    executor.release.set()
+    await consume_task
+    assert executor.peak == 6
+
+
+async def _consume(stream) -> None:
+    async for _ in stream:
+        pass
 
 
 @pytest.mark.asyncio
@@ -149,6 +234,9 @@ async def test_runner_sanitizes_uncaught_tool_exception_and_returns_diagnostic_r
     class _ExplodingExecutor:
         def get_meta(self, name: str) -> ToolMeta | None:
             return ToolMeta(name=name, display_name="Exploding tool")
+
+        def mark_provider_loaded_tools(self, names: set[str]) -> None:
+            del names
 
         async def execute(self, name: str, args: dict, tool_call_id: str) -> ToolResult:
             del name, args, tool_call_id

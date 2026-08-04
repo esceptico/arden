@@ -53,6 +53,10 @@ class ToolPolicy(BaseModel):
     destructive: bool | None = None
     open_world: bool | None = None
     idempotent: bool | None = None
+    # Explicit conflict domain for tool-runner scheduling. Tools that share a
+    # mutable resource declare the same key; provider tools may omit it and use
+    # their registered integration source as the default domain.
+    concurrency_group: str | None = None
 
     @model_validator(mode="before")
     @classmethod

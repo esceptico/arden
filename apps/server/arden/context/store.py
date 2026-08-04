@@ -13,12 +13,13 @@ from pydantic import BaseModel
 
 from arden.areas.paths import normalize_area_page_path
 from arden.constants import (
+    RAW_SEARCH_RESULT_RETENTION_DAYS,
     RAW_TOOL_RESULT_INLINE_MAX_BYTES,
     SESSION_EVENT_DURABLE_RETENTION,
     SESSION_EVENT_PRUNE_INTERVAL,
     SESSION_HANDOFF_MARKER,
 )
-from arden.context.models import SessionData, SessionState
+from arden.context.models import BackgroundStartDisposition, SessionData, SessionState
 from arden.core.raw_tool_results import (
     RawToolResultBlob,
     internal_blob_from_data,
@@ -339,6 +340,7 @@ CREATE TABLE IF NOT EXISTS background_agent_runs (
     session_id TEXT NOT NULL,
     parent_run_id TEXT,
     parent_tool_call_id TEXT,
+    suspension_id TEXT,
     child_session_id TEXT,
     agent_type TEXT NOT NULL DEFAULT 'background_research',
     wait INTEGER NOT NULL DEFAULT 0,
@@ -352,6 +354,10 @@ CREATE TABLE IF NOT EXISTS background_agent_runs (
     updated_at TEXT NOT NULL,
     ended_at TEXT,
     cancel_requested_at TEXT,
+    cancel_actor TEXT,
+    terminal_cause TEXT,
+    cancel_generation INTEGER NOT NULL DEFAULT 0,
+    cancel_idempotency_key TEXT,
     notified_at TEXT,
     completion_id TEXT,
     spawn_spec TEXT,
@@ -361,6 +367,15 @@ CREATE TABLE IF NOT EXISTS background_agent_runs (
 
 CREATE INDEX IF NOT EXISTS idx_background_agent_runs_session_status
     ON background_agent_runs(session_id, status);
+
+CREATE TABLE IF NOT EXISTS execution_cancellation_scopes (
+    session_id TEXT PRIMARY KEY,
+    actor TEXT NOT NULL,
+    cause TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS background_agent_events (
     session_id TEXT NOT NULL,
@@ -603,6 +618,7 @@ class SessionStore:
             "session_id": row["session_id"],
             "parent_run_id": row["parent_run_id"],
             "parent_tool_call_id": row["parent_tool_call_id"],
+            "suspension_id": row["suspension_id"],
             "agent_type": row["agent_type"] or "background_research",
             "wait": bool(row["wait"]),
             "status": row["status"],
@@ -614,6 +630,10 @@ class SessionStore:
             "updated_at": row["updated_at"],
             "ended_at": row["ended_at"],
             "cancel_requested_at": row["cancel_requested_at"],
+            "cancel_actor": row["cancel_actor"],
+            "terminal_cause": row["terminal_cause"],
+            "cancel_generation": int(row["cancel_generation"]),
+            "cancel_idempotency_key": row["cancel_idempotency_key"],
             "notified_at": row["notified_at"],
             "completion_id": dict(row).get("completion_id"),
         }
@@ -1580,6 +1600,9 @@ class SessionStore:
             if "parent_tool_call_id" not in columns:
                 await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN parent_tool_call_id TEXT")
                 changed = True
+            if "suspension_id" not in columns:
+                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN suspension_id TEXT")
+                changed = True
             if "child_session_id" not in columns:
                 await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN child_session_id TEXT")
                 changed = True
@@ -1602,6 +1625,15 @@ class SessionStore:
                     "ALTER TABLE background_agent_runs ADD COLUMN spawn_attempts INTEGER NOT NULL DEFAULT 0"
                 )
                 changed = True
+            for column in (
+                "cancel_actor TEXT",
+                "terminal_cause TEXT",
+                "cancel_generation INTEGER NOT NULL DEFAULT 0",
+                "cancel_idempotency_key TEXT",
+            ):
+                if column.split()[0] not in columns:
+                    await self.conn.execute(f"ALTER TABLE background_agent_runs ADD COLUMN {column}")
+                    changed = True
             if changed:
                 await self.conn.commit()
             return
@@ -1621,6 +1653,7 @@ class SessionStore:
                 session_id TEXT NOT NULL,
                 parent_run_id TEXT,
                 parent_tool_call_id TEXT,
+                suspension_id TEXT,
                 child_session_id TEXT,
                 agent_type TEXT NOT NULL DEFAULT 'background_research',
                 wait INTEGER NOT NULL DEFAULT 0,
@@ -1634,6 +1667,10 @@ class SessionStore:
                 updated_at TEXT NOT NULL,
                 ended_at TEXT,
                 cancel_requested_at TEXT,
+                cancel_actor TEXT,
+                terminal_cause TEXT,
+                cancel_generation INTEGER NOT NULL DEFAULT 0,
+                cancel_idempotency_key TEXT,
                 notified_at TEXT,
                 completion_id TEXT,
                 spawn_spec TEXT,
@@ -2925,62 +2962,168 @@ class SessionStore:
         parent_run_id: str | None,
         command: str,
         parent_tool_call_id: str | None = None,
+        suspension_id: str | None = None,
         child_session_id: str | None = None,
         agent_type: str = "background_research",
         wait: bool = False,
         spawn_spec: str | None = None,
-    ) -> None:
+    ) -> BackgroundStartDisposition:
         now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            """
-            INSERT INTO background_agent_runs (
-                task_id, session_id, parent_run_id, parent_tool_call_id, child_session_id,
-                agent_type, wait, status, command, spawn_spec,
-                created_at, started_at, updated_at
+        async with self._background_event_lock:
+            scope_rows = await self.conn.execute_fetchall(
+                "SELECT * FROM execution_cancellation_scopes WHERE session_id = ?",
+                (session_id,),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id, task_id) DO UPDATE SET
-                session_id = excluded.session_id,
-                parent_run_id = excluded.parent_run_id,
-                parent_tool_call_id = excluded.parent_tool_call_id,
-                child_session_id = excluded.child_session_id,
-                agent_type = excluded.agent_type,
-                wait = excluded.wait,
-                status = 'running',
-                command = excluded.command,
-                spawn_spec = COALESCE(excluded.spawn_spec, spawn_spec),
-                detail = NULL,
-                result_ref = NULL,
-                result_text = NULL,
-                updated_at = excluded.updated_at,
-                ended_at = NULL,
-                cancel_requested_at = NULL,
-                notified_at = NULL,
-                completion_id = NULL
-            WHERE background_agent_runs.completion_id IS NULL
-            """,
-            (
-                task_id,
-                session_id,
-                parent_run_id,
-                parent_tool_call_id,
-                child_session_id,
-                agent_type,
-                int(wait),
-                command,
-                spawn_spec,
-                now,
-                now,
-                now,
-            ),
-        )
-        await self.conn.commit()
-        if cursor.rowcount > 0:
-            await self.record_background_agent_event(
-                task_id=task_id,
-                session_id=session_id,
-                status="started",
+            cancellation = scope_rows[0] if scope_rows else None
+            cursor = await self.conn.execute(
+                """
+                INSERT INTO background_agent_runs (
+                    task_id, session_id, parent_run_id, parent_tool_call_id, suspension_id, child_session_id,
+                    agent_type, wait, status, command, spawn_spec,
+                    created_at, started_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, task_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    parent_run_id = excluded.parent_run_id,
+                    parent_tool_call_id = excluded.parent_tool_call_id,
+                    suspension_id = excluded.suspension_id,
+                    child_session_id = excluded.child_session_id,
+                    agent_type = excluded.agent_type,
+                    wait = excluded.wait,
+                    status = 'running',
+                    command = excluded.command,
+                    spawn_spec = COALESCE(excluded.spawn_spec, spawn_spec),
+                    detail = NULL,
+                    result_ref = NULL,
+                    result_text = NULL,
+                    updated_at = excluded.updated_at,
+                    ended_at = NULL,
+                    cancel_requested_at = NULL,
+                    cancel_actor = NULL,
+                    terminal_cause = NULL,
+                    cancel_idempotency_key = NULL,
+                    notified_at = NULL,
+                    completion_id = NULL
+                WHERE background_agent_runs.completion_id IS NULL
+                """,
+                (
+                    task_id,
+                    session_id,
+                    parent_run_id,
+                    parent_tool_call_id,
+                    suspension_id,
+                    child_session_id,
+                    agent_type,
+                    int(wait),
+                    command,
+                    spawn_spec,
+                    now,
+                    now,
+                    now,
+                ),
             )
+            if cursor.rowcount <= 0:
+                await self.conn.commit()
+                return BackgroundStartDisposition.CANCELLED
+
+            disposition = BackgroundStartDisposition.CANCELLED if cancellation else BackgroundStartDisposition.STARTED
+            event_id = None
+            detail = None
+            terminal = 0
+            if cancellation is not None:
+                actor = str(cancellation["actor"])
+                cause = str(cancellation["cause"])
+                generation = int(cancellation["generation"])
+                idempotency_key = str(cancellation["idempotency_key"])
+                completion_id = f"cancel-before-start:{idempotency_key}:{session_id}:{task_id}"
+                await self.conn.execute(
+                    """
+                    UPDATE background_agent_runs
+                    SET status = 'cancelled', detail = ?, ended_at = ?, updated_at = ?,
+                        cancel_requested_at = ?, cancel_actor = ?, terminal_cause = ?,
+                        cancel_generation = MAX(cancel_generation, ?), cancel_idempotency_key = ?,
+                        completion_id = ?
+                    WHERE session_id = ? AND task_id = ?
+                    """,
+                    (
+                        cause,
+                        now,
+                        now,
+                        now,
+                        actor,
+                        cause,
+                        generation,
+                        idempotency_key,
+                        completion_id,
+                        session_id,
+                        task_id,
+                    ),
+                )
+                if child_session_id:
+                    await self.conn.execute(
+                        """
+                        INSERT INTO execution_cancellation_scopes (
+                            session_id, actor, cause, generation, idempotency_key, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(session_id) DO UPDATE SET
+                            actor = excluded.actor,
+                            cause = excluded.cause,
+                            generation = MAX(execution_cancellation_scopes.generation, excluded.generation),
+                            idempotency_key = excluded.idempotency_key,
+                            updated_at = excluded.updated_at
+                        WHERE execution_cancellation_scopes.idempotency_key <> excluded.idempotency_key
+                        """,
+                        (child_session_id, actor, cause, generation, idempotency_key, now),
+                    )
+                if wait and parent_run_id and suspension_id:
+                    resolution = json.dumps(
+                        {"status": "cancelled", "result": cause},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    await self.conn.execute(
+                        """
+                        UPDATE tool_approvals
+                        SET status = 'cancelled', resolved_at = COALESCE(resolved_at, ?),
+                            result_feedback = COALESCE(?, result_feedback),
+                            resolution_json = COALESCE(?, resolution_json)
+                        WHERE run_id = ? AND tool_call_id = ? AND status = 'pending'
+                        """,
+                        (now, cause, resolution, parent_run_id, suspension_id),
+                    )
+                event_id = completion_id
+                detail = cause
+                terminal = 1
+            elif child_session_id:
+                await self.conn.execute(
+                    "DELETE FROM execution_cancellation_scopes WHERE session_id = ?",
+                    (child_session_id,),
+                )
+
+            seq_rows = await self.conn.execute_fetchall(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM background_agent_events WHERE session_id = ?",
+                (session_id,),
+            )
+            await self.conn.execute(
+                """
+                INSERT OR IGNORE INTO background_agent_events (
+                    session_id, seq, task_id, status, detail, terminal, created_at, event_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    int(seq_rows[0]["next_seq"]),
+                    task_id,
+                    disposition.value,
+                    detail,
+                    terminal,
+                    now,
+                    event_id,
+                ),
+            )
+            await self.conn.commit()
+        return disposition
 
     async def record_background_agent_event(
         self,
@@ -3097,6 +3240,29 @@ class SessionStore:
                 """,
                 (session_id, seq, task_id, status, detail, result_ref, now, completion_id),
             )
+            if existing["wait"] and existing["parent_run_id"] and existing["suspension_id"]:
+                resolution = json.dumps(
+                    {"status": status, "result": result_text or ""},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                await self.conn.execute(
+                    """
+                    UPDATE tool_approvals
+                    SET status = ?, resolved_at = COALESCE(resolved_at, ?),
+                        result_feedback = COALESCE(?, result_feedback),
+                        resolution_json = COALESCE(?, resolution_json)
+                    WHERE run_id = ? AND tool_call_id = ? AND status = 'pending'
+                    """,
+                    (
+                        status,
+                        now,
+                        result_text,
+                        resolution,
+                        existing["parent_run_id"],
+                        existing["suspension_id"],
+                    ),
+                )
             await self.conn.commit()
         return {
             "claimed": True,
@@ -3146,27 +3312,118 @@ class SessionStore:
         ]
 
     async def request_background_agent_cancel(self, session_id: str, task_id: str) -> bool:
-        now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            """
-            UPDATE background_agent_runs
-            SET status = 'cancel_requested',
-                cancel_requested_at = COALESCE(cancel_requested_at, ?),
-                updated_at = ?
-            WHERE session_id = ? AND task_id = ?
-              AND status NOT IN ('completed', 'failed', 'cancelled', 'interrupted')
-            """,
-            (now, now, session_id, task_id),
+        cancelled = await self.request_background_agent_cancel_cascade(
+            session_id=session_id,
+            task_id=task_id,
+            actor="user",
+            cause="user_cancelled",
+            idempotency_key=f"user_cancelled:{session_id}:{task_id}",
         )
-        await self.conn.commit()
-        changed = cursor.rowcount > 0
-        if changed:
-            await self.record_background_agent_event(
-                task_id=task_id,
-                session_id=session_id,
-                status="cancel_requested",
+        return bool(cancelled)
+
+    async def request_background_agent_cancel_cascade(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        actor: str,
+        cause: str,
+        idempotency_key: str,
+    ) -> list[tuple[str, str]]:
+        """Persist one cancellation intent across the stored spawn subtree.
+
+        The recursive edge is `parent.child_session_id -> child.session_id`.
+        One transaction updates every open descendant and appends an event in
+        each affected session, so restart recovery sees the same cause even if
+        the in-memory task cancellation is interrupted.
+        """
+        now = datetime.now(UTC).isoformat()
+        async with self._background_event_lock:
+            rows = await self.conn.execute_fetchall(
+                """
+                WITH RECURSIVE descendants(session_id, task_id, child_session_id) AS (
+                    SELECT session_id, task_id, child_session_id
+                    FROM background_agent_runs
+                    WHERE session_id = ? AND task_id = ?
+                    UNION ALL
+                    SELECT child.session_id, child.task_id, child.child_session_id
+                    FROM background_agent_runs AS child
+                    JOIN descendants AS parent ON child.session_id = parent.child_session_id
+                )
+                SELECT run.session_id, run.task_id, run.child_session_id
+                FROM background_agent_runs AS run
+                JOIN descendants AS node
+                  ON run.session_id = node.session_id AND run.task_id = node.task_id
+                WHERE run.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted')
+                  AND COALESCE(run.cancel_idempotency_key, '') <> ?
+                """,
+                (session_id, task_id, idempotency_key),
             )
-        return changed
+            cancelled = [(str(row["session_id"]), str(row["task_id"])) for row in rows]
+            for row in rows:
+                cancelled_session = str(row["session_id"])
+                cancelled_task = str(row["task_id"])
+                await self.conn.execute(
+                    """
+                    UPDATE background_agent_runs
+                    SET status = 'cancel_requested',
+                        cancel_requested_at = COALESCE(cancel_requested_at, ?),
+                        cancel_actor = ?, terminal_cause = ?,
+                        cancel_generation = cancel_generation + 1,
+                        cancel_idempotency_key = ?, detail = ?, updated_at = ?
+                    WHERE session_id = ? AND task_id = ?
+                    """,
+                    (
+                        now,
+                        actor,
+                        cause,
+                        idempotency_key,
+                        cause,
+                        now,
+                        cancelled_session,
+                        cancelled_task,
+                    ),
+                )
+                if row["child_session_id"]:
+                    await self.conn.execute(
+                        """
+                        INSERT INTO execution_cancellation_scopes (
+                            session_id, actor, cause, generation, idempotency_key, updated_at
+                        ) VALUES (?, ?, ?, 1, ?, ?)
+                        ON CONFLICT(session_id) DO UPDATE SET
+                            actor = excluded.actor,
+                            cause = excluded.cause,
+                            generation = execution_cancellation_scopes.generation + 1,
+                            idempotency_key = excluded.idempotency_key,
+                            updated_at = excluded.updated_at
+                        WHERE execution_cancellation_scopes.idempotency_key <> excluded.idempotency_key
+                        """,
+                        (row["child_session_id"], actor, cause, idempotency_key, now),
+                    )
+                seq_row = await self.conn.execute_fetchall(
+                    """
+                    SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
+                    FROM background_agent_events WHERE session_id = ?
+                    """,
+                    (cancelled_session,),
+                )
+                await self.conn.execute(
+                    """
+                    INSERT INTO background_agent_events (
+                        session_id, seq, task_id, status, detail, terminal, created_at, event_id
+                    ) VALUES (?, ?, ?, 'cancel_requested', ?, 0, ?, ?)
+                    """,
+                    (
+                        cancelled_session,
+                        int(seq_row[0]["next_seq"]),
+                        cancelled_task,
+                        cause,
+                        now,
+                        f"cancel:{idempotency_key}:{cancelled_session}:{cancelled_task}",
+                    ),
+                )
+            await self.conn.commit()
+        return cancelled
 
     async def get_background_agent_result(self, session_id: str, task_id: str) -> str | None:
         rows = await self.read_conn.execute_fetchall(
@@ -3288,33 +3545,84 @@ class SessionStore:
 
     async def mark_interrupted_background_agent_runs(self) -> int:
         now = datetime.now(UTC).isoformat()
-        rows = await self.conn.execute_fetchall(
-            """
-            SELECT task_id, session_id FROM background_agent_runs
-            WHERE status IN ('running', 'activity', 'cancel_requested')
-            """,
-        )
-        if not rows:
-            return 0
-        await self.conn.execute(
-            """
-            UPDATE background_agent_runs
-            SET status = 'interrupted',
-                detail = COALESCE(detail, 'server_restart'),
-                updated_at = ?,
-                ended_at = COALESCE(ended_at, ?)
-            WHERE status IN ('running', 'activity', 'cancel_requested')
-            """,
-            (now, now),
-        )
-        for row in rows:
-            await self.record_background_agent_event(
-                task_id=row["task_id"],
-                session_id=row["session_id"],
-                status="interrupted",
-                detail="server_restart",
+        async with self._background_event_lock:
+            rows = await self.conn.execute_fetchall(
+                """
+                SELECT * FROM background_agent_runs
+                WHERE status IN ('running', 'activity', 'cancel_requested')
+                """,
             )
-        await self.conn.commit()
+            if not rows:
+                return 0
+            for row in rows:
+                was_cancel_requested = row["status"] == "cancel_requested"
+                status = "cancelled" if was_cancel_requested else "interrupted"
+                if was_cancel_requested:
+                    detail = row["terminal_cause"] or "user_cancelled"
+                    event_detail = detail
+                else:
+                    detail = row["detail"] or "server_restart"
+                    event_detail = "server_restart"
+                completion_id = (
+                    row["completion_id"]
+                    or f"restart-cancel:{row['session_id']}:{row['task_id']}:{int(row['cancel_generation'])}"
+                    if was_cancel_requested
+                    else None
+                )
+                await self.conn.execute(
+                    """
+                    UPDATE background_agent_runs
+                    SET status = ?, detail = ?, updated_at = ?, ended_at = COALESCE(ended_at, ?),
+                        completion_id = COALESCE(completion_id, ?)
+                    WHERE session_id = ? AND task_id = ?
+                    """,
+                    (
+                        status,
+                        detail,
+                        now,
+                        now,
+                        completion_id,
+                        row["session_id"],
+                        row["task_id"],
+                    ),
+                )
+                seq_rows = await self.conn.execute_fetchall(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM background_agent_events WHERE session_id = ?",
+                    (row["session_id"],),
+                )
+                await self.conn.execute(
+                    """
+                    INSERT OR IGNORE INTO background_agent_events (
+                        session_id, seq, task_id, status, detail, terminal, created_at, event_id
+                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        row["session_id"],
+                        int(seq_rows[0]["next_seq"]),
+                        row["task_id"],
+                        status,
+                        event_detail,
+                        now,
+                        completion_id,
+                    ),
+                )
+                if was_cancel_requested and row["wait"] and row["parent_run_id"] and row["suspension_id"]:
+                    resolution = json.dumps(
+                        {"status": "cancelled", "result": detail},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    await self.conn.execute(
+                        """
+                        UPDATE tool_approvals
+                        SET status = 'cancelled', resolved_at = COALESCE(resolved_at, ?),
+                            result_feedback = COALESCE(?, result_feedback),
+                            resolution_json = COALESCE(?, resolution_json)
+                        WHERE run_id = ? AND tool_call_id = ? AND status = 'pending'
+                        """,
+                        (now, detail, resolution, row["parent_run_id"], row["suspension_id"]),
+                    )
+            await self.conn.commit()
         return len(rows)
 
     async def mark_interrupted_agent_sessions(self) -> int:
@@ -3556,7 +3864,13 @@ class SessionStore:
         )
         run_id = payload.get("run_id") if isinstance(payload.get("run_id"), str) else None
         preview = payload.get("preview") if isinstance(payload.get("preview"), str) else ""
-        retention_class = "session"
+        tool_name = payload.get("name") if isinstance(payload.get("name"), str) else None
+        if tool_name == "file_search_text":
+            retention_class = "search_temporary"
+            expires_at = (datetime.fromisoformat(now) + timedelta(days=RAW_SEARCH_RESULT_RETENTION_DAYS)).isoformat()
+        else:
+            retention_class = "session"
+            expires_at = None
         payload["raw_ref"] = tool_result_id
         payload.pop("content_sha256", None)
         payload["content_bytes"] = blob.content_bytes
@@ -3567,7 +3881,7 @@ class SessionStore:
             record.session_id,
             run_id,
             tool_call_id,
-            payload.get("name") if isinstance(payload.get("name"), str) else None,
+            tool_name,
             blob.content_sha256,
             blob.content_bytes,
             blob.stored_bytes,
@@ -3576,7 +3890,7 @@ class SessionStore:
             blob.blob_path,
             preview_text(preview),
             retention_class,
-            None,
+            expires_at,
             record.seq,
             now,
         )

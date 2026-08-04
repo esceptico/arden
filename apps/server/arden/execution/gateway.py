@@ -99,6 +99,7 @@ class ExecutorGateway:
             return 0
         devices = [d for d in await self.devices.list_devices() if d.revoked_at is None]
         for record in open_records:
+            cause = await self.invocations.cancellation_cause_for_session(record.session_id) or "server_restart"
             await self.invocations.request_cancel(record.invocation_id)
             for device in devices:
                 await self.commands.append(
@@ -115,8 +116,8 @@ class ExecutorGateway:
             await self.invocations.complete(
                 record.invocation_id,
                 status=status,
-                result_payload=json.dumps({"error": "orphaned by server restart"}),
-                error_code="server_restart",
+                result_payload=json.dumps({"error": f"orphaned after {cause}"}),
+                error_code=cause,
             )
         _logger.info("Reconciled %d orphaned tool invocation(s) after restart", len(open_records))
         return len(open_records)

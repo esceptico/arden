@@ -546,6 +546,24 @@ async def test_reconcile_settles_orphaned_invocations(gateway):
 
 
 @pytest.mark.asyncio
+async def test_reconcile_preserves_durable_child_cancel_cause(gateway):
+    await gateway.invocations.record_session_cancellation(
+        session_id="sess-1",
+        actor="user",
+        cause="user_cancelled",
+        idempotency_key="cancel-1",
+    )
+    invocation = await _client_invocation(gateway, "inv-cancelled-child")
+
+    await gateway.reconcile_open_invocations()
+
+    settled = await gateway.invocations.get(invocation.invocation_id)
+    assert settled is not None
+    assert settled.status == InvocationStatus.CANCELLED
+    assert settled.error_code == "user_cancelled"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_with_nothing_open_is_a_no_op(gateway):
     assert await gateway.reconcile_open_invocations() == 0
 

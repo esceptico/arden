@@ -122,6 +122,79 @@ async def test_client_tool_routes_to_device_and_returns_result(rig):
 
 
 @pytest.mark.asyncio
+async def test_client_file_discovery_updates_are_carried_to_the_next_device_call(rig):
+    gateway, router, registry = rig
+    device, _ = await gateway.devices.enroll(name="mac", capabilities=["filesystem"])
+    lease = await gateway.connect(device)
+    execution = _make_execution(registry)
+
+    async def settle_first_call():
+        for _ in range(100):
+            commands = await gateway.pending_commands(device.executor_id, 0)
+            if commands:
+                await gateway.accept_result(
+                    device,
+                    lease.lease_id,
+                    invocation_id=commands[0].invocation_id,
+                    status=InvocationStatus.FAILED,
+                    result_payload=json.dumps(
+                        {
+                            "content": "missing",
+                            "preview": "Not found",
+                            "file_discovery": {
+                                "version": 1,
+                                "observed": [{"path": "/workspace", "kind": "directory"}],
+                                "discovered_roots": [],
+                                "missed_roots": ["/workspace"],
+                            },
+                        }
+                    ),
+                    error_code="not_found",
+                )
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("command never dispatched")
+
+    first = asyncio.create_task(settle_first_call())
+    await router.execute(
+        ToolInvocation(invocation_id="call-1", tool_name="read_device_file", arguments={"path": "/workspace/nope"}),
+        execution,
+    )
+    await first
+    assert execution.ctx.run.file_discovery_state() == {
+        "observed_paths": {"/workspace": "directory"},
+        "miss_counts": {"/workspace": 1},
+    }
+
+    async def settle_second_call():
+        for _ in range(100):
+            commands = await gateway.pending_commands(device.executor_id, 1)
+            if commands:
+                assert commands[0].payload["context"]["file_discovery"] == {
+                    "observed_paths": {"/workspace": "directory"},
+                    "miss_counts": {"/workspace": 1},
+                }
+                await gateway.accept_result(
+                    device,
+                    lease.lease_id,
+                    invocation_id=commands[0].invocation_id,
+                    status=InvocationStatus.SUCCEEDED,
+                    result_payload=json.dumps({"content": "ok", "preview": "Read"}),
+                )
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("second command never dispatched")
+
+    second = asyncio.create_task(settle_second_call())
+    result = await router.execute(
+        ToolInvocation(invocation_id="call-2", tool_name="read_device_file", arguments={"path": "/workspace"}),
+        execution,
+    )
+    await second
+    assert result.content == "ok"
+
+
+@pytest.mark.asyncio
 async def test_failed_device_result_maps_to_tool_failure(rig):
     gateway, router, registry = rig
     device, _ = await gateway.devices.enroll(name="mac", capabilities=[])

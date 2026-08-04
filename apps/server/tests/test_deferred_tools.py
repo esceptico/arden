@@ -402,6 +402,7 @@ async def test_deferred_middleware_hides_then_reveals_loaded_tools():
     )
     assert not result.is_error
     assert "slack_search" in run.loaded_tools
+    assert "Loaded 1 deferred tool(s)" in result.content
 
     prepared = await middleware(_request(registry), _identity)
     names = {t["function"]["name"] for t in prepared.tools}
@@ -494,7 +495,28 @@ async def test_tool_search_loads_exact_deferred_names():
 
     assert not result.is_error
     assert "slack_search" in run.loaded_tools
-    assert "Loaded 1 deferred tool(s)" in result.content
+
+
+@pytest.mark.asyncio
+async def test_tool_search_preloads_multiple_exact_names():
+    registry = _registry()
+    run = RunContext(run_id="run", deferred_tools_enabled=True)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=run,
+        io=IOBridge(),
+    )
+
+    result = await registry.execute(
+        "tool_search",
+        ToolExecution(tool_id="call_search", tool_name="tool_search", ctx=ctx),
+        {"names": ["slack_search", "file_write", "notify"]},
+    )
+
+    assert not result.is_error
+    assert run.loaded_tools == {"slack_search", "file_write", "notify"}
+    assert "Loaded 3 deferred tool(s)" in result.content
 
 
 @pytest.mark.asyncio
@@ -819,6 +841,28 @@ async def test_load_tools_can_be_called_again_after_group_is_loaded():
     assert not second.is_error
     assert "Already loaded: slack_search" in second.content
     assert "slack_search" in run.loaded_tools
+
+
+@pytest.mark.asyncio
+async def test_load_tools_preloads_multiple_exact_names_in_one_call():
+    registry = _registry()
+    run = RunContext(run_id="run", deferred_tools_enabled=True)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=run,
+        io=IOBridge(),
+    )
+
+    result = await registry.execute(
+        "load_tools",
+        ToolExecution(tool_id="call_load", tool_name="load_tools", ctx=ctx),
+        {"names": ["slack_search", "file_write", "notify"]},
+    )
+
+    assert not result.is_error
+    assert run.loaded_tools == {"slack_search", "file_write", "notify"}
+    assert "Loaded 3 deferred tool(s)" in result.content
 
 
 @pytest.mark.asyncio

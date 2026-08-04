@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from arden.wiki.exceptions import GeneratedRegionConflictError, WikiAmbiguityError, WikiValidationError
 from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceDecision,
@@ -17,6 +18,14 @@ from arden.wiki.maintenance.runner import (
 class WikiMaintenanceReviewState:
     report: WikiMaintenancePreparedReport | None
     result: WikiMaintenanceResult | None
+    failure: "WikiMaintenanceReviewFailure | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class WikiMaintenanceReviewFailure:
+    code: str
+    message: str
+    recovery_action: str
 
 
 class WikiMaintenanceReviewService:
@@ -43,7 +52,7 @@ class WikiMaintenanceReviewService:
             self._task = asyncio.create_task(self._maintenance.run())
         await self._wait_for_state()
         if self._task.done():
-            return WikiMaintenanceReviewState(None, self._task.result())
+            return self._completed_state()
         return WikiMaintenanceReviewState(self._report, None)
 
     async def decide(self, decision: WikiMaintenanceDecision) -> WikiMaintenanceReviewState:
@@ -88,7 +97,7 @@ class WikiMaintenanceReviewService:
         try:
             done, _ = await asyncio.wait({self._task, ready}, return_when=asyncio.FIRST_COMPLETED)
             if self._task in done:
-                self._task.result()
+                self._completed_state()
         finally:
             if not ready.done():
                 ready.cancel()
@@ -96,6 +105,37 @@ class WikiMaintenanceReviewService:
                     await ready
                 except asyncio.CancelledError:
                     pass
+
+    def _completed_state(self) -> WikiMaintenanceReviewState:
+        if self._task is None or not self._task.done():
+            raise RuntimeError("wiki maintenance task is not complete")
+        try:
+            result = self._task.result()
+        except WikiValidationError as exc:
+            if isinstance(exc, GeneratedRegionConflictError):
+                code = "wiki_generated_region_conflict"
+                recovery_action = (
+                    "Stop this review. Restore the producer-owned generated region or route the page for "
+                    "manual repair before starting Wiki Maintenance again."
+                )
+            elif isinstance(exc, WikiAmbiguityError):
+                code = "wiki_identity_ambiguous"
+                recovery_action = "Stop this review. Resolve the ambiguous page title or alias before starting Wiki Maintenance again."
+            else:
+                code = "wiki_validation_conflict"
+                recovery_action = (
+                    "Stop this review. Repair the reported wiki invariant before starting Wiki Maintenance again."
+                )
+            return WikiMaintenanceReviewState(
+                report=None,
+                result=None,
+                failure=WikiMaintenanceReviewFailure(
+                    code=code,
+                    message=str(exc),
+                    recovery_action=recovery_action,
+                ),
+            )
+        return WikiMaintenanceReviewState(report=None, result=result)
 
     @classmethod
     def create(

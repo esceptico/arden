@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from arden.context.models import BackgroundStartDisposition
 from arden.tools.core.context import BackgroundTaskRegistry
 
 
@@ -49,6 +50,18 @@ async def test_background_registry_records_started_activity_and_completed():
 
     results["bg-1"] = "done"
     assert await registry.read_background_result("bg-1") == "done"
+
+
+@pytest.mark.asyncio
+async def test_background_registry_propagates_cancelled_start_disposition():
+    async def record(**_kwargs):
+        return BackgroundStartDisposition.CANCELLED
+
+    registry = BackgroundTaskRegistry(session_id="sess-1", record_event=record)
+
+    disposition = await registry.record_started(task_id="bg-1", command="research")
+
+    assert disposition is BackgroundStartDisposition.CANCELLED
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,19 @@ class _Store:
         self.cancelled.append((session_id, task_id))
         return True
 
+    async def request_background_agent_cancel_cascade(
+        self,
+        *,
+        session_id,
+        task_id,
+        actor,
+        cause,
+        idempotency_key,
+    ):
+        del actor, cause, idempotency_key
+        self.cancelled.append((session_id, task_id))
+        return [(session_id, task_id)]
+
     async def get_background_agent_result(self, session_id, task_id):
         return self.result_text
 

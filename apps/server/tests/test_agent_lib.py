@@ -134,6 +134,9 @@ class FakeExecutor:
             ToolMeta(name=name, display_name=name),
         )
 
+    def mark_provider_loaded_tools(self, names: set[str]) -> None:
+        del names
+
 
 def _msgs(user: str = "hi") -> list[dict]:
     return [{"role": "system", "content": "sys"}, {"role": "user", "content": user}]
@@ -722,6 +725,72 @@ async def test_max_tool_calls_denies_batch_that_would_exceed_budget():
         ("c1", "Tool call denied: max tool-call budget of 1 would be exceeded."),
         ("c2", "Tool call denied: max tool-call budget of 1 would be exceeded."),
     ]
+
+
+@pytest.mark.asyncio
+async def test_per_step_tool_cap_rejects_batch_atomically_and_allows_regrouping():
+    oversized = [_tc(f"c{i}", "t", {}) for i in range(11)]
+    llm = FakeLLM([_response(tool_calls=oversized), _response(text="regrouped")])
+    executor = FakeExecutor({"t": ToolResult(content="r", preview="r")})
+    messages = _msgs()
+
+    result = await _make_agent(llm, executor).run(messages)
+
+    assert result.stop_reason == StopReason.END_TURN
+    assert result.text == "regrouped"
+    assert executor.call_log == []
+    tool_messages = [message for message in messages if message["role"] == "tool"]
+    assert len(tool_messages) == 11
+    assert {message["tool_call_id"] for message in tool_messages} == {f"c{i}" for i in range(11)}
+    assert all("per-step limit of 10" in message["content"] for message in tool_messages)
+
+
+@pytest.mark.asyncio
+async def test_three_non_retryable_failure_only_steps_stop_as_no_progress():
+    llm = FakeLLM(
+        [
+            _response(tool_calls=[_tc("c1", "t", {})]),
+            _response(tool_calls=[_tc("c2", "t", {})]),
+            _response(tool_calls=[_tc("c3", "t", {})]),
+            _response(text="unreached"),
+        ]
+    )
+    executor = FakeExecutor(
+        {
+            "t": ToolResult.failure(
+                code="terminal_failure",
+                message="cannot proceed",
+                preview="failed",
+            )
+        }
+    )
+
+    result = await _make_agent(llm, executor).run(_msgs())
+
+    assert result.stop_reason == StopReason.NO_PROGRESS
+    assert result.steps == 3
+    assert llm.call_count == 3
+    assert len(executor.call_log) == 3
+
+
+@pytest.mark.asyncio
+async def test_success_resets_no_progress_counter():
+    outcomes = iter(
+        [
+            ToolResult.failure(code="terminal_failure", message="no", preview="no"),
+            ToolResult.failure(code="terminal_failure", message="no", preview="no"),
+            ToolResult(content="yes", preview="yes"),
+            ToolResult.failure(code="terminal_failure", message="no", preview="no"),
+            ToolResult.failure(code="terminal_failure", message="no", preview="no"),
+        ]
+    )
+    llm = FakeLLM([_response(tool_calls=[_tc(f"c{i}", "t", {})]) for i in range(5)] + [_response(text="done")])
+    executor = FakeExecutor({"t": lambda _args: next(outcomes)})
+
+    result = await _make_agent(llm, executor).run(_msgs())
+
+    assert result.stop_reason == StopReason.END_TURN
+    assert result.text == "done"
 
 
 @pytest.mark.asyncio

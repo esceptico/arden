@@ -345,19 +345,20 @@ def _wire_background_registry(bg_registry, session_service: SessionService, sess
 
 
 def _background_event_recorder(session_service: SessionService):
-    async def record(**event) -> None:
+    async def record(**event):
         store = session_service.store
         status = str(event.get("status") or "")
         task_id = str(event.get("task_id") or "")
         session_id = str(event.get("session_id") or "")
         if not task_id or not session_id:
-            return
+            return None
         if status == "started":
-            await store.record_background_agent_started(
+            return await store.record_background_agent_started(
                 task_id=task_id,
                 session_id=session_id,
                 parent_run_id=event.get("parent_run_id"),
                 parent_tool_call_id=event.get("parent_tool_call_id"),
+                suspension_id=event.get("suspension_id"),
                 child_session_id=event.get("child_session_id"),
                 agent_type=str(event.get("agent_type") or "background_research"),
                 wait=bool(event.get("wait")),
@@ -1766,8 +1767,17 @@ def make_child_io_factory(
             finished = True
             if status == "cancelled":
                 await child_bus.emit(RunCancelledEvent(run_id=params.run_id))
-            else:
+            elif status == "completed":
                 await child_bus.emit(RunFinishedEvent(run_id=params.run_id))
+            else:
+                await child_bus.emit(
+                    RunErrorEvent(
+                        run_id=params.run_id,
+                        message=f"Child agent ended with status: {status}.",
+                        recoverable=status == "interrupted",
+                        code=f"child_agent_{status}",
+                    )
+                )
 
         async def _aclose() -> None:
             # Run finished: drain durable writes and drop the bus unless a client

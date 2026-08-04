@@ -2,12 +2,14 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from arden.agent.tools.executor import AgentToolExecutor
 from arden.agent.types.events import ToolCompleted, ToolStarted
 from arden.agent.types.tool_call import PendingToolCall
 from arden.agent.types.tools import ToolOutcomeStatus, ToolResult, normalize_source_refs
+from arden.constants import AGENT_MAX_CONCURRENT_TOOLS
 from arden.logging import get_logger
 
 _SENTINEL = object()
@@ -22,6 +24,8 @@ class _ResolvedCall:
     icon: str | None = None
     noun: str | None = None
     source: str | None = None
+    changes_state: bool = False
+    concurrency_group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,11 +39,65 @@ def _ms_now() -> int:
     return int(time.monotonic() * 1000)
 
 
+class _GroupState:
+    def __init__(self) -> None:
+        self.condition = asyncio.Condition()
+        self.readers = 0
+        self.writer = False
+        self.waiting_writers = 0
+
+    async def acquire(self, *, write: bool) -> None:
+        async with self.condition:
+            if write:
+                self.waiting_writers += 1
+                try:
+                    await self.condition.wait_for(lambda: not self.writer and self.readers == 0)
+                    self.writer = True
+                finally:
+                    self.waiting_writers -= 1
+            else:
+                await self.condition.wait_for(lambda: not self.writer and self.waiting_writers == 0)
+                self.readers += 1
+
+    async def release(self, *, write: bool) -> None:
+        async with self.condition:
+            if write:
+                self.writer = False
+            else:
+                self.readers -= 1
+            self.condition.notify_all()
+
+
+class _ConcurrencyCoordinator:
+    def __init__(self, limit: int) -> None:
+        if limit < 1:
+            raise ValueError("tool concurrency limit must be positive")
+        self._global = asyncio.Semaphore(limit)
+        self._groups: dict[str, _GroupState] = {}
+
+    @asynccontextmanager
+    async def slot(self, call: _ResolvedCall):
+        group = self._groups.setdefault(call.concurrency_group or call.call.name, _GroupState())
+        await group.acquire(write=call.changes_state)
+        try:
+            async with self._global:
+                yield
+        finally:
+            await group.release(write=call.changes_state)
+
+
 class ToolRunner:
-    def __init__(self, executor: AgentToolExecutor, depth: int, parent_id: str | None):
+    def __init__(
+        self,
+        executor: AgentToolExecutor,
+        depth: int,
+        parent_id: str | None,
+        max_concurrency: int = AGENT_MAX_CONCURRENT_TOOLS,
+    ):
         self._executor = executor
         self._depth = depth
         self._parent_id = parent_id
+        self._concurrency = _ConcurrencyCoordinator(max_concurrency)
 
     def _resolve(self, call: PendingToolCall) -> _ResolvedCall:
         meta = self._executor.get_meta(call.name)
@@ -50,6 +108,8 @@ class ToolRunner:
             icon=meta.icon if meta else None,
             noun=meta.noun if meta else None,
             source=meta.source if meta else None,
+            changes_state=meta.changes_state if meta else False,
+            concurrency_group=meta.concurrency_group if meta else call.name,
         )
 
     async def _run_one(self, rc: _ResolvedCall) -> tuple[ToolResult, int]:
@@ -126,6 +186,17 @@ class ToolRunner:
             outcome=result.outcome,
         )
 
+    async def reject_all(
+        self,
+        calls: list[PendingToolCall],
+        result: ToolResult,
+    ) -> AsyncGenerator[ToolStarted | ToolCompleted]:
+        rejected = result.with_default_outcome()
+        for call in calls:
+            resolved = self._resolve(call)
+            yield self._started(resolved)
+            yield self._completed(resolved, rejected, 0)
+
     async def execute_all(self, calls: list[PendingToolCall]) -> AsyncGenerator[ToolStarted | ToolCompleted]:
         """Run every tool the model emitted in this step in parallel.
 
@@ -146,7 +217,8 @@ class ToolRunner:
             yield self._started(rc)
 
         async def run_one(rc: _ResolvedCall) -> None:
-            result, duration_ms = await self._run_one(rc)
+            async with self._concurrency.slot(rc):
+                result, duration_ms = await self._run_one(rc)
             await queue.put(_ConcurrentResult(resolved=rc, result=result, duration_ms=duration_ms))
 
         async def run_all() -> None:

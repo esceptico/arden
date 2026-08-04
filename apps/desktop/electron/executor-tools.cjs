@@ -18,11 +18,25 @@ const OFFLOAD_READ_LIMIT = 100;
 const DEFAULT_OFFLOAD_THRESHOLD = 50_000;
 const RG_TIMEOUT_MS = 20_000;
 const RG_EXCLUDE_GLOBS = ["!**/.git/**", "!**/node_modules/**", "!**/.venv/**", "!**/__pycache__/**"];
+const FILE_DISCOVERY_MISS_LIMIT = 2;
+const FILE_DISCOVERY_CANDIDATE_LIMIT = 8;
+const SEARCH_SNIPPET_MAX_BYTES = 4_096;
+const SEARCH_RESULT_MAX_BYTES = 256_000;
+const SEARCH_RECORD_MAX_BYTES = 16_384;
+const SEARCH_PATH_MAX_BYTES = 32_768;
+const SEARCH_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+const SEARCH_QUERY_MAX_CHARS = 4_096;
+const SEARCH_QUERY_MAX_BYTES = 16_384;
+const SEARCH_INPUT_PATH_MAX_CHARS = 4_096;
+const SEARCH_INPUT_PATH_MAX_BYTES = 16_384;
+const SEARCH_GLOB_MAX_CHARS = 1_024;
+const SEARCH_GLOB_MAX_BYTES = 4_096;
+const SEARCH_CURSOR_VERSION = 1;
 
 // --- shared helpers ---
 
-function failure(code, content, preview) {
-  return { status: "failed", errorCode: code, payload: { content, preview } };
+function failure(code, content, preview, payload = {}) {
+  return { status: "failed", errorCode: code, payload: { content, preview, ...payload } };
 }
 
 function resolvePath(rawPath, cwd) {
@@ -57,8 +71,196 @@ function observationId(target) {
   return `file:${target}`;
 }
 
+function fileDiscoveryUpdate({ observed = [], discoveredRoots = [], missedRoots = [] } = {}) {
+  return {
+    version: 1,
+    observed,
+    discovered_roots: discoveredRoots,
+    missed_roots: missedRoots,
+  };
+}
+
+function observedFilePath(target, kind) {
+  return { path: target, kind };
+}
+
+function isPermissionError(error) {
+  return error?.code === "EACCES" || error?.code === "EPERM";
+}
+
+function isMissingError(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+function pathInspectionFailure(error, target, cwd) {
+  if (isPermissionError(error)) {
+    return failure(
+      "permission_denied",
+      `Permission denied while inspecting ${displayPath(target, cwd)}.`,
+      "Permission denied",
+      { data: { resolved_path: target } },
+    );
+  }
+  return failure(
+    "path_inspection_failed",
+    `Could not inspect ${displayPath(target, cwd)}.`,
+    "Path inspection failed",
+    { data: { resolved_path: target } },
+  );
+}
+
+function pathKind(stat) {
+  if (stat.isFile()) return "file";
+  if (stat.isDirectory()) return "directory";
+  return "other";
+}
+
+function isWithinPath(target, root) {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function discoveryRequiredRoot(target, context, { discoveryOperation = false } = {}) {
+  const state = context?.file_discovery;
+  if (!state) return null;
+  if (state.observed_paths?.[target]) return null;
+  const roots = Object.entries(state.miss_counts ?? {})
+    .filter(([root, misses]) => Number(misses) >= FILE_DISCOVERY_MISS_LIMIT && isWithinPath(target, root))
+    .map(([root]) => root)
+    .sort((a, b) => b.length - a.length);
+  const root = roots[0] ?? null;
+  if (discoveryOperation && root === target) return null;
+  return root;
+}
+
+function discoveryRequiredFailure(target, root, cwd) {
+  const visibleTarget = displayPath(target, cwd);
+  const visibleRoot = displayPath(root, cwd);
+  return failure(
+    "discovery_required",
+    `Path discovery is required before trying another unobserved path under ${visibleRoot}. ` +
+      `Call file_list or file_find on ${visibleRoot}, then use an exact returned path. Requested: ${visibleTarget}.`,
+    "Discover paths first",
+    {
+      data: {
+        requested_path: visibleTarget,
+        resolved_path: target,
+        discovery_root: visibleRoot,
+        absolute_discovery_root: root,
+      },
+    },
+  );
+}
+
+async function missingPathFailure({ target, requestedPath, cwd, resource, cause }) {
+  if (!isMissingError(cause)) return pathInspectionFailure(cause, target, cwd);
+  let ancestor = path.dirname(target);
+  let ancestorStat;
+  while (true) {
+    try {
+      ancestorStat = await fs.stat(ancestor);
+      break;
+    } catch (error) {
+      if (!isMissingError(error)) return pathInspectionFailure(error, ancestor, cwd);
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        return failure(
+          "not_found",
+          `${resource} not found: ${displayPath(target, cwd)}. No existing ancestor could be inspected.`,
+          "Not found",
+          { data: { requested_path: String(requestedPath ?? ""), resolved_path: target, candidates: [] } },
+        );
+      }
+      ancestor = parent;
+    }
+  }
+
+  let entries = [];
+  if (ancestorStat.isDirectory()) {
+    let dirents;
+    try {
+      dirents = await fs.readdir(ancestor, { withFileTypes: true });
+    } catch (error) {
+      return pathInspectionFailure(error, ancestor, cwd);
+    }
+    entries = dirents
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, FILE_DISCOVERY_CANDIDATE_LIMIT)
+      .map(entry => ({
+        name: entry.name,
+        path: path.join(ancestor, entry.name),
+        kind: entry.isFile() ? "file" : entry.isDirectory() ? "directory" : "other",
+      }));
+  }
+
+  const visibleTarget = displayPath(target, cwd);
+  const visibleAncestor = displayPath(ancestor, cwd);
+  const candidateLines = entries.map(entry => `- ${displayPath(entry.path, cwd)} (${entry.kind})`);
+  const candidates = candidateLines.length ? `\nAvailable children:\n${candidateLines.join("\n")}` : "";
+  return failure(
+    "not_found",
+    `${resource} not found: ${visibleTarget}. Nearest existing ancestor: ${visibleAncestor}.${candidates}\n` +
+      `List or find under ${visibleAncestor}, then use an exact returned path.`,
+    "Not found",
+    {
+      data: {
+        requested_path: String(requestedPath ?? ""),
+        resolved_path: target,
+        nearest_existing_ancestor: ancestor,
+        candidates: entries,
+      },
+      file_discovery: fileDiscoveryUpdate({
+        observed: [observedFilePath(ancestor, pathKind(ancestorStat)), ...entries.map(e => observedFilePath(e.path, e.kind))],
+        missedRoots: [ancestor],
+      }),
+    },
+  );
+}
+
 function sha256(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function truncateUtf8(value, maxBytes) {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.length <= maxBytes) return { text: value, truncated: false };
+  let end = maxBytes;
+  while (end > 0 && (encoded[end] & 0xc0) === 0x80) end -= 1;
+  return { text: encoded.subarray(0, end).toString("utf8"), truncated: true };
+}
+
+function searchFingerprint({ root, query, fileGlob, outputMode }) {
+  return sha256(Buffer.from(JSON.stringify({ root, query, file_glob: fileGlob ?? null, output_mode: outputMode })));
+}
+
+function encodeSearchCursor(offset, fingerprint) {
+  return Buffer.from(JSON.stringify({ v: SEARCH_CURSOR_VERSION, offset, fingerprint }), "utf8").toString("base64url");
+}
+
+function decodeSearchCursor(cursor, fingerprint) {
+  if (!cursor) return 0;
+  const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  if (
+    parsed?.v !== SEARCH_CURSOR_VERSION ||
+    !Number.isInteger(parsed.offset) ||
+    parsed.offset < 0 ||
+    parsed.fingerprint !== fingerprint
+  ) {
+    throw new Error("Invalid search cursor");
+  }
+  return parsed.offset;
+}
+
+function boundedSearchResult(payload) {
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= SEARCH_RESULT_MAX_BYTES) {
+    return { status: "succeeded", payload };
+  }
+  return failure(
+    "result_too_large",
+    "The bounded search projection exceeded its response budget. Narrow the path, query, or file glob and retry.",
+    "Search result too large",
+    { data: { matches: [], has_more: true, next_cursor: null, limit_reason: "byte_limit" } },
+  );
 }
 
 function sizeLabel(stat) {
@@ -273,15 +475,14 @@ async function readFile(args, { context } = {}) {
     limit = OFFLOAD_READ_LIMIT;
   }
 
+  const requiredRoot = discoveryRequiredRoot(target, context);
+  if (requiredRoot) return discoveryRequiredFailure(target, requiredRoot, cwd);
+
   let stat;
   try {
     stat = await fs.stat(target);
-  } catch {
-    return failure(
-      "not_found",
-      `File not found: ${args.path}. Check the path or use list_files() to list the directory.`,
-      "Not found",
-    );
+  } catch (error) {
+    return missingPathFailure({ target, requestedPath: args?.path, cwd, resource: "File", cause: error });
   }
   if (stat.isDirectory()) {
     return failure(
@@ -316,6 +517,7 @@ async function readFile(args, { context } = {}) {
     preview: `Read ${totalLines} lines`,
     data: { ...pathData(target, cwd), size: snapshot.size },
     observations: [{ id: observationId(target), version: snapshot.sha256, content_read: contentRead }],
+    file_discovery: fileDiscoveryUpdate({ observed: [observedFilePath(target, "file")] }),
   };
   if (!isOffloaded) {
     payload.source_refs = [{ provider: "filesystem", kind: "file", ref: target, title: path.basename(target) }];
@@ -331,11 +533,14 @@ async function listFiles(args, { context } = {}) {
   const limit = Number.isFinite(args?.limit) ? Math.trunc(args.limit) : 200;
   const includeHidden = Boolean(args?.include_hidden);
 
+  const requiredRoot = discoveryRequiredRoot(root, context, { discoveryOperation: true });
+  if (requiredRoot) return discoveryRequiredFailure(root, requiredRoot, cwd);
+
   let rootStat;
   try {
     rootStat = await fs.stat(root);
-  } catch {
-    return failure("not_found", `Directory not found: ${args.path}`, "Not found");
+  } catch (error) {
+    return missingPathFailure({ target: root, requestedPath: args?.path, cwd, resource: "Directory", cause: error });
   }
   if (!rootStat.isDirectory()) {
     return failure("invalid_ref", `Path is not a directory: ${args.path}`, "Not a directory");
@@ -397,6 +602,13 @@ async function listFiles(args, { context } = {}) {
         has_more: page.has_more,
         next_cursor: page.next_cursor,
       },
+      file_discovery: fileDiscoveryUpdate({
+        observed: [
+          observedFilePath(root, "directory"),
+          ...page.items.map(item => observedFilePath(item.absolute_path ?? path.resolve(root, item.path), item.kind)),
+        ],
+        discoveredRoots: [root],
+      }),
     },
   };
 }
@@ -455,17 +667,136 @@ function runRg(rgArgs, cwd, { limitLines, signal }) {
   });
 }
 
+function runSearchRecords(rgArgs, cwd, { mode, signal, onRecord }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("rg", rgArgs, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+    let settled = false;
+    let intentionallyStopped = false;
+    let limitReason = null;
+    let scanBytes = 0;
+    let phase = "path";
+    let pathParts = [];
+    let pathBytes = 0;
+    let detailParts = [];
+    let detailBytes = 0;
+    let currentPath = null;
+
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve({ limitReason });
+    };
+    const stop = reason => {
+      if (settled) return;
+      intentionallyStopped = true;
+      limitReason ??= reason;
+      child.kill("SIGKILL");
+      finish();
+    };
+    const onAbort = () => {
+      child.kill("SIGKILL");
+      finish(new Error("aborted"));
+    };
+    const timer = setTimeout(() => stop("timeout"), RG_TIMEOUT_MS);
+    signal?.addEventListener("abort", onAbort);
+
+    const appendPath = value => {
+      pathBytes += value.length;
+      if (pathBytes > SEARCH_PATH_MAX_BYTES) return false;
+      pathParts.push(value);
+      return true;
+    };
+    const appendDetail = value => {
+      detailBytes += value.length;
+      if (detailBytes > SEARCH_RECORD_MAX_BYTES) return false;
+      detailParts.push(value);
+      return true;
+    };
+    const resetPath = () => {
+      pathParts = [];
+      pathBytes = 0;
+    };
+    const resetDetail = () => {
+      detailParts = [];
+      detailBytes = 0;
+    };
+
+    child.stdout.on("data", chunk => {
+      if (settled) return;
+      scanBytes += chunk.length;
+      if (scanBytes > SEARCH_SCAN_MAX_BYTES) {
+        stop("scan_byte_limit");
+        return;
+      }
+
+      let cursor = 0;
+      while (cursor < chunk.length && !settled) {
+        if (phase === "path") {
+          const delimiter = chunk.indexOf(0, cursor);
+          const end = delimiter === -1 ? chunk.length : delimiter;
+          if (!appendPath(chunk.subarray(cursor, end))) {
+            stop("record_byte_limit");
+            return;
+          }
+          if (delimiter === -1) return;
+          currentPath = Buffer.concat(pathParts, pathBytes).toString("utf8");
+          resetPath();
+          cursor = delimiter + 1;
+          if (mode === "files_only") {
+            const reason = onRecord({ path: currentPath });
+            currentPath = null;
+            if (reason) stop(reason);
+          } else {
+            phase = "detail";
+          }
+          continue;
+        }
+
+        const delimiter = chunk.indexOf(10, cursor);
+        const end = delimiter === -1 ? chunk.length : delimiter;
+        if (!appendDetail(chunk.subarray(cursor, end))) {
+          stop("record_byte_limit");
+          return;
+        }
+        if (delimiter === -1) return;
+        const detail = Buffer.concat(detailParts, detailBytes).toString("utf8").replace(/\r$/, "");
+        resetDetail();
+        phase = "path";
+        cursor = delimiter + 1;
+        const reason = onRecord({ path: currentPath, detail });
+        currentPath = null;
+        if (reason) stop(reason);
+      }
+    });
+    child.on("error", error => finish(error));
+    child.on("close", code => {
+      if (settled) return;
+      if (code !== 0 && code !== 1 && !intentionallyStopped) {
+        finish(new Error(`ripgrep failed with exit code ${code}`));
+        return;
+      }
+      finish();
+    });
+  });
+}
+
 async function findFiles(args, { signal, context } = {}) {
   const cwd = context?.default_cwd || undefined;
   const root = resolvePath(String(args?.path ?? "."), cwd);
   const pattern = String(args?.pattern ?? "*");
   const limit = Number.isFinite(args?.limit) ? Math.trunc(args.limit) : 200;
 
+  const requiredRoot = discoveryRequiredRoot(root, context, { discoveryOperation: true });
+  if (requiredRoot) return discoveryRequiredFailure(root, requiredRoot, cwd);
+
   let rootStat;
   try {
     rootStat = await fs.stat(root);
-  } catch {
-    return failure("not_found", `Directory not found: ${args.path}`, "Not found");
+  } catch (error) {
+    return missingPathFailure({ target: root, requestedPath: args?.path, cwd, resource: "Directory", cause: error });
   }
   if (!rootStat.isDirectory()) {
     return failure("invalid_ref", `Path is not a directory: ${args.path}`, "Not a directory");
@@ -514,6 +845,13 @@ async function findFiles(args, { signal, context } = {}) {
       content: `${displayPath(root, cwd)} / ${pattern}\n${lines.join("\n")}`,
       preview: `${visible.length} files${hasMore ? " (capped)" : ""}`,
       data: { ...pathData(root, cwd), pattern, matches: visible, has_more: hasMore },
+      file_discovery: fileDiscoveryUpdate({
+        observed: [
+          observedFilePath(root, "directory"),
+          ...visible.map(item => observedFilePath(item.absolute_path ?? item.path, "file")),
+        ],
+        discoveredRoots: [root],
+      }),
     },
   };
 }
@@ -522,100 +860,201 @@ async function searchText(args, { signal, context } = {}) {
   const cwd = context?.default_cwd || undefined;
   const root = resolvePath(String(args?.path ?? "."), cwd);
   const query = String(args?.query ?? "");
+  const requestedPath = String(args?.path ?? ".");
+  const fileGlob = args?.file_glob ? String(args.file_glob) : null;
+  const outputMode = String(args?.output_mode ?? "content");
   const limit = Number.isFinite(args?.limit) ? Math.trunc(args.limit) : 100;
+  if (Array.from(query).length > SEARCH_QUERY_MAX_CHARS || Buffer.byteLength(query, "utf8") > SEARCH_QUERY_MAX_BYTES) {
+    return failure("invalid_ref", "Search query exceeds the 4,096-character input limit.", "Query too large");
+  }
+  if (
+    Array.from(requestedPath).length > SEARCH_INPUT_PATH_MAX_CHARS ||
+    Buffer.byteLength(requestedPath, "utf8") > SEARCH_INPUT_PATH_MAX_BYTES
+  ) {
+    return failure("invalid_ref", "Search path exceeds the 4,096-character input limit.", "Path too large");
+  }
+  if (
+    fileGlob &&
+    (Array.from(fileGlob).length > SEARCH_GLOB_MAX_CHARS || Buffer.byteLength(fileGlob, "utf8") > SEARCH_GLOB_MAX_BYTES)
+  ) {
+    return failure("invalid_ref", "Search file_glob exceeds the 1,024-character input limit.", "Glob too large");
+  }
+  if (!["content", "files_only", "count"].includes(outputMode)) {
+    return failure("invalid_ref", `Unknown output_mode: ${outputMode}`, "Invalid mode");
+  }
+
+  const requiredRoot = discoveryRequiredRoot(root, context, { discoveryOperation: true });
+  if (requiredRoot) return discoveryRequiredFailure(root, requiredRoot, cwd);
 
   let rootStat;
   try {
     rootStat = await fs.stat(root);
-  } catch {
-    return failure("not_found", `Path not found: ${args.path}`, "Not found");
+  } catch (error) {
+    return missingPathFailure({ target: root, requestedPath: args?.path, cwd, resource: "Path", cause: error });
   }
 
   const searchCwd = rootStat.isDirectory() ? root : path.dirname(root);
   const target = rootStat.isDirectory() ? "." : path.basename(root);
-  const rgArgs = [
-    "--json",
-    "--fixed-strings",
-    "--sort",
-    "path",
-    "--line-number",
-    "--column",
-    "--color",
-    "never",
-    "--no-heading",
-  ];
+  const fingerprint = searchFingerprint({ root, query, fileGlob: args?.file_glob, outputMode });
+  let offset;
+  try {
+    offset = decodeSearchCursor(args?.cursor, fingerprint);
+  } catch {
+    return failure(
+      "invalid_ref",
+      "Invalid or stale file_search_text cursor. Re-run the first page with the same query, path, glob, and mode.",
+      "Invalid cursor",
+    );
+  }
+
+  const rgArgs = ["--fixed-strings", "--sort", "path", "--color", "never", "--no-heading"];
   for (const glob of RG_EXCLUDE_GLOBS) rgArgs.push("--glob", glob);
   if (args?.file_glob) rgArgs.push("--glob", args.file_glob);
+  if (outputMode === "content") {
+    rgArgs.push("--vimgrep", "--null", "--max-columns", String(SEARCH_SNIPPET_MAX_BYTES), "--max-columns-preview");
+  } else if (outputMode === "files_only") {
+    rgArgs.push("--files-with-matches", "--null");
+  } else {
+    rgArgs.push("--count-matches", "--null", "--with-filename");
+  }
   rgArgs.push("--", query, target);
+
+  const matches = [];
+  const contentLines = [];
+  let resultBytes = 0;
+  let recordIndex = 0;
+  let totalMatches = 0;
+  let hasMore = false;
+  let collectionLimitReason = null;
+
+  const relativeResultPath = filePath =>
+    rootStat.isDirectory() ? relativePath(filePath, root) : path.basename(filePath);
+  const addItem = (item, line) => {
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+    if (resultBytes + lineBytes > SEARCH_RESULT_MAX_BYTES) {
+      hasMore = true;
+      collectionLimitReason = "byte_limit";
+      return false;
+    }
+    resultBytes += lineBytes;
+    matches.push(item);
+    contentLines.push(line);
+    return true;
+  };
+
+  const onRecord = record => {
+    const index = recordIndex;
+    recordIndex += 1;
+
+    let filePath = path.resolve(searchCwd, record.path);
+    let item;
+    let line;
+    if (outputMode === "content") {
+      const firstColon = record.detail.indexOf(":");
+      const secondColon = record.detail.indexOf(":", firstColon + 1);
+      if (firstColon <= 0 || secondColon <= firstColon) return null;
+      const lineNumber = Number(record.detail.slice(0, firstColon));
+      const column = Number(record.detail.slice(firstColon + 1, secondColon));
+      const snippet = truncateUtf8(record.detail.slice(secondColon + 1), SEARCH_SNIPPET_MAX_BYTES);
+      const relative = relativeResultPath(filePath);
+      item = {
+        path: filePath,
+        relative_path: relative,
+        line: lineNumber,
+        column,
+        snippet_truncated: snippet.truncated,
+      };
+      line = `${relative}:${lineNumber}:${column}: ${snippet.text}${snippet.truncated ? "…" : ""}`;
+    } else if (outputMode === "files_only") {
+      const relative = relativeResultPath(filePath);
+      item = { path: filePath, relative_path: relative };
+      line = relative;
+    } else {
+      const count = Number(record.detail);
+      if (!Number.isFinite(count)) return null;
+      totalMatches += count;
+      const relative = relativeResultPath(filePath);
+      item = { path: filePath, relative_path: relative, count };
+      line = `${relative}: ${count}`;
+    }
+
+    if (index < offset) return null;
+    if (matches.length >= limit) {
+      hasMore = true;
+      return outputMode === "count" ? null : "result_limit";
+    }
+    if (!addItem(item, line)) return outputMode === "count" ? null : "byte_limit";
+    return null;
+  };
 
   let output;
   try {
-    // Every rg --json line is one event; matches are a subset, so scan a
-    // generous multiple before capping match extraction below.
-    output = await runRg(rgArgs, searchCwd, { limitLines: (limit + 1) * 8, signal });
-  } catch {
+    output = await runSearchRecords(rgArgs, searchCwd, { mode: outputMode, signal, onRecord });
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return {
       status: "failed",
       errorCode: "search_failed",
       payload: {
         content: "Text search with ripgrep failed.",
         preview: "Search failed",
-        data: { path: root, query, matches: [] },
+        data: { path: root, query, output_mode: outputMode, matches: [] },
       },
     };
   }
 
-  const matches = [];
-  let overflow = output.truncated;
-  for (const line of output.lines) {
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
+  if (output.limitReason) hasMore = true;
+  let limitReason = collectionLimitReason ?? output.limitReason ?? (hasMore ? "result_limit" : null);
+  const discoveryRoot = rootStat.isDirectory() ? root : searchCwd;
+  const buildProjection = () => {
+    const nextCursor = hasMore && matches.length ? encodeSearchCursor(offset + matches.length, fingerprint) : null;
+    const data = {
+      ...pathData(root, cwd),
+      query,
+      output_mode: outputMode,
+      matches,
+      has_more: hasMore,
+      next_cursor: nextCursor,
+      limit_reason: limitReason,
+    };
+    if (outputMode === "count") {
+      data.total_matches = totalMatches;
+      data.files_counted = recordIndex;
+      data.count_complete = output.limitReason === null;
     }
-    if (event?.type !== "match") continue;
-    const data = event.data ?? {};
-    const rawPath = data.path?.text ?? "";
-    const filePath = path.resolve(searchCwd, rawPath);
-    const lineText = String(data.lines?.text ?? "").replace(/[\r\n]+$/, "");
-    let column = lineText.indexOf(query) + 1;
-    if (column <= 0) column = Number(data.submatches?.[0]?.start ?? 0) + 1;
-    matches.push({
-      path: filePath,
-      relative_path: relativePath(filePath, root),
-      line: Number(data.line_number),
-      column,
-      text: lineText,
-    });
-    if (matches.length > limit) {
-      overflow = true;
-      break;
+    let content = contentLines.join("\n");
+    if (hasMore && matches.length) {
+      content += `\nShowing ${matches.length} result(s); more exist (${limitReason}). Continue with next_cursor or narrow scope.`;
     }
-  }
-
-  if (!matches.length) {
     return {
-      status: "succeeded",
-      payload: {
-        content: `No matches for '${query}' under ${root}.`,
-        preview: "0 matches",
-        data: { path: root, query, matches: [] },
-      },
-    };
-  }
-  const hasMore = overflow || matches.length > limit;
-  const visible = matches.slice(0, limit);
-  let content = visible.map(m => `${m.relative_path}:${m.line}:${m.column}: ${m.text}`).join("\n");
-  if (hasMore) content += `\nShowing ${visible.length} matches; more exist. Narrow path/query to continue.`;
-  return {
-    status: "succeeded",
-    payload: {
       content,
-      preview: `${visible.length} matches${hasMore ? " (capped)" : ""}`,
-      data: { path: root, query, matches: visible, has_more: hasMore },
-    },
+      preview: `${matches.length} ${outputMode === "files_only" ? "files" : outputMode === "count" ? "counts" : "matches"}${hasMore ? " (capped)" : ""}`,
+      data,
+      file_discovery: fileDiscoveryUpdate({
+        observed: [
+          observedFilePath(root, pathKind(rootStat)),
+          ...matches.map(item => observedFilePath(item.path, "file")),
+        ],
+        discoveredRoots: [discoveryRoot],
+      }),
+    };
   };
+  if (!matches.length) {
+    const suffix = hasMore ? ` Search stopped at ${limitReason}; narrow the scope and retry.` : "";
+    const payload = buildProjection();
+    payload.content = `No matches for '${query}' under ${displayPath(root, cwd)}.${suffix}`;
+    payload.preview = `0 matches${hasMore ? " (partial)" : ""}`;
+    return boundedSearchResult(payload);
+  }
+  let payload = buildProjection();
+  while (Buffer.byteLength(JSON.stringify(payload), "utf8") > SEARCH_RESULT_MAX_BYTES && matches.length > 1) {
+    matches.pop();
+    contentLines.pop();
+    hasMore = true;
+    limitReason = "byte_limit";
+    payload = buildProjection();
+  }
+  return boundedSearchResult(payload);
 }
 
 // --- write_file / edit_file ---
@@ -668,6 +1107,7 @@ async function writeFile(args, { context } = {}) {
             observations: [
               { id: observationId(target), version: current.sha256, content_read: Boolean(observation?.content_read) },
             ],
+            file_discovery: fileDiscoveryUpdate({ observed: [observedFilePath(target, "file")] }),
           },
         };
       }
@@ -701,6 +1141,7 @@ async function writeFile(args, { context } = {}) {
       data: { ...pathData(target, cwd), lines, size: revision.size },
       effect: { operation, target },
       observations: [{ id: observationId(target), version: revision.sha256, content_read: true }],
+      file_discovery: fileDiscoveryUpdate({ observed: [observedFilePath(target, "file")] }),
     },
   };
 }
@@ -765,6 +1206,7 @@ async function editFile(args, { context } = {}) {
       observations: [
         { id: observationId(target), version: revision.sha256, content_read: Boolean(observation?.content_read) },
       ],
+      file_discovery: fileDiscoveryUpdate({ observed: [observedFilePath(target, "file")] }),
     },
   };
 }

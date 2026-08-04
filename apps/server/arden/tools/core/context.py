@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -12,7 +13,7 @@ from arden.agent import Role, ToolOutcomeStatus, ToolResult
 from arden.agent.agent import RunBudget
 from arden.agent.ledger import SharedLedger
 from arden.constants import ARDEN_TMP_BASE
-from arden.context.models import AreaContext, SessionState
+from arden.context.models import AreaContext, BackgroundStartDisposition, SessionState
 from arden.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, ConnectionNeededEvent, InputNeededEvent
 from arden.logging import get_logger
 from arden.tools.core.contracts import ConnectionDescriptor, RunRegistryContract, ToolRegistryContract
@@ -82,6 +83,38 @@ class ResourceObservation:
     content_read: bool
 
 
+_MAX_FILE_PATH_OBSERVATIONS = 10_000
+
+
+@dataclass
+class FileDiscoveryLedger:
+    """Run-scoped evidence about filesystem paths and failed discovery roots."""
+
+    observed_paths: OrderedDict[str, Literal["file", "directory", "other"]] = field(default_factory=OrderedDict)
+    miss_counts: dict[str, int] = field(default_factory=dict)
+
+    def observe(self, path: str, kind: Literal["file", "directory", "other"]) -> None:
+        self.observed_paths[path] = kind
+        self.observed_paths.move_to_end(path)
+        while len(self.observed_paths) > _MAX_FILE_PATH_OBSERVATIONS:
+            self.observed_paths.popitem(last=False)
+
+    def discover(self, root: str) -> None:
+        root_path = Path(root)
+        for missed_root in tuple(self.miss_counts):
+            if Path(missed_root) == root_path or Path(missed_root).is_relative_to(root_path):
+                del self.miss_counts[missed_root]
+
+    def miss(self, root: str) -> None:
+        self.miss_counts[root] = self.miss_counts.get(root, 0) + 1
+
+    def snapshot(self) -> dict[str, dict[str, str] | dict[str, int]]:
+        return {
+            "observed_paths": dict(self.observed_paths),
+            "miss_counts": dict(self.miss_counts),
+        }
+
+
 @dataclass
 class RunContext:
     """Per-run identity and limits."""
@@ -116,6 +149,7 @@ class RunContext:
     active_plan_ref: str | None = None
     research_scope_id: str | None = None
     _resource_observations: dict[str, ResourceObservation] = field(default_factory=dict, repr=False)
+    _file_discovery: FileDiscoveryLedger = field(default_factory=FileDiscoveryLedger, repr=False)
     # Builds an IOBridge bound to a child (subagent) session's own SSE bus, so a
     # spawned FULL subagent streams to its own session exactly like a normal run
     # instead of the parent's bus. Set by the chat service (which owns the
@@ -144,6 +178,18 @@ class RunContext:
 
     def resource_observations(self) -> dict[str, ResourceObservation]:
         return dict(self._resource_observations)
+
+    def observe_file_path(self, path: str, kind: Literal["file", "directory", "other"]) -> None:
+        self._file_discovery.observe(path, kind)
+
+    def reset_file_discovery(self, root: str) -> None:
+        self._file_discovery.discover(root)
+
+    def record_file_miss(self, root: str) -> None:
+        self._file_discovery.miss(root)
+
+    def file_discovery_state(self) -> dict[str, dict[str, str] | dict[str, int]]:
+        return self._file_discovery.snapshot()
 
     def to_rehydration_state(
         self,
@@ -300,7 +346,7 @@ class BackgroundTaskRegistry:
 
     session_id: str = ""
     on_result: Callable[[list[dict]], Awaitable[None]] | None = None
-    record_event: Callable[..., Awaitable[None]] | None = None
+    record_event: Callable[..., Awaitable[BackgroundStartDisposition | None]] | None = None
     read_result: Callable[[str], Awaitable[str | None]] | None = None
     claim_completion: Callable[..., Awaitable[dict]] | None = None
     mark_completion_delivered: Callable[..., Awaitable[None]] | None = None
@@ -506,19 +552,21 @@ class BackgroundTaskRegistry:
         result_text: str | None = None,
         parent_run_id: str | None = None,
         parent_tool_call_id: str | None = None,
+        suspension_id: str | None = None,
         child_session_id: str | None = None,
         agent_type: str | None = None,
         wait: bool | None = None,
         spawn_spec: str | None = None,
-    ) -> None:
+    ) -> BackgroundStartDisposition:
         if not self.record_event:
-            return
+            return BackgroundStartDisposition.STARTED
         terminal = status in {"completed", "failed", "cancelled", "interrupted"}
-        await self.record_event(
+        disposition = await self.record_event(
             task_id=task_id,
             session_id=self.session_id,
             parent_run_id=parent_run_id,
             parent_tool_call_id=parent_tool_call_id,
+            suspension_id=suspension_id,
             child_session_id=child_session_id,
             agent_type=agent_type,
             wait=wait,
@@ -530,6 +578,7 @@ class BackgroundTaskRegistry:
             terminal=terminal,
             spawn_spec=spawn_spec,
         )
+        return disposition or BackgroundStartDisposition.STARTED
 
     async def record_started(
         self,
@@ -538,19 +587,21 @@ class BackgroundTaskRegistry:
         command: str,
         parent_run_id: str | None = None,
         parent_tool_call_id: str | None = None,
+        suspension_id: str | None = None,
         child_session_id: str | None = None,
         agent_type: str | None = None,
         wait: bool | None = None,
         spawn_spec: str | None = None,
-    ) -> None:
+    ) -> BackgroundStartDisposition:
         self._commands[task_id] = command
         if child_session_id:
             self._child_sessions[task_id] = child_session_id
-        await self._record(
+        return await self._record(
             task_id=task_id,
             status="started",
             parent_run_id=parent_run_id,
             parent_tool_call_id=parent_tool_call_id,
+            suspension_id=suspension_id,
             child_session_id=child_session_id,
             agent_type=agent_type,
             wait=wait,

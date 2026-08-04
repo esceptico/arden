@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from arden.context.models import AreaContext, SessionState
 from arden.core.prompts import AREA_BLOCK
+from arden.core.tool_executor import ArdenToolExecutor
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, file_revision
 from arden.tools.core.registry import ToolRegistry
@@ -19,6 +20,7 @@ from arden.tools.executor import ToolExecutor
 from arden.tools.files import (
     FileEditInput,
     FileReadInput,
+    FileSearchTextInput,
     WriteFileInput,
     file_edit_tool,
     file_find_tool,
@@ -131,6 +133,40 @@ def test_file_write_schemas_reject_hash_arguments() -> None:
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         WriteFileInput.model_validate({"path": "x", "content": "y", "expected_sha256": "a" * 64})
+
+
+def test_file_search_schema_exposes_modes_and_bound_cursor() -> None:
+    parsed = FileSearchTextInput.model_validate(
+        {"query": "needle", "output_mode": "files_only", "cursor": "cursor-1", "limit": 25}
+    )
+    assert parsed.output_mode == "files_only"
+    assert parsed.cursor == "cursor-1"
+
+    with pytest.raises(ValidationError):
+        FileSearchTextInput.model_validate({"query": "needle", "output_mode": "unknown"})
+    with pytest.raises(ValidationError):
+        FileSearchTextInput.model_validate({"query": "needle", "unexpected": True})
+    with pytest.raises(ValidationError):
+        FileSearchTextInput.model_validate({"query": "q" * 4097})
+
+
+def test_file_tools_share_one_explicit_filesystem_concurrency_group() -> None:
+    assert {tool.policy.concurrency_group for tool in ALL_FILE_TOOLS.values()} == {"filesystem"}
+
+
+def test_internal_tool_metadata_uses_explicit_or_tool_scoped_concurrency_groups() -> None:
+    executor = ToolExecutor()
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run"),
+        io=IOBridge(),
+    )
+    wrapped = ArdenToolExecutor(executor, ctx)
+
+    assert wrapped.get_meta("file_write").concurrency_group == "filesystem"
+    assert wrapped.get_meta("bash").concurrency_group == "filesystem"
+    assert wrapped.get_meta("current_time").concurrency_group == "current_time"
 
 
 # --- approvals (still built server-side, against the same disk) ---

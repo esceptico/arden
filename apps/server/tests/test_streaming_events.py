@@ -740,6 +740,31 @@ async def test_child_io_factory_emits_run_cancelled_on_cancel():
 
 
 @pytest.mark.asyncio
+async def test_child_io_factory_emits_run_error_on_failure():
+    from unittest.mock import AsyncMock
+
+    from arden.services.chat import make_child_io_factory
+    from arden.tools.core.context import ChildIOParams
+
+    buses = BusRegistry()
+    factory = make_child_io_factory(
+        buses,
+        _fake_run_registry(),
+        _fake_session_service(),
+        record_approval=AsyncMock(),
+        resolve_approval=AsyncMock(),
+        approval_timeout_seconds=300,
+    )
+    child = await factory(ChildIOParams(session_id="p::failed", run_id="r1", pending_approvals={}))
+
+    await child.finish("failed")
+
+    events = [record.event for record in buses.get("p::failed")._recent]
+    assert [type(event).__name__ for event in events] == ["RunStartedEvent", "RunErrorEvent"]
+    assert events[-1].code == "child_agent_failed"
+
+
+@pytest.mark.asyncio
 async def test_child_io_factory_aclose_keeps_bus_while_run_active():
     """aclose() must NOT evict a child bus while its run is still active — it uses
     the SAME liveness predicate as the SSE endpoint (run_registry.get_active_run),

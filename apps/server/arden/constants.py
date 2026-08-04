@@ -36,6 +36,9 @@ AGENT_MAX_CONCURRENT = 16
 # in one agent is already pathological, so this never trips legitimate work.
 AGENT_MAX_ITERATIONS = 200
 AGENT_MAX_TOOL_CALLS = None
+AGENT_MAX_TOOL_CALLS_PER_STEP = 10
+AGENT_MAX_CONCURRENT_TOOLS = 6
+AGENT_MAX_NO_PROGRESS_STEPS = 3
 AGENT_MAX_WALL_TIME_SECONDS = None
 AGENT_MAX_COST = None
 # Hard ceiling on cumulative output (completion) tokens for a run subtree.
@@ -128,6 +131,7 @@ OFFLOAD_PREVIEW_CHARS = 12000  # hard cap for compact references; full content i
 RAW_TOOL_RESULT_INLINE_MAX_BYTES = 64 * 1024
 RAW_TOOL_RESULT_PREVIEW_CHARS = OFFLOAD_PREVIEW_CHARS
 RAW_TOOL_RESULT_DATA_KEY = "_raw_tool_result"
+RAW_SEARCH_RESULT_RETENTION_DAYS = 7
 
 
 # --- Display Truncation ---

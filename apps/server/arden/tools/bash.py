@@ -89,6 +89,7 @@ bash_tool = tool(
         placement=ToolPlacement.CLIENT,
         requires_approval=True,
         allow_approval_bypass=False,
+        concurrency_group="filesystem",
     ),
     approval=approve_bash,
     execute=run_bash,

@@ -40,6 +40,15 @@ CREATE INDEX IF NOT EXISTS idx_tool_invocations_run
 CREATE INDEX IF NOT EXISTS idx_tool_invocations_open
     ON tool_invocations(status, updated_at)
     WHERE status IN ('requested', 'running');
+
+CREATE TABLE IF NOT EXISTS execution_cancellation_scopes (
+    session_id TEXT PRIMARY KEY,
+    actor TEXT NOT NULL,
+    cause TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -203,6 +212,41 @@ class InvocationStore:
         cursor.row_factory = aiosqlite.Row
         rows = await cursor.fetchall()
         return [_record_from_row(row) for row in rows]
+
+    async def cancellation_cause_for_session(self, session_id: str) -> str | None:
+        cursor = await self._conn.execute(
+            """
+            SELECT cause FROM execution_cancellation_scopes WHERE session_id = ?
+            """,
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return str(row[0]) if row is not None else None
+
+    async def record_session_cancellation(
+        self,
+        *,
+        session_id: str,
+        actor: str,
+        cause: str,
+        idempotency_key: str,
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO execution_cancellation_scopes (
+                session_id, actor, cause, generation, idempotency_key, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                actor = excluded.actor,
+                cause = excluded.cause,
+                generation = execution_cancellation_scopes.generation + 1,
+                idempotency_key = excluded.idempotency_key,
+                updated_at = excluded.updated_at
+            WHERE execution_cancellation_scopes.idempotency_key <> excluded.idempotency_key
+            """,
+            (session_id, actor, cause, idempotency_key, _now()),
+        )
+        await self._conn.commit()
 
     async def _require(self, invocation_id: str) -> InvocationRecord:
         record = await self.get(invocation_id)

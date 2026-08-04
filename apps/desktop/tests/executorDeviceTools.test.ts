@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,8 +58,45 @@ describe("read_file handler", () => {
 
   test("missing file and directory are typed failures", async () => {
     const dir = tempDir();
-    expect((await readFile({ path: join(dir, "nope.txt") })).errorCode).toBe("not_found");
+    const missing = await readFile({ path: join(dir, "nope.txt") });
+    expect(missing.errorCode).toBe("not_found");
+    expect(missing.payload.data.nearest_existing_ancestor).toBe(dir);
+    expect(missing.payload.file_discovery.missed_roots).toEqual([dir]);
     expect((await readFile({ path: dir })).errorCode).toBe("invalid_ref");
+  });
+
+  test("permission failure while enriching a missing path stays typed", async () => {
+    if (process.platform === "win32") return;
+    const dir = tempDir();
+    const locked = join(dir, "locked");
+    mkdirSync(locked);
+    chmodSync(locked, 0o111);
+    try {
+      const result = await readFile({ path: join(locked, "missing.txt") });
+      expect(result.errorCode).toBe("permission_denied");
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
+  test("requires directory discovery after two misses under one root", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "actual.txt"), "hello\n");
+    const context = {
+      file_discovery: {
+        observed_paths: { [dir]: "directory" },
+        miss_counts: { [dir]: 2 },
+      },
+    };
+
+    const blocked = await readFile({ path: join(dir, "third-guess.txt") }, { context });
+    expect(blocked.errorCode).toBe("discovery_required");
+    expect(blocked.payload.data.absolute_discovery_root).toBe(dir);
+
+    const discovery = await listFiles({ path: dir }, { context });
+    expect(discovery.status).toBe("succeeded");
+    expect(discovery.payload.file_discovery.discovered_roots).toEqual([dir]);
+    expect(discovery.payload.file_discovery.observed).toContainEqual({ path: join(dir, "actual.txt"), kind: "file" });
   });
 
   test("relative path resolves against context default_cwd", async () => {
@@ -141,6 +178,7 @@ describe("search_text handler", () => {
     expect(result.status).toBe("succeeded");
     expect(result.payload.data.matches).toHaveLength(2);
     expect(result.payload.data.matches[0]).toMatchObject({ relative_path: "code.py", line: 1, column: 5 });
+    expect(result.payload.data.matches[0].text).toBeUndefined();
   });
 
   test("no matches is a clean success", async () => {
@@ -150,6 +188,70 @@ describe("search_text handler", () => {
     const result = await searchText({ query: "absent-token", path: dir });
     expect(result.status).toBe("succeeded");
     expect(result.payload.preview).toBe("0 matches");
+  });
+
+  test("supports deterministic content cursors and rejects stale cursors", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "code.py"), "alpha\nalpha\nalpha\n");
+
+    const first = await searchText({ query: "alpha", path: dir, limit: 1 });
+    expect(first.payload.data.has_more).toBe(true);
+    expect(first.payload.data.next_cursor).toBeTruthy();
+    const second = await searchText({ query: "alpha", path: dir, limit: 1, cursor: first.payload.data.next_cursor });
+    expect(second.payload.data.matches[0].line).toBe(2);
+    const stale = await searchText({ query: "different", path: dir, limit: 1, cursor: first.payload.data.next_cursor });
+    expect(stale.errorCode).toBe("invalid_ref");
+  });
+
+  test("supports files_only and count modes without returning snippets", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "a.txt"), "alpha alpha\n");
+    writeFileSync(join(dir, "b.txt"), "alpha\n");
+    writeFileSync(join(dir, "c.txt"), "none\n");
+
+    const files = await searchText({ query: "alpha", path: dir, output_mode: "files_only" });
+    expect(files.payload.data.matches.map((item: { relative_path: string }) => item.relative_path)).toEqual([
+      "a.txt",
+      "b.txt",
+    ]);
+    expect(files.payload.content).not.toContain("alpha alpha");
+
+    const count = await searchText({ query: "alpha", path: dir, output_mode: "count" });
+    expect(count.payload.data.total_matches).toBe(3);
+    expect(count.payload.data.files_counted).toBe(2);
+    expect(count.payload.data.count_complete).toBe(true);
+  });
+
+  test("bounds a multi-megabyte matching line before constructing the result payload", async () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "minified.js"), `needle${"x".repeat(2_000_000)}\n`);
+
+    const result = await searchText({ query: "needle", path: dir });
+    expect(result.status).toBe("succeeded");
+    expect(Buffer.byteLength(JSON.stringify(result.payload), "utf8")).toBeLessThan(300_000);
+    expect(Buffer.byteLength(result.payload.content, "utf8")).toBeLessThan(10_000);
+    expect(result.payload.data.matches[0].text).toBeUndefined();
+  });
+
+  test("caps the complete serialized search payload", async () => {
+    const dir = tempDir();
+    const line = `needle ${"x".repeat(4_500)}`;
+    writeFileSync(join(dir, "large.txt"), Array.from({ length: 100 }, () => line).join("\n"));
+
+    const result = await searchText({ query: "needle", path: dir, limit: 100 });
+
+    expect(Buffer.byteLength(JSON.stringify(result.payload), "utf8")).toBeLessThanOrEqual(256_000);
+    expect(result.payload.data.has_more).toBe(true);
+    expect(result.payload.data.limit_reason).toBe("byte_limit");
+    expect(result.payload.data.next_cursor).toBeTruthy();
+  });
+
+  test("rejects oversized inputs without exceeding the response budget", async () => {
+    const dir = tempDir();
+    const result = await searchText({ query: "q".repeat(300_000), path: dir });
+
+    expect(result.errorCode).toBe("invalid_ref");
+    expect(Buffer.byteLength(JSON.stringify(result.payload), "utf8")).toBeLessThanOrEqual(256_000);
   });
 });
 
@@ -163,6 +265,21 @@ describe("write_file handler", () => {
     expect(readFileSync(file, "utf8")).toBe("hello\nworld\n");
     expect(result.payload.effect).toEqual({ operation: "create", target: file });
     expect(result.payload.observations[0].content_read).toBe(true);
+  });
+
+  test("successful creation records exact discovery evidence", async () => {
+    const dir = tempDir();
+    const file = join(dir, "created.txt");
+    const created = await writeFile({ path: file, content: "hello\n" });
+
+    expect(created.payload.file_discovery.observed).toContainEqual({ path: file, kind: "file" });
+    const context = {
+      file_discovery: {
+        observed_paths: { [file]: "file" },
+        miss_counts: { [dir]: 2 },
+      },
+    };
+    expect((await readFile({ path: file }, { context })).status).toBe("succeeded");
   });
 
   test("replacing requires a fresh complete read", async () => {

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from arden.context.models import BackgroundStartDisposition
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
 from arden.events.sse import WorkflowFinishedEvent, WorkflowStartedEvent
 from arden.logging import get_logger
@@ -148,7 +149,7 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
         # Durable roster row up front: deliver_result's completion claim needs
         # it, and the sidebar can show the running workflow like any agent. No
         # spawn_spec — a workflow is not respawned from the outbox on restart.
-        await bg_registry.record_started(
+        start_disposition = await bg_registry.record_started(
             task_id=workflow_id,
             command=label,
             parent_run_id=ctx.run.run_id,
@@ -159,6 +160,14 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
     except BaseException:
         bg_registry.release(workflow_id)
         raise
+    if start_disposition is BackgroundStartDisposition.CANCELLED:
+        bg_registry.release(workflow_id)
+        return ToolResult.failure(
+            code="parent_cancelled",
+            message="Workflow was not started because its owning agent is already cancelled.",
+            preview="Workflow cancelled",
+            recovery_action="Do not retry from the cancelled agent session.",
+        )
     emit = ctx.io.emit
     if emit:
         await emit(
@@ -287,7 +296,12 @@ workflow_tool = tool(
     display_description="Run a built-in multi-agent workflow.",
     description=WORKFLOW_DESCRIPTION,
     input_model=WorkflowInput,
-    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"skill_registry"})),
+    policy=ToolPolicy(
+        action=ToolAction.EXECUTE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"skill_registry"}),
+        concurrency_group="workflow_agents",
+    ),
     execute=run_workflow,
     # "workflow" (not "agent") so the desktop renders it as a workflow card from
     # the tool call itself — independent of the streamed workflow-domain events.

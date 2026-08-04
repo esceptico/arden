@@ -13,6 +13,7 @@ and must match the formats and failure codes documented here.
 import asyncio
 import difflib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,7 +35,9 @@ FIND_FILES_DESCRIPTION = (
     "When an area default cwd is set, use paths relative to it unless searching outside the area."
 )
 SEARCH_TEXT_DESCRIPTION = (
-    "Search files on the user's device for literal text. "
+    "Search files on the user's device for literal text. Start with output_mode='files_only' or 'count' "
+    "when discovering scope, then request paged 'content' matches and use file_read for exact windows. "
+    "Continue with next_cursor instead of repeating the same page. "
     "When an area default cwd is set, use paths relative to it unless searching outside the area."
 )
 WRITE_FILE_DESCRIPTION = (
@@ -157,13 +160,31 @@ async def file_find(execution: ToolExecution, args: FileFindInput) -> ToolResult
 
 
 class FileSearchTextInput(BaseModel):
-    query: str = Field(min_length=1, description="Literal text to search for.")
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=4096, description="Literal text to search for.")
     path: str = Field(
         default=".",
+        max_length=4096,
         description="File or directory path to search. Prefer relative paths from the area default cwd when set.",
     )
-    file_glob: str | None = Field(default=None, description="Optional file glob, for example '*.py'.")
+    file_glob: str | None = Field(
+        default=None,
+        max_length=1024,
+        description="Optional file glob, for example '*.py'.",
+    )
+    output_mode: Literal["content", "files_only", "count"] = Field(
+        default="content",
+        description=(
+            "content returns bounded snippets; files_only returns matching paths; count returns per-file and total counts."
+        ),
+    )
     limit: int = Field(default=_DEFAULT_MATCH_LIMIT, ge=1, le=1000, description="Maximum matches to return.")
+    cursor: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Opaque cursor from a previous file_search_text page with the same query, path, glob, and mode.",
+    )
 
 
 async def file_search_text(execution: ToolExecution, args: FileSearchTextInput) -> ToolResult:
@@ -239,7 +260,12 @@ file_read_tool = tool(
     display_description="Read a file from the user's device.",
     description=READ_FILE_DESCRIPTION,
     input_model=FileReadInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
+        concurrency_group="filesystem",
+    ),
     execute=file_read,
 )
 
@@ -248,7 +274,12 @@ file_list_tool = tool(
     display_description="List files in a directory on the user's device.",
     description=LIST_FILES_DESCRIPTION,
     input_model=FileListInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
+        concurrency_group="filesystem",
+    ),
     execute=file_list,
 )
 
@@ -257,7 +288,12 @@ file_find_tool = tool(
     display_description="Find files by name or pattern on the user's device.",
     description=FIND_FILES_DESCRIPTION,
     input_model=FileFindInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
+        concurrency_group="filesystem",
+    ),
     execute=file_find,
 )
 
@@ -266,7 +302,12 @@ file_search_text_tool = tool(
     display_description="Search text across files on the user's device.",
     description=SEARCH_TEXT_DESCRIPTION,
     input_model=FileSearchTextInput,
-    policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, placement=ToolPlacement.CLIENT),
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        placement=ToolPlacement.CLIENT,
+        concurrency_group="filesystem",
+    ),
     execute=file_search_text,
 )
 
@@ -281,6 +322,7 @@ file_write_tool = tool(
         placement=ToolPlacement.CLIENT,
         requires_approval=True,
         deferred=True,
+        concurrency_group="filesystem",
     ),
     approval=approve_file_write,
     execute=file_write,
@@ -297,6 +339,7 @@ file_edit_tool = tool(
         placement=ToolPlacement.CLIENT,
         requires_approval=True,
         deferred=True,
+        concurrency_group="filesystem",
     ),
     approval=approve_file_edit,
     execute=file_edit,

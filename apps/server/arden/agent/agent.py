@@ -40,8 +40,9 @@ from arden.agent.types.llm import (
 )
 from arden.agent.types.stop import StopReason
 from arden.agent.types.tool_choice import ToolChoice, ToolChoiceMode
-from arden.agent.types.tools import ToolOutcome, ToolOutcomeStatus
+from arden.agent.types.tools import ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.types.usage import Usage
+from arden.constants import AGENT_MAX_NO_PROGRESS_STEPS, AGENT_MAX_TOOL_CALLS_PER_STEP
 from arden.logging import get_logger
 
 _logger = get_logger(__name__)
@@ -80,7 +81,7 @@ def _provider_loaded_tool_names(call: ProviderToolCall) -> set[str]:
                 continue
         if not isinstance(args, dict):
             continue
-        for key in ("tools", "paths"):
+        for key in ("tools", "paths", "names"):
             values = args.get(key)
             if isinstance(values, list):
                 names.update(value for value in values if isinstance(value, str))
@@ -108,6 +109,7 @@ class Agent:
         model: str,
         max_iterations: int | None = None,
         max_tool_calls: int | None = None,
+        max_tool_calls_per_step: int = AGENT_MAX_TOOL_CALLS_PER_STEP,
         max_wall_time_seconds: float | None = None,
         max_cost: float | None = None,
         max_depth: int = 3,
@@ -132,6 +134,9 @@ class Agent:
         self.model = model
         self.max_iterations = max_iterations
         self.max_tool_calls = max_tool_calls
+        if max_tool_calls_per_step < 1:
+            raise ValueError("max_tool_calls_per_step must be positive")
+        self.max_tool_calls_per_step = max_tool_calls_per_step
         self.max_wall_time_seconds = max_wall_time_seconds
         self.max_cost = max_cost
         self.max_depth = max_depth
@@ -169,6 +174,7 @@ class Agent:
         started_at = self._started_at if self._started_at is not None else self._clock()
         step = 0
         result_text = ""
+        no_progress_steps = 0
         try:
             if incomplete_step := trailing_incomplete_tool_step(messages):
                 recovered = (
@@ -270,12 +276,45 @@ class Agent:
                     )
 
                 calls = parse_tool_calls(response_message.tool_calls)
-                if step_deferred_tools and hasattr(self._executor, "mark_provider_loaded_tools"):
+                if step_deferred_tools:
                     deferred_names = {name for tool in step_deferred_tools if (name := _tool_name(tool))}
                     loaded_names = {call.name for call in calls if call.name in deferred_names}
                     for provider_call in response_message.provider_tool_calls or []:
                         loaded_names.update(_provider_loaded_tool_names(provider_call) & deferred_names)
                     self._executor.mark_provider_loaded_tools(loaded_names)
+                if len(calls) > self.max_tool_calls_per_step:
+                    rejection = ToolResult.failure(
+                        code="tool_fanout_limit_exceeded",
+                        message=(
+                            f"Tool batch rejected: {len(calls)} calls exceeds the per-step limit of "
+                            f"{self.max_tool_calls_per_step}. Regroup the work into smaller batches."
+                        ),
+                        preview="Tool batch rejected",
+                        recovery_action=(
+                            f"Retry with at most {self.max_tool_calls_per_step} tool calls in one model step."
+                        ),
+                    )
+                    completions: list[ToolCompleted] = []
+                    async for event in dispatch_tools(
+                        self._runner,
+                        messages,
+                        calls,
+                        response_message.tool_calls,
+                        rejection=rejection,
+                    ):
+                        if isinstance(event, ToolCompleted):
+                            completions.append(event)
+                        if isinstance(event, ToolStarted) and event.tool_id in self._last_streamed_tool_input_ids:
+                            continue
+                        yield event
+                    no_progress_steps = self._next_no_progress_count(no_progress_steps, completions)
+                    step += 1
+                    if no_progress_steps >= AGENT_MAX_NO_PROGRESS_STEPS:
+                        yield self._result(result_text, StopReason.NO_PROGRESS, step, messages)
+                        return
+                    if self.hooks.on_step_finish:
+                        await self.hooks.on_step_finish(step, self._last_response, messages)
+                    continue
                 if self._would_exceed_tool_budget(len(calls)):
                     self._append_budget_denials(messages, response_message.tool_calls, StopReason.MAX_TOOL_CALLS)
                     yield self._result(result_text, StopReason.MAX_TOOL_CALLS, step, messages)
@@ -283,10 +322,19 @@ class Agent:
                 self._record_tool_calls(len(calls))
 
                 streamed_tool_input_ids = self._last_streamed_tool_input_ids
+                completions = []
                 async for event in dispatch_tools(self._runner, messages, calls, response_message.tool_calls):
+                    if isinstance(event, ToolCompleted):
+                        completions.append(event)
                     if isinstance(event, ToolStarted) and event.tool_id in streamed_tool_input_ids:
                         continue
                     yield event
+
+                no_progress_steps = self._next_no_progress_count(no_progress_steps, completions)
+                if no_progress_steps >= AGENT_MAX_NO_PROGRESS_STEPS:
+                    step += 1
+                    yield self._result(result_text, StopReason.NO_PROGRESS, step, messages)
+                    return
 
                 if reason := self._budget_stop_reason(started_at):
                     if reason == StopReason.MAX_TOKEN_BUDGET:
@@ -345,7 +393,7 @@ class Agent:
         provider_tool_calls: Sequence[ProviderToolCall],
         deferred_tools: list[dict] | None,
     ) -> set[str]:
-        if not deferred_tools or not hasattr(self._executor, "mark_provider_loaded_tools"):
+        if not deferred_tools:
             return set()
         deferred_names = {name for tool in deferred_tools if (name := _tool_name(tool))}
         loaded_names: set[str] = set()
@@ -400,6 +448,19 @@ class Agent:
 
     def _record_tool_calls(self, call_count: int) -> None:
         self._budget.tool_calls += call_count
+
+    @staticmethod
+    def _next_no_progress_count(current: int, completions: list[ToolCompleted]) -> int:
+        if not completions:
+            return 0
+        failed_without_retry = all(
+            event.outcome is not None
+            and event.outcome.status != ToolOutcomeStatus.SUCCEEDED
+            and event.outcome.error is not None
+            and not event.outcome.error.retryable
+            for event in completions
+        )
+        return current + 1 if failed_without_retry else 0
 
     def _append_budget_denials(self, messages: list[dict], tool_calls, reason: StopReason) -> None:
         content = self._budget_denial_content(reason)

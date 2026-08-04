@@ -644,12 +644,18 @@ async def cancel_run(
         raise HTTPException(status_code=404, detail="Run not found")
     # Mirror the cascade durably, same as the child-agent cancel route — an
     # in-memory cancel alone reads as still-running after a restart.
-    session_service = getattr(runtime, "session_service", None)
-    store = getattr(session_service, "store", None)
-    if store is not None:
-        for cancelled_session, cancelled_task in result.get("cancelled_children", []):
-            await store.request_background_agent_cancel(cancelled_session, cancelled_task)
+    if result.get("cancelled_roots") and runtime.session_service is not None:
+        store = runtime.session_service.store
+        for cancelled_session, cancelled_task in result.get("cancelled_roots", []):
+            await store.request_background_agent_cancel_cascade(
+                session_id=cancelled_session,
+                task_id=cancelled_task,
+                actor="user",
+                cause="user_cancelled",
+                idempotency_key=f"run-cancel:{run_id}:{cancelled_session}:{cancelled_task}",
+            )
     result.pop("cancelled_children", None)
+    result.pop("cancelled_roots", None)
     return {"status": "cancelling", "run_id": run_id, **result}
 
 
@@ -796,10 +802,17 @@ async def _cancel_child_agent(
     run_registry: RunRegistry,
 ) -> dict:
     requested = False
-    session_service = getattr(runtime, "session_service", None)
-    store = getattr(session_service, "store", None)
+    store = runtime.session_service.store if runtime.session_service is not None else None
     if store is not None:
-        requested = await store.request_background_agent_cancel(session_id, child_run_id)
+        requested = bool(
+            await store.request_background_agent_cancel_cascade(
+                session_id=session_id,
+                task_id=child_run_id,
+                actor="user",
+                cause="user_cancelled",
+                idempotency_key=f"child-cancel:{session_id}:{child_run_id}",
+            )
+        )
 
     registry = run_registry.get_background_registry(session_id)
     command = registry.cancel(child_run_id)
@@ -808,9 +821,7 @@ async def _cancel_child_agent(
 
     # Cascade: cancelling an agent also stops everything it spawned, otherwise
     # detached grandchildren (in their own session registries) keep running.
-    for desc_session, desc_task in run_registry.cancel_subtree(registry.child_session(child_run_id)):
-        if store is not None:
-            await store.request_background_agent_cancel(desc_session, desc_task)
+    run_registry.cancel_subtree(registry.child_session(child_run_id))
 
     return {
         "status": "cancelled" if command is not None else "cancel_requested",

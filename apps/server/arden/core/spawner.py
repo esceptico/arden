@@ -22,7 +22,7 @@ from arden.agent import (
 )
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.constants import AGENT_MAX_CONCURRENT, SUBAGENT_DEFAULT_TIMEOUT
-from arden.context.models import SessionState
+from arden.context.models import BackgroundStartDisposition, SessionState
 from arden.context.prompts import RESEARCH_AGENT_COMPACTION_CONTEXT
 from arden.core.compaction_model_request_middleware import CompactionModelRequestMiddleware
 from arden.core.compactor import Compactor
@@ -996,11 +996,12 @@ def create_spawn_fn(
                 await child_io_close()
 
         try:
-            await registry.record_started(
+            start_disposition = await registry.record_started(
                 task_id=task_id,
                 command=label,
                 parent_run_id=calling_ctx.run.run_id,
                 parent_tool_call_id=parent_id,
+                suspension_id=suspension_id,
                 child_session_id=child_state.session_id if has_child_session else None,
                 agent_type=resolved_agent_type,
                 wait=should_wait,
@@ -1009,6 +1010,16 @@ def create_spawn_fn(
         except BaseException:
             registry.release(task_id)
             raise
+
+        if start_disposition is BackgroundStartDisposition.CANCELLED:
+            registry.release(task_id)
+            if agent_label_task is not None and not agent_label_task.done():
+                agent_label_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await agent_label_task
+            await _save_child_session("cancelled")
+            await _teardown_child_io()
+            raise asyncio.CancelledError
 
         if should_wait:
             # The in-process await below is still what delivers the result;

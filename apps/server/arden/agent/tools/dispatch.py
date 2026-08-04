@@ -16,6 +16,7 @@ async def dispatch_tools(
     calls: list[PendingToolCall],
     raw_tool_calls: list[ToolCall],
     recovered_results: dict[str, ToolResult] | None = None,
+    rejection: ToolResult | None = None,
 ) -> AsyncGenerator[ToolStarted | ToolCompleted]:
     recovered_results = recovered_results or {}
     results: dict[str, str] = {tool_id: result.content for tool_id, result in recovered_results.items()}
@@ -28,7 +29,8 @@ async def dispatch_tools(
             model_content[tool_id] = result.model_content
 
     try:
-        async for event in runner.execute_all(calls):
+        event_stream = runner.reject_all(calls, rejection) if rejection is not None else runner.execute_all(calls)
+        async for event in event_stream:
             if isinstance(event, ToolCompleted):
                 results[event.tool_id] = event.result
                 if data := persistable_tool_result_data(event.data, event.source_refs):

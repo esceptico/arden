@@ -9,6 +9,7 @@ from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 from arden.wiki.constants import WIKI_MAINTENANCE_REVIEW_TOOL_NAME
+from arden.wiki.exceptions import WikiAmbiguityError, WikiValidationError
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService, WikiMaintenanceReviewState
 from arden.wiki.maintenance.runner import WikiMaintenanceDecision, WikiMaintenanceError
 
@@ -50,6 +51,13 @@ def _service(execution: ToolExecution) -> WikiMaintenanceReviewService | ToolRes
 
 
 def _result(state: WikiMaintenanceReviewState) -> ToolResult:
+    if state.failure is not None:
+        return ToolResult.failure(
+            code=state.failure.code,
+            message=state.failure.message,
+            preview="Maintenance blocked",
+            recovery_action=state.failure.recovery_action,
+        )
     if state.result is not None:
         result = state.result
         skipped = (
@@ -95,6 +103,18 @@ async def wiki_maintenance_review(execution: ToolExecution, args: WikiMaintenanc
             message=str(exc),
             preview="Decision rejected",
             recovery_action="Correct the decision for the current report and retry.",
+        )
+    except WikiValidationError as exc:
+        ambiguous = isinstance(exc, WikiAmbiguityError)
+        return ToolResult.failure(
+            code="wiki_identity_ambiguous" if ambiguous else "wiki_validation_conflict",
+            message=str(exc),
+            preview="Maintenance blocked",
+            recovery_action=(
+                "Stop this review and resolve the ambiguous page identity before restarting Wiki Maintenance."
+                if ambiguous
+                else "Stop this review and repair the reported wiki invariant before restarting Wiki Maintenance."
+            ),
         )
 
 
