@@ -13,11 +13,17 @@ from pydantic import BaseModel, Field
 import arden.database as database
 import arden.tools.executor as tool_executor_module
 from arden.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
+from arden.agent.types.tool_call import FunctionCall, PendingToolCall
+from arden.agent.types.tool_call import ToolCall as AgentToolCall
+from arden.agent.types.tools import ToolSourceRef
 from arden.constants import OFFLOAD_PREVIEW_CHARS, OFFLOAD_THRESHOLD
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
 from arden.core.tool_executor import ArdenToolExecutor
+from arden.events.sse import ToolCallResultEvent
 from arden.integrations.base import Integration
+from arden.server.bus import StreamRecord
+from arden.services.chat import _recover_durable_tool_calls
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.automation import automation_create_tool, loop_done_tool, loop_schedule_wakeup_tool
 from arden.tools.background import agent_cancel_tool
@@ -1277,6 +1283,145 @@ async def test_arden_tool_executor_policy_offload_false_keeps_retrieval_pointer(
     assert result.outcome.status == ToolOutcomeStatus.SUCCEEDED
 
 
+def test_arden_tool_executor_bounds_recovered_result_before_model_history(tmp_path, monkeypatch):
+    import arden.core.tool_result_files as trf
+
+    monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
+    registry = ToolRegistry()
+    executor = ArdenToolExecutor(
+        ToolExecutor().with_registry(registry),
+        _make_tool_context(registry, session_id="recovered-session"),
+    )
+    full = "recovered payload\n" * 10_000
+
+    result = executor.prepare_recovered_result(
+        ToolResult(content=full, preview="recovered"),
+        "call-recovered",
+    )
+
+    assert full not in result.content
+    assert "file_read" in result.content
+    path = trf.result_payload_file_path("recovered-session", "call-recovered")
+    assert path.exists()
+    assert json.loads(path.read_text())["content"] == full
+    assert result.data["truncated"] is True
+    assert result.data["raw_ref"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_durable_large_result_recovers_without_nested_serialization(
+    session_store: SessionStore,
+    tmp_path,
+    monkeypatch,
+):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as trf
+
+    monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "blobs")
+    large_content = "durable recovery evidence\n" * 10_000
+    continuation = {"has_more": True, "next_offset": 200}
+    source_ref = ToolSourceRef(
+        provider="wiki",
+        kind="page",
+        ref="wiki:durable",
+        title="Durable evidence",
+    )
+
+    async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        return ToolResult(
+            content=large_content,
+            preview="durable evidence",
+            data=continuation,
+            source_refs=(source_ref,),
+        )
+
+    registry = ToolRegistry()
+    registry.register(
+        "large_result",
+        tool(
+            description="Return a large durable result.",
+            execute=large_result,
+            policy=ToolPolicy(
+                action=ToolAction.READ,
+                scope=ToolScope.INTERNAL,
+                audit=False,
+                offload=True,
+            ),
+        ),
+    )
+    executor = ArdenToolExecutor(
+        ToolExecutor().with_registry(registry),
+        _make_tool_context(registry, session_id="recovered-session"),
+    )
+    bounded = await executor.execute("large_result", {}, "call-recovered")
+    assert bounded.data is not None
+
+    await session_store.record_tool_call_started(
+        run_id="run-1",
+        session_id="recovered-session",
+        tool_call_id="call-recovered",
+        tool_name="large_result",
+        action="read",
+        scope="internal",
+    )
+    await session_store.record_tool_call_finished(
+        run_id="run-1",
+        tool_call_id="call-recovered",
+        status="success",
+        result_preview=bounded.preview,
+        outcome=bounded.outcome.to_dict() if bounded.outcome else None,
+    )
+    await session_store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="recovered-session",
+            event=ToolCallResultEvent(
+                tool_call_id="call-recovered",
+                name="large_result",
+                content=bounded.content,
+                preview=bounded.preview,
+                data=bounded.data,
+                outcome=bounded.outcome.to_dict() if bounded.outcome else None,
+            ),
+        )
+    )
+    trf.result_file_path("recovered-session", "call-recovered").unlink()
+    trf.result_payload_file_path("recovered-session", "call-recovered").unlink()
+    pending = PendingToolCall(
+        tool_call=AgentToolCall(
+            id="call-recovered",
+            type="function",
+            function=FunctionCall(name="large_result", arguments="{}"),
+        ),
+        name="large_result",
+        args={},
+    )
+
+    recovered = await _recover_durable_tool_calls(
+        session_store,
+        "run-1",
+        [pending],
+        prepare_result=executor.prepare_recovered_result,
+    )
+
+    result = recovered["call-recovered"]
+    assert large_content not in result.content
+    assert "file_read" in result.content
+    assert result.data is not None
+    assert result.data["has_more"] is True
+    assert result.data["next_offset"] == 200
+    assert result.source_refs == (source_ref,)
+
+    restored = ToolResult.from_serialized_payload(
+        trf.result_payload_file_path("recovered-session", "call-recovered").read_text()
+    )
+    assert restored is not None
+    assert restored.content == large_content
+    assert restored.data == continuation
+    assert restored.source_refs == (source_ref,)
+
+
 @pytest.mark.asyncio
 async def test_arden_tool_executor_bounds_large_structured_data():
     async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -1313,6 +1458,222 @@ async def test_arden_tool_executor_bounds_large_structured_data():
     assert "file_read" in result.content
     emitted = json.dumps({"content": result.content, "data": result.data, "model_content": result.model_content})
     assert len(emitted) < 20_000
+
+
+@pytest.mark.asyncio
+async def test_arden_tool_executor_keeps_readable_raw_and_exact_payload_paths_distinct(tmp_path, monkeypatch):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as trf
+
+    monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "blobs")
+    large_content = "readable result\n" * 5_000
+    continuation = {"has_more": True, "next_offset": 200}
+    source_ref = ToolSourceRef(
+        provider="wiki",
+        kind="page",
+        ref="wiki:offload",
+        title="Offloaded evidence",
+    )
+
+    async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        return ToolResult(
+            content=large_content,
+            preview="large",
+            data=continuation,
+            source_refs=(source_ref,),
+        )
+
+    registry = ToolRegistry()
+    registry.register(
+        "large_result",
+        tool(
+            description="Return large content and structured data.",
+            execute=large_result,
+            policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=True),
+        ),
+    )
+    executor = ArdenToolExecutor(
+        ToolExecutor().with_registry(registry),
+        _make_tool_context(registry, session_id="distinct-session"),
+    )
+
+    result = await executor.execute("large_result", {}, "call-distinct")
+
+    raw_path = trf.result_file_path("distinct-session", "call-distinct")
+    payload_path = trf.result_payload_file_path("distinct-session", "call-distinct")
+    assert raw_path != payload_path
+    assert raw_path.read_text() == large_content
+    exact = ToolResult.from_serialized_payload(payload_path.read_text())
+    assert exact is not None
+    assert exact.content == large_content
+    assert exact.data == continuation
+    assert exact.source_refs == (source_ref,)
+    assert str(raw_path) in result.content
+    assert len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
+
+
+def test_tool_result_decoder_rejects_unmarked_envelope_shaped_raw_json():
+    raw = json.dumps(
+        {
+            "content": "ordinary external JSON",
+            "preview": "looks like an envelope",
+            "is_error": False,
+            "data": {},
+            "model_content": [],
+            "source_refs": [],
+            "outcome": None,
+        }
+    )
+
+    assert ToolResult.from_serialized_payload(raw) is None
+    encoded = ToolResult(content=raw, preview="outer").serialized_payload()
+    decoded = ToolResult.from_serialized_payload(encoded)
+    assert decoded is not None
+    assert decoded.content == raw
+
+
+@pytest.mark.asyncio
+async def test_double_offload_preserves_envelope_shaped_raw_json_as_content(tmp_path, monkeypatch):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as trf
+
+    monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "blobs")
+    raw = json.dumps(
+        {
+            "content": "inner content",
+            "preview": "inner preview",
+            "is_error": False,
+            "data": {"body": "x" * 60_000},
+            "model_content": [],
+            "source_refs": [],
+            "outcome": None,
+        }
+    )
+    outer_data = {"duplicate": "y" * 60_000}
+
+    async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        return ToolResult(content=raw, preview="outer preview", data=outer_data)
+
+    registry = ToolRegistry()
+    registry.register(
+        "large_result",
+        tool(
+            description="Return envelope-shaped raw JSON.",
+            execute=large_result,
+            policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=True),
+        ),
+    )
+    executor = ArdenToolExecutor(
+        ToolExecutor().with_registry(registry),
+        _make_tool_context(registry, session_id="collision-session"),
+    )
+
+    result = await executor.execute("large_result", {}, "call-collision")
+
+    exact = ToolResult.from_serialized_payload(
+        trf.result_payload_file_path("collision-session", "call-collision").read_text()
+    )
+    assert exact is not None
+    assert exact.content == raw
+    assert exact.preview == "outer preview"
+    assert exact.data == outer_data
+    assert len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
+
+
+def test_branch_path_rewrite_preserves_provider_sidecars_and_call_arguments(tmp_path, monkeypatch):
+    import arden.core.tool_result_files as trf
+
+    monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
+    source_session = "source"
+    target_session = "branch"
+    source_path = str(trf.result_file_path(source_session, "call-1"))
+    target_path = str(trf.result_file_path(target_session, "call-1"))
+    messages = [
+        {
+            "role": "assistant",
+            "content": f"Provider text mentions {source_path}",
+            "openai_response_items": [{"type": "message", "content": [{"text": source_path}]}],
+            "anthropic_content": [{"type": "text", "text": source_path}],
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "file_read", "arguments": json.dumps({"path": source_path})},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": f"Read more at {source_path}"},
+        {
+            "role": "assistant",
+            "content": f"[Session State Handoff]\nEvidence: {source_path}",
+            "compaction": {"kind": "session_handoff", "note": source_path},
+        },
+    ]
+
+    rewritten = trf.rewrite_result_paths(messages, source_session, target_session)
+
+    assert rewritten[0] == messages[0]
+    assert rewritten[1]["content"] == f"Read more at {target_path}"
+    assert target_path in rewritten[2]["content"]
+    assert rewritten[2]["compaction"]["note"] == target_path
+    assert rewritten is not messages
+
+
+@pytest.mark.asyncio
+async def test_terminal_recovery_falls_back_to_exact_payload_file_without_manifest(
+    session_store: SessionStore, tmp_path, monkeypatch
+):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as trf
+
+    monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "blobs")
+    large_content = "recover me exactly\n" * 10_000
+
+    async def large_result(execution: ToolExecution, args: EmptyInput) -> ToolResult:
+        return ToolResult(content=large_content, preview="recoverable")
+
+    registry = ToolRegistry()
+    registry.register(
+        "large_result",
+        tool(
+            description="Return a large result.",
+            execute=large_result,
+            policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, audit=True, offload=False),
+        ),
+    )
+    ctx = _make_tool_context(registry, session_id="recovery-session")
+    ctx.services["store"] = session_store
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
+    await executor.execute("large_result", {}, "call-recovery-fallback")
+    assert await session_store.get_tool_result_for_call(run_id="run-1", tool_call_id="call-recovery-fallback") is None
+    pending = PendingToolCall(
+        tool_call=AgentToolCall(
+            id="call-recovery-fallback",
+            type="function",
+            function=FunctionCall(name="large_result", arguments="{}"),
+        ),
+        name="large_result",
+        args={},
+    )
+
+    recovered = await _recover_durable_tool_calls(
+        session_store,
+        "run-1",
+        [pending],
+        prepare_result=executor.prepare_recovered_result,
+    )
+
+    result = recovered["call-recovery-fallback"]
+    assert large_content not in result.content
+    assert "file_read" in result.content
+    exact = ToolResult.from_serialized_payload(
+        trf.result_payload_file_path("recovery-session", "call-recovery-fallback").read_text()
+    )
+    assert exact is not None
+    assert exact.content == large_content
 
 
 @pytest.mark.asyncio
@@ -1572,14 +1933,17 @@ def test_prune_offload_store_drops_old_keeps_recent(monkeypatch, tmp_path):
 
     monkeypatch.setattr(trf, "RESULTS_BASE", tmp_path / "tool-results")
     old = trf.persist_result("old-sess", "call-old", "x" * 100)
+    old_payload = trf.persist_result_payload("old-sess", "call-old", '{"content":"x"}')
     new = trf.persist_result("new-sess", "call-new", "y" * 100)
     past = time.time() - (trf.RESULTS_MAX_AGE_SECONDS + 3600)
     os.utime(old, (past, past))
+    os.utime(old_payload, (past, past))
 
     removed = trf.prune_offload_store()
 
-    assert removed == 1
+    assert removed == 2
     assert not old.exists()
+    assert not old_payload.exists()
     assert new.exists()
     assert not (trf.RESULTS_BASE / "old-sess").exists()  # empty session dir swept
     assert trf.find_result_file("call-new") == new  # still locatable by id

@@ -16,8 +16,13 @@ from arden.constants import (
     OFFLOAD_THRESHOLD,
     is_external_source,
 )
-from arden.core.raw_tool_results import persist_raw_tool_result
-from arden.core.tool_result_files import persist_result
+from arden.core.raw_tool_results import (
+    internal_blob_from_data,
+    persist_raw_tool_result,
+    read_raw_tool_result,
+    strip_internal_raw_tool_result_data,
+)
+from arden.core.tool_result_files import persist_result, persist_result_payload
 from arden.integrations.base import IntegrationConnectionError
 from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import ConnectionService
@@ -66,6 +71,15 @@ class ArdenToolExecutor:
     def mark_provider_loaded_tools(self, names: set[str]) -> None:
         if self._ctx.run.deferred_tools_enabled:
             self._ctx.run.loaded_tools.update(names)
+
+    def prepare_recovered_result(self, result: ToolResult, tool_call_id: str) -> ToolResult:
+        """Apply the same ingestion bound to a result replayed from durable storage.
+
+        Recovery bypasses normal tool execution, so it must explicitly pass
+        through the universal serialized-payload bound before the result is
+        appended to model history.
+        """
+        return self._bound_result_payload(result, tool_call_id).with_default_outcome()
 
     async def execute(self, name: str, args: dict, tool_call_id: str) -> ToolResult:
         with Tracer.span(f"tool.{name}"):
@@ -378,7 +392,7 @@ class ArdenToolExecutor:
         note = ""
         if tool_call_id is not None:
             raw_payload = result.serialized_payload()
-            path = persist_result(self._ctx.session_id, tool_call_id, raw_payload)
+            path = persist_result_payload(self._ctx.session_id, tool_call_id, raw_payload)
             blob = persist_raw_tool_result(raw_payload)
             data = {
                 "truncated": True,
@@ -402,8 +416,9 @@ class ArdenToolExecutor:
         if len(serialized.encode("utf-8")) <= OFFLOAD_THRESHOLD:
             return result
 
-        path = persist_result(self._ctx.session_id, tool_call_id, serialized)
-        blob = persist_raw_tool_result(serialized)
+        exact_serialized = self._exact_serialized_payload(result, serialized)
+        path = persist_result_payload(self._ctx.session_id, tool_call_id, exact_serialized)
+        blob = persist_raw_tool_result(exact_serialized)
         lines = result.content.split("\n")
         preview, _preview_lines = _bounded_offload_preview(lines)
         data: dict[str, Any] = {
@@ -436,6 +451,28 @@ class ArdenToolExecutor:
             outcome=result.outcome,
         )
 
+    def _exact_serialized_payload(self, result: ToolResult, serialized: str) -> str:
+        """Undo a readable-content offload before persisting the exact envelope."""
+        raw_blob = internal_blob_from_data(result.data)
+        if raw_blob is None:
+            return serialized
+        try:
+            raw = read_raw_tool_result(raw_blob.blob_path, compression=raw_blob.compression)
+        except OSError:
+            return serialized
+        if ToolResult.from_serialized_payload(raw) is not None:
+            return raw
+        exact = ToolResult(
+            content=raw,
+            preview=result.preview,
+            is_error=result.is_error,
+            data=strip_internal_raw_tool_result_data(result.data),
+            model_content=result.model_content,
+            source_refs=result.source_refs,
+            outcome=result.outcome,
+        )
+        return exact.serialized_payload()
+
     def get_meta(self, name: str) -> ToolMeta | None:
         if name not in self._meta_cache:
             tool = self._executor.registry.get(name)
@@ -463,8 +500,10 @@ class ArdenToolExecutor:
             return result
 
         path = persist_result(self._ctx.session_id, tool_call_id, content)
-        raw_blob = persist_raw_tool_result(content)
-        data = {**(result.data or {}), **raw_blob.to_internal_data()}
+        exact_payload = result.serialized_payload()
+        persist_result_payload(self._ctx.session_id, tool_call_id, exact_payload)
+        payload_blob = persist_raw_tool_result(exact_payload)
+        data = {**(result.data or {}), **payload_blob.to_internal_data()}
         lines = content.split("\n")
         total = len(lines)
         preview, preview_lines = _bounded_offload_preview(lines)

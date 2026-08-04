@@ -13,7 +13,7 @@ from arden.agent.types.events import Result, ToolCompleted
 from arden.agent.types.tool_call import PendingToolCall
 from arden.areas.agent import is_custodian_task_id
 from arden.automation.prompts import AUTOMATION_SUFFIX, CUSTODIAN_SUFFIX
-from arden.constants import CONVERSATION_GAP_THRESHOLD, LOOP_ITERATION_HISTORY_WINDOW
+from arden.constants import CONVERSATION_GAP_THRESHOLD
 from arden.context.models import AreaContext, SessionData, SessionState
 from arden.core.content import (
     ContextContent,
@@ -27,6 +27,7 @@ from arden.core.factory import AgentConfig, create_agent
 from arden.core.naming import generate_conversation_name
 from arden.core.prompts import INIT_INSTRUCTION, build_system_blocks
 from arden.core.spawn_spec import SpawnSpec
+from arden.core.tool_result_files import find_result_file, find_result_payload_file
 from arden.core.usage_tracker import UsageTracker
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import (
@@ -79,6 +80,8 @@ async def _recover_durable_tool_calls(
     store,
     run_id: str,
     calls: list[PendingToolCall],
+    *,
+    prepare_result: Callable[[ToolResult, str], ToolResult] | None = None,
 ) -> dict[str, ToolResult]:
     durable = {row["tool_call_id"]: row for row in await store.list_tool_calls(run_id=run_id)}
     recovered: dict[str, ToolResult] = {}
@@ -97,7 +100,7 @@ async def _recover_durable_tool_calls(
                 # per-spawn lifecycle_id, not this tool_call_id, so they never
                 # flip this row to 'awaiting'.)
                 continue
-            recovered[tool_call_id] = ToolResult.failure(
+            result = ToolResult.failure(
                 code="execution_state_uncertain",
                 message=(
                     "Tool execution may have started before the server restarted. "
@@ -107,16 +110,38 @@ async def _recover_durable_tool_calls(
                 status=ToolOutcomeStatus.UNCERTAIN,
                 recovery_action="Verify whether the operation completed before retrying.",
             )
+            recovered[tool_call_id] = prepare_result(result, tool_call_id) if prepare_result else result
             continue
         stored_result = await store.get_tool_result_for_call(run_id=run_id, tool_call_id=tool_call_id)
-        content = (stored_result or {}).get("content") or row.get("result_preview") or "Tool call completed."
+        content = (stored_result or {}).get("content")
+        if not content:
+            result_path = find_result_payload_file(tool_call_id) or find_result_file(tool_call_id)
+            if result_path is not None:
+                try:
+                    content = await asyncio.to_thread(result_path.read_text, encoding="utf-8")
+                except OSError:
+                    content = None
+        content = content or row.get("result_preview") or "Tool call completed."
         outcome = ToolOutcome.from_dict(row["outcome"]) if row.get("outcome") else None
-        recovered[tool_call_id] = ToolResult(
-            content=content,
-            preview=row.get("result_preview"),
-            is_error=row["status"] != "success",
-            outcome=outcome,
-        )
+        decoded = ToolResult.from_serialized_payload(content)
+        if decoded is not None:
+            result = ToolResult(
+                content=decoded.content,
+                preview=decoded.preview,
+                is_error=decoded.is_error,
+                data=decoded.data,
+                model_content=decoded.model_content,
+                source_refs=decoded.source_refs,
+                outcome=decoded.outcome or outcome,
+            )
+        else:
+            result = ToolResult(
+                content=content,
+                preview=row.get("result_preview") or "Recovered tool result",
+                is_error=row["status"] != "success",
+                outcome=outcome,
+            )
+        recovered[tool_call_id] = prepare_result(result, tool_call_id) if prepare_result else result
     return recovered
 
 
@@ -445,9 +470,8 @@ async def _maybe_precompact_loop_history(
         if emit:
             await emit(CompactionFinishedEvent(messages_before=before_count, messages_after=before_count))
         # Pre-run compaction is maintenance, not a precondition. A failed
-        # summarize must not kill the fire — the iteration trim still bounds
-        # what the agent sees, and raising here bricks the loop for good:
-        # every fire replays the same oversized history into the same error.
+        # summary must not silently drop history; the normal provider error and
+        # forced-compaction retry path decide whether the fire can continue.
         _logger.warning(
             "Pre-run compaction failed for %s; firing uncompacted",
             data.state.session_id,
@@ -470,6 +494,8 @@ async def _maybe_precompact_loop_history(
         messages=compacted,
         last_input_tokens=None,
         last_message_count=len(compacted),
+        context_generation=data.state.context_generation,
+        context_etag=data.state.context_etag,
     )
 
 
@@ -685,69 +711,12 @@ def _area_context_from_record(area: dict | None) -> AreaContext | None:
 
 
 def _persistable_messages(run: RunState) -> list[dict]:
-    """The agent view (run.messages) plus any prefix we trimmed off for an
-    iteration-mode loop. Disk history must remain complete — the agent
-    only sees the tail to keep prompt context bounded."""
-    if not run.history_prefix:
-        return run.messages
-    return [*run.history_prefix, *run.messages]
+    """Return canonical model history. Normal execution only appends to it."""
+    return run.messages
 
 
 def _compaction_source_messages(run: RunState) -> list[dict]:
-    if not run.history_prefix:
-        return run.messages
-    if run.messages and run.messages[0].get("role") == Role.SYSTEM:
-        return [run.messages[0], *run.history_prefix, *run.messages[1:]]
-    return _persistable_messages(run)
-
-
-def _trim_for_loop_iteration(messages: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Cap prior history for an iteration-mode loop fire.
-
-    Returns (prefix_to_persist, view_for_agent). The view keeps the system
-    row at index 0 (if present) plus the most recent
-    LOOP_ITERATION_HISTORY_WINDOW user/assistant/tool messages; the prefix
-    is the middle area that was dropped from the agent's view but must
-    be re-prepended at save time so disk history stays complete.
-
-    The cut respects tool-call boundaries: if the naive WINDOW cut would
-    orphan a tool_result (its parent assistant with tool_calls fell into
-    the prefix), the cut walks backward until it lands on a clean
-    boundary — a user message, or an assistant with no tool_calls.
-    Otherwise OpenAI rejects with "No tool call found for function call
-    output". The window is therefore a soft target — the tail may grow
-    beyond N to keep tool sequences intact.
-    """
-    if len(messages) <= LOOP_ITERATION_HISTORY_WINDOW:
-        return [], messages
-    head: list[dict] = []
-    rest = messages
-    if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
-        head = [messages[0]]
-        rest = messages[1:]
-    if len(rest) <= LOOP_ITERATION_HISTORY_WINDOW:
-        return [], messages
-    cut = len(rest) - LOOP_ITERATION_HISTORY_WINDOW
-    while cut > 0 and not _is_clean_cut_boundary(rest[cut]):
-        cut -= 1
-    prefix = rest[:cut]
-    tail = rest[cut:]
-    return prefix, head + tail
-
-
-def _is_clean_cut_boundary(msg: dict) -> bool:
-    """True iff the message can safely be the first kept entry in the
-    trimmed tail. Tool results need their parent assistant in scope, and
-    an assistant with tool_calls needs its tool results in scope — both
-    are unsafe boundaries. A user message or a tool-call-free assistant
-    is a clean start.
-    """
-    role = msg.get("role")
-    if role == "user":
-        return True
-    if role == "assistant" and not msg.get("tool_calls"):
-        return True
-    return False
+    return run.messages
 
 
 async def prepare_chat(
@@ -781,15 +750,6 @@ async def prepare_chat(
     if loop_task_id:
         session_data = await _maybe_precompact_loop_history(deps, session_data, emit=emit)
     messages = session_data.messages
-    history_prefix: list[dict] = []
-    if loop_task_id:
-        # Iteration-mode loops would otherwise re-feed the whole prior
-        # transcript on every fire. Cap to the last N messages so the
-        # prompt context stays bounded for long-running monitors. The
-        # dropped head is stashed on the run so save paths can re-prepend
-        # it — disk history stays complete even though the agent only
-        # sees the tail.
-        history_prefix, messages = _trim_for_loop_iteration(messages)
 
     is_resume = resume_run_id is not None
     user_message = message
@@ -865,8 +825,6 @@ async def prepare_chat(
         run.input_message_index = len(messages) - 1
     if skip_approvals is not None:
         run.set_skip_approvals(skip_approvals)
-    run.history_prefix = history_prefix
-
     return ChatContext(
         run=run,
         session_state=session_state,
@@ -1494,12 +1452,11 @@ async def _drain_backgrounded(
     async def _save_snapshot() -> None:
         latest = await ctx.session_service.load(ctx.session_state.session_id)
         current_messages = list(latest.messages) if latest else []
-        state = latest.state if latest else ctx.session_state
-        # For iteration-mode loops the agent view is trimmed; prepend the
-        # stashed prefix so prefix-matching against disk lines up and the
-        # full history is preserved.
         full_view = _persistable_messages(ctx.run)
-        await ctx.session_service.save(state, _merge_background_messages(current_messages, full_view))
+        await ctx.session_service.save(
+            ctx.session_state,
+            _merge_background_messages(current_messages, full_view),
+        )
 
     async def _save_directly(injected: list[dict]) -> None:
         async with save_lock:
@@ -1613,7 +1570,15 @@ async def _emit_ingested_for_client_entries(
 def _merge_background_messages(current: list[dict], background: list[dict]) -> list[dict]:
     prefix_len = 0
     for current_msg, background_msg in zip(current, background, strict=False):
-        if current_msg != background_msg:
+        current_id = current_msg.get("message_id") or current_msg.get("client_id")
+        background_id = background_msg.get("message_id") or background_msg.get("client_id")
+        same_identity = (
+            isinstance(current_id, str)
+            and bool(current_id)
+            and isinstance(background_id, str)
+            and current_id == background_id
+        )
+        if not same_identity and current_msg != background_msg:
             break
         prefix_len += 1
     return [*current, *background[prefix_len:]]
@@ -1952,9 +1917,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             # or above this watermark gets a clean buffered replay, while
             # a cursor below it triggers a stream_reset → history reload.
             #
-            # `messages` here is the same list object as run.messages — for
-            # iteration-mode loops it's the trimmed view, so prepend the
-            # stashed prefix to keep disk history complete.
+            # `messages` here is the same list object as canonical run history.
             await ctx.session_service.save_progress(session_state, _persistable_messages(run))
             bus.mark_checkpoint()
             await _record_run_status(
@@ -1975,10 +1938,16 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
 
         bg_registry.on_result = _on_bg_result
 
-        async def _recover_tool_calls(calls: list[PendingToolCall]) -> dict[str, ToolResult]:
-            return await _recover_durable_tool_calls(ctx.session_service.store, run.run_id, calls)
-
         def _configure_agent(next_agent: Agent) -> Agent:
+            async def _recover_tool_calls(calls: list[PendingToolCall]) -> dict[str, ToolResult]:
+                prepare_result = getattr(next_agent.executor, "prepare_recovered_result", None)
+                return await _recover_durable_tool_calls(
+                    ctx.session_service.store,
+                    run.run_id,
+                    calls,
+                    prepare_result=prepare_result,
+                )
+
             next_agent.hooks.on_response = _track_response
             next_agent.hooks.on_step_finish = _checkpoint
             next_agent.hooks.get_pending_messages = _build_get_pending(bus, run, ctx.session_service, bg_registry)
@@ -2025,7 +1994,6 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
 
             run.messages.clear()
             run.messages.extend(compacted)
-            run.history_prefix.clear()
             await ctx.session_service.save(
                 session_state,
                 _persistable_messages(run),
@@ -2168,10 +2136,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 run.usage = tracker.usage
                 run_finished = True
                 input_tokens = _response_input_tokens(getattr(agent, "_last_response", None))
-                # Persist the durable transcript size. Loop runs may trim the
-                # model working set, but pre-turn compaction still evaluates
-                # the saved transcript, so the UI pressure gauge should match
-                # that compaction trigger.
+                # Persist the canonical active-context size.
                 metadata: dict | None = None
                 if input_tokens is not None or run.messages:
                     metadata = {}

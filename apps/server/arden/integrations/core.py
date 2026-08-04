@@ -36,7 +36,7 @@ from arden.tools.automation import (
     loop_done_tool,
     loop_schedule_wakeup_tool,
 )
-from arden.tools.background import agent_cancel_tool
+from arden.tools.background import agent_cancel_tool, agent_result_read_tool
 from arden.tools.bash import bash_tool
 from arden.tools.connections import connection_request_tool
 from arden.tools.deferred import load_tools_tool, tool_search_tool
@@ -138,7 +138,7 @@ AUTOMATION = Integration(
 BACKGROUND = Integration(
     id="_background",
     label="Background task controls",
-    tools={"agent_cancel": agent_cancel_tool},
+    tools={"agent_cancel": agent_cancel_tool, "agent_result_read": agent_result_read_tool},
 )
 
 NOTIFICATIONS = Integration(

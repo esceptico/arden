@@ -1,11 +1,8 @@
-"""Bounded history window for iteration-mode loops.
+"""Explicit compaction behavior for iteration-mode loops.
 
-When a loop fires in `read_history=True` mode it re-enters the target
-session. To keep the prompt context bounded for long-running monitors we
-cap prior history to LOOP_ITERATION_HISTORY_WINDOW messages — preserving
-the system message at index 0 and keeping the most recent tail.
-
-Trimming is runtime-only — disk history is untouched.
+Loop fires preserve their full active context. When the saved usage crosses
+the threshold, pre-run compaction creates a durable handoff before the model
+call; there is no independent tail-window trim.
 """
 
 from dataclasses import replace
@@ -15,7 +12,6 @@ from types import SimpleNamespace
 import pytest
 
 from arden.automation.prompts import AUTOMATION_SUFFIX
-from arden.constants import LOOP_ITERATION_HISTORY_WINDOW
 from arden.context.models import SessionData, SessionState
 from arden.core.factory import AgentConfig
 from arden.events.internal import RunFailed
@@ -27,7 +23,6 @@ from arden.services.chat import (
     _chat_request_hash,
     _close_interrupted_tool_step,
     _persistable_messages,
-    _trim_for_loop_iteration,
     prepare_chat,
     resume_suspended_chat_run,
 )
@@ -188,12 +183,6 @@ def _split_history(messages: list[dict]) -> tuple[list[dict], list[dict], dict]:
     user_added = messages[-1]
     middle = messages[len(system) : -1]
     return system, middle, user_added
-
-
-def test_loop_iteration_history_window_constant_exists():
-    # Sanity check that the budget is what the design calls for. If this
-    # ever changes intentionally, update the test consciously.
-    assert LOOP_ITERATION_HISTORY_WINDOW == 50
 
 
 @pytest.mark.asyncio
@@ -479,9 +468,7 @@ async def test_restart_binds_automation_before_resuming_chat():
 
 
 @pytest.mark.asyncio
-async def test_loop_iteration_trims_history_to_window():
-    # 60 prior messages (system + 60). Loop fire should leave system + last 50
-    # prior msgs + the fresh user prompt = 52 entries.
+async def test_loop_iteration_preserves_full_history_without_compaction():
     history = _make_history(60)
     svc = _StubSessionService(history)
     deps = _make_deps(svc)
@@ -498,18 +485,16 @@ async def test_loop_iteration_trims_history_to_window():
 
     system, prior, user_msg = _split_history(ctx.run.messages)
     assert len(system) == 1
-    assert len(prior) == LOOP_ITERATION_HISTORY_WINDOW
-    # Kept the tail, not the head.
-    assert prior[0]["content"] == "msg-10"
+    assert len(prior) == 60
+    assert prior[0]["content"] == "msg-0"
     assert prior[-1]["content"] == "msg-59"
-    # The fresh loop-dispatched message is appended after the trimmed tail.
     assert user_msg["role"] == "user"
     assert user_msg.get("is_meta") is True
     assert user_msg["client_id"] == "loop:loop-shy-otter:7"
 
 
 @pytest.mark.asyncio
-async def test_loop_iteration_precompacts_full_history_before_trim():
+async def test_loop_iteration_precompacts_full_history_before_model_call():
     history = _make_history(60)
     compactor = _LoopPreTurnCompactor()
     emitted = []
@@ -549,13 +534,12 @@ async def test_loop_iteration_precompacts_full_history_before_trim():
     assert len(compacted) == 6
     assert metadata == {"last_input_tokens": None, "last_message_count": 6}
     assert ctx.initial_input_tokens is None
-    assert ctx.run.history_prefix == []
     assert ctx.run.messages[-1]["client_id"] == client_id
 
 
 @pytest.mark.asyncio
 async def test_loop_iteration_under_window_keeps_all_history():
-    # 30 prior messages — below the cap → no trimming.
+    # No saved usage pressure means no compaction.
     history = _make_history(30)
     svc = _StubSessionService(history)
     deps = _make_deps(svc)
@@ -622,43 +606,12 @@ async def test_goal_meta_chat_does_not_use_loop_iteration_window():
     system, prior, user_msg = _split_history(ctx.run.messages)
     assert len(system) == 1
     assert len(prior) == 60
-    assert ctx.run.history_prefix == []
     assert user_msg["client_id"] == client_id
     assert user_msg.get("is_meta") is True
 
 
 @pytest.mark.asyncio
-async def test_loop_iteration_stashes_prefix_for_persistence():
-    # Trimming must not destroy disk history — the dropped head sits on
-    # the run as `history_prefix` so save paths can re-prepend it.
-    history = _make_history(60)
-    svc = _StubSessionService(history)
-    deps = _make_deps(svc)
-
-    client_id = "loop:loop-c:1"
-    ctx = await prepare_chat(
-        deps,
-        message="iter",
-        skip_approvals=None,
-        session_id="sess-1",
-        client_id=client_id,
-        loop_task_id="loop-c",
-    )
-
-    prefix = ctx.run.history_prefix
-    # 60 prior + 1 system. system is preserved separately, then 50 of the
-    # 60 non-system msgs go to the agent view → 10 stashed in the prefix.
-    assert len(prefix) == 10
-    assert prefix[0]["content"] == "msg-0"
-    assert prefix[-1]["content"] == "msg-9"
-
-
-@pytest.mark.asyncio
 async def test_loop_iteration_save_progress_persists_full_history():
-    # End-to-end: when a save path fires after a trim, the bytes that land
-    # in session storage must be history_prefix + agent_view, i.e. the
-    # full pre-trim history plus the fresh user message. Otherwise we'd
-    # silently truncate disk history on every loop tick.
     history = _make_history(60)
     svc = _StubSessionService(history)
     deps = _make_deps(svc)
@@ -673,21 +626,14 @@ async def test_loop_iteration_save_progress_persists_full_history():
         loop_task_id="loop-persist",
     )
 
-    # Sanity: the agent view was actually trimmed.
-    assert len(ctx.run.history_prefix) == 10
-    assert len(ctx.run.messages) < len(history) + 1
-
     # Simulate any save path firing (start_chat's pre-stream save,
     # _checkpoint, _save_snapshot, or the final save in `finally`).
     await deps.session_service.save_progress(ctx.session_state, _persistable_messages(ctx.run))
 
     assert svc.save_progress_calls, "save_progress should have been called"
     persisted = svc.save_progress_calls[-1]
-    # 1 system + 60 prior + 1 fresh user msg = 62.
     assert len(persisted) == len(history) + 1
-    assert persisted == [*ctx.run.history_prefix, *ctx.run.messages]
-    # Every original prior message survives — none of msg-0..msg-59 went
-    # missing from disk just because the agent view was trimmed.
+    assert persisted == ctx.run.messages
     persisted_contents = {m.get("content") for m in persisted if isinstance(m.get("content"), str)}
     for i in range(60):
         assert f"msg-{i}" in persisted_contents, f"msg-{i} dropped from disk"
@@ -697,25 +643,7 @@ async def test_loop_iteration_save_progress_persists_full_history():
 
 
 @pytest.mark.asyncio
-async def test_non_loop_chat_leaves_history_prefix_empty():
-    history = _make_history(60)
-    svc = _StubSessionService(history)
-    deps = _make_deps(svc)
-
-    ctx = await prepare_chat(
-        deps,
-        message="hi",
-        skip_approvals=False,
-        session_id="sess-1",
-        client_id="user-cid",
-    )
-
-    assert ctx.run.history_prefix == []
-
-
-@pytest.mark.asyncio
-async def test_loop_iteration_preserves_system_after_trim():
-    # System message must survive even when the tail is trimmed aggressively.
+async def test_loop_iteration_preserves_one_system_message():
     history = _make_history(60)
     # Make the system message recognizable so we can assert it's the same one.
     history[0]["content"] = "SENTINEL-SYSTEM-PROMPT"
@@ -734,92 +662,19 @@ async def test_loop_iteration_preserves_system_after_trim():
 
     # The system message is rebuilt by _prepare_messages from system_blocks,
     # so the *content* won't match the sentinel — but it must still be
-    # present at index 0 and the trimmed tail must not contain a leftover
+    # present at index 0 and history must not contain a leftover
     # system row.
     assert ctx.run.messages[0]["role"] == "system"
     other_systems = [m for m in ctx.run.messages[1:] if m.get("role") == "system"]
     assert other_systems == []
-    # And the prior-history portion is exactly the cap.
     _, prior, _ = _split_history(ctx.run.messages)
-    assert len(prior) == LOOP_ITERATION_HISTORY_WINDOW
-
-
-def test_trim_expands_when_cut_lands_inside_tool_sequence(monkeypatch):
-    # Naive cut at the WINDOW boundary would orphan a tool_result whose
-    # parent assistant (with tool_calls) sits one slot earlier. The trim
-    # must walk the boundary backward to a clean split so OpenAI doesn't
-    # reject the request with "No tool call found for function call output".
-    monkeypatch.setattr("arden.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
-    history = [
-        {"role": "user", "content": "kick it off"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "call_A", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
-        },
-        {"role": "tool", "tool_call_id": "call_A", "content": "result-A"},
-        {"role": "tool", "tool_call_id": "call_A", "content": "result-A2"},
-        {"role": "user", "content": "next"},
-    ]
-
-    prefix, view = _trim_for_loop_iteration(history)
-
-    # Naive WINDOW=2 would have given view=[tool_result_B, user2] with an
-    # orphan tool_result at the head. After expansion the view must keep
-    # the entire tool sequence intact, starting at a clean boundary (the
-    # user message that opened the turn).
-    assert view[0]["role"] == "user"
-    assert view[0]["content"] == "kick it off"
-    assert view == history
-    assert prefix == []
-
-
-def test_trim_no_expansion_when_cut_lands_on_clean_assistant(monkeypatch):
-    # Cut lands on an assistant with no tool_calls — already a clean
-    # boundary, no expansion needed. Tail is exactly WINDOW messages.
-    monkeypatch.setattr("arden.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
-    history = [
-        {"role": "user", "content": "user1"},
-        {"role": "assistant", "content": "asst1"},
-        {"role": "user", "content": "user2"},
-        {"role": "assistant", "content": "asst2"},
-        {"role": "user", "content": "user3"},
-        {"role": "assistant", "content": "asst3"},
-    ]
-
-    prefix, view = _trim_for_loop_iteration(history)
-
-    assert view == [
-        {"role": "user", "content": "user3"},
-        {"role": "assistant", "content": "asst3"},
-    ]
-    assert prefix == history[:-2]
-
-
-def test_trim_no_expansion_when_cut_lands_on_user(monkeypatch):
-    # Cut lands on a user message — clean boundary, no expansion.
-    monkeypatch.setattr("arden.services.chat.LOOP_ITERATION_HISTORY_WINDOW", 2)
-    history = [
-        {"role": "assistant", "content": "asst1"},
-        {"role": "user", "content": "user2"},
-        {"role": "assistant", "content": "asst2"},
-    ]
-
-    prefix, view = _trim_for_loop_iteration(history)
-
-    assert view == [
-        {"role": "user", "content": "user2"},
-        {"role": "assistant", "content": "asst2"},
-    ]
-    assert prefix == [{"role": "assistant", "content": "asst1"}]
+    assert len(prior) == 60
 
 
 @pytest.mark.asyncio
 async def test_loop_iteration_fires_uncompacted_when_precompaction_fails():
-    # Pre-run compaction is maintenance, not a precondition: if the summarize
-    # call blows up (e.g. its request exceeds the model window), the fire must
-    # proceed on the trimmed view — raising would brick the loop for good,
-    # replaying the same oversized history into the same error every hour.
+    # A failed pre-run summary never authorizes silent tail trimming. The full
+    # history proceeds to the normal provider/forced-compaction retry path.
     class _ExplodingCompactor:
         def should_compact(self, messages, model, last_input_tokens):
             return True
@@ -861,4 +716,6 @@ async def test_loop_iteration_fires_uncompacted_when_precompaction_fails():
     assert emitted[-1].messages_after == len(history)
     # Nothing was rewritten on disk, and the fire still assembled a run.
     assert svc.save_calls == []
+    _system, prior, _user = _split_history(ctx.run.messages)
+    assert len(prior) == 60
     assert ctx.run.messages[-1]["client_id"] == client_id

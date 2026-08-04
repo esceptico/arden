@@ -136,6 +136,30 @@ def test_chat_completions_request_strips_internal_tool_result_data():
     assert request["messages"] == [{"role": "tool", "tool_call_id": "call_1", "content": "Started background agent."}]
 
 
+def test_chat_completions_request_strips_openai_response_items():
+    client = OpenAIClient(api_key="test")
+
+    request = client._prepare(
+        messages=[
+            {
+                "role": "assistant",
+                "content": "done",
+                "openai_response_items": [{"type": "message", "content": []}],
+                "background_result_ref": "bg-1",
+            }
+        ],
+        model="gpt-5.2",
+        tools=None,
+        tool_choice=None,
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort=None,
+        response_format=None,
+    )
+
+    assert request["messages"] == [{"role": "assistant", "content": "done"}]
+
+
 def test_responses_request_formats_image_blocks_as_input_images():
     client = OpenAIClient(api_key="test")
 
@@ -245,7 +269,7 @@ def test_responses_deferred_tool_search_preserves_prompt_cache_key():
     assert {"type": "tool_search"} in request["tools"]
 
 
-def test_responses_replays_provider_tool_search_before_loaded_function_call():
+def test_responses_legacy_tool_search_receipt_does_not_emit_orphan_call():
     client = OpenAIClient(api_key="test")
 
     request = client._prepare_responses(
@@ -282,19 +306,12 @@ def test_responses_replays_provider_tool_search_before_loaded_function_call():
         response_format=None,
     )
 
-    replay = request["input"][1:4]
-    assert replay[0] == {
-        "type": "tool_search_call",
-        "id": "tsc_1",
-        "status": "completed",
-        "arguments": {"tools": ["emails"]},
-    }
-    assert replay[1]["type"] == "function_call"
-    assert replay[1]["name"] == "emails"
-    assert replay[2]["type"] == "function_call_output"
+    replay = request["input"][1:]
+    assert [item["type"] for item in replay] == ["function_call", "function_call_output"]
+    assert replay[0]["name"] == "emails"
 
 
-def test_responses_replays_stored_provider_tool_search_item_before_loaded_function_call():
+def test_responses_legacy_stored_tool_search_item_does_not_emit_orphan_call():
     client = OpenAIClient(api_key="test")
 
     request = client._prepare_responses(
@@ -332,14 +349,8 @@ def test_responses_replays_stored_provider_tool_search_item_before_loaded_functi
         response_format=None,
     )
 
-    assert request["input"][1] == {
-        "type": "tool_search_call",
-        "id": "tsc_1",
-        "status": "completed",
-        "arguments": {"tools": ["emails"]},
-    }
-    assert request["input"][2]["type"] == "function_call"
-    assert request["input"][2]["name"] == "emails"
+    assert [item["type"] for item in request["input"][1:]] == ["function_call", "function_call_output"]
+    assert request["input"][1]["name"] == "emails"
 
 
 def test_responses_request_skips_native_deferred_tool_search_for_unsupported_model():
@@ -769,15 +780,80 @@ def test_responses_parser_preserves_provider_tool_search_call():
     assert provider_calls is not None
     assert provider_calls[0].id == "tsc_1"
     assert provider_calls[0].name == "tool_search"
-    assert provider_calls[0].arguments == '{"query": "slack"}'
-    assert provider_calls[0].result == '[{"name": "slack_search"}]'
+    assert provider_calls[0].arguments == '{"tools": ["slack_search"]}'
+    assert provider_calls[0].result == "Matched tools: slack_search"
     assert provider_calls[0].provider_item == {
         "type": "tool_search_call",
         "id": "tsc_1",
         "query": "slack",
-        "results": [{"name": "slack_search"}],
         "status": "completed",
     }
+    assert parsed.choices[0].message.openai_response_items == [
+        {
+            "type": "tool_search_call",
+            "id": "tsc_1",
+            "query": "slack",
+            "results": [{"name": "slack_search"}],
+        }
+    ]
+
+
+def test_responses_replays_exact_ordered_output_without_duplicates():
+    output = [
+        {
+            "type": "tool_search_call",
+            "id": "tsc_1",
+            "execution": "server",
+            "status": "completed",
+            "arguments": {"paths": ["slack"]},
+        },
+        {
+            "type": "tool_search_output",
+            "execution": "server",
+            "status": "completed",
+            "tools": [{"type": "function", "name": "slack_search", "description": "Search Slack"}],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "slack_search",
+            "arguments": '{"query":"release"}',
+            "status": "completed",
+        },
+    ]
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[_FakeItem(item) for item in output],
+    )
+
+    parsed = parse_responses_response(response, "gpt-5.5")
+    message = parsed.choices[0].message
+    normalized = normalize_assistant_message(message)
+    client = OpenAIClient(api_key="test")
+    request = client._prepare_responses(
+        messages=[
+            {"role": "user", "content": "search slack"},
+            normalized,
+            {"role": "tool", "tool_call_id": "call_1", "content": "found it"},
+        ],
+        model="gpt-5.5",
+        tools=[],
+        deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
+        tool_choice="auto",
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort="high",
+        response_format=None,
+    )
+
+    assert normalized["openai_response_items"] == output
+    assert request["input"][1:4] == output
+    assert request["input"][4]["type"] == "function_call_output"
+    assert [item.get("type") for item in request["input"]].count("tool_search_call") == 1
+    assert [item.get("type") for item in request["input"]].count("tool_search_output") == 1
+    assert normalized["provider_tool_calls"][0]["arguments"] == '{"tools": ["slack_search"]}'
+    assert normalized["provider_tool_calls"][0]["result"] == "Matched tools: slack_search"
 
 
 def test_responses_normalizes_provider_tool_search_replay_item():

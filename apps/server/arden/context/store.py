@@ -11,6 +11,7 @@ from uuid import uuid4
 import aiosqlite
 from pydantic import BaseModel
 
+from arden.agent.types.tools import ToolResult
 from arden.areas.paths import normalize_area_page_path
 from arden.constants import (
     RAW_SEARCH_RESULT_RETENTION_DAYS,
@@ -28,6 +29,12 @@ from arden.core.raw_tool_results import (
     read_raw_tool_result,
     strip_internal_raw_tool_result_data,
 )
+from arden.core.tool_result_files import (
+    persist_result,
+    persist_result_payload,
+    result_file_path,
+    result_payload_file_path,
+)
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import event_from_payload
 from arden.logging import get_logger
@@ -38,7 +45,12 @@ from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 4
+_SESSION_SCHEMA_VERSION = 5
+
+
+class StaleSessionContextError(RuntimeError):
+    """A run tried to save through a context generation that was replaced."""
+
 
 LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
 # Hard bound on the string handed to the FTS5 MATCH parser. A very long query
@@ -116,6 +128,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_status TEXT,
     area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL,
     chat_model TEXT,
+    context_generation INTEGER NOT NULL DEFAULT 0,
     storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold')),
     cold_bundle_path TEXT,
     cold_bundle_sha256 TEXT,
@@ -427,9 +440,9 @@ SQL_SAVE_SESSION = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, area_id, chat_model
+    agent_type, agent_status, area_id, chat_model, context_generation
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     last_activity = excluded.last_activity,
     messages = excluded.messages,
@@ -443,15 +456,16 @@ ON CONFLICT(session_id) DO UPDATE SET
     agent_status = excluded.agent_status,
     area_id = sessions.area_id,
     chat_model = excluded.chat_model
+WHERE sessions.context_generation = excluded.context_generation
 """
 
 SQL_INSERT_SESSION_IF_ABSENT = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, area_id, chat_model
+    agent_type, agent_status, area_id, chat_model, context_generation
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO NOTHING
 """
 
@@ -508,14 +522,15 @@ SQL_UPSERT_PROGRESS = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, area_id, chat_model
+    agent_type, agent_status, area_id, chat_model, context_generation
 )
-VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     messages = excluded.messages,
     last_activity = excluded.last_activity,
     agent_status = excluded.agent_status,
     area_id = sessions.area_id
+WHERE sessions.context_generation = excluded.context_generation
 """
 SQL_UPDATE_NAME = "UPDATE sessions SET name = ? WHERE session_id = ?"
 SQL_UPDATE_NAME_IF_EMPTY = "UPDATE sessions SET name = ? WHERE session_id = ? AND (name IS NULL OR name = '')"
@@ -550,6 +565,10 @@ class SessionStore:
         self.chat_completion_conn = chat_completion_conn
         self._background_event_lock = asyncio.Lock()
         self._storage_maintenance_lock = asyncio.Lock()
+        # Context snapshots span projection, transcript, checkpoint, and turn
+        # writes. Keep those logical transactions off the shared connection so
+        # another session's commit cannot release their savepoint mid-flight.
+        self._session_context_transaction_lock = asyncio.Lock()
         self._session_locks_guard = asyncio.Lock()
         self._session_write_locks: dict[str, asyncio.Lock] = {}
 
@@ -560,6 +579,17 @@ class SessionStore:
                 lock = asyncio.Lock()
                 self._session_write_locks[session_id] = lock
             return lock
+
+    @asynccontextmanager
+    async def _session_context_transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        async with self._session_context_transaction_lock, self._maintenance_connection() as connection:
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield connection
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
 
     async def _update(self, sql: str, params: tuple) -> bool:
         cursor = await self.conn.execute(sql, params)
@@ -838,9 +868,7 @@ class SessionStore:
                     except aiosqlite.OperationalError as error:
                         if "duplicate column name" not in str(error).lower():
                             raise
-            for col in (
-                "last_accessed_at TEXT",
-            ):
+            for col in ("last_accessed_at TEXT",):
                 try:
                     await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
                 except aiosqlite.OperationalError as error:
@@ -850,6 +878,14 @@ class SessionStore:
             version = 3
         if version == 3:
             await self._migrate_background_agent_runs_schema()
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+                ("4",),
+            )
+            await self.conn.commit()
+            version = 4
+        if version == 4:
+            await self._migrate_session_context_generation_schema()
             await self.conn.execute(
                 "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
                 (str(_SESSION_SCHEMA_VERSION),),
@@ -868,6 +904,7 @@ class SessionStore:
             "agent_status TEXT",
             "area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL",
             "chat_model TEXT",
+            "context_generation INTEGER NOT NULL DEFAULT 0",
             "last_accessed_at TEXT",
             "storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold'))",
             "cold_bundle_path TEXT",
@@ -946,6 +983,11 @@ class SessionStore:
             return int(rows[0]["value"])
         except (TypeError, ValueError) as error:
             raise RuntimeError("persisted session schema version is invalid") from error
+
+    async def _migrate_session_context_generation_schema(self) -> None:
+        rows = await self.conn.execute_fetchall("PRAGMA table_info(sessions)")
+        if rows and "context_generation" not in {row["name"] for row in rows}:
+            await self.conn.execute("ALTER TABLE sessions ADD COLUMN context_generation INTEGER NOT NULL DEFAULT 0")
 
     async def _pre_migrate_tool_results_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_results)")
@@ -1744,6 +1786,108 @@ class SessionStore:
             seen.add(message_id)
 
     @staticmethod
+    def _message_id_sequence(messages: list[dict]) -> list[str] | None:
+        ids: list[str] = []
+        for message in messages:
+            message_id = message.get("message_id") or message.get("client_id")
+            if not isinstance(message_id, str) or not message_id:
+                return None
+            ids.append(message_id)
+        return ids
+
+    @staticmethod
+    def _projection_etag(raw_messages: str | None) -> str:
+        marker = b"\x00" if raw_messages is None else b"\x01" + raw_messages.encode()
+        return hashlib.sha256(marker).hexdigest()
+
+    @classmethod
+    def renew_handoff_projection(
+        cls,
+        messages: list[dict],
+        *,
+        messages_before: int,
+        reason: str,
+    ) -> list[dict]:
+        """Renew a copied handoff so its identity and retained-tail receipt stay true."""
+        handoff_index = next(
+            (index for index in range(len(messages) - 1, -1, -1) if cls._is_handoff_message_payload(messages[index])),
+            None,
+        )
+        if handoff_index is None:
+            return messages
+
+        tail = messages[handoff_index + 1 :]
+        tail_ids = cls._message_id_sequence(tail)
+        if tail_ids is None:
+            raise ValueError("rewind requires stable retained-tail message ids")
+        previous = messages[handoff_index]
+        previous_id = previous.get("message_id")
+        compaction_id = f"compact-{uuid4().hex[:16]}"
+        compaction: dict[str, Any] = {
+            "compaction_id": compaction_id,
+            "kind": "session_handoff",
+            "messages_before": messages_before,
+            "messages_after": len(messages),
+            "preserved_tail_ids": tail_ids,
+            "reason": reason,
+        }
+        if isinstance(previous_id, str) and previous_id:
+            compaction["parent_compaction_id"] = previous_id
+        previous_compaction = previous.get("compaction")
+        if isinstance(previous_compaction, dict):
+            if isinstance(previous_compaction.get("rehydration"), dict):
+                compaction["rehydration"] = previous_compaction["rehydration"]
+            tool_result_refs = previous_compaction.get("tool_result_refs")
+            if isinstance(tool_result_refs, list):
+                refs = list(dict.fromkeys(ref for ref in tool_result_refs if isinstance(ref, str) and ref))
+                if refs:
+                    compaction["tool_result_refs"] = refs
+            background_result_refs = previous_compaction.get("background_result_refs")
+            if isinstance(background_result_refs, list):
+                refs = list(dict.fromkeys(ref for ref in background_result_refs if isinstance(ref, str) and ref))
+                if refs:
+                    compaction["background_result_refs"] = refs
+        replacement = {
+            "role": previous.get("role", "assistant"),
+            "content": previous.get("content", SESSION_HANDOFF_MARKER),
+            "message_id": compaction_id,
+            "compaction": compaction,
+        }
+        return [*messages[:handoff_index], replacement, *tail]
+
+    @staticmethod
+    def active_tool_result_ids(messages: list[dict]) -> set[str]:
+        """Return tool-call IDs whose offloaded results remain in active context."""
+        refs: set[str] = set()
+        for message in messages:
+            tool_call_id = message.get("tool_call_id") if message.get("role") == "tool" else None
+            if isinstance(tool_call_id, str) and tool_call_id:
+                refs.add(tool_call_id)
+            compaction = message.get("compaction")
+            nested = compaction.get("tool_result_refs") if isinstance(compaction, dict) else None
+            if isinstance(nested, list):
+                refs.update(ref for ref in nested if isinstance(ref, str) and ref)
+        return refs
+
+    @staticmethod
+    def active_background_result_ids(messages: list[dict]) -> set[str]:
+        """Return durable background task IDs referenced by active context."""
+        refs: set[str] = set()
+        for message in messages:
+            direct = message.get("background_result_ref")
+            if isinstance(direct, str) and direct:
+                refs.add(direct)
+            elif isinstance(message.get("client_id"), str) and message["client_id"].startswith("bg:"):
+                legacy_ref, separator, _status = message["client_id"][3:].rpartition(":")
+                if separator and legacy_ref:
+                    refs.add(legacy_ref)
+            compaction = message.get("compaction")
+            nested = compaction.get("background_result_refs") if isinstance(compaction, dict) else None
+            if isinstance(nested, list):
+                refs.update(ref for ref in nested if isinstance(ref, str) and ref)
+        return refs
+
+    @staticmethod
     def _flatten_message_text(msg: dict) -> str:
         """Plain-text projection of a message for full-text search — the same
         text the agent reads, not the JSON envelope. Flattens content blocks
@@ -1774,16 +1918,22 @@ class SessionStore:
 
         return "\n".join(p for p in walk(msg.get("content")) if p).strip()
 
-    async def _mirror_session_messages(self, session_id: str, messages: list[dict]) -> None:
-        # session_messages is the durable UI/debug transcript, not just a
-        # cache of the compacted model context. Rewrites update known rows
-        # and append new ones, but must not delete raw pre-compaction rows.
+    async def _mirror_session_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        *,
+        connection: aiosqlite.Connection | None = None,
+    ) -> None:
+        # session_messages is the durable transcript. Normal snapshot saves
+        # may append rows, but never rewrite or delete an existing message.
+        # Explicit user rewind/session deletion use dedicated destructive APIs.
         if not messages:
-            await self.conn.execute("DELETE FROM session_messages WHERE session_id = ?", (session_id,))
-            await self.conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
             return
 
-        rows = await self.conn.execute_fetchall(
+        conn = connection or self.conn
+
+        rows = await conn.execute_fetchall(
             "SELECT message_id, seq FROM session_messages WHERE session_id = ?",
             (session_id,),
         )
@@ -1801,17 +1951,8 @@ class SessionStore:
             message_json = await asyncio.to_thread(lambda m=msg: json.dumps(m, default=str))
             search_text = self._flatten_message_text(msg)
 
-            if message_id in existing:
-                await self.conn.execute(
-                    """
-                    UPDATE session_messages
-                    SET role = ?, message_json = ?, client_id = ?, created_at = ?, search_text = ?
-                    WHERE session_id = ? AND message_id = ?
-                    """,
-                    (role, message_json, client_id, created_at, search_text, session_id, message_id),
-                )
-            else:
-                await self.conn.execute(
+            if message_id not in existing:
+                await conn.execute(
                     """
                     INSERT INTO session_messages
                         (session_id, message_id, seq, role, message_json, client_id, created_at, search_text)
@@ -1819,8 +1960,138 @@ class SessionStore:
                     """,
                     (session_id, message_id, next_seq, role, message_json, client_id, created_at, search_text),
                 )
+                existing[message_id] = next_seq
                 next_seq += 1
-        await self._rebuild_session_turns(session_id)
+            await self._record_compaction_message(
+                session_id=session_id,
+                message_id=message_id,
+                seq=existing[message_id],
+                message=msg,
+                created_at=created_at,
+                connection=conn,
+            )
+        await self._rebuild_session_turns(session_id, connection=conn)
+
+    async def _record_compaction_message(
+        self,
+        *,
+        session_id: str,
+        message_id: str,
+        seq: int,
+        message: dict,
+        created_at: str,
+        connection: aiosqlite.Connection | None = None,
+    ) -> None:
+        compaction = message.get("compaction")
+        if not isinstance(compaction, dict) or compaction.get("kind") != "session_handoff":
+            return
+        compaction_id = compaction.get("compaction_id")
+        if not isinstance(compaction_id, str) or not compaction_id or compaction_id != message_id:
+            return
+        messages_before = compaction.get("messages_before")
+        messages_after = compaction.get("messages_after")
+        if not isinstance(messages_before, int) or not isinstance(messages_after, int):
+            return
+        rehydration = compaction.get("rehydration")
+        rehydration_json = json.dumps(rehydration, default=str) if isinstance(rehydration, dict) else None
+        conn = connection or self.conn
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO chat_compactions (
+                compaction_id, session_id, boundary_seq, messages_before, messages_after,
+                rehydration_state, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                compaction_id,
+                session_id,
+                seq,
+                messages_before,
+                messages_after,
+                rehydration_json,
+                created_at,
+            ),
+        )
+
+    @staticmethod
+    def _is_handoff_message_payload(message: dict) -> bool:
+        content = message.get("content", "")
+        return isinstance(content, str) and content.startswith(SESSION_HANDOFF_MARKER)
+
+    @classmethod
+    def _active_context_from_transcript_rows(
+        cls,
+        rows: list[aiosqlite.Row],
+        fallback: list[dict],
+        *,
+        fallback_valid: bool,
+    ) -> list[dict]:
+        """Recover the active model view when its saved projection is invalid.
+
+        ``sessions.messages`` is the authoritative active projection during
+        ordinary operation. The immutable transcript is a recovery source, not
+        a second live view: independently saved snapshots can contain branches,
+        and the system row is intentionally refreshed in place. A modern
+        handoff makes recovery deterministic by naming its retained tail.
+        Legacy handoffs lack that information, so recovery fails closed.
+        """
+        if fallback_valid:
+            return fallback
+
+        parsed: list[tuple[int, str, dict]] = []
+        for row in rows:
+            try:
+                message = json.loads(row["message_json"])
+            except (TypeError, json.JSONDecodeError):
+                return fallback
+            if not isinstance(message, dict):
+                return fallback
+            parsed.append((int(row["seq"]), str(row["message_id"]), message))
+
+        if not parsed:
+            return fallback
+
+        handoffs = [item for item in parsed if cls._is_handoff_message_payload(item[2])]
+        if not handoffs:
+            return [message for _seq, _message_id, message in parsed]
+
+        checkpoint: tuple[int, str, dict] | None = None
+        retained_ids: list[str] | None = None
+        for item in handoffs:
+            compaction = item[2].get("compaction")
+            candidate_ids = compaction.get("preserved_tail_ids") if isinstance(compaction, dict) else None
+            if (
+                isinstance(compaction, dict)
+                and compaction.get("kind") == "session_handoff"
+                and compaction.get("compaction_id") == item[1]
+                and isinstance(candidate_ids, list)
+                and all(isinstance(value, str) and value for value in candidate_ids)
+                and len(set(candidate_ids)) == len(candidate_ids)
+            ):
+                checkpoint = item
+                retained_ids = candidate_ids
+
+        if checkpoint is None or retained_ids is None or handoffs[-1][0] != checkpoint[0]:
+            return fallback
+
+        by_id = {message_id: message for _seq, message_id, message in parsed}
+        if any(message_id not in by_id for message_id in retained_ids):
+            return fallback
+
+        system = next((message for _seq, _id, message in parsed if message.get("role") == "system"), None)
+        checkpoint_seq, checkpoint_id, checkpoint_message = checkpoint
+        retained = [by_id[message_id] for message_id in retained_ids]
+        retained_set = set(retained_ids)
+        appended = [
+            message
+            for seq, message_id, message in parsed
+            if seq > checkpoint_seq
+            and message_id != checkpoint_id
+            and message_id not in retained_set
+            and message.get("role") != "system"
+        ]
+        return [*([system] if system is not None else []), checkpoint_message, *retained, *appended]
 
     def _message_row_payload(self, row: aiosqlite.Row) -> dict:
         return {
@@ -1833,6 +2104,62 @@ class SessionStore:
             "message": json.loads(row["message_json"]),
         }
 
+    async def _restore_active_tool_result_files(self, session_id: str, messages: list[dict]) -> None:
+        """Rehydrate pruned file-read targets from the durable result manifest."""
+        missing = {
+            tool_call_id: (
+                not result_file_path(session_id, tool_call_id).exists(),
+                not result_payload_file_path(session_id, tool_call_id).exists(),
+            )
+            for tool_call_id in self.active_tool_result_ids(messages)
+        }
+        missing = {tool_call_id: needs for tool_call_id, needs in missing.items() if any(needs)}
+        if not missing:
+            return
+        placeholders = ",".join("?" for _ in missing)
+        rows = await self.read_conn.execute_fetchall(
+            f"""
+            SELECT tool_call_id, blob_path, compression
+            FROM tool_results
+            WHERE session_id = ?
+              AND tool_call_id IN ({placeholders})
+            ORDER BY created_at DESC
+            """,
+            (session_id, *sorted(missing)),
+        )
+        restored: set[str] = set()
+        for row in rows:
+            tool_call_id = str(row["tool_call_id"])
+            if tool_call_id in restored:
+                continue
+            try:
+                content = await asyncio.to_thread(
+                    read_raw_tool_result,
+                    row["blob_path"],
+                    compression=row["compression"],
+                )
+                missing_raw, missing_payload = missing[tool_call_id]
+                decoded = ToolResult.from_serialized_payload(content)
+                if missing_raw:
+                    await asyncio.to_thread(
+                        persist_result,
+                        session_id,
+                        tool_call_id,
+                        decoded.content if decoded is not None else content,
+                    )
+                if missing_payload:
+                    if decoded is not None:
+                        await asyncio.to_thread(persist_result_payload, session_id, tool_call_id, content)
+            except OSError:
+                _logger.warning(
+                    "Failed to rehydrate tool result file for %s/%s",
+                    session_id,
+                    tool_call_id,
+                    exc_info=True,
+                )
+                continue
+            restored.add(tool_call_id)
+
     def _is_turn_message(self, row: aiosqlite.Row) -> bool:
         if row["role"] == "system":
             return False
@@ -1840,12 +2167,18 @@ class SessionStore:
         content = message.get("content", "")
         return not (isinstance(content, str) and content.startswith(SESSION_HANDOFF_MARKER))
 
-    async def _rebuild_session_turns(self, session_id: str) -> None:
-        rows = await self.conn.execute_fetchall(
+    async def _rebuild_session_turns(
+        self,
+        session_id: str,
+        *,
+        connection: aiosqlite.Connection | None = None,
+    ) -> None:
+        conn = connection or self.conn
+        rows = await conn.execute_fetchall(
             "SELECT * FROM session_messages WHERE session_id = ? ORDER BY seq ASC",
             (session_id,),
         )
-        await self.conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
+        await conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
 
         current_start: aiosqlite.Row | None = None
         current_end: aiosqlite.Row | None = None
@@ -1856,7 +2189,7 @@ class SessionStore:
             if current_start is None or current_end is None:
                 return
             turn_id = f"{session_id}:{turn_index}"
-            await self.conn.execute(
+            await conn.execute(
                 """
                 INSERT INTO session_turns (
                     session_id, turn_id, turn_index, user_message_id,
@@ -1893,12 +2226,17 @@ class SessionStore:
 
         await flush_current()
 
-    async def _ensure_session_messages_unlocked(self, session_id: str) -> None:
-        has_rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION_MESSAGES_COUNT, (session_id,))
+    async def _ensure_session_messages_unlocked(
+        self,
+        session_id: str,
+        *,
+        connection: aiosqlite.Connection,
+    ) -> None:
+        has_rows = await connection.execute_fetchall(SQL_LOAD_SESSION_MESSAGES_COUNT, (session_id,))
         if has_rows:
             return
 
-        rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION_MESSAGES_JSON, (session_id,))
+        rows = await connection.execute_fetchall(SQL_LOAD_SESSION_MESSAGES_JSON, (session_id,))
         if not rows or not rows[0]["messages"]:
             return
 
@@ -1910,14 +2248,13 @@ class SessionStore:
         serializable = [msg for msg in messages if isinstance(msg, dict)]
         self._stamp_messages(serializable, now)
         messages_json = await asyncio.to_thread(lambda: json.dumps(serializable, default=str))
-        await self._mirror_session_messages(session_id, serializable)
-        await self.conn.execute("UPDATE sessions SET messages = ? WHERE session_id = ?", (messages_json, session_id))
-        await self.conn.commit()
+        await self._mirror_session_messages(session_id, serializable, connection=connection)
+        await connection.execute("UPDATE sessions SET messages = ? WHERE session_id = ?", (messages_json, session_id))
 
     async def _ensure_session_messages(self, session_id: str) -> None:
         lock = await self._session_write_lock(session_id)
-        async with lock:
-            await self._ensure_session_messages_unlocked(session_id)
+        async with lock, self._session_context_transaction() as connection:
+            await self._ensure_session_messages_unlocked(session_id, connection=connection)
 
     async def update_progress(self, state: SessionState, messages: list[dict | Any]) -> None:
         """Lightweight mid-run save: rewrite messages + bump last_activity,
@@ -1926,31 +2263,37 @@ class SessionStore:
         chat service re-stamps last_input_tokens."""
         lock = await self._session_write_lock(state.session_id)
         async with lock:
-            serializable = self._to_serializable_messages(messages)
-            now = datetime.now(UTC).isoformat()
-            self._stamp_messages(serializable, now)
+            async with self._session_context_transaction() as connection:
+                serializable = self._to_serializable_messages(messages)
+                now = datetime.now(UTC).isoformat()
+                self._stamp_messages(serializable, now)
 
-            messages_json = await asyncio.to_thread(lambda: json.dumps(serializable, default=str))
-            await self.conn.execute(
-                SQL_UPSERT_PROGRESS,
-                (
-                    state.session_id,
-                    state.started_at.isoformat(),
-                    now,
-                    messages_json,
-                    state.name,
-                    state.session_type,
-                    state.origin_automation_id,
-                    state.parent_session_id,
-                    state.parent_tool_call_id,
-                    state.agent_type,
-                    state.agent_status,
-                    state.area_id,
-                    state.chat_model,
-                ),
-            )
-            await self._mirror_session_messages(state.session_id, serializable)
-            await self.conn.commit()
+                messages_json = await asyncio.to_thread(lambda: json.dumps(serializable, default=str))
+                cursor = await connection.execute(
+                    SQL_UPSERT_PROGRESS,
+                    (
+                        state.session_id,
+                        state.started_at.isoformat(),
+                        now,
+                        messages_json,
+                        state.name,
+                        state.session_type,
+                        state.origin_automation_id,
+                        state.parent_session_id,
+                        state.parent_tool_call_id,
+                        state.agent_type,
+                        state.agent_status,
+                        state.area_id,
+                        state.chat_model,
+                        state.context_generation,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    raise StaleSessionContextError(
+                        f"session {state.session_id} context was replaced while its run was active"
+                    )
+                await self._mirror_session_messages(state.session_id, serializable, connection=connection)
+            state.context_etag = self._projection_etag(messages_json)
 
     async def record_chat_run_started(
         self,
@@ -2672,8 +3015,143 @@ class SessionStore:
         # intentionally eligible for the orphan sweep after its safety grace.
         return {row["content_sha256"] for row in rows}
 
+    async def create_session_branch(
+        self,
+        *,
+        source_session_id: str,
+        state: SessionState,
+        messages: list[dict | Any],
+        tool_call_ids: set[str],
+        background_task_ids: set[str],
+        metadata: dict | None = None,
+    ) -> None:
+        """Atomically persist a branch and its durable recovery records."""
+        lock = await self._session_write_lock(state.session_id)
+        async with lock, self._session_context_transaction() as connection:
+            source = await connection.execute_fetchall(
+                "SELECT 1 FROM sessions WHERE session_id = ?",
+                (source_session_id,),
+            )
+            if not source:
+                raise ValueError(f"source session {source_session_id} no longer exists")
+
+            serializable, etag = await self._save_session_snapshot_unlocked(
+                state,
+                messages,
+                metadata,
+                connection=connection,
+            )
+
+            if tool_call_ids:
+                placeholders = ",".join("?" for _ in tool_call_ids)
+                rows = await connection.execute_fetchall(
+                    f"""
+                    SELECT * FROM tool_results
+                    WHERE session_id = ? AND tool_call_id IN ({placeholders})
+                    ORDER BY created_at ASC
+                    """,
+                    (source_session_id, *sorted(tool_call_ids)),
+                )
+                cloned_ids = {str(row["tool_call_id"]) for row in rows}
+                projection = json.dumps(serializable, default=str)
+                missing_offloads = sorted(
+                    tool_call_id
+                    for tool_call_id in tool_call_ids - cloned_ids
+                    if str(result_file_path(state.session_id, tool_call_id)) in projection
+                    or str(result_payload_file_path(state.session_id, tool_call_id)) in projection
+                )
+                if missing_offloads:
+                    raise ValueError(f"tool results unavailable for branch: {', '.join(missing_offloads)}")
+                await connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO tool_results (
+                        tool_result_id, session_id, run_id, tool_call_id, tool_name,
+                        content_sha256, content_bytes, stored_bytes, compression,
+                        blob_ref, blob_path, preview, retention_class, expires_at,
+                        source_event_seq, created_at
+                    )
+                    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    """,
+                    [
+                        (
+                            self._tool_result_id(
+                                session_id=state.session_id,
+                                tool_call_id=str(row["tool_call_id"]),
+                                content_sha256=str(row["content_sha256"]),
+                            ),
+                            state.session_id,
+                            row["tool_call_id"],
+                            row["tool_name"],
+                            row["content_sha256"],
+                            row["content_bytes"],
+                            row["stored_bytes"],
+                            row["compression"],
+                            row["blob_ref"],
+                            row["blob_path"],
+                            row["preview"],
+                            row["retention_class"],
+                            row["expires_at"],
+                            row["created_at"],
+                        )
+                        for row in rows
+                    ],
+                )
+
+            if background_task_ids:
+                placeholders = ",".join("?" for _ in background_task_ids)
+                rows = await connection.execute_fetchall(
+                    f"""
+                    SELECT * FROM background_agent_runs
+                    WHERE session_id = ? AND task_id IN ({placeholders})
+                      AND status IN ('completed', 'failed', 'cancelled', 'interrupted')
+                      AND completion_id IS NOT NULL
+                    """,
+                    (source_session_id, *sorted(background_task_ids)),
+                )
+                by_task = {str(row["task_id"]): row for row in rows}
+                missing = sorted(background_task_ids - by_task.keys())
+                if missing:
+                    raise ValueError(f"background results unavailable for branch: {', '.join(missing)}")
+                now = datetime.now(UTC).isoformat()
+                await connection.executemany(
+                    """
+                    INSERT INTO background_agent_runs (
+                        task_id, session_id, parent_run_id, parent_tool_call_id,
+                        suspension_id, child_session_id, agent_type, wait, status,
+                        command, detail, result_ref, result_text, created_at,
+                        started_at, updated_at, ended_at, cancel_requested_at,
+                        cancel_actor, terminal_cause, cancel_generation,
+                        cancel_idempotency_key, notified_at, completion_id,
+                        spawn_spec, spawn_attempts
+                    ) VALUES (
+                        ?, ?, NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        NULL, NULL, NULL, 0, NULL, ?, ?, NULL, 0
+                    )
+                    """,
+                    [
+                        (
+                            task_id,
+                            state.session_id,
+                            row["agent_type"],
+                            row["status"],
+                            row["command"],
+                            row["detail"],
+                            row["result_ref"],
+                            row["result_text"],
+                            row["created_at"],
+                            row["started_at"],
+                            row["updated_at"],
+                            row["ended_at"],
+                            now,
+                            f"branch:{state.session_id}:{task_id}:{row['status']}",
+                        )
+                        for task_id, row in by_task.items()
+                    ],
+                )
+        state.context_etag = etag
+
     async def prune_expired_tool_results(self, *, limit: int = 1000, now: datetime | None = None) -> int:
-        """Drop expired manifests; the orphan-blob sweep reclaims bytes safely."""
+        """Drop expired, inactive manifests; active context references pin them."""
 
         if limit <= 0:
             return 0
@@ -2685,6 +3163,48 @@ class SessionStore:
                 SELECT tool_result_id
                 FROM tool_results
                 WHERE expires_at IS NOT NULL AND expires_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM sessions AS active_session
+                      WHERE active_session.session_id = tool_results.session_id
+                        AND CASE
+                            WHEN json_valid(active_session.messages)
+                            THEN json_type(active_session.messages) <> 'array'
+                            ELSE 1
+                        END
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM sessions AS active_session,
+                           json_each(
+                               CASE
+                                   WHEN json_valid(active_session.messages) THEN active_session.messages
+                                   ELSE '[]'
+                               END
+                           ) AS active_message
+                      WHERE active_session.session_id = tool_results.session_id
+                        AND json_extract(active_message.value, '$.role') = 'tool'
+                        AND json_extract(active_message.value, '$.tool_call_id') = tool_results.tool_call_id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM sessions AS active_session,
+                           json_each(
+                               CASE
+                                   WHEN json_valid(active_session.messages) THEN active_session.messages
+                                   ELSE '[]'
+                               END
+                           ) AS active_message,
+                           json_each(
+                               CASE
+                                   WHEN json_type(active_message.value, '$.compaction.tool_result_refs') = 'array'
+                                   THEN json_extract(active_message.value, '$.compaction.tool_result_refs')
+                                   ELSE '[]'
+                               END
+                           ) AS active_ref
+                      WHERE active_session.session_id = tool_results.session_id
+                        AND CAST(active_ref.value AS TEXT) = tool_results.tool_call_id
+                  )
                 ORDER BY expires_at, tool_result_id
                 LIMIT ?
             )
@@ -2698,10 +3218,12 @@ class SessionStore:
         now = datetime.now(UTC).isoformat()
         rows = await self.read_conn.execute_fetchall(
             """
-            SELECT * FROM tool_results
-            WHERE run_id = ? AND tool_call_id = ?
-              AND (expires_at IS NULL OR expires_at > ?)
-            ORDER BY created_at DESC
+            SELECT result.*
+            FROM tool_calls AS call
+            JOIN tool_results AS result ON result.tool_result_id = call.result_ref
+            WHERE call.run_id = ? AND call.tool_call_id = ?
+              AND (result.expires_at IS NULL OR result.expires_at > ?)
+            ORDER BY result.created_at DESC
             LIMIT 1
             """,
             (run_id, tool_call_id, now),
@@ -3788,8 +4310,11 @@ class SessionStore:
         return [self._chat_queued_message_payload(row) for row in rows]
 
     @staticmethod
-    def _tool_result_id(*, session_id: str, seq: int, tool_call_id: str, content_sha256: str) -> str:
-        seed = f"{session_id}\0{seq}\0{tool_call_id}\0{content_sha256}".encode()
+    def _tool_result_id(*, session_id: str, tool_call_id: str, content_sha256: str) -> str:
+        # Stable across durable event replay. The table's uniqueness contract
+        # is the same tuple; including transport seq produced dangling raw_ref
+        # values when INSERT OR IGNORE reused the earlier manifest row.
+        seed = f"{session_id}\0{tool_call_id}\0{content_sha256}".encode()
         return f"tr_{hashlib.sha256(seed).hexdigest()[:24]}"
 
     @staticmethod
@@ -3853,7 +4378,6 @@ class SessionStore:
                 preview=preview,
                 tool_result_id=cls._tool_result_id(
                     session_id=record.session_id,
-                    seq=record.seq,
                     tool_call_id=tool_call_id,
                     content_sha256=blob.content_sha256,
                 ),
@@ -3862,7 +4386,6 @@ class SessionStore:
 
         tool_result_id = cls._tool_result_id(
             session_id=record.session_id,
-            seq=record.seq,
             tool_call_id=tool_call_id,
             content_sha256=blob.content_sha256,
         )
@@ -4157,12 +4680,7 @@ class SessionStore:
                 rehydration_state, created_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(compaction_id) DO UPDATE SET
-                session_id = excluded.session_id,
-                boundary_seq = excluded.boundary_seq,
-                messages_before = excluded.messages_before,
-                messages_after = excluded.messages_after,
-                rehydration_state = excluded.rehydration_state
+            ON CONFLICT(compaction_id) DO NOTHING
             """,
             (
                 compaction_id,
@@ -4199,42 +4717,210 @@ class SessionStore:
             for row in rows
         ]
 
+    async def _save_session_snapshot_unlocked(
+        self,
+        state: SessionState,
+        messages: list[dict | Any],
+        metadata: dict | None,
+        *,
+        expected_generation: int | None = None,
+        connection: aiosqlite.Connection,
+    ) -> tuple[list[dict], str]:
+        serializable_messages = self._to_serializable_messages(messages)
+
+        # The list is shared with the agent's in-memory context, so stable
+        # identity and timestamps survive later append-only saves.
+        now = datetime.now(UTC).isoformat()
+        self._stamp_messages(serializable_messages, now)
+        meta = metadata or {}
+        messages_json, metadata_json = await asyncio.to_thread(
+            lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
+        )
+        generation = state.context_generation if expected_generation is None else expected_generation
+        cursor = await connection.execute(
+            SQL_SAVE_SESSION,
+            (
+                state.session_id,
+                state.started_at.isoformat(),
+                state.last_activity.isoformat(),
+                messages_json,
+                metadata_json,
+                state.name,
+                state.session_type,
+                state.origin_automation_id,
+                state.parent_session_id,
+                state.parent_tool_call_id,
+                state.agent_type,
+                state.agent_status,
+                state.area_id,
+                state.chat_model,
+                generation,
+            ),
+        )
+        if cursor.rowcount == 0:
+            raise StaleSessionContextError(f"session {state.session_id} context was replaced while its run was active")
+        await self._mirror_session_messages(state.session_id, serializable_messages, connection=connection)
+        return serializable_messages, self._projection_etag(messages_json)
+
     async def save_session(self, state: SessionState, messages: list[dict | Any], metadata: dict | None = None) -> None:
         lock = await self._session_write_lock(state.session_id)
         async with lock:
-            serializable_messages = self._to_serializable_messages(messages)
+            async with self._session_context_transaction() as connection:
+                _serializable, etag = await self._save_session_snapshot_unlocked(
+                    state,
+                    messages,
+                    metadata,
+                    connection=connection,
+                )
+            state.context_etag = etag
 
-            # Stamp created_at on every message that hasn't been stamped yet.
-            # The list is shared with the agent's in-memory context so the
-            # stamp persists across saves without a side-table lookup.
-            now = datetime.now(UTC).isoformat()
-            self._stamp_messages(serializable_messages, now)
+    async def _advance_context_generation_unlocked(
+        self,
+        state: SessionState,
+        *,
+        expected_generation: int,
+        expected_projection_etag: str,
+        expected_message_ids: list[str] | None = None,
+        connection: aiosqlite.Connection,
+    ) -> int | None:
+        rows = await connection.execute_fetchall(
+            "SELECT messages, context_generation FROM sessions WHERE session_id = ?",
+            (state.session_id,),
+        )
+        if not rows:
+            return None
+        raw_messages = rows[0]["messages"]
+        if (
+            int(rows[0]["context_generation"]) != expected_generation
+            or self._projection_etag(raw_messages) != expected_projection_etag
+        ):
+            return None
+        try:
+            current = json.loads(raw_messages) if raw_messages is not None else None
+        except (TypeError, json.JSONDecodeError):
+            current = None
+        if (
+            expected_message_ids is not None
+            and isinstance(current, list)
+            and self._message_id_sequence(current) != expected_message_ids
+        ):
+            return None
 
-            meta = metadata or {}
-            messages_json, metadata_json = await asyncio.to_thread(
-                lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
-            )
-            await self.conn.execute(
-                SQL_SAVE_SESSION,
-                (
-                    state.session_id,
-                    state.started_at.isoformat(),
-                    state.last_activity.isoformat(),
-                    messages_json,
-                    metadata_json,
-                    state.name,
-                    state.session_type,
-                    state.origin_automation_id,
-                    state.parent_session_id,
-                    state.parent_tool_call_id,
-                    state.agent_type,
-                    state.agent_status,
-                    state.area_id,
-                    state.chat_model,
-                ),
-            )
-            await self._mirror_session_messages(state.session_id, serializable_messages)
-            await self.conn.commit()
+        next_generation = expected_generation + 1
+        cursor = await connection.execute(
+            """
+            UPDATE sessions
+            SET context_generation = ?
+            WHERE session_id = ? AND context_generation = ? AND messages IS ?
+            """,
+            (next_generation, state.session_id, expected_generation, raw_messages),
+        )
+        return next_generation if cursor.rowcount == 1 else None
+
+    async def rewind_session(
+        self,
+        state: SessionState,
+        messages: list[dict | Any],
+        *,
+        expected_message_ids: list[str],
+        discard_message_ids: list[str],
+        expected_generation: int | None = None,
+        expected_projection_etag: str | None = None,
+        metadata: dict | None = None,
+    ) -> bool:
+        """Atomically replace the active projection and delete reverted rows.
+
+        Ordinary saves never rewrite or delete transcript rows. A user-requested
+        rewind is the explicit exception. Deletion is by active message identity,
+        not raw transcript sequence: compaction reorders retained-tail messages.
+        """
+        lock = await self._session_write_lock(state.session_id)
+        async with lock:
+            async with self._session_context_transaction() as connection:
+                generation = state.context_generation if expected_generation is None else expected_generation
+                etag = state.context_etag if expected_projection_etag is None else expected_projection_etag
+                next_generation = (
+                    await self._advance_context_generation_unlocked(
+                        state,
+                        expected_generation=generation,
+                        expected_projection_etag=etag,
+                        expected_message_ids=expected_message_ids,
+                        connection=connection,
+                    )
+                    if etag is not None
+                    else None
+                )
+                if next_generation is None:
+                    return False
+
+                serializable = self._to_serializable_messages(messages)
+                self._stamp_messages(serializable, datetime.now(UTC).isoformat())
+                replacement = self.renew_handoff_projection(
+                    serializable,
+                    messages_before=len(expected_message_ids),
+                    reason="user_rewind",
+                )
+                replacement, replacement_etag = await self._save_session_snapshot_unlocked(
+                    state,
+                    replacement,
+                    metadata,
+                    expected_generation=next_generation,
+                    connection=connection,
+                )
+                unique_ids = list(dict.fromkeys(discard_message_ids))
+                if unique_ids:
+                    await connection.executemany(
+                        "DELETE FROM session_messages WHERE session_id = ? AND message_id = ?",
+                        [(state.session_id, message_id) for message_id in unique_ids],
+                    )
+                await self._rebuild_session_turns(state.session_id, connection=connection)
+            state.context_generation = next_generation
+            state.context_etag = replacement_etag
+            messages[:] = replacement
+            return True
+
+    async def clear_session_context(
+        self,
+        state: SessionState,
+        *,
+        expected_message_ids: list[str],
+        expected_generation: int | None = None,
+        expected_projection_etag: str | None = None,
+        metadata: dict | None = None,
+    ) -> bool:
+        """Atomically clear the active projection and its transcript."""
+        lock = await self._session_write_lock(state.session_id)
+        async with lock:
+            async with self._session_context_transaction() as connection:
+                generation = state.context_generation if expected_generation is None else expected_generation
+                etag = state.context_etag if expected_projection_etag is None else expected_projection_etag
+                next_generation = (
+                    await self._advance_context_generation_unlocked(
+                        state,
+                        expected_generation=generation,
+                        expected_projection_etag=etag,
+                        expected_message_ids=expected_message_ids,
+                        connection=connection,
+                    )
+                    if etag is not None
+                    else None
+                )
+                if next_generation is None:
+                    return False
+
+                _messages, cleared_etag = await self._save_session_snapshot_unlocked(
+                    state,
+                    [],
+                    metadata,
+                    expected_generation=next_generation,
+                    connection=connection,
+                )
+                await connection.execute("DELETE FROM session_messages WHERE session_id = ?", (state.session_id,))
+                await connection.execute("DELETE FROM session_turns WHERE session_id = ?", (state.session_id,))
+                await connection.execute("DELETE FROM chat_compactions WHERE session_id = ?", (state.session_id,))
+            state.context_generation = next_generation
+            state.context_etag = cleared_etag
+            return True
 
     async def create_session_if_absent(
         self,
@@ -4245,36 +4931,43 @@ class SessionStore:
         """Insert a new session without replacing a row created by a racing owner."""
         lock = await self._session_write_lock(state.session_id)
         async with lock:
-            serializable_messages = self._to_serializable_messages(messages or [])
-            now = datetime.now(UTC).isoformat()
-            self._stamp_messages(serializable_messages, now)
-            meta = metadata or {}
-            messages_json, metadata_json = await asyncio.to_thread(
-                lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
-            )
-            cursor = await self.conn.execute(
-                SQL_INSERT_SESSION_IF_ABSENT,
-                (
-                    state.session_id,
-                    state.started_at.isoformat(),
-                    state.last_activity.isoformat(),
-                    messages_json,
-                    metadata_json,
-                    state.name,
-                    state.session_type,
-                    state.origin_automation_id,
-                    state.parent_session_id,
-                    state.parent_tool_call_id,
-                    state.agent_type,
-                    state.agent_status,
-                    state.area_id,
-                    state.chat_model,
-                ),
-            )
-            created = cursor.rowcount > 0
+            async with self._session_context_transaction() as connection:
+                serializable_messages = self._to_serializable_messages(messages or [])
+                now = datetime.now(UTC).isoformat()
+                self._stamp_messages(serializable_messages, now)
+                meta = metadata or {}
+                messages_json, metadata_json = await asyncio.to_thread(
+                    lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
+                )
+                cursor = await connection.execute(
+                    SQL_INSERT_SESSION_IF_ABSENT,
+                    (
+                        state.session_id,
+                        state.started_at.isoformat(),
+                        state.last_activity.isoformat(),
+                        messages_json,
+                        metadata_json,
+                        state.name,
+                        state.session_type,
+                        state.origin_automation_id,
+                        state.parent_session_id,
+                        state.parent_tool_call_id,
+                        state.agent_type,
+                        state.agent_status,
+                        state.area_id,
+                        state.chat_model,
+                        state.context_generation,
+                    ),
+                )
+                created = cursor.rowcount > 0
+                if created:
+                    await self._mirror_session_messages(
+                        state.session_id,
+                        serializable_messages,
+                        connection=connection,
+                    )
             if created:
-                await self._mirror_session_messages(state.session_id, serializable_messages)
-            await self.conn.commit()
+                state.context_etag = self._projection_etag(messages_json)
             return created
 
     async def load_session(self, session_id: str) -> SessionData | None:
@@ -4306,17 +4999,52 @@ class SessionStore:
             agent_status=dict(row).get("agent_status"),
             area_id=row["area_id"],
             chat_model=dict(row).get("chat_model"),
+            context_generation=int(dict(row).get("context_generation") or 0),
         )
 
         raw_messages, raw_metadata = row["messages"], row["metadata"]
-        messages, metadata = await asyncio.to_thread(
-            lambda: (json.loads(raw_messages) if raw_messages else [], json.loads(raw_metadata) if raw_metadata else {})
+        context_etag = self._projection_etag(raw_messages)
+        state.context_etag = context_etag
+
+        def _parse_session_projection() -> tuple[list[dict], bool, dict]:
+            try:
+                parsed_messages = json.loads(raw_messages) if raw_messages is not None else None
+            except (TypeError, json.JSONDecodeError):
+                parsed_messages = None
+            projection_valid = isinstance(parsed_messages, list) and all(
+                isinstance(message, dict) for message in parsed_messages
+            )
+            messages = parsed_messages if projection_valid else []
+            try:
+                parsed_metadata = json.loads(raw_metadata) if raw_metadata else {}
+            except (TypeError, json.JSONDecodeError):
+                parsed_metadata = {}
+            metadata = parsed_metadata if isinstance(parsed_metadata, dict) else {}
+            return messages, projection_valid, metadata
+
+        messages, projection_valid, metadata = await asyncio.to_thread(_parse_session_projection)
+        transcript_rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT seq, message_id, message_json
+            FROM session_messages
+            WHERE session_id = ?
+            ORDER BY seq ASC
+            """,
+            (session_id,),
         )
+        messages = self._active_context_from_transcript_rows(
+            transcript_rows,
+            messages,
+            fallback_valid=projection_valid,
+        )
+        await self._restore_active_tool_result_files(session_id, messages)
         return SessionData(
             state=state,
             messages=messages,
             last_input_tokens=metadata.get("last_input_tokens"),
             last_message_count=metadata.get("last_message_count"),
+            context_generation=state.context_generation,
+            context_etag=context_etag,
         )
 
     async def get_latest_id(self) -> str | None:
@@ -4462,6 +5190,7 @@ class SessionStore:
         connection.row_factory = aiosqlite.Row
         try:
             await connection.execute("PRAGMA busy_timeout=5000")
+            await connection.execute("PRAGMA foreign_keys=ON")
             yield connection
         finally:
             await connection.close()
@@ -4475,9 +5204,7 @@ class SessionStore:
             table = str(row["name"])
             if table == "sessions" or table.startswith("session_messages_fts"):
                 continue
-            columns = await connection.execute_fetchall(
-                f"PRAGMA table_info({self._quoted_identifier(table)})"
-            )
+            columns = await connection.execute_fetchall(f"PRAGMA table_info({self._quoted_identifier(table)})")
             if any(column["name"] == "session_id" for column in columns):
                 owned.append(table)
         return owned
@@ -4536,6 +5263,7 @@ class SessionStore:
                         """
                         UPDATE sessions
                         SET messages = '[]', metadata = '{}', storage_state = 'cold',
+                            context_generation = context_generation + 1,
                             cold_bundle_path = ?, cold_bundle_sha256 = ?, cold_bundle_bytes = ?,
                             cold_logical_bytes = ?, cold_message_count = ?, cold_prose_sha256 = ?,
                             cold_blob_hashes_json = ?
@@ -4589,10 +5317,14 @@ class SessionStore:
             async with self._maintenance_connection() as connection:
                 await connection.execute("BEGIN IMMEDIATE")
                 current = await connection.execute_fetchall(
-                    "SELECT storage_state, cold_bundle_sha256 FROM sessions WHERE session_id = ?",
+                    "SELECT storage_state, cold_bundle_sha256, context_generation FROM sessions WHERE session_id = ?",
                     (session_id,),
                 )
-                if not current or current[0]["storage_state"] != "cold" or current[0]["cold_bundle_sha256"] != manifest.bundle_sha256:
+                if (
+                    not current
+                    or current[0]["storage_state"] != "cold"
+                    or current[0]["cold_bundle_sha256"] != manifest.bundle_sha256
+                ):
                     await connection.rollback()
                     raise RuntimeError("cold session changed while restoration was being prepared")
                 for table, table_rows in snapshot.get("tables", {}).items():
@@ -4616,7 +5348,8 @@ class SessionStore:
                 restorable = {
                     schema_row["name"]
                     for schema_row in schema_rows
-                    if schema_row["name"] != "session_id" and not schema_row["name"].startswith("cold_")
+                    if schema_row["name"] not in {"session_id", "context_generation"}
+                    and not schema_row["name"].startswith("cold_")
                 }
                 columns = [column for column in original if column in restorable and column != "storage_state"]
                 assignments = ", ".join(f"{self._quoted_identifier(column)} = ?" for column in columns)
@@ -5200,37 +5933,6 @@ class SessionStore:
         except Exception:
             return {}
         return payload if isinstance(payload, dict) else {}
-
-    async def delete_session_messages_from(
-        self,
-        session_id: str,
-        message_id: str | None = None,
-        seq: int | None = None,
-    ) -> bool:
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            await self._ensure_session_messages_unlocked(session_id)
-            target_seq = seq
-            if target_seq is None and message_id:
-                rows = await self.read_conn.execute_fetchall(
-                    """
-                    SELECT seq FROM session_messages
-                    WHERE session_id = ? AND (message_id = ? OR client_id = ?)
-                    LIMIT 1
-                    """,
-                    (session_id, message_id, message_id),
-                )
-                target_seq = int(rows[0]["seq"]) if rows else None
-            if target_seq is None:
-                return False
-
-            cursor = await self.conn.execute(
-                "DELETE FROM session_messages WHERE session_id = ? AND seq >= ?",
-                (session_id, target_seq),
-            )
-            await self._rebuild_session_turns(session_id)
-            await self.conn.commit()
-            return cursor.rowcount > 0
 
     async def list_session_turns(self, session_id: str, limit: int = 100) -> list[dict]:
         await self._ensure_session_messages(session_id)

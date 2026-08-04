@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
+import json
 from datetime import UTC, datetime
 
 import pytest
 
 import arden.tools.background as background_module
+from arden.constants import OFFLOAD_THRESHOLD
 from arden.context.models import SessionState
 from arden.server.state import RunRegistry
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
@@ -20,6 +22,87 @@ def _ctx(registry: BackgroundTaskRegistry, run_registry: RunRegistry | None = No
         background_tasks=registry,
         run_registry=run_registry,
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_result_read_pages_exact_unicode_content():
+    full = 'αβ\n"quoted"\n終わり'
+
+    async def read_result(task_id: str) -> str | None:
+        return full if task_id == "agent-1" else None
+
+    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
+    execution = ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry))
+
+    first = await background_module.agent_result_read(
+        execution,
+        background_module.AgentResultReadInput(task_id="agent-1", offset=0, limit=6),
+    )
+    first_page = json.loads(first.content)
+    second = await background_module.agent_result_read(
+        execution,
+        background_module.AgentResultReadInput(
+            task_id="agent-1",
+            offset=first_page["next_offset"],
+        ),
+    )
+    second_page = json.loads(second.content)
+
+    assert first_page["content"] + second_page["content"] == full
+    assert first_page == {
+        "task_id": "agent-1",
+        "offset": 0,
+        "content": full[:6],
+        "next_offset": 6,
+        "total_chars": len(full),
+        "has_more": True,
+    }
+    assert second_page["next_offset"] is None
+    assert second_page["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_result_read_worst_case_json_page_stays_directly_parseable():
+    full = ('\x00"\\💥' * 2_000) + "tail"
+
+    async def read_result(_task_id: str) -> str:
+        return full
+
+    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
+    result = await background_module.agent_result_read(
+        ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry)),
+        background_module.AgentResultReadInput(task_id="x" * 200),
+    )
+    page = json.loads(result.content)
+
+    assert page["content"] == full[: background_module.BACKGROUND_RESULT_READ_MAX_CHARS]
+    assert page["next_offset"] == background_module.BACKGROUND_RESULT_READ_MAX_CHARS
+    # The executor's unconditional final payload bound must not replace this
+    # JSON with a generic file pointer, even at maximum escaping expansion.
+    assert len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_agent_result_read_rejects_missing_result_and_past_end_offset():
+    async def read_result(task_id: str) -> str | None:
+        return "done" if task_id == "agent-1" else None
+
+    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
+    execution = ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry))
+
+    missing = await background_module.agent_result_read(
+        execution,
+        background_module.AgentResultReadInput(task_id="missing"),
+    )
+    past_end = await background_module.agent_result_read(
+        execution,
+        background_module.AgentResultReadInput(task_id="agent-1", offset=5),
+    )
+
+    assert missing.is_error
+    assert missing.outcome.error.code == "not_found"
+    assert past_end.is_error
+    assert past_end.outcome.error.code == "invalid_arguments"
 
 
 async def _register_live(registry: BackgroundTaskRegistry, task_id: str, command: str) -> asyncio.Task:

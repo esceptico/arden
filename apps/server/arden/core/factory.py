@@ -9,7 +9,6 @@ from arden.core.compaction_model_request_middleware import CompactionModelReques
 from arden.core.compactor import Compactor, SummaryCompactor
 from arden.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
 from arden.core.llm_client import llm_client
-from arden.core.model_context_budget import ToolResultContextBudgetMiddleware
 from arden.core.spawner import create_spawn_fn
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.usage_tracker import UsageTracker
@@ -177,10 +176,6 @@ def create_agent(
                 registry=executor.registry,
                 run=run_ctx,
                 get_services=lambda: executor.tool_services,
-            ),
-            ToolResultContextBudgetMiddleware(
-                session_id=session_state.session_id,
-                on_results_evicted=run_ctx.downgrade_resource_observations_for_tool_results,
             ),
             CompactionModelRequestMiddleware(
                 compactor=config.compactor,

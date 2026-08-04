@@ -21,10 +21,6 @@ from arden.context.models import SessionState
 from arden.core.compaction_model_request_middleware import CompactionModelRequestMiddleware
 from arden.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
 from arden.core.factory import AgentConfig, create_agent
-from arden.core.model_context_budget import (
-    MODEL_TOOL_RESULT_KEEP_FULL_CHARS,
-    ToolResultContextBudgetMiddleware,
-)
 from arden.core.spawner import create_spawn_fn
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.core import APP_CONTROL, SESSIONS
@@ -304,9 +300,8 @@ async def test_compaction_uses_persisted_input_tokens_on_first_request():
 
 
 @pytest.mark.asyncio
-async def test_model_context_budget_stubs_oversized_tool_tail_after_compaction():
-    # A single result above the keep-full budget is stubbed (in practice offload catches it first).
-    huge_result = "x" * (MODEL_TOOL_RESULT_KEEP_FULL_CHARS + 10_000)
+async def test_compaction_replacement_is_not_silently_trimmed():
+    huge_result = "x" * 100_000
 
     class CompactsToHugeToolTail:
         def should_compact(self, messages, model, last_input_tokens):
@@ -331,45 +326,11 @@ async def test_model_context_budget_stubs_oversized_tool_tail_after_compaction()
 
     prepared = await apply_model_request_middlewares(
         _request(_registry()),
-        (
-            ToolResultContextBudgetMiddleware(),
-            CompactionModelRequestMiddleware(compactor=CompactsToHugeToolTail()),
-        ),
+        (CompactionModelRequestMiddleware(compactor=CompactsToHugeToolTail()),),
     )
 
-    tool_content = prepared.messages[-1]["content"]
-    assert len(tool_content) < len(huge_result)
-    assert "cleared from context" in tool_content
-    assert huge_result not in tool_content
-
-
-@pytest.mark.asyncio
-async def test_model_context_budget_keeps_recent_full_stubs_old():
-    big = "x" * (MODEL_TOOL_RESULT_KEEP_FULL_CHARS // 2 + 1000)  # only the most recent fits
-    messages = [{"role": "system", "content": "system"}]
-    for i in range(4):
-        messages.append({"role": "tool", "tool_call_id": f"call-{i}", "content": big})
-
-    async def next_request(req: ModelRequest) -> ModelRequest:
-        return ModelRequest(
-            step=req.step,
-            messages=messages,
-            model=req.model,
-            tools=req.tools,
-            deferred_tools=req.deferred_tools,
-            tool_choice=req.tool_choice,
-            reasoning_effort=req.reasoning_effort,
-            previous_response=req.previous_response,
-        )
-
-    prepared = await ToolResultContextBudgetMiddleware()(_request(_registry()), next_request)
-    by_id = {m["tool_call_id"]: m["content"] for m in prepared.messages if m.get("role") == "tool"}
-
-    # most recent kept full; older ones collapsed to a short stub
-    assert by_id["call-3"] == big
-    for cid in ("call-0", "call-1", "call-2"):
-        assert "cleared from context" in by_id[cid]
-        assert big not in by_id[cid]
+    assert prepared.messages[-1]["content"] == huge_result
+    assert prepared.compaction_replacement is prepared.messages
 
 
 @pytest.mark.asyncio
@@ -1039,6 +1000,28 @@ async def test_create_agent_compaction_refreshes_deferred_schema():
     assert "slack_search" not in deferred_names
 
 
+@pytest.mark.asyncio
+async def test_create_agent_does_not_trim_accumulated_tool_results_without_compaction():
+    registry = _registry()
+    agent = create_agent(
+        executor=_Executor(registry),
+        config=AgentConfig(model="test-model", research_model=None, max_depth=3),
+        tools=registry.get_schemas(),
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        run_id="run",
+    )
+    body = "x" * 30_000
+    messages = [
+        {"role": "system", "content": "test"},
+        *({"role": "tool", "tool_call_id": f"call-{index}", "content": body} for index in range(4)),
+    ]
+
+    prepared, *_rest = await agent._prepare(0, messages)
+
+    assert [message["content"] for message in prepared[1:]] == [body] * 4
+    assert [message["content"] for message in messages[1:]] == [body] * 4
+
+
 def test_create_agent_wires_child_io_factory_onto_run_context():
     # Regression: child_io_factory must land on the RunContext the SPAWNER reads
     # (calling_ctx.run.child_io_factory), not on a RunState. The original bug was a
@@ -1514,10 +1497,10 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_spawned_agent_clamps_tool_tail_after_compaction(monkeypatch):
+async def test_spawned_agent_uses_explicit_compaction_without_request_trimming(monkeypatch):
     registry = _registry()
     captured = {}
-    huge_result = "x" * (MODEL_TOOL_RESULT_KEEP_FULL_CHARS + 10_000)
+    huge_result = "x" * 100_000
 
     class CompactsToHugeToolTail:
         def __init__(self):
@@ -1590,12 +1573,8 @@ async def test_spawned_agent_clamps_tool_tail_after_compaction(monkeypatch):
         captured["model_request_middlewares"],
     )
     tool_content = prepared.messages[-1]["content"]
-    assert len(tool_content) < len(huge_result)
-    assert "cleared from context" in tool_content
-    assert huge_result not in tool_content
+    assert tool_content == huge_result
     assert compactor.seen_messages is not None
-    # Full compaction operates on canonical history. Request-only tool-result
-    # limiting runs on the compacted model view and must not rewrite that source.
     assert huge_result in str(compactor.seen_messages)
 
 

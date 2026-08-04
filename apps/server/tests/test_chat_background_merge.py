@@ -44,3 +44,20 @@ def test_background_merge_does_not_duplicate_already_saved_background_tail():
     ]
 
     assert _merge_background_messages(current, background) == current
+
+
+def test_background_merge_matches_refreshed_system_message_by_stable_id():
+    current = [
+        {"role": "system", "content": "fresh prompt", "message_id": "system-1"},
+        {"role": "user", "content": "before", "message_id": "user-1"},
+    ]
+    background = [
+        {"role": "system", "content": "older prompt", "message_id": "system-1"},
+        {"role": "user", "content": "before", "message_id": "user-1"},
+        {"role": "assistant", "content": "background result", "message_id": "assistant-1"},
+    ]
+
+    assert _merge_background_messages(current, background) == [
+        *current,
+        background[-1],
+    ]

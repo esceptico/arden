@@ -505,9 +505,9 @@ class Agent:
             self.model_request_middlewares,
         )
 
-        if prepared.history_messages is not None and prepared.history_messages is not messages:
+        if prepared.compaction_replacement is not None and prepared.compaction_replacement is not messages:
             messages.clear()
-            messages.extend(prepared.history_messages)
+            messages.extend(prepared.compaction_replacement)
 
         return (
             prepared.messages,

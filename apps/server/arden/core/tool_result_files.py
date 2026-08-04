@@ -11,14 +11,15 @@ it can't accumulate again. Long-term raw evidence is stored separately via
 core.raw_tool_results and the tool_results manifest.
 
 tool_call_ids are globally unique, so `find_result_file` can still locate a file
-from the id alone (glob across session dirs) for layers that don't carry the
-session — e.g. the context-budget middleware rewriting an older result to a stub.
+from the id alone for recovery and diagnostics when the caller lacks a session.
 """
 
 import re
 import shutil
 import time
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 from arden.settings import ARDEN_DIR
 
@@ -41,6 +42,10 @@ def result_file_path(session_id: str, tool_call_id: str) -> Path:
     return session_results_dir(session_id) / f"{tool_call_id}.txt"
 
 
+def result_payload_file_path(session_id: str, tool_call_id: str) -> Path:
+    return session_results_dir(session_id) / f"{tool_call_id}.payload.json"
+
+
 def _ensure_ignore_marker() -> None:
     """Drop a ripgrep `.ignore` at the store root so file_search_text/file_find never
     walk offloaded results — the result store is not a search corpus. ripgrep
@@ -60,11 +65,82 @@ def persist_result(session_id: str, tool_call_id: str, content: str) -> Path:
     return path
 
 
+def persist_result_payload(session_id: str, tool_call_id: str, content: str) -> Path:
+    path = result_payload_file_path(session_id, tool_call_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_ignore_marker()
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def find_result_file(tool_call_id: str) -> Path | None:
     """Locate an offloaded result by globally unique id."""
     if not RESULTS_BASE.exists():
         return None
     return next(RESULTS_BASE.glob(f"**/{tool_call_id}.txt"), None)
+
+
+def find_result_payload_file(tool_call_id: str) -> Path | None:
+    """Locate an exact serialized ToolResult envelope by globally unique id."""
+    if not RESULTS_BASE.exists():
+        return None
+    return next(RESULTS_BASE.glob(f"**/{tool_call_id}.payload.json"), None)
+
+
+def clone_result_files(source_session_id: str, target_session_id: str, tool_call_ids: set[str]) -> None:
+    """Copy readable caches for a branch so it does not depend on its source."""
+    if not tool_call_ids:
+        return
+    _ensure_ignore_marker()
+    for tool_call_id in tool_call_ids:
+        pairs = (
+            (result_file_path(source_session_id, tool_call_id), result_file_path(target_session_id, tool_call_id)),
+            (
+                result_payload_file_path(source_session_id, tool_call_id),
+                result_payload_file_path(target_session_id, tool_call_id),
+            ),
+        )
+        for source, target in pairs:
+            if not source.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
+def rewrite_result_paths(value: Any, source_session_id: str, target_session_id: str) -> Any:
+    """Rebase only Arden-owned message pointers, preserving provider replay state."""
+    source = str(session_results_dir(source_session_id))
+    target = str(session_results_dir(target_session_id))
+
+    def rewrite_owned(item: Any) -> Any:
+        if isinstance(item, str):
+            return item.replace(source, target)
+        if isinstance(item, dict):
+            return {key: rewrite_owned(child) for key, child in item.items()}
+        if isinstance(item, list):
+            return [rewrite_owned(child) for child in item]
+        if isinstance(item, tuple):
+            return tuple(rewrite_owned(child) for child in item)
+        return deepcopy(item)
+
+    def rewrite_message(message: Any) -> Any:
+        if not isinstance(message, dict):
+            return deepcopy(message)
+        copied = deepcopy(message)
+        if copied.get("role") == "tool":
+            for key in ("content", "data"):
+                if key in copied:
+                    copied[key] = rewrite_owned(copied[key])
+        compaction = copied.get("compaction")
+        if isinstance(compaction, dict) and compaction.get("kind") == "session_handoff":
+            if "content" in copied:
+                copied["content"] = rewrite_owned(copied["content"])
+            copied["compaction"] = rewrite_owned(compaction)
+        return copied
+
+    if isinstance(value, list):
+        return [rewrite_message(message) for message in value]
+    return rewrite_message(value)
 
 
 def purge_session_results(session_id: str) -> None:
@@ -80,13 +156,14 @@ def prune_offload_store(max_age_seconds: int = RESULTS_MAX_AGE_SECONDS) -> int:
     _ensure_ignore_marker()
     cutoff = time.time() - max_age_seconds
     removed = 0
-    for path in RESULTS_BASE.rglob("*.txt"):
-        try:
-            if path.stat().st_mtime < cutoff:
-                path.unlink()
-                removed += 1
-        except OSError:
-            pass
+    for pattern in ("*.txt", "*.payload.json"):
+        for path in RESULTS_BASE.rglob(pattern):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                pass
     for child in RESULTS_BASE.iterdir():
         if child.is_dir():
             try:

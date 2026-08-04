@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 
 from arden.agent.types.llm import Message, Role
@@ -48,6 +49,8 @@ def normalize_assistant_message(message: Message) -> dict:
             }
             for call in provider_tool_calls
         ]
+    if openai_response_items := getattr(message, "openai_response_items", None):
+        sanitized["openai_response_items"] = deepcopy(openai_response_items)
     return sanitized
 
 

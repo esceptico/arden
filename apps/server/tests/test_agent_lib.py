@@ -1076,11 +1076,11 @@ async def test_model_request_middleware_can_replace_request_messages_without_mut
 
 
 @pytest.mark.asyncio
-async def test_model_request_middleware_explicit_history_replacement_mutates_history():
+async def test_model_request_middleware_explicit_compaction_replacement_starts_new_epoch():
     replacement = [{"role": "system", "content": "compacted"}]
 
     async def replace_history(request, next_request):
-        return await next_request(replace(request, messages=replacement, history_messages=replacement))
+        return await next_request(replace(request, messages=replacement, compaction_replacement=replacement))
 
     llm = FakeLLM([_response(text="ok")])
     agent = _make_agent(llm, FakeExecutor({}), model_request_middlewares=(replace_history,))

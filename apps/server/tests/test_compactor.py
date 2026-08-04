@@ -8,6 +8,11 @@ import pytest
 import arden.constants as constants
 from arden.agent import Role
 from arden.constants import SESSION_HANDOFF_MARKER, SUMMARY_MAX_TOKENS
+from arden.context.prompts import (
+    MERGE_SUMMARY_PROMPT_TEMPLATE,
+    RESEARCH_AGENT_COMPACTION_CONTEXT,
+    SUMMARIZE_PROMPT_TEMPLATE,
+)
 from arden.core.compactor import (
     _CHARS_PER_TOKEN,
     _DROPPED_HISTORY_MARKER,
@@ -16,6 +21,7 @@ from arden.core.compactor import (
     _build_compacted_messages,
     compact_needed,
     compact_summarize,
+    compactable_range,
     is_handoff_message,
 )
 from arden.llm.models import get_model
@@ -34,14 +40,45 @@ def test_handoff_summary_tracks_raw_message_range():
 
     summary = compacted[1]
     assert summary["content"] == f"{SESSION_HANDOFF_MARKER}\nUseful summary"
+    compaction_id = summary["message_id"]
+    assert compaction_id.startswith("compact-")
     assert summary["compaction"] == {
+        "compaction_id": compaction_id,
         "kind": "session_handoff",
         "message_start": 1,
         "message_end": 4,
+        "messages_before": 5,
+        "messages_after": 3,
+        "preserved_tail_ids": ["m-4"],
         "message_start_id": "m-1",
         "message_end_id": "m-3",
     }
     assert is_handoff_message(summary)
+
+
+def test_short_history_can_compact_opaque_provider_state():
+    messages = [
+        {"role": Role.SYSTEM, "content": "system"},
+        {"role": Role.USER, "content": "find the tool"},
+        {
+            "role": Role.ASSISTANT,
+            "content": "",
+            "openai_response_items": [{"type": "tool_search_output", "tools": [{"description": "x" * 200_000}]}],
+        },
+        {"role": Role.USER, "content": "use it now"},
+    ]
+
+    assert compactable_range(messages) == (1, 3)
+
+
+def test_short_history_compacts_provider_state_when_it_is_latest():
+    messages = [
+        {"role": Role.SYSTEM, "content": "system"},
+        {"role": Role.USER, "content": "find the tool"},
+        {"role": Role.ASSISTANT, "content": "", "anthropic_content": [{"type": "text", "text": "x" * 200_000}]},
+    ]
+
+    assert compactable_range(messages) == (1, 3)
 
 
 def test_build_compacted_messages_embeds_rehydration_state():
@@ -71,6 +108,79 @@ def test_compacted_messages_record_tool_result_refs():
     assert compacted[1]["compaction"]["tool_result_refs"] == ["call-A", "call-B"]
 
 
+def test_recompaction_preserves_nested_tool_result_refs():
+    messages = [
+        {"role": "system", "content": "system", "message_id": "sys"},
+        {
+            "role": "assistant",
+            "content": "prior handoff",
+            "message_id": "compact-old",
+            "compaction": {
+                "kind": "session_handoff",
+                "compaction_id": "compact-old",
+                "tool_result_refs": ["call-old", "call-shared"],
+            },
+        },
+        {"role": "tool", "content": "new", "tool_call_id": "call-shared", "message_id": "tool-new"},
+        {"role": "assistant", "content": "tail", "message_id": "tail"},
+    ]
+
+    compacted = _build_compacted_messages(messages, 1, 3, "new summary")
+
+    assert compacted[1]["compaction"]["tool_result_refs"] == ["call-old", "call-shared"]
+
+
+def test_compacted_messages_record_and_retain_background_result_refs():
+    messages = [
+        {"role": "system", "content": "system", "message_id": "sys"},
+        {
+            "role": "assistant",
+            "content": "prior handoff",
+            "message_id": "compact-old",
+            "compaction": {
+                "kind": "session_handoff",
+                "compaction_id": "compact-old",
+                "background_result_refs": ["agent-old", "agent-shared"],
+            },
+        },
+        {
+            "role": "user",
+            "content": (
+                '<background_agent_result task_id="wrong-xml-ref" result_ref="background://wrong-xml-ref" '
+                'status="completed">\n<result>done</result>\n</background_agent_result>'
+            ),
+            "client_id": "bg:wrong-client-ref:completed",
+            "background_result_ref": "agent-shared",
+            "message_id": "bg-shared",
+        },
+        {
+            "role": "user",
+            "content": '<background_agent_result status="failed">legacy</background_agent_result>',
+            "client_id": "bg:agent-legacy:failed",
+            "message_id": "bg-legacy",
+        },
+        {"role": "assistant", "content": "tail", "message_id": "tail"},
+    ]
+
+    compacted = _build_compacted_messages(messages, 1, 4, "new summary")
+
+    assert compacted[1]["compaction"]["background_result_refs"] == [
+        "agent-old",
+        "agent-shared",
+        "agent-legacy",
+    ]
+
+
+def test_compaction_prompts_preserve_exact_background_result_locators():
+    prompts = (
+        SUMMARIZE_PROMPT_TEMPLATE.render(budget=100),
+        MERGE_SUMMARY_PROMPT_TEMPLATE.render(budget=100),
+        RESEARCH_AGENT_COMPACTION_CONTEXT,
+    )
+
+    assert all("agent_result_read" in prompt and "task_id" in prompt for prompt in prompts)
+
+
 def test_compacted_messages_omit_tool_result_refs_when_none():
     messages = [
         {"role": Role.SYSTEM, "content": "system"},
@@ -81,6 +191,7 @@ def test_compacted_messages_omit_tool_result_refs_when_none():
     compacted = _build_compacted_messages(messages, 1, 2, "summary")
 
     assert "tool_result_refs" not in compacted[1]["compaction"]
+    assert "background_result_refs" not in compacted[1]["compaction"]
 
 
 def test_handoff_content_has_no_reread_ref_list():

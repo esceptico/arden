@@ -38,6 +38,7 @@ class Message:
     reasoning_encrypted_content: str | None = None
     anthropic_content: list[dict] | None = None
     provider_tool_calls: list[ProviderToolCall] | None = None
+    openai_response_items: list[dict] | None = None
 
 
 @dataclass(frozen=True)

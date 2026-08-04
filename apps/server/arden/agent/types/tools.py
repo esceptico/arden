@@ -4,10 +4,12 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from urllib.parse import urlsplit
 
-from arden.core.content import ContentBlock
+from arden.core.content import ContentBlock, parse_block
 
 _PROVIDER_MAX_CHARS = 64
 _KIND_MAX_CHARS = 64
+_TOOL_RESULT_ENVELOPE_KEY = "_arden_envelope"
+_TOOL_RESULT_ENVELOPE_VERSION = "tool_result.v1"
 _REF_MAX_CHARS = 2048
 _TITLE_MAX_CHARS = 256
 _URL_MAX_CHARS = 4096
@@ -284,6 +286,7 @@ class ToolResult:
 
     def serialized_payload(self) -> str:
         payload = {
+            _TOOL_RESULT_ENVELOPE_KEY: _TOOL_RESULT_ENVELOPE_VERSION,
             "content": self.content,
             "preview": self.preview,
             "is_error": self.is_error,
@@ -296,6 +299,49 @@ class ToolResult:
             "outcome": self.outcome.to_dict() if self.outcome else None,
         }
         return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+    @classmethod
+    def from_serialized_payload(cls, value: str) -> "ToolResult | None":
+        """Decode the exact durable envelope emitted by ``serialized_payload``.
+
+        Ordinary result text, including envelope-shaped JSON, deliberately
+        returns ``None`` unless it carries Arden's explicit version marker.
+        """
+        try:
+            payload = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        required = {"content", "preview", "is_error", "data", "model_content", "source_refs", "outcome"}
+        if (
+            not isinstance(payload, dict)
+            or payload.get(_TOOL_RESULT_ENVELOPE_KEY) != _TOOL_RESULT_ENVELOPE_VERSION
+            or not required.issubset(payload)
+        ):
+            return None
+        if not isinstance(payload["content"], str) or not isinstance(payload["preview"], str):
+            return None
+        if not isinstance(payload["is_error"], bool):
+            return None
+        raw_model_content = payload["model_content"]
+        raw_source_refs = payload["source_refs"]
+        raw_outcome = payload["outcome"]
+        if not isinstance(raw_model_content, list) or not isinstance(raw_source_refs, list):
+            return None
+        try:
+            model_content = tuple(parse_block(block) for block in raw_model_content if isinstance(block, dict))
+            outcome = ToolOutcome.from_dict(raw_outcome) if isinstance(raw_outcome, Mapping) else None
+            data = payload["data"] if isinstance(payload["data"], dict) else None
+            return cls(
+                content=payload["content"],
+                preview=payload["preview"],
+                is_error=payload["is_error"],
+                data=data,
+                model_content=model_content,
+                source_refs=normalize_source_refs(raw_source_refs),
+                outcome=outcome,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def failure(

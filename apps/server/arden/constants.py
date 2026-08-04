@@ -97,12 +97,6 @@ HISTORY_MESSAGE_LIMIT = 50  # max user/assistant messages returned for UI histor
 SESSION_EVENT_DURABLE_RETENTION = 10000
 SESSION_EVENT_PRUNE_INTERVAL = 500  # prune a session after this many durable writes
 
-# Iteration-mode loops re-enter the target session and would otherwise see
-# the entire prior history. Cap to the last N messages (system row at
-# index 0 is preserved). Runtime-only; disk history is untouched.
-LOOP_ITERATION_HISTORY_WINDOW = 50
-
-
 # --- Context Compaction ---
 
 COMPRESSION_THRESHOLD = 0.8  # % of model token limit to trigger compaction

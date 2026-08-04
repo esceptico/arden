@@ -86,7 +86,8 @@ async def test_background_registry_injects_hidden_meta_completion_with_result():
         {
             "role": "user",
             "content": (
-                '<background_agent_result session_id="sess-1::ab12ef" status="completed">\n'
+                '<background_agent_result task_id="bg-1" result_ref="background://bg-1" '
+                'session_id="sess-1::ab12ef" status="completed">\n'
                 "This is a hidden completion event. The user cannot see this message.\n"
                 "Write a visible assistant response now. Summarize the result directly for the user.\n"
                 "If the result contains sources, IDs, links, or evidence, include the relevant ones inline.\n"
@@ -99,6 +100,7 @@ async def test_background_registry_injects_hidden_meta_completion_with_result():
             "is_meta": True,
             "client_id": "bg:bg-1:completed",
             "background_status": "completed",
+            "background_result_ref": "bg-1",
         }
     ]
 
@@ -123,7 +125,9 @@ async def test_background_completion_omits_the_session_when_the_durable_row_has_
     )
 
     content = injected[0]["content"]
-    assert content.startswith('<background_agent_result status="completed">')
+    assert content.startswith(
+        '<background_agent_result task_id="bg-1" result_ref="background://bg-1" status="completed">'
+    )
     assert "session_read" not in content
 
 

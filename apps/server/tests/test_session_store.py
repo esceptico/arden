@@ -1,5 +1,6 @@
 """Session store tests — real SQLite, round-trip persistence."""
 
+import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -9,10 +10,11 @@ import pytest
 import pytest_asyncio
 
 import arden.database as database
-from arden.agent import Usage
+from arden.agent import ToolResult, Usage
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
 from arden.context.models import BackgroundStartDisposition, SessionState
-from arden.context.store import SessionStore
+from arden.context.store import SessionStore, StaleSessionContextError
+from arden.core.compactor import _build_compacted_messages
 from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import ThinkingEvent, ToolCallResultEvent
@@ -1735,9 +1737,37 @@ async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp
         }
     ]
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "4"
+    assert version[0]["value"] == "5"
 
     await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v4_adds_context_generation_before_serving_rows(tmp_path: Path):
+    db = tmp_path / "v4-sessions.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    original = SessionStore(conn, read_conn)
+    await original.init_schema()
+    await original.save_session(_make_state("legacy"), [{"role": "user", "content": "kept"}])
+    await read_conn.close()
+    await conn.execute("ALTER TABLE sessions DROP COLUMN context_generation")
+    await conn.execute("UPDATE session_store_meta SET value = '4' WHERE key = 'schema_version'")
+    await conn.commit()
+
+    migrated_read = await database.connect(db, readonly=True)
+    migrated = SessionStore(conn, migrated_read)
+    await migrated.init_schema()
+
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(sessions)")}
+    assert "context_generation" in columns
+    row = (await conn.execute_fetchall("SELECT context_generation FROM sessions WHERE session_id = 'legacy'"))[0]
+    assert row["context_generation"] == 0
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "5"
+
+    await migrated_read.close()
     await conn.close()
 
 
@@ -2176,6 +2206,447 @@ async def test_offloaded_tool_result_event_registers_existing_raw_blob(store: Se
     assert manifest is not None
     assert manifest["content"] == raw
 
+    # Replaying the same result under a new transport sequence must reuse the
+    # manifest ID instead of emitting a pointer to an INSERT-ignored row.
+    await store.record_session_event(
+        StreamRecord(
+            seq=15,
+            session_id="sess-offload",
+            event=ToolCallResultEvent(
+                tool_call_id="call-offload",
+                name="bash",
+                content="compact head/tail preview",
+                preview="compact",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    replay_rows = await store.read_conn.execute_fetchall(
+        "SELECT event_json FROM session_events WHERE session_id = 'sess-offload' ORDER BY seq"
+    )
+    replay_refs = [json.loads(row["event_json"])["raw_ref"] for row in replay_rows]
+    assert replay_refs == [payload["raw_ref"], payload["raw_ref"]]
+    manifest_rows = await store.read_conn.execute_fetchall(
+        "SELECT tool_result_id FROM tool_results WHERE session_id = 'sess-offload'"
+    )
+    assert [row["tool_result_id"] for row in manifest_rows] == [payload["raw_ref"]]
+
+
+@pytest.mark.asyncio
+async def test_session_resume_rehydrates_pruned_offload_file_from_manifest(store: SessionStore, tmp_path, monkeypatch):
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    session_id = "sess-rehydrate"
+    tool_call_id = "call-rehydrate"
+    raw = "durable raw result\n" * 5000
+    blob = persist_raw_tool_result(raw)
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=session_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="bash",
+                content="bounded preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    path = tool_result_files.result_file_path(session_id, tool_call_id)
+    state = _make_state(session_id=session_id)
+    await store.save_session(
+        state,
+        [
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "client_id": "tool-message",
+                "content": f"bounded preview\nUse file_read(path={str(path)!r}, offset=N).",
+            }
+        ],
+    )
+    assert not path.exists()
+
+    loaded = await store.load_session(session_id)
+
+    assert loaded is not None
+    assert path.read_text() == raw
+
+
+@pytest.mark.asyncio
+async def test_session_resume_rehydrates_distinct_raw_and_payload_files(store: SessionStore, tmp_path, monkeypatch):
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    session_id = "sess-rehydrate-payload"
+    tool_call_id = "call-rehydrate-payload"
+    raw = "durable raw result\n" * 5_000
+    exact_payload = ToolResult(content=raw, preview="raw").serialized_payload()
+    blob = persist_raw_tool_result(exact_payload)
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=session_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="bash",
+                content="bounded preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    raw_path = tool_result_files.result_file_path(session_id, tool_call_id)
+    payload_path = tool_result_files.result_payload_file_path(session_id, tool_call_id)
+    state = _make_state(session_id=session_id)
+    await store.save_session(
+        state,
+        [
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "client_id": "tool-message",
+                "content": (
+                    f"bounded preview\nUse file_read(path={str(raw_path)!r}). "
+                    f"Exact payload: file_read(path={str(payload_path)!r})."
+                ),
+            }
+        ],
+    )
+
+    loaded = await store.load_session(session_id)
+
+    assert loaded is not None
+    assert raw_path.read_text() == raw
+    assert payload_path.read_text() == exact_payload
+
+
+@pytest.mark.asyncio
+async def test_active_search_result_pins_expired_manifest_until_context_drops_it(
+    store: SessionStore,
+    tmp_path,
+    monkeypatch,
+):
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    session_id = "sess-active-search"
+    tool_call_id = "call-search"
+    raw = "search evidence\n" * 5000
+    blob = persist_raw_tool_result(raw)
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=session_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="file_search_text",
+                content="bounded search preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    path = tool_result_files.result_file_path(session_id, tool_call_id)
+    active_tool_message = {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "client_id": "active-search-result",
+        "content": f"bounded preview\nUse file_read(path={str(path)!r}, offset=N).",
+    }
+    state = _make_state(session_id=session_id)
+    await store.save_session(state, [active_tool_message])
+    expired = datetime.now(UTC) - timedelta(days=1)
+    await store.conn.execute(
+        "UPDATE tool_results SET expires_at = ? WHERE session_id = ? AND tool_call_id = ?",
+        (expired.isoformat(), session_id, tool_call_id),
+    )
+    await store.conn.commit()
+
+    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+    loaded = await store.load_session(session_id)
+    assert loaded is not None
+    assert path.read_text() == raw
+
+    await store.save_session(state, [{"role": "user", "content": "new epoch", "client_id": "new-user"}])
+    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken_projection", ["{broken", "{}"])
+async def test_invalid_active_projection_fails_closed_when_pruning_tool_results(
+    store: SessionStore,
+    tmp_path,
+    monkeypatch,
+    broken_projection: str,
+):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "raw-results")
+    session_id = "sess-invalid-projection"
+    tool_call_id = "call-invalid-projection"
+    raw = "recoverable evidence\n" * 500
+    blob = persist_raw_tool_result(raw)
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=session_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="file_search_text",
+                content="bounded preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    path = tool_result_files.result_file_path(session_id, tool_call_id)
+    state = _make_state(session_id=session_id)
+    await store.save_session(
+        state,
+        [
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "client_id": "active-result",
+                "content": f"bounded preview\nUse file_read(path={str(path)!r}).",
+            }
+        ],
+    )
+    await store.conn.execute(
+        "UPDATE tool_results SET expires_at = ? WHERE session_id = ? AND tool_call_id = ?",
+        ((datetime.now(UTC) - timedelta(days=1)).isoformat(), session_id, tool_call_id),
+    )
+    await store.conn.execute(
+        "UPDATE sessions SET messages = ? WHERE session_id = ?",
+        (broken_projection, session_id),
+    )
+    await store.conn.commit()
+    path.unlink(missing_ok=True)
+
+    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+    recovered = await store.load_session(session_id)
+    assert recovered is not None
+    assert recovered.messages[0]["tool_call_id"] == tool_call_id
+    assert path.read_text() == raw
+
+
+@pytest.mark.asyncio
+async def test_compacted_result_ref_survives_branch_and_source_deletion(
+    store: SessionStore,
+    tmp_path,
+    monkeypatch,
+):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as tool_result_files
+    import arden.services.session as session_service_module
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "raw-results")
+    source_id = "source-with-offload"
+    tool_call_id = "call-compacted-search"
+    raw = "compacted search evidence\n" * 5_000
+    blob = persist_raw_tool_result(raw)
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=source_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="file_search_text",
+                content="bounded search preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    source_path = tool_result_files.result_file_path(source_id, tool_call_id)
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "search", "client_id": "u-1"},
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": f"bounded preview\nUse file_read(path={str(source_path)!r}).",
+            "client_id": "tool-1",
+        },
+        {"role": "assistant", "content": "tail", "client_id": "a-1"},
+    ]
+    source_state = _make_state(source_id, name="Source")
+    await store.save_session(source_state, original)
+    compacted = _build_compacted_messages(
+        original,
+        1,
+        3,
+        f"Search evidence remains at file_read(path={str(source_path)!r}).",
+    )
+    await store.save_session(source_state, compacted)
+    expired = datetime.now(UTC) - timedelta(days=1)
+    await store.conn.execute(
+        "UPDATE tool_results SET expires_at = ? WHERE session_id = ? AND tool_call_id = ?",
+        (expired.isoformat(), source_id, tool_call_id),
+    )
+    await store.conn.commit()
+
+    assert compacted[1]["compaction"]["tool_result_refs"] == [tool_call_id]
+    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+
+    def fail_cache_copy(*_args):
+        raise OSError("simulated branch cache miss")
+
+    monkeypatch.setattr(session_service_module, "clone_result_files", fail_cache_copy)
+
+    service = SessionService(store)
+    branch_state = await service.branch(source_id, name="Independent branch")
+    assert branch_state is not None
+    branch_id = branch_state.session_id
+    branch_path = tool_result_files.result_file_path(branch_id, tool_call_id)
+    branched = await service.load(branch_id)
+    assert branched is not None
+    assert branched.messages[1]["compaction"]["reason"] == "session_branch"
+    assert branched.messages[1]["compaction"]["tool_result_refs"] == [tool_call_id]
+    assert str(branch_path) in branched.messages[1]["content"]
+    assert str(source_path) not in branched.messages[1]["content"]
+    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+
+    assert await service.permanently_delete_current(source_id)
+    branch_path.unlink(missing_ok=True)
+    payload_path = tool_result_files.result_payload_file_path(branch_id, tool_call_id)
+    payload_path.unlink(missing_ok=True)
+
+    restored = await service.load(branch_id)
+
+    assert restored is not None
+    assert branch_path.read_text() == raw
+    branch_manifests = await store.read_conn.execute_fetchall(
+        "SELECT tool_result_id FROM tool_results WHERE session_id = ? AND tool_call_id = ?",
+        (branch_id, tool_call_id),
+    )
+    assert len(branch_manifests) == 1
+
+
+@pytest.mark.asyncio
+async def test_compacted_background_result_survives_branch_and_source_deletion(store: SessionStore):
+    source_id = "source-with-background-result"
+    task_id = "bg-branch-result"
+    await store.record_background_agent_started(
+        task_id=task_id,
+        session_id=source_id,
+        parent_run_id="source-run",
+        parent_tool_call_id="source-call",
+        child_session_id="source-child",
+        wait=True,
+        command="research",
+        spawn_spec='{"task":"research"}',
+    )
+    await store.record_background_agent_finished(
+        task_id=task_id,
+        session_id=source_id,
+        status="completed",
+        result_ref=f"background://{task_id}",
+        result_text="durable branch evidence",
+    )
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {
+            "role": "user",
+            "content": "hidden completion",
+            "client_id": f"bg:{task_id}:completed",
+            "background_result_ref": task_id,
+        },
+        {"role": "assistant", "content": "tail", "client_id": "a-1"},
+    ]
+    compacted = _build_compacted_messages(original, 1, 2, "Background research completed.")
+    await store.save_session(_make_state(source_id, name="Source"), compacted)
+
+    service = SessionService(store)
+    branch_state = await service.branch(source_id, name="Independent branch")
+    assert branch_state is not None
+    branch_id = branch_state.session_id
+    branched = await service.load(branch_id)
+    assert branched is not None
+    assert branched.messages[1]["compaction"]["background_result_refs"] == [task_id]
+
+    cloned = await store.get_background_agent_run(branch_id, task_id)
+    assert cloned is not None
+    assert cloned["parent_run_id"] is None
+    assert cloned["parent_tool_call_id"] is None
+    assert cloned["child_session_id"] is None
+    assert cloned["wait"] is False
+    assert cloned["notified_at"] is not None
+    assert cloned["completion_id"].startswith(f"branch:{branch_id}:")
+    assert cloned["spawn_spec"] is None
+    assert await store.list_background_agent_events(branch_id) == []
+
+    assert await service.permanently_delete_current(source_id)
+    assert await store.get_background_agent_result(branch_id, task_id) == "durable branch evidence"
+    assert await store.list_undelivered_background_completions() == []
+    assert await store.list_respawnable_background_agent_runs(max_attempts=3) == []
+
+
+@pytest.mark.asyncio
+async def test_branch_rolls_back_when_referenced_background_result_is_missing(
+    store: SessionStore,
+    monkeypatch,
+):
+    source_id = "source-with-missing-background-result"
+    missing_task_id = "bg-missing"
+    tool_call_id = "call-before-rollback"
+    blob = persist_raw_tool_result("branch rollback evidence")
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=source_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="file_search_text",
+                content="bounded preview",
+                preview="bounded preview",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    source_state = _make_state(source_id, name="Source")
+    messages = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "bounded preview",
+            "client_id": "tool-before-rollback",
+        },
+        {
+            "role": "user",
+            "content": "legacy hidden completion",
+            "client_id": f"bg:{missing_task_id}:completed",
+        },
+    ]
+    await store.save_session(source_state, messages)
+    target_state = _make_state("rolled-back-branch", name="Branch")
+    service = SessionService(store)
+    monkeypatch.setattr(service, "create", lambda **_kwargs: target_state)
+
+    with pytest.raises(ValueError, match="background results unavailable"):
+        await service.branch(source_id)
+
+    assert await store.load_session(target_state.session_id) is None
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM session_messages WHERE session_id = ?",
+        (target_state.session_id,),
+    )
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM background_agent_runs WHERE session_id = ?",
+        (target_state.session_id,),
+    )
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM tool_results WHERE session_id = ?",
+        (target_state.session_id,),
+    )
+
 
 @pytest.mark.asyncio
 async def test_compaction_boundary_round_trip(store: SessionStore):
@@ -2202,11 +2673,12 @@ async def test_compaction_boundary_round_trip(store: SessionStore):
 @pytest.mark.asyncio
 async def test_save_updates_existing_session(store: SessionStore):
     state = _make_state()
-    await store.save_session(state, [{"role": "user", "content": "First"}])
+    first = {"role": "user", "content": "First"}
+    await store.save_session(state, [first])
     await store.save_session(
         state,
         [
-            {"role": "user", "content": "First"},
+            first,
             {"role": "assistant", "content": "Reply"},
         ],
     )
@@ -2301,15 +2773,16 @@ async def test_update_progress_keeps_metadata_on_existing_session(store: Session
     """Mid-run checkpoints must not clobber metadata that the final save
     sets (e.g. last_input_tokens used for compaction)."""
     state = _make_state("with-meta")
+    user_message = {"role": "user", "content": "hi"}
     await store.save_session(
         state,
-        [{"role": "user", "content": "hi"}],
+        [user_message],
         metadata={"last_input_tokens": 1234},
     )
     await store.update_progress(
         state,
         [
-            {"role": "user", "content": "hi"},
+            user_message,
             {"role": "assistant", "content": "yo"},
         ],
     )
@@ -2370,6 +2843,614 @@ async def test_session_messages_preserve_raw_transcript_across_compaction(store:
     ]
     assert page["has_more_before"] is False
     assert page["has_more_after"] is False
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_reconstructs_active_context_from_immutable_transcript(store: SessionStore):
+    state = _make_state()
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "first", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+        {"role": "user", "content": "second", "client_id": "u-2"},
+        {
+            "role": "assistant",
+            "content": "reply 2",
+            "client_id": "a-2",
+            "anthropic_content": [{"type": "text", "text": "reply 2"}],
+            "provider_tool_calls": [
+                {
+                    "id": "tsc-2",
+                    "name": "tool_search",
+                    "arguments": '{"tools":["wiki_read_page"]}',
+                    "result": "Matched tools: wiki_read_page",
+                    "done": True,
+                    "provider_item": {"id": "tsc-2", "type": "tool_search_call"},
+                }
+            ],
+            "openai_response_items": [
+                {"id": "tsc-2", "type": "tool_search_call", "status": "completed"},
+                {
+                    "type": "tool_search_output",
+                    "tools": [{"type": "function", "name": "wiki_read_page"}],
+                },
+            ],
+        },
+    ]
+    await store.save_session(state, original)
+    before_rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id, seq, message_json FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+    before = {row["message_id"]: (row["seq"], row["message_json"]) for row in before_rows}
+
+    compacted = _build_compacted_messages(original, 1, 3, "first summary")
+    await store.save_session(state, compacted)
+
+    # A malformed active projection recovers from the durable checkpoint.
+    # A valid [] is an explicit user clear and must never resurrect history.
+    await store.conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await store.conn.commit()
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["content"] for message in loaded.messages] == [
+        "system",
+        "[Session State Handoff]\nfirst summary",
+        "second",
+        "reply 2",
+    ]
+    assert loaded.messages[-1]["anthropic_content"] == [{"type": "text", "text": "reply 2"}]
+    assert loaded.messages[-1]["provider_tool_calls"][0]["provider_item"]["id"] == "tsc-2"
+    assert [item["type"] for item in loaded.messages[-1]["openai_response_items"]] == [
+        "tool_search_call",
+        "tool_search_output",
+    ]
+
+    after_rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id, seq, message_json FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+    after = {row["message_id"]: (row["seq"], row["message_json"]) for row in after_rows}
+    assert {message_id: after[message_id] for message_id in before} == before
+    assert len(after_rows) == len(before_rows) + 1
+
+    compactions = await store.list_chat_compactions(state.session_id)
+    assert len(compactions) == 1
+    assert compactions[0]["compaction_id"] == compacted[1]["message_id"]
+    assert compactions[0]["messages_before"] == len(original)
+    assert compactions[0]["messages_after"] == len(compacted)
+
+
+@pytest.mark.asyncio
+async def test_repeated_checkpoints_reconstruct_latest_summary_and_ordered_tail(store: SessionStore):
+    state = _make_state()
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "one reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+        {"role": "assistant", "content": "two reply", "client_id": "a-2"},
+    ]
+    await store.save_session(state, original)
+    first = _build_compacted_messages(original, 1, 3, "summary one")
+    await store.save_session(state, first)
+
+    third_turn = [
+        {"role": "user", "content": "three", "client_id": "u-3"},
+        {"role": "assistant", "content": "three reply", "client_id": "a-3"},
+    ]
+    first_with_tail = [*first, *third_turn]
+    await store.save_session(state, first_with_tail)
+    second = _build_compacted_messages(first_with_tail, 1, 4, "summary two")
+    await store.save_session(state, second)
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["content"] for message in loaded.messages] == [
+        "system",
+        "[Session State Handoff]\nsummary two",
+        "three",
+        "three reply",
+    ]
+    assert [row["compaction_id"] for row in await store.list_chat_compactions(state.session_id)] == [
+        first[1]["message_id"],
+        second[1]["message_id"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_valid_empty_snapshot_never_resurrects_immutable_transcript(store: SessionStore):
+    state = _make_state()
+    await store.save_session(
+        state,
+        [
+            {"role": "user", "content": "old request", "client_id": "u-1"},
+            {"role": "assistant", "content": "old reply", "client_id": "a-1"},
+        ],
+    )
+    await store.conn.execute("UPDATE sessions SET messages = '[]' WHERE session_id = ?", (state.session_id,))
+    await store.conn.commit()
+
+    loaded = await store.load_session(state.session_id)
+    raw_rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+
+    assert loaded is not None and loaded.messages == []
+    assert [row["message_id"] for row in raw_rows] == ["u-1", "a-1"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_checkpoint_reconstruction_survives_cache_corruption_and_restart(tmp_path: Path):
+    db = tmp_path / "checkpoint-restart.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    first_store = SessionStore(conn, read_conn)
+    await first_store.init_schema()
+    state = _make_state("checkpoint-restart")
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "one reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+        {"role": "assistant", "content": "two reply", "client_id": "a-2"},
+    ]
+    await first_store.save_session(state, original)
+    first = _build_compacted_messages(original, 1, 3, "summary one")
+    await first_store.save_session(state, first)
+    first_with_tail = [
+        *first,
+        {"role": "user", "content": "three", "client_id": "u-3"},
+        {"role": "assistant", "content": "three reply", "client_id": "a-3"},
+    ]
+    await first_store.save_session(state, first_with_tail)
+    second = _build_compacted_messages(first_with_tail, 1, 4, "summary two")
+    await first_store.save_session(state, second)
+    await conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await conn.commit()
+    await read_conn.close()
+    await conn.close()
+
+    restarted_conn = await database.connect(db)
+    restarted_read = await database.connect(db, readonly=True)
+    restarted = SessionStore(restarted_conn, restarted_read)
+    try:
+        await restarted.init_schema()
+        loaded = await restarted.load_session(state.session_id)
+
+        assert loaded is not None
+        assert [message["content"] for message in loaded.messages] == [
+            "system",
+            "[Session State Handoff]\nsummary two",
+            "three",
+            "three reply",
+        ]
+        assert loaded.messages[1]["message_id"] == second[1]["message_id"]
+    finally:
+        await restarted_read.close()
+        await restarted_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_handoff_without_tail_ids_uses_compatibility_projection(store: SessionStore):
+    state = _make_state()
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "old", "client_id": "u-1"},
+        {"role": "assistant", "content": "tail", "client_id": "a-1"},
+    ]
+    await store.save_session(state, original)
+    legacy_projection = [
+        original[0],
+        {
+            "role": "assistant",
+            "content": "[Session State Handoff]\nlegacy summary",
+            "client_id": "legacy-summary",
+            "compaction": {"kind": "session_handoff", "message_start": 1, "message_end": 2},
+        },
+        original[-1],
+    ]
+    await store.save_session(state, legacy_projection)
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["content"] for message in loaded.messages] == [
+        "system",
+        "[Session State Handoff]\nlegacy summary",
+        "tail",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_normal_resave_cannot_rewrite_existing_transcript_row(store: SessionStore):
+    state = _make_state()
+    message = {"role": "tool", "content": "original result", "client_id": "tool-row"}
+    await store.save_session(state, [message])
+    await store.save_session(
+        state,
+        [{"role": "tool", "content": "silently replaced", "client_id": "tool-row"}],
+    )
+
+    row = (
+        await store.read_conn.execute_fetchall(
+            "SELECT message_json FROM session_messages WHERE session_id = ? AND message_id = ?",
+            (state.session_id, "tool-row"),
+        )
+    )[0]
+    assert json.loads(row["message_json"])["content"] == "original result"
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert loaded.messages[0]["content"] == "silently replaced"
+
+
+@pytest.mark.asyncio
+async def test_rewind_deletes_exact_active_suffix_and_reconstructs_after_compaction(store: SessionStore):
+    state = _make_state()
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "one reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+        {"role": "assistant", "content": "two reply", "client_id": "a-2"},
+    ]
+    await store.save_session(state, original)
+    compacted = _build_compacted_messages(original, 1, 3, "summary")
+    active = [
+        *compacted,
+        {"role": "user", "content": "three", "client_id": "u-3"},
+        {"role": "assistant", "content": "three reply", "client_id": "a-3"},
+    ]
+    await store.save_session(state, active)
+    expected_ids = store._message_id_sequence(active)
+    assert expected_ids is not None
+
+    assert await store.rewind_session(
+        state,
+        active[:2],
+        expected_message_ids=expected_ids,
+        discard_message_ids=expected_ids[2:],
+    )
+    assert state.context_generation == 1
+    assert state.context_etag is not None
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["content"] for message in loaded.messages] == [
+        "system",
+        "[Session State Handoff]\nsummary",
+    ]
+    renewed_handoff = loaded.messages[1]
+    assert renewed_handoff["message_id"] != compacted[1]["message_id"]
+    assert renewed_handoff["compaction"]["reason"] == "user_rewind"
+    assert renewed_handoff["compaction"]["preserved_tail_ids"] == []
+
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+    remaining_ids = [row["message_id"] for row in rows]
+    # Inactive pre-compaction rows and the old summary remain audit evidence.
+    assert {"sys", "u-1", "a-1", compacted[1]["message_id"], renewed_handoff["message_id"]} <= set(remaining_ids)
+    assert not {"u-2", "a-2", "u-3", "a-3"} & set(remaining_ids)
+
+    await store.conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await store.conn.commit()
+    reconstructed = await store.load_session(state.session_id)
+    assert reconstructed is not None
+    assert [message["message_id"] for message in reconstructed.messages] == [
+        "sys",
+        renewed_handoff["message_id"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rewind_rejects_stale_active_snapshot_without_deleting_new_messages(store: SessionStore):
+    state = _make_state()
+    original = [
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+    ]
+    await store.save_session(state, original)
+    stale_ids = store._message_id_sequence(original)
+    assert stale_ids is not None
+    current = [*original, {"role": "user", "content": "concurrent", "client_id": "u-2"}]
+    await store.save_session(state, current)
+
+    assert not await store.rewind_session(
+        state,
+        [],
+        expected_message_ids=stale_ids,
+        discard_message_ids=stale_ids,
+    )
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == ["u-1", "a-1", "u-2"]
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+    assert [row["message_id"] for row in rows] == ["u-1", "a-1", "u-2"]
+
+
+@pytest.mark.asyncio
+async def test_rewind_rolls_back_snapshot_when_transcript_delete_fails(store: SessionStore):
+    state = _make_state()
+    messages = [
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+    ]
+    await store.save_session(state, messages)
+    expected_ids = store._message_id_sequence(messages)
+    assert expected_ids is not None
+    await store.conn.execute(
+        """
+        CREATE TRIGGER fail_rewind_delete
+        BEFORE DELETE ON session_messages
+        WHEN OLD.session_id = 'test-session'
+        BEGIN
+            SELECT RAISE(ABORT, 'forced rewind failure');
+        END
+        """
+    )
+    await store.conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced rewind failure"):
+        await store.rewind_session(
+            state,
+            [],
+            expected_message_ids=expected_ids,
+            discard_message_ids=expected_ids,
+        )
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == expected_ids
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+    assert [row["message_id"] for row in rows] == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_context_transactions_do_not_cross_commit_between_sessions(store: SessionStore, monkeypatch):
+    first = _make_state("transaction-a")
+    second = _make_state("transaction-b")
+    await store.save_session(first, [{"role": "user", "content": "old a", "client_id": "a-old"}])
+    await store.save_session(second, [{"role": "user", "content": "old b", "client_id": "b-old"}])
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_mirror = store._mirror_session_messages
+
+    async def blocking_mirror(session_id, messages, *, connection=None):
+        if session_id == first.session_id:
+            entered.set()
+            await release.wait()
+        await original_mirror(session_id, messages, connection=connection)
+
+    monkeypatch.setattr(store, "_mirror_session_messages", blocking_mirror)
+    first_save = asyncio.create_task(
+        store.save_session(first, [{"role": "user", "content": "new a", "client_id": "a-new"}])
+    )
+    await entered.wait()
+    second_save = asyncio.create_task(
+        store.save_session(second, [{"role": "user", "content": "new b", "client_id": "b-new"}])
+    )
+    try:
+        await asyncio.sleep(0.05)
+        assert not second_save.done()
+        rows = await store.read_conn.execute_fetchall(
+            "SELECT session_id, messages FROM sessions WHERE session_id IN (?, ?) ORDER BY session_id",
+            (first.session_id, second.session_id),
+        )
+        assert [json.loads(row["messages"])[0]["content"] for row in rows] == ["old a", "old b"]
+    finally:
+        release.set()
+    await asyncio.gather(first_save, second_save)
+
+
+@pytest.mark.asyncio
+async def test_update_progress_rolls_back_projection_when_transcript_mirror_fails(store: SessionStore):
+    state = _make_state("progress-rollback")
+    original = [{"role": "user", "content": "kept", "client_id": "u-kept"}]
+    await store.save_session(state, original)
+    await store.conn.execute(
+        """
+        CREATE TRIGGER fail_progress_mirror
+        BEFORE INSERT ON session_messages
+        WHEN NEW.session_id = 'progress-rollback' AND NEW.message_id = 'a-fail'
+        BEGIN
+            SELECT RAISE(ABORT, 'forced progress mirror failure');
+        END
+        """
+    )
+    await store.conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced progress mirror failure"):
+        await store.update_progress(
+            state,
+            [*original, {"role": "assistant", "content": "must roll back", "client_id": "a-fail"}],
+        )
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == ["u-kept"]
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT message_id FROM session_messages WHERE session_id = ? ORDER BY seq",
+        (state.session_id,),
+    )
+    assert [row["message_id"] for row in rows] == ["u-kept"]
+
+
+@pytest.mark.asyncio
+async def test_create_session_if_absent_rolls_back_row_when_transcript_mirror_fails(store: SessionStore):
+    await store.conn.execute(
+        """
+        CREATE TRIGGER fail_create_mirror
+        BEFORE INSERT ON session_messages
+        WHEN NEW.session_id = 'create-rollback'
+        BEGIN
+            SELECT RAISE(ABORT, 'forced create mirror failure');
+        END
+        """
+    )
+    await store.conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced create mirror failure"):
+        await store.create_session_if_absent(
+            _make_state("create-rollback"),
+            [{"role": "user", "content": "must roll back", "client_id": "u-fail"}],
+        )
+
+    assert not await store.read_conn.execute_fetchall("SELECT 1 FROM sessions WHERE session_id = 'create-rollback'")
+
+
+@pytest.mark.asyncio
+async def test_session_service_clear_context_atomically_removes_history_and_checkpoints(store: SessionStore):
+    state = _make_state()
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+    ]
+    await store.save_session(state, original)
+    compacted = _build_compacted_messages(original, 1, 3, "summary")
+    await store.save_session(state, compacted)
+    service = SessionService(store)
+    data = await service.load(state.session_id)
+    assert data is not None
+
+    assert await service.clear_context(data)
+    assert data.context_generation == 1
+    assert data.state.context_generation == 1
+    assert data.context_etag == data.state.context_etag
+
+    loaded = await service.load(state.session_id)
+    assert loaded is not None and loaded.messages == []
+    for table in ("session_messages", "session_turns", "chat_compactions"):
+        rows = await store.read_conn.execute_fetchall(
+            f"SELECT COUNT(*) AS count FROM {table} WHERE session_id = ?",
+            (state.session_id,),
+        )
+        assert rows[0]["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_run_cannot_restore_context_after_clear(store: SessionStore):
+    state = _make_state()
+    messages = [{"role": "user", "content": "delete me", "client_id": "u-1"}]
+    await store.save_session(state, messages)
+    stale = await store.load_session(state.session_id)
+    current = await store.load_session(state.session_id)
+    assert stale is not None and current is not None
+
+    service = SessionService(store)
+    assert await service.clear_context(current)
+    with pytest.raises(StaleSessionContextError):
+        await store.update_progress(
+            stale.state,
+            [*stale.messages, {"role": "assistant", "content": "late", "client_id": "a-late"}],
+        )
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None and loaded.messages == []
+    assert not (await store.list_session_messages(state.session_id, limit=10))["messages"]
+
+
+@pytest.mark.asyncio
+async def test_stale_run_cannot_restore_context_after_rewind(store: SessionStore):
+    state = _make_state()
+    messages = [
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "one reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+        {"role": "assistant", "content": "two reply", "client_id": "a-2"},
+    ]
+    await store.save_session(state, messages)
+    stale = await store.load_session(state.session_id)
+    current = await store.load_session(state.session_id)
+    assert stale is not None and current is not None
+
+    service = SessionService(store)
+    assert await service.revert(state.session_id, turns=1) is not None
+    with pytest.raises(StaleSessionContextError):
+        await store.save_session(stale.state, stale.messages)
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == ["u-1", "a-1"]
+
+
+@pytest.mark.asyncio
+async def test_rewind_rejects_same_id_content_change(store: SessionStore):
+    state = _make_state()
+    messages = [
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "one reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+    ]
+    await store.save_session(state, messages)
+    stale = await store.load_session(state.session_id)
+    current = await store.load_session(state.session_id)
+    assert stale is not None and current is not None
+    current.messages[0]["content"] = "newer one"
+    await store.save_session(current.state, current.messages)
+
+    expected_ids = store._message_id_sequence(stale.messages)
+    assert expected_ids is not None
+    assert not await store.rewind_session(
+        stale.state,
+        stale.messages[:2],
+        expected_message_ids=expected_ids,
+        discard_message_ids=expected_ids[2:],
+        expected_generation=stale.context_generation,
+        expected_projection_etag=stale.context_etag,
+    )
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert loaded.messages[0]["content"] == "newer one"
+    assert [message["message_id"] for message in loaded.messages] == expected_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["clear", "rewind"])
+async def test_recovered_malformed_projection_can_be_destructively_updated(
+    store: SessionStore,
+    operation: str,
+):
+    state = _make_state()
+    messages = [
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "one reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+        {"role": "assistant", "content": "two reply", "client_id": "a-2"},
+    ]
+    await store.save_session(state, messages)
+    await store.conn.execute(
+        "UPDATE sessions SET messages = '{broken' WHERE session_id = ?",
+        (state.session_id,),
+    )
+    await store.conn.commit()
+    recovered = await store.load_session(state.session_id)
+    assert recovered is not None
+    assert [message["message_id"] for message in recovered.messages] == ["u-1", "a-1", "u-2", "a-2"]
+
+    service = SessionService(store)
+    if operation == "clear":
+        assert await service.clear_context(recovered)
+        expected_ids: list[str] = []
+    else:
+        result = await service.revert(state.session_id, turns=1)
+        assert result is not None
+        expected_ids = ["u-1", "a-1"]
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == expected_ids
 
 
 @pytest.mark.asyncio
@@ -2722,12 +3803,19 @@ async def test_latest_session_messages_keep_contiguous_tail_when_anchor_range_is
 
 
 @pytest.mark.asyncio
-async def test_delete_session_messages_from_trims_reverted_future(store: SessionStore):
+async def test_rewind_session_trims_uncompacted_active_future(store: SessionStore):
     state = _make_state()
     messages = [{"role": "user", "content": f"msg {i}", "client_id": f"m-{i}"} for i in range(4)]
     await store.save_session(state, messages)
+    expected_ids = store._message_id_sequence(messages)
+    assert expected_ids is not None
 
-    assert await store.delete_session_messages_from("test-session", message_id="m-2")
+    assert await store.rewind_session(
+        state,
+        messages[:2],
+        expected_message_ids=expected_ids,
+        discard_message_ids=expected_ids[2:],
+    )
 
     page = await store.list_session_messages("test-session", limit=10)
     assert [row["message_id"] for row in page["messages"]] == ["m-0", "m-1"]
@@ -2888,9 +3976,12 @@ async def test_cold_archived_session_round_trips_full_transcript(store: SessionS
 
     assert manifest is not None
     assert Path(manifest.bundle_path).is_file()
-    cold_row = (await store.read_conn.execute_fetchall("SELECT * FROM sessions WHERE session_id = ?", (state.session_id,)))[0]
+    cold_row = (
+        await store.read_conn.execute_fetchall("SELECT * FROM sessions WHERE session_id = ?", (state.session_id,))
+    )[0]
     assert cold_row["storage_state"] == "cold"
     assert cold_row["messages"] == "[]"
+    assert cold_row["context_generation"] == 1
     assert not await store.read_conn.execute_fetchall(
         "SELECT 1 FROM session_messages WHERE session_id = ?", (state.session_id,)
     )
@@ -2916,6 +4007,46 @@ async def test_cold_archived_session_round_trips_full_transcript(store: SessionS
     )[0]
     assert restored_row["storage_state"] == "hot"
     assert restored_row["archived_at"] is None
+    assert restored_row["context_generation"] == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_cold_session_cannot_be_undone_by_restore(store: SessionStore, tmp_path: Path):
+    state = _make_state(session_id="cold-clear")
+    await store.save_session(
+        state,
+        [{"role": "user", "content": "delete permanently", "client_id": "u-cold-clear"}],
+    )
+    assert await store.archive_session(state.session_id)
+    manifest = await store.cold_convert_session(state.session_id, cold_root=tmp_path / "cold")
+    assert manifest is not None
+    service = SessionService(
+        store,
+        cold_root=tmp_path / "cold",
+        blob_root=tmp_path / "blobs" / "tool-results",
+    )
+    data = await service.load(state.session_id)
+    assert data is not None and data.messages == []
+    assert data.context_generation == 1
+
+    assert await service.clear_context(data)
+    assert data.context_generation == 2
+    assert not Path(manifest.bundle_path).exists()
+    cleared_row = (
+        await store.read_conn.execute_fetchall("SELECT * FROM sessions WHERE session_id = ?", (state.session_id,))
+    )[0]
+    assert cleared_row["storage_state"] == "hot"
+    assert cleared_row["context_generation"] == 2
+    assert cleared_row["messages"] == "[]"
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM session_messages WHERE session_id = ?",
+        (state.session_id,),
+    )
+
+    assert await service.restore(state.session_id)
+    restored = await store.load_session(state.session_id)
+    assert restored is not None and restored.messages == []
+    assert restored.context_generation == 2
 
 
 @pytest.mark.asyncio
@@ -2929,7 +4060,9 @@ async def test_permanent_delete_removes_all_session_owned_rows(store: SessionSto
 
     assert await store.permanently_delete_session(state.session_id)
 
-    assert not await store.read_conn.execute_fetchall("SELECT 1 FROM sessions WHERE session_id = ?", (state.session_id,))
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM sessions WHERE session_id = ?", (state.session_id,)
+    )
     for table in await store._session_owned_tables(store.read_conn):
         rows = await store.read_conn.execute_fetchall(
             f'SELECT 1 FROM "{table}" WHERE session_id = ? LIMIT 1',

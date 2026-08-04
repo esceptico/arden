@@ -2,6 +2,7 @@ import json
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any
 
 import httpx
@@ -356,6 +357,7 @@ def _with_streamed_fallbacks(
             reasoning_content=reasoning_content,
             reasoning_encrypted_content=msg.reasoning_encrypted_content,
             provider_tool_calls=msg.provider_tool_calls,
+            openai_response_items=msg.openai_response_items,
         ),
         finish_reason=parsed.choices[0].finish_reason,
     )
@@ -372,9 +374,12 @@ def parse_responses_response(
     reasoning_encrypted_content = None
     tool_calls: list[ToolCall] = []
     provider_tool_calls: list[ProviderToolCall] = []
+    loaded_tool_names: list[str] = []
 
-    for item in output_items if output_items is not None else response.output:
-        data = item if isinstance(item, dict) else _model_dump(item)
+    source_items = output_items if output_items is not None else response.output
+    response_items = [deepcopy(item if isinstance(item, dict) else _model_dump(item)) for item in source_items]
+
+    for data in response_items:
         item_type = data.get("type")
         if item_type == "message":
             for part in data.get("content", []):
@@ -409,9 +414,14 @@ def parse_responses_response(
 
         if item_type == "tool_search_call":
             provider_tool_calls.append(_parse_tool_search_call(data))
+            loaded_tool_names.extend(_legacy_tool_search_names(data))
+            continue
+
+        if item_type == "tool_search_output":
+            loaded_tool_names.extend(_tool_search_output_names(data))
 
     if provider_tool_calls:
-        provider_tool_calls = _with_tool_search_matches(provider_tool_calls, tool_calls)
+        provider_tool_calls = _with_tool_search_matches(provider_tool_calls, tool_calls, loaded_tool_names)
 
     message = Message(
         role=Role.ASSISTANT,
@@ -420,6 +430,7 @@ def parse_responses_response(
         reasoning_content="".join(reasoning_parts) or None,
         reasoning_encrypted_content=reasoning_encrypted_content,
         provider_tool_calls=provider_tool_calls or None,
+        openai_response_items=response_items or None,
     )
     return CompletionResponse(
         choices=[Choice(message=message, finish_reason=_finish_reason(response, tool_calls))],
@@ -430,11 +441,8 @@ def parse_responses_response(
 
 def _parse_tool_search_call(data: dict[str, Any], *, done: bool = True) -> ProviderToolCall:
     call_id = data.get("id") or data.get("call_id") or data.get("item_id") or "tool_search"
-    query = data.get("query") or data.get("queries") or data.get("input") or {}
-    result = data.get("results") or data.get("output") or data.get("tools") or data.get("status") or ""
-    if result == "completed":
-        result = ""
-    provider_item = dict(data)
+    query = data.get("arguments") or data.get("query") or data.get("queries") or data.get("input") or {}
+    provider_item = {key: deepcopy(value) for key, value in data.items() if key not in {"results", "output", "tools"}}
     provider_item["type"] = "tool_search_call"
     provider_item["id"] = str(call_id)
     if done:
@@ -443,14 +451,18 @@ def _parse_tool_search_call(data: dict[str, Any], *, done: bool = True) -> Provi
         id=str(call_id),
         name="tool_search",
         arguments=json.dumps({"query": query}, default=str),
-        result=_provider_tool_result_text(result),
+        result="",
         done=done,
         provider_item=provider_item,
     )
 
 
-def _with_tool_search_matches(calls: list[ProviderToolCall], tool_calls: list[ToolCall]) -> list[ProviderToolCall]:
-    names = [tc.function.name for tc in tool_calls]
+def _with_tool_search_matches(
+    calls: list[ProviderToolCall],
+    tool_calls: list[ToolCall],
+    loaded_tool_names: list[str] | None = None,
+) -> list[ProviderToolCall]:
+    names = list(dict.fromkeys(loaded_tool_names or [tc.function.name for tc in tool_calls]))
     if not names:
         return calls
     result = f"Matched tools: {', '.join(names)}"
@@ -459,7 +471,7 @@ def _with_tool_search_matches(calls: list[ProviderToolCall], tool_calls: list[To
         ProviderToolCall(
             id=call.id,
             name=call.name,
-            arguments=arguments if call.arguments in ('{"query": {}}', '{"query": ""}') else call.arguments,
+            arguments=arguments,
             result=call.result or result,
             done=True,
             provider_item=call.provider_item,
@@ -468,24 +480,28 @@ def _with_tool_search_matches(calls: list[ProviderToolCall], tool_calls: list[To
     ]
 
 
-def _provider_tool_result_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, default=str)
+def _tool_search_output_names(data: dict[str, Any]) -> list[str]:
+    return _tool_names(data.get("tools"))
 
 
-def _provider_tool_arguments_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str) and value:
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+def _legacy_tool_search_names(data: dict[str, Any]) -> list[str]:
+    return _tool_names(data.get("results") or data.get("output") or data.get("tools"))
+
+
+def _tool_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "namespace":
+            names.extend(_tool_names(item.get("tools")))
+            continue
+        name = item.get("name")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return list(dict.fromkeys(names))
 
 
 def _convert_messages(messages: list[dict]) -> tuple[str | None, list[dict[str, Any]]]:
@@ -548,24 +564,14 @@ def _convert_user_content(content: str | list) -> str | list[dict[str, Any]]:
 
 
 def _convert_assistant_message(msg: dict) -> list[dict[str, Any]]:
+    if response_items := msg.get("openai_response_items"):
+        return deepcopy(response_items)
+
     items: list[dict[str, Any]] = []
     if encrypted := msg.get("reasoning_encrypted_content"):
         items.append({"type": "reasoning", "encrypted_content": encrypted, "summary": []})
     if content := msg.get("content"):
         items.append({"role": "assistant", "content": _content_to_text(content)})
-    for call in msg.get("provider_tool_calls") or []:
-        if call.get("name") == "tool_search":
-            provider_item = call.get("provider_item") or {}
-            items.append(
-                {
-                    "type": "tool_search_call",
-                    "id": provider_item.get("id") or call["id"],
-                    "status": provider_item.get("status") or "completed",
-                    "arguments": _provider_tool_arguments_object(
-                        provider_item.get("arguments") or call.get("arguments")
-                    ),
-                }
-            )
     for tc in msg.get("tool_calls", []):
         fn = tc["function"]
         items.append(

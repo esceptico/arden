@@ -702,7 +702,8 @@ async def clear_session(svc: SessionService = Depends(require_session_service), 
         return {"status": "cleared", "session_id": None}
 
     data.state.last_activity = data.state.started_at
-    await svc.save(data.state, [])
+    if not await svc.clear_context(data):
+        raise HTTPException(status_code=409, detail="Session changed while it was being cleared")
 
     return {
         "status": "cleared",

@@ -39,7 +39,9 @@ _INTERNAL_MESSAGE_KEYS = frozenset(
         "outcome",
         "anthropic_content",
         "provider_tool_calls",
+        "openai_response_items",
         "background_status",
+        "background_result_ref",
     }
 )
 

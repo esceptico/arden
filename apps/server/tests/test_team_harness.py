@@ -1,9 +1,8 @@
-"""Tests for the subagent team harness: the shared child identity fragment,
-the live <agent_roster> note, the app_followup_task tool (queue vs wake), and the
-failure-path truncation + guidance in deliver_result."""
+"""Tests for the subagent team harness and bounded result delivery."""
 
 import asyncio
 import contextlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -271,7 +270,7 @@ async def test_deliver_result_truncates_failed_bodies_and_appends_guidance(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_deliver_result_never_truncates_completed_results(tmp_path, monkeypatch):
+async def test_deliver_result_keeps_completed_results_under_the_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
     registry = BackgroundTaskRegistry(session_id="cur")
     body = "y" * 10_000
@@ -280,3 +279,101 @@ async def test_deliver_result_never_truncates_completed_results(tmp_path, monkey
     assert body in content
     assert "[truncated]" not in content
     assert "app_followup_task(" not in content
+
+
+@pytest.mark.asyncio
+async def test_deliver_result_bounds_large_completion_after_persisting_exact_body(tmp_path, monkeypatch):
+    monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
+    order: list[tuple[str, object]] = []
+
+    async def record_event(**kwargs):
+        order.append(("record", kwargs["result_text"]))
+
+    async def on_result(messages: list[dict]) -> None:
+        order.append(("inject", messages[0]["content"]))
+
+    registry = BackgroundTaskRegistry(
+        session_id="cur",
+        record_event=record_event,
+        on_result=on_result,
+    )
+    body = "H" * 30_000 + "M" * 30_000 + "T" * 30_000
+
+    await registry.deliver_result(
+        task_id="agent-1",
+        result=body,
+        label="Agent",
+        status="completed",
+        emit=None,
+        child_session_id="cur::a1",
+    )
+
+    assert order[0] == ("record", body)
+    assert order[1][0] == "inject"
+    content = order[1][1]
+    assert isinstance(content, str)
+    assert len(content) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
+    assert 'task_id="agent-1"' in content
+    assert 'result_ref="background://agent-1"' in content
+    assert "H" * 1_000 in content
+    assert "M" * 1_000 not in content
+    assert "T" * 1_000 in content
+    assert "[Middle omitted from this bounded completion.]" in content
+    assert 'agent_result_read(task_id="agent-1", offset=0, limit=4000)' in content
+    assert await registry.read_background_result("agent-1") == body
+
+
+@pytest.mark.asyncio
+async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_path, monkeypatch):
+    monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
+    recorded: list[str] = []
+    injected: list[str] = []
+
+    async def record_event(**kwargs):
+        recorded.append(kwargs["result_text"])
+
+    async def on_result(messages: list[dict]) -> None:
+        injected.append(messages[0]["content"])
+
+    steering = [f"<steering_message>\n{char * 20_000}\n</steering_message>" for char in ("A", "B", "C")]
+    registry = BackgroundTaskRegistry(
+        session_id="cur",
+        record_event=record_event,
+        on_result=on_result,
+    )
+
+    await registry.deliver_result(
+        task_id="agent-1",
+        result="child result",
+        label="Agent",
+        status="completed",
+        emit=None,
+        undelivered_steering=steering,
+    )
+
+    durable = json.loads(recorded[0])
+    assert durable == {
+        "format": "background_completion_v1",
+        "result": "child result",
+        "undelivered_steering": steering,
+    }
+    assert await registry.read_background_result("agent-1") == recorded[0]
+    assert len(injected[0]) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
+    assert "A" * 1_000 in injected[0]
+    assert "C" * 1_000 in injected[0]
+    assert "[Middle omitted from this bounded completion.]" in injected[0]
+    assert 'agent_result_read(task_id="agent-1", offset=0, limit=4000)' in injected[0]
+
+    await registry.deliver_result(
+        task_id="agent-2",
+        result="failed child result",
+        label="Agent",
+        status="failed",
+        emit=None,
+        undelivered_steering=steering,
+    )
+
+    assert json.loads(recorded[1])["undelivered_steering"] == steering
+    assert len(injected[1]) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
+    assert "[truncated]" in injected[1]
+    assert 'agent_result_read(task_id="agent-2", offset=0, limit=4000)' in injected[1]

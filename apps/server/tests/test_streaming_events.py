@@ -189,14 +189,20 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
             return {"content": "durable result"}
 
     calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 6)]
+    prepared = []
 
-    recovered = await _recover_durable_tool_calls(Store(), "run-1", calls)
+    def prepare_result(result, tool_call_id):
+        prepared.append(tool_call_id)
+        return result
+
+    recovered = await _recover_durable_tool_calls(Store(), "run-1", calls, prepare_result=prepare_result)
 
     assert set(recovered) == {"c1", "c2"}
     assert recovered["c1"].content == "durable result"
     assert recovered["c1"].outcome.status == ToolOutcomeStatus.SUCCEEDED
     assert recovered["c2"].outcome.status == ToolOutcomeStatus.UNCERTAIN
     assert recovered["c2"].outcome.error.code == "execution_state_uncertain"
+    assert prepared == ["c1", "c2"]
 
 
 @pytest.mark.asyncio
@@ -1742,14 +1748,17 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_chat_records_durable_message_count_for_trimmed_loop(monkeypatch):
+async def test_run_chat_records_canonical_message_count_for_loop(monkeypatch):
     from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
     run.loop_task_id = "loop-1"
-    run.history_prefix = [{"role": "user", "content": f"old-{i}"} for i in range(3)]
-    run.messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "tick", "is_meta": True}]
+    run.messages = [
+        {"role": "system", "content": "s"},
+        *({"role": "user", "content": f"old-{i}"} for i in range(3)),
+        {"role": "user", "content": "tick", "is_meta": True},
+    ]
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
     class Store:
@@ -2733,14 +2742,14 @@ async def test_run_chat_compacts_and_retries_context_length_provider_error(monke
 
 
 @pytest.mark.asyncio
-async def test_context_retry_compacts_loop_prefix_into_persisted_summary(monkeypatch):
+async def test_context_retry_compacts_full_canonical_history(monkeypatch):
     from arden.services import chat as chat_service
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
-    run.history_prefix = [{"role": "user", "content": "old-prefix"}]
     run.messages = [
         {"role": "system", "content": "system"},
+        {"role": "user", "content": "old-prefix"},
         {"role": "user", "content": "tail"},
     ]
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
@@ -2826,7 +2835,6 @@ async def test_context_retry_compacts_loop_prefix_into_persisted_summary(monkeyp
         {"role": "user", "content": "old-prefix"},
         {"role": "user", "content": "tail"},
     ]
-    assert run.history_prefix == []
     assert service.saved[0][0] == [
         {"role": "system", "content": "system"},
         {"role": "assistant", "content": "<session_handoff>\nold-prefix summary"},

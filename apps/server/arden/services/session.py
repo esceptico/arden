@@ -7,7 +7,7 @@ from typing import Literal
 from arden.context.models import SessionData, SessionState
 from arden.context.store import AREA_FILTER_UNSET, SessionStore
 from arden.core.compactor import compact_messages, compactable_range
-from arden.core.tool_result_files import purge_session_results
+from arden.core.tool_result_files import clone_result_files, purge_session_results, rewrite_result_paths
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import SessionActivityEvent, SessionCreatedEvent, SSEEvent
 from arden.logging import get_logger
@@ -208,6 +208,36 @@ class SessionService:
             _logger.warning("Failed to save mid-run progress: %s", e)
             raise
         await self._announce_activity(session_state, messages)
+
+    async def clear_context(self, data: SessionData) -> bool:
+        """Apply an explicit user clear as one guarded destructive write."""
+        async with self._lock_for(data.state.session_id):
+            if await self.store.rehydrate_cold_session(data.state.session_id, blob_root=self.blob_root):
+                refreshed = await self.store.load_session(data.state.session_id)
+                if refreshed is None:
+                    return False
+                data.state = refreshed.state
+                data.messages = refreshed.messages
+                data.last_input_tokens = refreshed.last_input_tokens
+                data.last_message_count = refreshed.last_message_count
+                data.context_generation = refreshed.context_generation
+                data.context_etag = refreshed.context_etag
+            expected_ids = self.store._message_id_sequence(data.messages)
+            if expected_ids is None:
+                return False
+            data.state.last_activity = datetime.now(UTC)
+            cleared = await self.store.clear_session_context(
+                data.state,
+                expected_message_ids=expected_ids,
+                expected_generation=data.context_generation,
+                expected_projection_etag=data.context_etag,
+            )
+        if cleared:
+            data.messages.clear()
+            data.context_generation = data.state.context_generation
+            data.context_etag = data.state.context_etag
+            await self._announce_activity(data.state, [])
+        return cleared
 
     async def _announce_activity(self, session_state: SessionState, messages: list[dict]) -> None:
         """Push a row delta for passive sessions so the sidebar bumps/re-sorts
@@ -673,8 +703,10 @@ class SessionService:
         if target_idx is None:
             return None
 
+        expected_ids = self.store._message_id_sequence(data.messages)
+        if expected_ids is None:
+            return None
         target_message = data.messages[target_idx]
-        target_ref = target_message.get("message_id") or target_message.get("client_id")
         raw = target_message["content"]
         user_message = (
             raw
@@ -686,14 +718,26 @@ class SessionService:
             else ""
         )
         reverted_count = len(data.messages) - target_idx
-        data.messages = data.messages[:target_idx]
+        discarded_ids = expected_ids[target_idx:]
+        replacement = data.messages[:target_idx]
         metadata = {"last_input_tokens": data.last_input_tokens} if data.last_input_tokens else None
-        await self.save(data.state, data.messages, metadata=metadata)
-        await self.store.delete_session_messages_from(
-            data.state.session_id,
-            message_id=target_ref if isinstance(target_ref, str) else None,
-            seq=target_idx if not isinstance(target_ref, str) else None,
-        )
+        data.state.last_activity = datetime.now(UTC)
+        async with self._lock_for(data.state.session_id):
+            rewound = await self.store.rewind_session(
+                data.state,
+                replacement,
+                expected_message_ids=expected_ids,
+                discard_message_ids=discarded_ids,
+                expected_generation=data.context_generation,
+                expected_projection_etag=data.context_etag,
+                metadata=metadata,
+            )
+        if not rewound:
+            return None
+        data.messages = replacement
+        data.context_generation = data.state.context_generation
+        data.context_etag = data.state.context_etag
+        await self._announce_activity(data.state, data.messages)
         return {"user_message": user_message, "reverted_count": reverted_count}
 
     async def permanently_delete(self, session_id: str) -> bool:
@@ -746,8 +790,32 @@ class SessionService:
             area_id=data.state.area_id,
         )
         new_state.auto_approve = set(data.state.auto_approve)
+        messages = self.store.renew_handoff_projection(
+            messages,
+            messages_before=len(messages),
+            reason="session_branch",
+        )
+        tool_result_ids = self.store.active_tool_result_ids(messages)
+        background_result_ids = self.store.active_background_result_ids(messages)
+        messages = rewrite_result_paths(messages, session_id, new_state.session_id)
         metadata = {"last_input_tokens": data.last_input_tokens} if data.last_input_tokens else None
-        await self.save(new_state, messages, metadata=metadata)
+        await self.store.create_session_branch(
+            source_session_id=session_id,
+            state=new_state,
+            messages=messages,
+            tool_call_ids=tool_result_ids,
+            background_task_ids=background_result_ids,
+            metadata=metadata,
+        )
+        try:
+            await asyncio.to_thread(clone_result_files, session_id, new_state.session_id, tool_result_ids)
+        except Exception:
+            _logger.warning("Failed to copy branch tool-result cache", exc_info=True)
+        try:
+            await self.store._restore_active_tool_result_files(new_state.session_id, messages)
+        except Exception:
+            _logger.warning("Failed to restore branch tool-result cache", exc_info=True)
+        await self._announce_activity(new_state, messages)
         return new_state
 
 

@@ -282,7 +282,7 @@ async def test_read_wiki_page_uses_paths_without_exposing_storage_ids(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_repeated_unchanged_full_wiki_read_returns_receipt_until_content_is_evicted(tmp_path: Path) -> None:
+async def test_repeated_unchanged_full_wiki_read_returns_receipt_until_compaction(tmp_path: Path) -> None:
     wiki = _wiki(tmp_path)
     execution = _execution(wiki)
 
@@ -294,7 +294,7 @@ async def test_repeated_unchanged_full_wiki_read_returns_receipt_until_content_i
     assert second.data["content_returned"] is False
     assert "still current and visible" in second.content
 
-    execution.ctx.run.downgrade_resource_observations_for_tool_results({execution.tool_id})
+    execution.ctx.run.downgrade_resource_observations()
     refreshed = await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
 
     assert refreshed.data["content_truncated"] is False

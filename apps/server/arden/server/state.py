@@ -89,11 +89,6 @@ class RunState:
     # safely infer these by scanning from the front.
     client_id: str | None = None
     input_message_index: int | None = None
-    # Iteration-mode loops trim prior history to keep the agent's prompt
-    # context bounded. The dropped head sits here so saves can re-prepend
-    # it — disk history stays complete even though the agent only sees
-    # the tail. Empty for non-loop runs and for loop runs under the cap.
-    history_prefix: list[dict] = field(default_factory=list)
     # Reference to the live SessionState driving this run. Set during
     # prepare_chat so endpoints can resolve metadata against the active
     # session without re-loading durable history.

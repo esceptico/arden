@@ -15,11 +15,11 @@ class ModelRequest:
     tool_choice: ToolChoice
     reasoning_effort: str | None
     previous_response: CompletionResponse | None
-    # Most middleware fields shape one provider request only. Compaction is the
-    # exception: it deliberately replaces canonical/persisted history. Keeping
-    # that intent explicit prevents request-only context limiting from erasing
-    # the live transcript.
-    history_messages: list[dict] | None = None
+    # Most middleware fields shape one provider request only. Full compaction
+    # is the sole exception: it deliberately starts a new canonical context
+    # epoch. The explicit field prevents ordinary request projection from
+    # rewriting live history.
+    compaction_replacement: list[dict] | None = None
 
 
 ModelRequestNext = Callable[[ModelRequest], Awaitable[ModelRequest]]

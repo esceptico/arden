@@ -53,6 +53,7 @@ ALWAYS_ON = {
     # spawn surfaces
     "research",
     "skill_use",
+    "agent_result_read",
     # chat output & connections
     "render_html",
     "connection_request",

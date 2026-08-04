@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from arden.core.compactor import compactable_range
@@ -31,7 +29,7 @@ async def get_context_usage(
     resolved_session_id = data.state.session_id if data else session_id
     active_run = runtime.run_registry.get_active_run(resolved_session_id) if resolved_session_id else None
     messages = active_run.messages if active_run else (data.messages if data else [])
-    message_count = len(active_run.history_prefix) + len(active_run.messages) if active_run else len(messages)
+    message_count = len(messages)
     last_input_tokens = data.last_input_tokens if data else None
     tools = runtime.executor.get_tools() if runtime.executor else []
     allowed_tool_names = tool_schema_names(tools)
@@ -116,14 +114,6 @@ async def compact_context(
         before = int(result.get("before_messages", result.get("message_count", 0)) or 0)
         after = int(result.get("after_messages", result.get("message_count", before)) or before)
         await bus.emit(CompactionFinishedEvent(run_id="", messages_before=before, messages_after=after))
-        if result.get("status") == "compacted" and resolved_session_id:
-            await runtime.session_service.record_chat_compaction(
-                compaction_id=f"compact-{uuid4().hex[:16]}",
-                session_id=resolved_session_id,
-                boundary_seq=bus.next_seq - 1,
-                messages_before=before,
-                messages_after=after,
-            )
     return result
 
 

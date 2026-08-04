@@ -29,7 +29,6 @@ from arden.core.compactor import Compactor
 from arden.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
 from arden.core.isolation import IsolationLevel
 from arden.core.llm_client import llm_client
-from arden.core.model_context_budget import ToolResultContextBudgetMiddleware
 from arden.core.naming import generate_agent_name
 from arden.core.prompts import AREA_BLOCK, TEAM_CHILD_BLOCK
 from arden.core.spawn_spec import ParentRef, SpawnSpec, WorkflowRef
@@ -643,10 +642,6 @@ def create_spawn_fn(
                 registry=child_registry,
                 run=child_run,
                 get_services=lambda: child_ctx.services,
-            ),
-            ToolResultContextBudgetMiddleware(
-                session_id=child_state.session_id,
-                on_results_evicted=child_run.downgrade_resource_observations_for_tool_results,
             ),
         )
         compaction_emit = parent_emit if parent_id and not background else None

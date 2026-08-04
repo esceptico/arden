@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from typing import Protocol
+from uuid import uuid4
 
 from arden.agent import CompletionResponse, Role
 from arden.constants import (
@@ -71,17 +72,26 @@ def compactable_range(
     snapping the boundary forward past tool messages to avoid splitting a turn.
     """
     n = len(messages)
-    if n <= 4:
+    if n <= 2:
         return None
 
-    compressible = n - 1
-    keep_count = max(4, int(compressible * keep_ratio))
-    tail_start = n - keep_count
+    if n <= 4:
+        # A single provider-native search item can be larger than an otherwise
+        # short chat. Keep the newest ordinary message, but retire opaque
+        # provider protocol state when it is itself the tail causing pressure.
+        tail_start = n - 1
+        latest = messages[-1]
+        if latest.get("openai_response_items") or latest.get("anthropic_content"):
+            tail_start = n
+    else:
+        compressible = n - 1
+        keep_count = max(4, int(compressible * keep_ratio))
+        tail_start = n - keep_count
 
     while tail_start < n and messages[tail_start]["role"] == Role.TOOL:
         tail_start += 1
 
-    if tail_start <= 1 or tail_start >= n:
+    if tail_start <= 1:
         return None
 
     return (1, tail_start)
@@ -311,6 +321,65 @@ def _message_ref_id(msg: dict) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _ensure_message_ref_id(msg: dict) -> str:
+    if value := _message_ref_id(msg):
+        return value
+    value = f"msg-{uuid4().hex[:16]}"
+    msg["message_id"] = value
+    return value
+
+
+def _tool_result_refs(messages: list[dict]) -> list[str]:
+    """Collect direct and previously-compacted result refs in stable order."""
+    refs: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        direct = message.get("tool_call_id") if message.get("role") == Role.TOOL else None
+        nested = message.get("compaction")
+        candidates = [direct] if isinstance(direct, str) else []
+        if isinstance(nested, dict) and isinstance(nested.get("tool_result_refs"), list):
+            candidates.extend(ref for ref in nested["tool_result_refs"] if isinstance(ref, str))
+        for ref in candidates:
+            if ref and ref not in seen:
+                seen.add(ref)
+                refs.append(ref)
+    return refs
+
+
+def _background_result_refs(messages: list[dict]) -> list[str]:
+    """Collect background task IDs from completion messages and prior handoffs."""
+    refs: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        candidates: list[str] = []
+        direct = message.get("background_result_ref")
+        if isinstance(direct, str) and direct:
+            candidates.append(direct)
+        else:
+            content = message.get("content")
+            if isinstance(content, str) and content.startswith("<background_agent_result"):
+                opening = content.split(">", 1)[0]
+                marker = 'task_id="'
+                marker_start = opening.find(marker)
+                if marker_start >= 0:
+                    value_start = marker_start + len(marker)
+                    value_end = opening.find('"', value_start)
+                    if value_end > value_start:
+                        candidates.append(opening[value_start:value_end])
+                elif isinstance(message.get("client_id"), str) and message["client_id"].startswith("bg:"):
+                    legacy_ref, separator, _status = message["client_id"][3:].rpartition(":")
+                    if separator and legacy_ref:
+                        candidates.append(legacy_ref)
+        nested = message.get("compaction")
+        if isinstance(nested, dict) and isinstance(nested.get("background_result_refs"), list):
+            candidates.extend(ref for ref in nested["background_result_refs"] if isinstance(ref, str))
+        for ref in candidates:
+            if ref and ref not in seen:
+                seen.add(ref)
+                refs.append(ref)
+    return refs
+
+
 def _build_compacted_messages(
     messages: list[dict],
     start: int,
@@ -319,18 +388,28 @@ def _build_compacted_messages(
     *,
     rehydration_state: dict | None = None,
 ) -> list[dict]:
+    retained_tail = messages[end:]
+    retained_tail_ids = [_ensure_message_ref_id(msg) for msg in retained_tail]
+    compaction_id = f"compact-{uuid4().hex[:16]}"
     compaction: dict = {
+        "compaction_id": compaction_id,
         "kind": "session_handoff",
         "message_start": start,
         "message_end": end,
+        "messages_before": len(messages),
+        "messages_after": 2 + len(retained_tail),
+        "preserved_tail_ids": retained_tail_ids,
     }
     if start_id := _message_ref_id(messages[start]):
         compaction["message_start_id"] = start_id
     if end > start and (end_id := _message_ref_id(messages[end - 1])):
         compaction["message_end_id"] = end_id
-    tool_messages = [msg for msg in messages[start:end] if msg.get("role") == Role.TOOL and msg.get("tool_call_id")]
-    if tool_messages:
-        compaction["tool_result_refs"] = [msg["tool_call_id"] for msg in tool_messages]
+    tool_result_refs = _tool_result_refs(messages[start:end])
+    if tool_result_refs:
+        compaction["tool_result_refs"] = tool_result_refs
+    background_result_refs = _background_result_refs(messages[start:end])
+    if background_result_refs:
+        compaction["background_result_refs"] = background_result_refs
     if rehydration_state:
         compaction["rehydration"] = rehydration_state
 
@@ -339,9 +418,10 @@ def _build_compacted_messages(
         {
             "role": Role.ASSISTANT,
             "content": f"{SESSION_HANDOFF_MARKER}\n{summary}",
+            "message_id": compaction_id,
             "compaction": compaction,
         },
-        *messages[end:],
+        *retained_tail,
     ]
 
 

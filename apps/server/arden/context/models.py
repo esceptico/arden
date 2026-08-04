@@ -24,6 +24,10 @@ class SessionState:
     agent_status: str | None = None
     area_id: str | None = None
     chat_model: str | None = None
+    # Loaded runs carry this optimistic-write fence. Explicit clear/rewind
+    # advances it so an older in-memory run cannot restore discarded context.
+    context_generation: int = 0
+    context_etag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,3 +49,13 @@ class SessionData:
     # budget dial uses this for message-pressure because compaction uses the
     # saved transcript, even when a loop trims its model working set.
     last_message_count: int | None = None
+    # Hash of the exact raw sessions.messages projection, including malformed
+    # JSON recovered from the immutable transcript.
+    context_generation: int = 0
+    context_etag: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.context_generation == 0 and self.state.context_generation != 0:
+            self.context_generation = self.state.context_generation
+        if self.context_etag is None:
+            self.context_etag = self.state.context_etag

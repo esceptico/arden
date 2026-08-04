@@ -107,12 +107,11 @@ def test_context_usage_reports_loaded_deferred_tool_counts():
     assert data["visible_tool_count"] < data["tool_count"]
 
 
-def test_context_usage_counts_loop_prefix_during_active_run():
+def test_context_usage_counts_canonical_active_run_messages():
     runtime = _Runtime()
     run = runtime.run_registry.create_run("sess-1")
     run.status = RunStatus.RUNNING
-    run.history_prefix = [{"role": "user", "content": f"old-{i}"} for i in range(3)]
-    run.messages = [{"role": "user", "content": "active"}]
+    run.messages = [{"role": "user", "content": f"active-{i}"} for i in range(4)]
 
     app.dependency_overrides[get_runtime] = lambda: runtime
     app.dependency_overrides[require_session_service] = lambda: _SessionService()
@@ -178,7 +177,9 @@ def test_manual_compact_bypasses_auto_threshold(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["status"] == "compacted"
-    assert session_service.recorded_compactions == 1
+    # The durable summary save records the checkpoint; the HTTP route must not
+    # create a second transport-sequence checkpoint.
+    assert session_service.recorded_compactions == 0
 
 
 def test_manual_compact_noops_when_nothing_compactable_without_spinner_event():
