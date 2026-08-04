@@ -112,6 +112,7 @@ def test_compactor_builds_verified_copy_without_mutating_source(tmp_path: Path):
     compacted = sqlite3.connect(output)
     compacted.row_factory = sqlite3.Row
     assert compacted.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert compacted.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
     assert compacted.execute("SELECT COUNT(*) FROM session_events").fetchone()[0] == 1
     assert "file_search_text" not in {row[1] for row in compacted.execute("PRAGMA table_info(session_messages)")}
     tool_message = json.loads(
@@ -133,7 +134,12 @@ def test_compactor_builds_verified_copy_without_mutating_source(tmp_path: Path):
     assert manifest["outbox"]["payloads_compacted"] == 2
     assert manifest["outbox"]["payload_bytes_removed"] > 19_000
     assert manifest["outbox"]["receipts_pruned"] == 1
-    assert manifest["checks"] == {"integrity": "ok", "row_counts": "ok", "user_assistant_prose": "ok"}
+    assert manifest["checks"] == {
+        "integrity": "ok",
+        "row_counts": "ok",
+        "user_assistant_prose": "ok",
+        "auto_vacuum": "incremental",
+    }
     assert Path(manifest["manifest_path"]).is_file()
 
 

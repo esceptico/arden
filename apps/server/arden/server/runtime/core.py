@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException, Request
@@ -65,7 +66,15 @@ from arden.server.wiki_health import dangling_fact_citation_issues
 from arden.services.session import SessionService
 from arden.skills.registry import SkillMeta, SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
-from arden.storage_budget import enforce_storage_budget
+from arden.storage_budget import (
+    StorageSessionCandidate,
+    build_storage_cleanup_plan,
+    enforce_storage_budget,
+    execute_storage_file_action,
+    inspect_storage,
+    list_storage_backups,
+    set_backup_keep,
+)
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki.approval_store import WikiRenameApprovalStore
@@ -186,6 +195,12 @@ class Runtime:
             "max_bytes": None,
             "target_bytes": None,
             "checked_at": None,
+            "categories": [],
+            "reclaimed_by_category": {},
+            "database_reclaim_mode": None,
+            "last_plan": None,
+            "last_run": None,
+            "next_maintenance_at": None,
         }
         self._index_lock = asyncio.Lock()
         self._index_task: asyncio.Task[None] | None = None
@@ -855,13 +870,23 @@ class Runtime:
         try:
             await self.session_service.store.prune_expired_tool_results()
             referenced = await self.session_service.store.list_tool_result_content_hashes()
+            reclaim_status = await self.session_service.store.database_reclaim_status()
             report = await asyncio.to_thread(
                 enforce_storage_budget,
                 self.config.arden_dir,
                 max_space_gb=self.config.max_space_gb,
                 referenced_tool_result_hashes=referenced,
+                backup_retention_days=self.config.storage_backup_retention_days,
+                expire_backups=True,
+                database_reclaim_mode=str(reclaim_status["mode"]),
             )
-            self._storage_status = report.to_dict()
+            latest_run = await self.session_service.store.latest_storage_cleanup_run()
+            self._storage_status = {
+                **report.to_dict(),
+                "last_plan": self._storage_status.get("last_plan"),
+                "last_run": latest_run,
+                "next_maintenance_at": self._storage_status.get("next_maintenance_at"),
+            }
         except Exception as error:
             self._storage_status = {
                 **self._storage_status,
@@ -873,12 +898,196 @@ class Runtime:
         self._set_warmup_capability("storage")
         return self.storage_status()
 
+    async def _storage_cleanup_plan(self, request):
+        referenced = await self.session_service.store.list_tool_result_content_hashes()
+        reclaim_status = await self.session_service.store.database_reclaim_status()
+        inventory = await asyncio.to_thread(
+            inspect_storage,
+            self.config.arden_dir,
+            max_space_gb=self.config.max_space_gb,
+            referenced_tool_result_hashes=referenced,
+            backup_retention_days=self.config.storage_backup_retention_days,
+            database_reclaim_mode=str(reclaim_status["mode"]),
+        )
+        candidates = await self.session_service.store.list_storage_cleanup_candidates()
+        pinned = set(request.pinned_session_ids)
+        inactive_before = datetime.now(UTC) - timedelta(days=self.config.storage_current_inactive_days)
+        protected: list[StorageSessionCandidate] = []
+        for candidate in candidates:
+            reasons = list(candidate.protected_reasons)
+            if candidate.session_id == request.current_session_id:
+                reasons.append("currently open chat")
+            if candidate.session_id in pinned:
+                reasons.append("pinned chat")
+            if self.run_registry.get_active_run(candidate.session_id) is not None:
+                reasons.append("active run")
+            if not candidate.archived:
+                try:
+                    last_activity = datetime.fromisoformat(candidate.last_activity)
+                except ValueError:
+                    reasons.append("invalid activity timestamp")
+                else:
+                    if last_activity > inactive_before:
+                        reasons.append(f"active within {self.config.storage_current_inactive_days} days")
+            protected.append(replace(candidate, protected_reasons=tuple(sorted(set(reasons)))))
+
+        limit_gb = request.target_gb if request.target_gb is not None else self.config.max_space_gb
+        target_bytes = inventory.report.total_bytes if limit_gb is None else int(limit_gb * (1024**3) * 0.85)
+        allow_archived = (
+            self.config.storage_allow_archived_cleanup
+            if request.allow_archived_chats is None
+            else request.allow_archived_chats
+        )
+        allow_current = (
+            self.config.storage_allow_current_cleanup
+            if request.allow_current_chats is None
+            else request.allow_current_chats
+        )
+        return build_storage_cleanup_plan(
+            inventory,
+            target_bytes=target_bytes,
+            sessions=protected,
+            allow_archived_chats=allow_archived,
+            allow_delete_cold_chats=request.allow_delete_cold_chats,
+            allow_current_chats=allow_current,
+            current_chat_minimum=self.config.storage_current_minimum,
+        )
+
+    async def plan_storage_cleanup(self, request) -> dict:
+        plan = await self._storage_cleanup_plan(request)
+        self._storage_status["last_plan"] = plan.to_dict()
+        return plan.to_dict()
+
+    async def execute_storage_cleanup(self, request) -> dict:
+        initial = await self._storage_cleanup_plan(request)
+        if initial.plan_id != request.plan_id:
+            raise HTTPException(status_code=409, detail="Storage changed; review the refreshed cleanup plan")
+        started_at = datetime.now(UTC).isoformat()
+        completed = 0
+        before = initial.before_bytes
+        receipts: list[dict] = []
+        try:
+            for action in initial.actions:
+                if action.kind in {"stale_tool_result", "expired_backup"}:
+                    fresh = await self._storage_cleanup_plan(request)
+                    if not any(
+                        item.kind == action.kind and item.resource_id == action.resource_id for item in fresh.actions
+                    ):
+                        receipts.append({**asdict(action), "status": "skipped_after_revalidation"})
+                        continue
+                    referenced = await self.session_service.store.list_tool_result_content_hashes()
+                    await asyncio.to_thread(
+                        execute_storage_file_action,
+                        self.config.arden_dir,
+                        action,
+                        referenced_tool_result_hashes=referenced,
+                        backup_retention_days=self.config.storage_backup_retention_days,
+                    )
+                    completed += 1
+                    receipts.append({**asdict(action), "status": "completed"})
+                    continue
+                async with self.run_registry.session_lock(action.resource_id):
+                    fresh = await self._storage_cleanup_plan(request)
+                    if not any(
+                        item.kind == action.kind and item.resource_id == action.resource_id for item in fresh.actions
+                    ):
+                        receipts.append({**asdict(action), "status": "skipped_after_revalidation"})
+                        continue
+                    changed = False
+                    if action.kind == "cold_convert_session":
+                        changed = await self.session_service.cold_convert(action.resource_id) is not None
+                    elif action.kind == "delete_cold_session":
+                        changed = await self.session_service.permanently_delete(action.resource_id)
+                    elif action.kind == "delete_current_session":
+                        changed = await self.session_service.permanently_delete_current(action.resource_id)
+                    completed += int(changed)
+                    receipts.append({**asdict(action), "status": "completed" if changed else "skipped"})
+            await self.session_service.store.incremental_vacuum()
+            await self.run_storage_maintenance_once()
+        except Exception as error:
+            after = int(self.storage_status().get("total_bytes") or before)
+            run_id = await self.session_service.store.record_storage_cleanup_run(
+                plan_id=initial.plan_id,
+                started_at=started_at,
+                before_bytes=before,
+                target_bytes=initial.target_bytes,
+                after_bytes=after,
+                reclaimed_bytes=max(0, before - after),
+                actions=receipts,
+                status="error",
+                error=f"{type(error).__name__}: {error}",
+            )
+            self._storage_status["last_run"] = {
+                "run_id": run_id,
+                "plan_id": initial.plan_id,
+                "started_at": started_at,
+                "before_bytes": before,
+                "target_bytes": initial.target_bytes,
+                "after_bytes": after,
+                "reclaimed_bytes": max(0, before - after),
+                "actions": receipts,
+                "status": "error",
+                "error": f"{type(error).__name__}: {error}",
+            }
+            _logger.exception("Storage cleanup plan %s failed", initial.plan_id)
+            raise
+        after = int(self._storage_status["total_bytes"])
+        reclaimed = max(0, before - after)
+        run_id = await self.session_service.store.record_storage_cleanup_run(
+            plan_id=initial.plan_id,
+            started_at=started_at,
+            before_bytes=before,
+            target_bytes=initial.target_bytes,
+            after_bytes=after,
+            reclaimed_bytes=reclaimed,
+            actions=receipts,
+            status="completed",
+        )
+        self._storage_status["last_run"] = {
+            "run_id": run_id,
+            "plan_id": initial.plan_id,
+            "started_at": started_at,
+            "before_bytes": before,
+            "target_bytes": initial.target_bytes,
+            "after_bytes": after,
+            "reclaimed_bytes": reclaimed,
+            "actions": receipts,
+            "status": "completed",
+        }
+        _logger.info(
+            "Storage cleanup completed plan=%s actions=%d reclaimed_bytes=%d",
+            initial.plan_id,
+            completed,
+            reclaimed,
+        )
+        return {
+            "plan_id": initial.plan_id,
+            "reclaimed_bytes": reclaimed,
+            "actions_completed": completed,
+            "status": self.storage_status(),
+        }
+
+    async def list_storage_backups(self) -> list[dict]:
+        backups = await asyncio.to_thread(
+            list_storage_backups,
+            self.config.arden_dir,
+            backup_retention_days=self.config.storage_backup_retention_days,
+        )
+        return [backup.__dict__ for backup in backups]
+
+    async def set_storage_backup_keep(self, relative_path: str, *, keep: bool) -> list[dict]:
+        await asyncio.to_thread(set_backup_keep, self.config.arden_dir, relative_path, keep=keep)
+        return await self.list_storage_backups()
+
     def start_storage_maintenance(self, *, interval_seconds: float = 3600) -> None:
         if self._storage_maintenance_task is not None:
             return
 
         async def _loop() -> None:
             while True:
+                self._storage_status["next_maintenance_at"] = (
+                    datetime.now(UTC) + timedelta(seconds=interval_seconds)
+                ).isoformat()
                 await asyncio.sleep(interval_seconds)
                 await self.run_storage_maintenance_once()
 

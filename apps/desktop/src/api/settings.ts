@@ -2,10 +2,14 @@ import { apiWithConfig, type AppConfig } from "@/api/core";
 import type {
   ModelsResponse,
   ServerConfig,
+  StorageBackup,
+  StorageCleanupRun,
+  StoragePlan,
+  StoragePlanRequest,
+  StorageStatus,
   ToolMetadata,
   ToolOverrideDecision,
   ToolPolicyMetadata,
-  StorageStatus,
 } from "@/api/types";
 
 // ─── MCP servers ──────────────────────────────────────────────────────
@@ -383,6 +387,11 @@ export type ServerConfigPatch = Partial<{
   compression_keep_ratio: number;
   summary_max_tokens: number;
   max_space_gb: number | null;
+  storage_backup_retention_days: number;
+  storage_allow_archived_cleanup: boolean;
+  storage_allow_current_cleanup: boolean;
+  storage_current_inactive_days: number;
+  storage_current_minimum: number;
   web_search: "auto" | "exa" | "ddgs" | "none";
   tool_overrides: Record<string, ToolOverrideDecision>;
   integrations: Partial<Record<GoogleIntegrationId, boolean | null>> & {
@@ -397,6 +406,41 @@ export async function getStorageStatusApi(config: AppConfig): Promise<StorageSta
 
 export async function maintainStorageApi(config: AppConfig): Promise<StorageStatus> {
   return apiWithConfig<StorageStatus>(config, "/storage/maintain", { method: "POST" });
+}
+
+export async function planStorageCleanupApi(
+  config: AppConfig,
+  request: StoragePlanRequest,
+): Promise<StoragePlan> {
+  return apiWithConfig<StoragePlan>(config, "/storage/plan", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function executeStorageCleanupApi(
+  config: AppConfig,
+  request: StoragePlanRequest & { plan_id: string },
+): Promise<StorageCleanupRun> {
+  return apiWithConfig<StorageCleanupRun>(config, "/storage/execute", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function listStorageBackupsApi(config: AppConfig): Promise<StorageBackup[]> {
+  return apiWithConfig<StorageBackup[]>(config, "/storage/backups");
+}
+
+export async function setStorageBackupKeepApi(
+  config: AppConfig,
+  relativePath: string,
+  keep: boolean,
+): Promise<StorageBackup[]> {
+  return apiWithConfig<StorageBackup[]>(config, "/storage/backups/keep", {
+    method: "PUT",
+    body: JSON.stringify({ relative_path: relativePath, keep }),
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

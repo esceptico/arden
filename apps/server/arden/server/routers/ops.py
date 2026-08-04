@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from arden.server.deps import require_automation_runtime, require_tool_executor
 from arden.server.middleware import _extract_bearer_token
@@ -13,6 +13,13 @@ from arden.server.schemas import (
     OutboxStatusResponse,
     ReplayOutboxRequest,
     SchedulerStatusResponse,
+    SetStorageBackupKeepRequest,
+    StorageBackupResponse,
+    StorageCleanupRunResponse,
+    StorageExecuteRequest,
+    StorageHealthResponse,
+    StoragePlanRequest,
+    StoragePlanResponse,
 )
 from arden.settings import verify_api_key
 from arden.tools.executor import ToolExecutor
@@ -66,14 +73,42 @@ async def get_index_status(runtime: Runtime = Depends(get_runtime)):
     return await runtime.get_index_status()
 
 
-@router.get("/storage/status")
+@router.get("/storage/status", response_model=StorageHealthResponse)
 async def get_storage_status(runtime: Runtime = Depends(get_runtime)):
     return runtime.storage_status()
 
 
-@router.post("/storage/maintain")
+@router.post("/storage/maintain", response_model=StorageHealthResponse)
 async def maintain_storage(runtime: Runtime = Depends(get_runtime)):
     return await runtime.run_storage_maintenance_once()
+
+
+@router.post("/storage/plan", response_model=StoragePlanResponse)
+async def plan_storage_cleanup(request: StoragePlanRequest, runtime: Runtime = Depends(get_runtime)):
+    return await runtime.plan_storage_cleanup(request)
+
+
+@router.post("/storage/execute", response_model=StorageCleanupRunResponse)
+async def execute_storage_cleanup(request: StorageExecuteRequest, runtime: Runtime = Depends(get_runtime)):
+    return await runtime.execute_storage_cleanup(request)
+
+
+@router.get("/storage/backups", response_model=list[StorageBackupResponse])
+async def get_storage_backups(runtime: Runtime = Depends(get_runtime)):
+    return await runtime.list_storage_backups()
+
+
+@router.put("/storage/backups/keep", response_model=list[StorageBackupResponse])
+async def keep_storage_backup(
+    request: SetStorageBackupKeepRequest,
+    runtime: Runtime = Depends(get_runtime),
+):
+    try:
+        return await runtime.set_storage_backup_keep(request.relative_path, keep=request.keep)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Backup no longer exists") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/index/start")

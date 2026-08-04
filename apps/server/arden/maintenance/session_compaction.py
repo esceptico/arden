@@ -613,6 +613,7 @@ def compact_legacy_database(
                 raise RuntimeError("user/assistant prose parity failed")
             if candidate.exists():
                 raise FileExistsError(candidate)
+            connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
             escaped = str(candidate).replace("'", "''")
             connection.execute(f"VACUUM INTO '{escaped}'")
             vacuum_complete = True
@@ -625,6 +626,8 @@ def compact_legacy_database(
         try:
             if compacted.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise RuntimeError("compacted database failed integrity_check")
+            if int(compacted.execute("PRAGMA auto_vacuum").fetchone()[0]) != 2:
+                raise RuntimeError("compacted database did not enable incremental auto-vacuum")
         finally:
             compacted.close()
         os.chmod(candidate, database.stat().st_mode & 0o777)
@@ -672,7 +675,12 @@ def compact_legacy_database(
             "verified_blob_manifests": verified_blobs,
             "preexisting_missing_blob_refs": sorted(missing_blobs),
             "new_blobs": blobs,
-            "checks": {"integrity": "ok", "row_counts": "ok", "user_assistant_prose": "ok"},
+            "checks": {
+                "integrity": "ok",
+                "row_counts": "ok",
+                "user_assistant_prose": "ok",
+                "auto_vacuum": "incremental",
+            },
         }
         manifest_path = final_path.with_name(f"{final_path.name}.compaction-manifest.json")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

@@ -121,6 +121,8 @@ export interface ArchivedSession {
   parent_tool_call_id?: string | null;
   agent_type?: string | null;
   agent_status?: string | null;
+  storage_state?: "hot" | "cold";
+  cold_bundle_bytes?: number;
 }
 
 export async function listArchivedSessionsApi(config: AppConfig): Promise<ArchivedSession[]> {

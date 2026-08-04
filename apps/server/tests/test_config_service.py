@@ -92,10 +92,30 @@ async def test_config_service_persists_and_clears_storage_budget(monkeypatch):
     monkeypatch.setattr(config_module, "save_user_settings", save_settings)
     service = ConfigService(on_config_change=_noop)
 
-    await service.update(max_space_gb=12.5)
-    assert persisted == {"max_space_gb": 12.5}
+    await service.update(
+        max_space_gb=12.5,
+        storage_backup_retention_days=21,
+        storage_allow_archived_cleanup=True,
+        storage_allow_current_cleanup=True,
+        storage_current_inactive_days=120,
+        storage_current_minimum=150,
+    )
+    assert persisted == {
+        "max_space_gb": 12.5,
+        "storage_backup_retention_days": 21,
+        "storage_allow_archived_cleanup": True,
+        "storage_allow_current_cleanup": True,
+        "storage_current_inactive_days": 120,
+        "storage_current_minimum": 150,
+    }
     await service.update(max_space_gb=None)
-    assert persisted == {}
+    assert persisted == {
+        "storage_backup_retention_days": 21,
+        "storage_allow_archived_cleanup": True,
+        "storage_allow_current_cleanup": True,
+        "storage_current_inactive_days": 120,
+        "storage_current_minimum": 150,
+    }
 
 
 @pytest.mark.asyncio

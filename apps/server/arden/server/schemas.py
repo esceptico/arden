@@ -201,6 +201,18 @@ class WarmupHealthResponse(BaseModel):
     capabilities: dict[str, bool]
 
 
+class StorageCategoryResponse(BaseModel):
+    id: str
+    label: str
+    total_bytes: int
+    reclaimable_bytes: int
+    item_count: int
+    policy_tier: int | None = None
+    protection_reason: str | None = None
+    description: str
+    measurement_kind: Literal["physical", "logical_estimate"]
+
+
 class StorageHealthResponse(BaseModel):
     status: Literal["pending", "disabled", "ok", "reclaimed", "quota_blocked", "error"]
     total_bytes: int
@@ -211,6 +223,71 @@ class StorageHealthResponse(BaseModel):
     target_bytes: int | None = None
     checked_at: str | None = None
     error: str | None = None
+    categories: list[StorageCategoryResponse] = Field(default_factory=list)
+    reclaimed_by_category: dict[str, int] = Field(default_factory=dict)
+    database_reclaim_mode: str | None = None
+    last_plan: dict | None = None
+    last_run: dict | None = None
+    next_maintenance_at: str | None = None
+
+
+class StoragePlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_gb: float | None = Field(default=None, ge=0.01)
+    allow_archived_chats: bool | None = None
+    allow_delete_cold_chats: bool = False
+    allow_current_chats: bool | None = None
+    current_session_id: str | None = None
+    pinned_session_ids: list[str] = Field(default_factory=list, max_length=10_000)
+
+
+class StoragePlanActionResponse(BaseModel):
+    tier: int
+    kind: str
+    category_id: str
+    resource_id: str
+    estimated_reclaimable_bytes: int
+    destructive: bool
+    description: str
+
+
+class StoragePlanResponse(BaseModel):
+    plan_id: str
+    before_bytes: int
+    target_bytes: int
+    estimated_after_bytes: int
+    estimated_reclaimable_bytes: int
+    attainable: bool
+    actions: list[StoragePlanActionResponse]
+    blockers: list[str]
+    created_at: str
+
+
+class StorageExecuteRequest(StoragePlanRequest):
+    plan_id: str = Field(min_length=64, max_length=64)
+
+
+class StorageCleanupRunResponse(BaseModel):
+    plan_id: str
+    reclaimed_bytes: int
+    actions_completed: int
+    status: StorageHealthResponse
+
+
+class StorageBackupResponse(BaseModel):
+    relative_path: str
+    size_bytes: int
+    modified_at: str
+    kept: bool
+    expired: bool
+
+
+class SetStorageBackupKeepRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    relative_path: str = Field(min_length=1, max_length=4_096)
+    keep: bool
 
 
 class HealthResponse(BaseModel):
@@ -544,6 +621,11 @@ class UpdateConfigRequest(BaseModel):
     compression_keep_ratio: float | None = Field(default=None, ge=0, le=1)
     summary_max_tokens: int | None = Field(default=None, ge=256, le=8000)
     max_space_gb: float | None = Field(default=None, ge=0.1)
+    storage_backup_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    storage_allow_archived_cleanup: bool | None = None
+    storage_allow_current_cleanup: bool | None = None
+    storage_current_inactive_days: int | None = Field(default=None, ge=1, le=3650)
+    storage_current_minimum: int | None = Field(default=None, ge=1, le=100_000)
     web_search: Literal["auto", "exa", "ddgs", "none"] | None = None
     tool_overrides: dict[str, ToolOverrideDecision] | None = None
     integrations: IntegrationToggles | None = None

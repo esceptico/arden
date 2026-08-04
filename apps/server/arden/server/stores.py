@@ -111,7 +111,11 @@ class Stores:
             automation_settlement_conn=automation_settlement_conn,
             chat_completion_conn=chat_completion_conn,
             read_conn=read_conn,
-            sessions=SessionService(session_store),
+            sessions=SessionService(
+                session_store,
+                cold_root=config.arden_dir / "cold-sessions",
+                blob_root=config.arden_dir / "blobs" / "tool-results",
+            ),
             automations=automations,
             notifiers=notifiers,
             monitor=monitor,

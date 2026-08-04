@@ -115,6 +115,11 @@ PERSIST_KEYS = frozenset(
         "compression_keep_ratio",
         "summary_max_tokens",
         "max_space_gb",
+        "storage_backup_retention_days",
+        "storage_allow_archived_cleanup",
+        "storage_allow_current_cleanup",
+        "storage_current_inactive_days",
+        "storage_current_minimum",
         "mcp_servers",
         "tool_overrides",
         "agent_max_iterations",
@@ -217,6 +222,11 @@ class Config(BaseSettings):
 
     # Managed storage. None reports usage without enforcing a quota.
     max_space_gb: float | None = Field(default=None, ge=0.1)
+    storage_backup_retention_days: int = Field(default=14, ge=1, le=3650)
+    storage_allow_archived_cleanup: bool = False
+    storage_allow_current_cleanup: bool = False
+    storage_current_inactive_days: int = Field(default=90, ge=1, le=3650)
+    storage_current_minimum: int = Field(default=100, ge=1, le=100_000)
 
     # API authentication
     api_key_hash: str | None = None

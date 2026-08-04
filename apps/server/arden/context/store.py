@@ -1,7 +1,10 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -29,10 +32,12 @@ from arden.events.sse import event_from_payload
 from arden.logging import get_logger
 from arden.outbox.store import OutboxStore
 from arden.server.bus import StreamRecord
+from arden.storage_budget import StorageSessionCandidate
+from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_bundle, write_cold_session_bundle
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 1
+_SESSION_SCHEMA_VERSION = 3
 
 LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
 # Hard bound on the string handed to the FTS5 MATCH parser. A very long query
@@ -58,6 +63,23 @@ CREATE TABLE IF NOT EXISTS session_store_meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS storage_cleanup_runs (
+    run_id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    before_bytes INTEGER NOT NULL,
+    target_bytes INTEGER NOT NULL,
+    after_bytes INTEGER NOT NULL,
+    reclaimed_bytes INTEGER NOT NULL,
+    actions_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_storage_cleanup_runs_completed
+    ON storage_cleanup_runs(completed_at DESC);
+
 CREATE TABLE IF NOT EXISTS areas (
     area_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -80,6 +102,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     started_at TEXT NOT NULL,
     last_activity TEXT NOT NULL,
+    last_accessed_at TEXT,
     messages TEXT,
     metadata TEXT,
     name TEXT,
@@ -91,7 +114,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_type TEXT,
     agent_status TEXT,
     area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL,
-    chat_model TEXT
+    chat_model TEXT,
+    storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold')),
+    cold_bundle_path TEXT,
+    cold_bundle_sha256 TEXT,
+    cold_bundle_bytes INTEGER,
+    cold_logical_bytes INTEGER,
+    cold_message_count INTEGER,
+    cold_prose_sha256 TEXT,
+    cold_blob_hashes_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_activity ON sessions(last_activity);
@@ -443,7 +474,11 @@ SQL_LIST_ARCHIVED = """
 SELECT session_id, started_at, last_activity, name, archived_at,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
        agent_type, agent_status, area_id, chat_model,
-       json_array_length(COALESCE(messages, '[]')) AS message_count
+       COALESCE(storage_state, 'hot') AS storage_state,
+       COALESCE(cold_bundle_bytes, 0) AS cold_bundle_bytes,
+       CASE WHEN COALESCE(storage_state, 'hot') = 'cold'
+            THEN COALESCE(cold_message_count, 0)
+            ELSE json_array_length(COALESCE(messages, '[]')) END AS message_count
 FROM sessions
 WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC
@@ -499,6 +534,7 @@ class SessionStore:
         self.read_conn = read_conn or conn
         self.chat_completion_conn = chat_completion_conn
         self._background_event_lock = asyncio.Lock()
+        self._storage_maintenance_lock = asyncio.Lock()
         self._session_locks_guard = asyncio.Lock()
         self._session_write_locks: dict[str, asyncio.Lock] = {}
 
@@ -743,12 +779,58 @@ class SessionStore:
         }
 
     async def init_schema(self) -> None:
+        tables = await self.conn.execute_fetchall(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        )
+        if not tables:
+            # New databases can opt into bounded physical reclamation without
+            # a rewrite. Existing NONE databases migrate through the offline
+            # verified compactor because SQLite requires a full VACUUM.
+            await self.conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            mode = await self.conn.execute_fetchall("PRAGMA auto_vacuum")
+            if int(mode[0][0]) != 2:
+                # database.connect enables WAL before the session schema is
+                # created. SQLite may then defer the header change until a
+                # VACUUM; on an empty DB this is bounded and contains no data.
+                await self.conn.execute("VACUUM")
         await self._pre_migrate_tool_results_schema()
         await self.conn.executescript(SCHEMA)
         version = await self._session_schema_version()
         if version >= _SESSION_SCHEMA_VERSION:
             # Keep the trigger contract self-healing without repeating table
             # scans or destructive column rewrites on every process start.
+            await self._migrate_session_messages_fts()
+            return
+        if version in {1, 2}:
+            if version == 1:
+                for col in (
+                    "storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold'))",
+                    "cold_bundle_path TEXT",
+                    "cold_bundle_sha256 TEXT",
+                    "cold_bundle_bytes INTEGER",
+                    "cold_logical_bytes INTEGER",
+                    "cold_message_count INTEGER",
+                    "cold_prose_sha256 TEXT",
+                    "cold_blob_hashes_json TEXT",
+                ):
+                    try:
+                        await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
+                    except aiosqlite.OperationalError as error:
+                        if "duplicate column name" not in str(error).lower():
+                            raise
+            for col in (
+                "last_accessed_at TEXT",
+            ):
+                try:
+                    await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
+                except aiosqlite.OperationalError as error:
+                    if "duplicate column name" not in str(error).lower():
+                        raise
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+                (str(_SESSION_SCHEMA_VERSION),),
+            )
+            await self.conn.commit()
             await self._migrate_session_messages_fts()
             return
         for col in (
@@ -762,6 +844,15 @@ class SessionStore:
             "agent_status TEXT",
             "area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL",
             "chat_model TEXT",
+            "last_accessed_at TEXT",
+            "storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold'))",
+            "cold_bundle_path TEXT",
+            "cold_bundle_sha256 TEXT",
+            "cold_bundle_bytes INTEGER",
+            "cold_logical_bytes INTEGER",
+            "cold_message_count INTEGER",
+            "cold_prose_sha256 TEXT",
+            "cold_blob_hashes_json TEXT",
         ):
             try:
                 await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
@@ -2536,6 +2627,8 @@ class SessionStore:
 
     async def list_tool_result_content_hashes(self) -> set[str]:
         rows = await self.read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
+        # Cold bundles are self-contained, so their original external blobs are
+        # intentionally eligible for the orphan sweep after its safety grace.
         return {row["content_sha256"] for row in rows}
 
     async def prune_expired_tool_results(self, *, limit: int = 1000, now: datetime | None = None) -> int:
@@ -3971,6 +4064,8 @@ class SessionStore:
                 "agent_status": row["agent_status"],
                 "area_id": row["area_id"],
                 "chat_model": dict(row).get("chat_model"),
+                "storage_state": dict(row).get("storage_state") or "hot",
+                "cold_bundle_bytes": int(dict(row).get("cold_bundle_bytes") or 0),
             }
             for row in rows
         ]
@@ -3983,6 +4078,12 @@ class SessionStore:
 
     async def update_session_chat_model(self, session_id: str, chat_model: str | None) -> bool:
         return await self._update(SQL_UPDATE_SESSION_CHAT_MODEL, (chat_model, session_id))
+
+    async def touch_session_access(self, session_id: str) -> bool:
+        return await self._update(
+            "UPDATE sessions SET last_accessed_at = ? WHERE session_id = ? AND archived_at IS NULL",
+            (datetime.now(UTC).isoformat(), session_id),
+        )
 
     async def update_session_name_if_empty(self, session_id: str, name: str) -> bool:
         return await self._update(SQL_UPDATE_NAME_IF_EMPTY, (name, session_id))
@@ -4017,12 +4118,356 @@ class SessionStore:
                 "agent_status": row["agent_status"],
                 "area_id": row["area_id"],
                 "chat_model": dict(row).get("chat_model"),
+                "storage_state": dict(row).get("storage_state") or "hot",
+                "cold_bundle_bytes": int(dict(row).get("cold_bundle_bytes") or 0),
             }
             for row in rows
         ]
 
     async def permanently_delete_session(self, session_id: str) -> bool:
-        return await self._update(SQL_DELETE_ARCHIVED, (session_id,))
+        return await self.purge_session(session_id, require_archived=True)
+
+    @staticmethod
+    def _quoted_identifier(identifier: str) -> str:
+        return '"' + identifier.replace('"', '""') + '"'
+
+    @asynccontextmanager
+    async def _maintenance_connection(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Use an isolated transaction connection for file-backed databases."""
+
+        rows = await self.conn.execute_fetchall("PRAGMA database_list")
+        database_path = next((str(row["file"]) for row in rows if row["name"] == "main"), "")
+        if not database_path:
+            yield self.conn
+            return
+        connection = await aiosqlite.connect(database_path)
+        connection.row_factory = aiosqlite.Row
+        try:
+            await connection.execute("PRAGMA busy_timeout=5000")
+            yield connection
+        finally:
+            await connection.close()
+
+    async def _session_owned_tables(self, connection: aiosqlite.Connection) -> list[str]:
+        rows = await connection.execute_fetchall(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+        owned: list[str] = []
+        for row in rows:
+            table = str(row["name"])
+            if table == "sessions" or table.startswith("session_messages_fts"):
+                continue
+            columns = await connection.execute_fetchall(
+                f"PRAGMA table_info({self._quoted_identifier(table)})"
+            )
+            if any(column["name"] == "session_id" for column in columns):
+                owned.append(table)
+        return owned
+
+    async def _snapshot_session(self, session_id: str) -> dict[str, Any] | None:
+        rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))
+        if not rows:
+            return None
+        tables: dict[str, list[dict[str, Any]]] = {}
+        for table in await self._session_owned_tables(self.read_conn):
+            table_rows = await self.read_conn.execute_fetchall(
+                f"SELECT * FROM {self._quoted_identifier(table)} WHERE session_id = ?",
+                (session_id,),
+            )
+            if table_rows:
+                tables[table] = [dict(row) for row in table_rows]
+        return {"session": dict(rows[0]), "tables": tables}
+
+    async def cold_convert_session(
+        self,
+        session_id: str,
+        *,
+        cold_root: Path,
+    ) -> ColdBundleManifest | None:
+        """Move an archived hot session into a verified, restorable bundle."""
+
+        session_lock = await self._session_write_lock(session_id)
+        async with self._storage_maintenance_lock, session_lock:
+            snapshot = await self._snapshot_session(session_id)
+            if snapshot is None:
+                return None
+            session = snapshot["session"]
+            if session.get("archived_at") is None:
+                raise ValueError("only archived sessions can be converted to cold storage")
+            if session.get("storage_state") == "cold":
+                return None
+            digest = hashlib.sha256(session_id.encode()).hexdigest()
+            bundle_path = cold_root / digest[:2] / f"{digest}.session.tar.zst"
+            manifest = await asyncio.to_thread(write_cold_session_bundle, snapshot, bundle_path)
+            try:
+                async with self._maintenance_connection() as connection:
+                    await connection.execute("BEGIN IMMEDIATE")
+                    current = await connection.execute_fetchall(
+                        "SELECT archived_at, storage_state FROM sessions WHERE session_id = ?",
+                        (session_id,),
+                    )
+                    if not current or current[0]["archived_at"] is None or current[0]["storage_state"] != "hot":
+                        await connection.rollback()
+                        raise RuntimeError("session changed while cold conversion was being prepared")
+                    for table in await self._session_owned_tables(connection):
+                        await connection.execute(
+                            f"DELETE FROM {self._quoted_identifier(table)} WHERE session_id = ?",
+                            (session_id,),
+                        )
+                    await connection.execute(
+                        """
+                        UPDATE sessions
+                        SET messages = '[]', metadata = '{}', storage_state = 'cold',
+                            cold_bundle_path = ?, cold_bundle_sha256 = ?, cold_bundle_bytes = ?,
+                            cold_logical_bytes = ?, cold_message_count = ?, cold_prose_sha256 = ?,
+                            cold_blob_hashes_json = ?
+                        WHERE session_id = ?
+                        """,
+                        (
+                            manifest.bundle_path,
+                            manifest.bundle_sha256,
+                            manifest.bundle_bytes,
+                            manifest.logical_bytes,
+                            manifest.message_count,
+                            manifest.user_assistant_prose_sha256,
+                            json.dumps(manifest.blob_hashes),
+                            session_id,
+                        ),
+                    )
+                    await connection.commit()
+            except Exception:
+                bundle_path.unlink(missing_ok=True)
+                raise
+            return manifest
+
+    async def rehydrate_cold_session(self, session_id: str, *, blob_root: Path) -> bool:
+        """Restore a cold bundle into the live schema before unarchiving it."""
+
+        session_lock = await self._session_write_lock(session_id)
+        async with self._storage_maintenance_lock, session_lock:
+            rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))
+            if not rows or rows[0]["storage_state"] != "cold":
+                return False
+            row = rows[0]
+            bundle_path = Path(str(row["cold_bundle_path"] or ""))
+            manifest = ColdBundleManifest(
+                format_version="arden-cold-session-v1",
+                session_id=session_id,
+                bundle_path=str(bundle_path),
+                bundle_sha256=str(row["cold_bundle_sha256"]),
+                bundle_bytes=int(row["cold_bundle_bytes"] or 0),
+                message_count=int(row["cold_message_count"] or 0),
+                logical_bytes=int(row["cold_logical_bytes"] or 0),
+                user_assistant_prose_sha256=str(row["cold_prose_sha256"]),
+                blob_hashes=tuple(json.loads(row["cold_blob_hashes_json"] or "[]")),
+            )
+            snapshot = await asyncio.to_thread(
+                read_cold_session_bundle,
+                bundle_path,
+                blob_root=blob_root,
+                restore_blobs=True,
+                verify_manifest=manifest,
+            )
+            async with self._maintenance_connection() as connection:
+                await connection.execute("BEGIN IMMEDIATE")
+                current = await connection.execute_fetchall(
+                    "SELECT storage_state, cold_bundle_sha256 FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                )
+                if not current or current[0]["storage_state"] != "cold" or current[0]["cold_bundle_sha256"] != manifest.bundle_sha256:
+                    await connection.rollback()
+                    raise RuntimeError("cold session changed while restoration was being prepared")
+                for table, table_rows in snapshot.get("tables", {}).items():
+                    if not table_rows:
+                        continue
+                    schema_rows = await connection.execute_fetchall(
+                        f"PRAGMA table_info({self._quoted_identifier(table)})"
+                    )
+                    available = {schema_row["name"] for schema_row in schema_rows}
+                    columns = [column for column in table_rows[0] if column in available]
+                    if not columns:
+                        continue
+                    quoted_columns = ", ".join(self._quoted_identifier(column) for column in columns)
+                    placeholders = ", ".join("?" for _ in columns)
+                    await connection.executemany(
+                        f"INSERT INTO {self._quoted_identifier(table)} ({quoted_columns}) VALUES ({placeholders})",
+                        [tuple(table_row.get(column) for column in columns) for table_row in table_rows],
+                    )
+                original = snapshot["session"]
+                schema_rows = await connection.execute_fetchall("PRAGMA table_info(sessions)")
+                restorable = {
+                    schema_row["name"]
+                    for schema_row in schema_rows
+                    if schema_row["name"] != "session_id" and not schema_row["name"].startswith("cold_")
+                }
+                columns = [column for column in original if column in restorable and column != "storage_state"]
+                assignments = ", ".join(f"{self._quoted_identifier(column)} = ?" for column in columns)
+                await connection.execute(
+                    f"""
+                    UPDATE sessions SET {assignments}, storage_state = 'hot',
+                        cold_bundle_path = NULL, cold_bundle_sha256 = NULL, cold_bundle_bytes = NULL,
+                        cold_logical_bytes = NULL, cold_message_count = NULL, cold_prose_sha256 = NULL,
+                        cold_blob_hashes_json = NULL
+                    WHERE session_id = ?
+                    """,
+                    (*[original.get(column) for column in columns], session_id),
+                )
+                await connection.commit()
+            bundle_path.unlink(missing_ok=True)
+            return True
+
+    async def purge_session(self, session_id: str, *, require_archived: bool) -> bool:
+        """Delete the session row and every table row owned by it."""
+
+        session_lock = await self._session_write_lock(session_id)
+        async with self._storage_maintenance_lock, session_lock:
+            async with self._maintenance_connection() as connection:
+                await connection.execute("BEGIN IMMEDIATE")
+                rows = await connection.execute_fetchall(
+                    "SELECT archived_at, cold_bundle_path FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                )
+                if not rows or (require_archived and rows[0]["archived_at"] is None):
+                    await connection.rollback()
+                    return False
+                bundle_path = Path(rows[0]["cold_bundle_path"]) if rows[0]["cold_bundle_path"] else None
+                for table in await self._session_owned_tables(connection):
+                    await connection.execute(
+                        f"DELETE FROM {self._quoted_identifier(table)} WHERE session_id = ?",
+                        (session_id,),
+                    )
+                await connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+                await connection.commit()
+            if bundle_path is not None:
+                bundle_path.unlink(missing_ok=True)
+            return True
+
+    async def list_storage_cleanup_candidates(self) -> list[StorageSessionCandidate]:
+        rows = await self.read_conn.execute_fetchall(
+            """
+            SELECT s.session_id, s.archived_at, s.storage_state,
+                   COALESCE(s.last_accessed_at, s.last_activity) AS last_activity,
+                   s.session_type, s.origin_automation_id,
+                   CASE WHEN s.storage_state = 'cold'
+                        THEN COALESCE(s.cold_bundle_bytes, 0)
+                        ELSE length(COALESCE(s.messages, '')) + length(COALESCE(s.metadata, ''))
+                           + COALESCE((SELECT sum(length(message_json) + length(COALESCE(search_text, '')))
+                                       FROM session_messages m WHERE m.session_id = s.session_id), 0)
+                           + COALESCE((SELECT sum(length(event_json))
+                                       FROM session_events e WHERE e.session_id = s.session_id), 0)
+                           + COALESCE((SELECT sum(stored_bytes)
+                                       FROM tool_results t WHERE t.session_id = s.session_id), 0)
+                   END AS logical_bytes,
+                   CASE WHEN s.storage_state = 'cold' THEN COALESCE(s.cold_message_count, 0)
+                        ELSE (SELECT count(*) FROM session_messages m WHERE m.session_id = s.session_id)
+                   END AS message_count,
+                   (SELECT status FROM session_goals g WHERE g.session_id = s.session_id) AS goal_status
+            FROM sessions s
+            ORDER BY s.last_activity ASC, s.session_id ASC
+            """
+        )
+        candidates: list[StorageSessionCandidate] = []
+        for row in rows:
+            protected: list[str] = []
+            if (row["session_type"] or "chat") != "chat" or row["origin_automation_id"] is not None:
+                protected.append("automation or agent session")
+            if row["goal_status"] not in {None, "complete"}:
+                protected.append("unfinished goal")
+            candidates.append(
+                StorageSessionCandidate(
+                    session_id=row["session_id"],
+                    archived=row["archived_at"] is not None,
+                    storage_state=row["storage_state"] or "hot",
+                    last_activity=row["last_activity"],
+                    logical_bytes=max(0, int(row["logical_bytes"] or 0)),
+                    message_count=max(0, int(row["message_count"] or 0)),
+                    protected_reasons=tuple(protected),
+                )
+            )
+        return candidates
+
+    async def database_reclaim_status(self) -> dict[str, int | str]:
+        mode_rows = await self.read_conn.execute_fetchall("PRAGMA auto_vacuum")
+        page_rows = await self.read_conn.execute_fetchall("PRAGMA page_size")
+        free_rows = await self.read_conn.execute_fetchall("PRAGMA freelist_count")
+        mode = int(mode_rows[0][0])
+        return {
+            "mode": "incremental" if mode == 2 else "offline_migration_required",
+            "page_size": int(page_rows[0][0]),
+            "free_pages": int(free_rows[0][0]),
+        }
+
+    async def incremental_vacuum(self, *, pages: int = 2048) -> int:
+        status = await self.database_reclaim_status()
+        if status["mode"] != "incremental":
+            return 0
+        before = int(status["free_pages"]) * int(status["page_size"])
+        async with self._storage_maintenance_lock:
+            await self.conn.execute(f"PRAGMA incremental_vacuum({max(1, min(pages, 8192))})")
+            await self.conn.commit()
+            await self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        after_status = await self.database_reclaim_status()
+        after = int(after_status["free_pages"]) * int(after_status["page_size"])
+        return max(0, before - after)
+
+    async def record_storage_cleanup_run(
+        self,
+        *,
+        plan_id: str,
+        started_at: str,
+        before_bytes: int,
+        target_bytes: int,
+        after_bytes: int,
+        reclaimed_bytes: int,
+        actions: list[dict[str, Any]],
+        status: str,
+        error: str | None = None,
+    ) -> str:
+        run_id = f"storage_{uuid4().hex}"
+        await self.conn.execute(
+            """
+            INSERT INTO storage_cleanup_runs (
+                run_id, plan_id, started_at, completed_at, before_bytes, target_bytes,
+                after_bytes, reclaimed_bytes, actions_json, status, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                plan_id,
+                started_at,
+                datetime.now(UTC).isoformat(),
+                before_bytes,
+                target_bytes,
+                after_bytes,
+                reclaimed_bytes,
+                json.dumps(actions, sort_keys=True),
+                status,
+                error,
+            ),
+        )
+        await self.conn.commit()
+        return run_id
+
+    async def latest_storage_cleanup_run(self) -> dict[str, Any] | None:
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT * FROM storage_cleanup_runs ORDER BY completed_at DESC LIMIT 1"
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "run_id": row["run_id"],
+            "plan_id": row["plan_id"],
+            "started_at": row["started_at"],
+            "completed_at": row["completed_at"],
+            "before_bytes": row["before_bytes"],
+            "target_bytes": row["target_bytes"],
+            "after_bytes": row["after_bytes"],
+            "reclaimed_bytes": row["reclaimed_bytes"],
+            "actions": json.loads(row["actions_json"]),
+            "status": row["status"],
+            "error": row["error"],
+        }
 
     async def list_session_messages(
         self,

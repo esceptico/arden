@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from arden.context.models import SessionData, SessionState
@@ -10,6 +11,7 @@ from arden.core.tool_result_files import purge_session_results
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import SessionActivityEvent, SessionCreatedEvent, SSEEvent
 from arden.logging import get_logger
+from arden.settings import ARDEN_DIR
 
 _logger = get_logger(__name__)
 
@@ -38,8 +40,17 @@ def session_row(state: SessionState, message_count: int) -> dict:
 
 
 class SessionService:
-    def __init__(self, store: SessionStore, event_sink: EventSink | None = None):
+    def __init__(
+        self,
+        store: SessionStore,
+        event_sink: EventSink | None = None,
+        *,
+        cold_root: Path | None = None,
+        blob_root: Path | None = None,
+    ):
         self.store = store
+        self.cold_root = cold_root or ARDEN_DIR / "cold-sessions"
+        self.blob_root = blob_root or ARDEN_DIR / "blobs" / "tool-results"
         self._locks: dict[str, asyncio.Lock] = {}
         # Optional publisher (wired by the runtime to the global automation
         # bus) so session lifecycle changes reach connected desktops live.
@@ -522,6 +533,9 @@ class SessionService:
             area_id=area_id,
         )
 
+    async def mark_accessed(self, session_id: str) -> bool:
+        return await self.store.touch_session_access(session_id)
+
     async def search_messages(
         self,
         query: str,
@@ -623,7 +637,11 @@ class SessionService:
         return await self.store.archive_session(session_id)
 
     async def restore(self, session_id: str) -> bool:
+        await self.store.rehydrate_cold_session(session_id, blob_root=self.blob_root)
         return await self.store.restore_session(session_id)
+
+    async def cold_convert(self, session_id: str):
+        return await self.store.cold_convert_session(session_id, cold_root=self.cold_root)
 
     async def list_archived(self, limit: int = 20) -> list[dict]:
         return await self.store.list_archived_sessions(limit=limit)
@@ -683,6 +701,12 @@ class SessionService:
         if deleted:
             # Drop the session's offloaded tool-result files too, so the store
             # doesn't keep dead sessions' data around.
+            purge_session_results(session_id)
+        return deleted
+
+    async def permanently_delete_current(self, session_id: str) -> bool:
+        deleted = await self.store.purge_session(session_id, require_archived=False)
+        if deleted:
             purge_session_results(session_id)
         return deleted
 

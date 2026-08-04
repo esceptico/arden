@@ -369,6 +369,9 @@ async def get_session_history(
     # this first, then opens the SSE stream with after_seq=checkpoint_seq so
     # replay is a delta rather than the whole active-session reconstruction.
     sid = data.state.session_id
+    mark_accessed = getattr(svc, "mark_accessed", None)
+    if mark_accessed is not None:
+        await mark_accessed(sid)
     runtime_snapshot = await _session_runtime_snapshot(svc, runtime, buses, sid)
     active_run = runtime_snapshot["active_run"]
     active_run_id = active_run["run_id"] if active_run and active_run["status"] in ACTIVE_RUN_STATUSES else None

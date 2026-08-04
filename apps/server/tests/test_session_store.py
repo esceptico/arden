@@ -2558,3 +2558,103 @@ async def test_session_runtime_run_and_pending_approvals(store: SessionStore):
     assert len(approvals) == 1
     assert approvals[0]["tool_call_id"] == "tool-1"
     assert approvals[0]["preview"] == "preview text"
+
+
+@pytest.mark.asyncio
+async def test_cold_archived_session_round_trips_full_transcript(store: SessionStore, tmp_path: Path):
+    state = _make_state(session_id="cold-session", name="Cold session")
+    messages = [
+        {"role": "user", "content": "keep this question", "client_id": "u-cold"},
+        {"role": "assistant", "content": "keep this answer", "client_id": "a-cold"},
+    ]
+    await store.save_session(state, messages)
+    await store.record_session_event(
+        StreamRecord(seq=1, session_id=state.session_id, event=ThinkingEvent(status="evidence"))
+    )
+    assert await store.archive_session(state.session_id)
+
+    manifest = await store.cold_convert_session(state.session_id, cold_root=tmp_path / "cold")
+
+    assert manifest is not None
+    assert Path(manifest.bundle_path).is_file()
+    cold_row = (await store.read_conn.execute_fetchall("SELECT * FROM sessions WHERE session_id = ?", (state.session_id,)))[0]
+    assert cold_row["storage_state"] == "cold"
+    assert cold_row["messages"] == "[]"
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM session_messages WHERE session_id = ?", (state.session_id,)
+    )
+    assert not await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM session_events WHERE session_id = ?", (state.session_id,)
+    )
+
+    service = SessionService(
+        store,
+        cold_root=tmp_path / "cold",
+        blob_root=tmp_path / "blobs" / "tool-results",
+    )
+    assert await service.restore(state.session_id)
+    restored = await store.load_session(state.session_id)
+    assert restored is not None
+    assert [message["content"] for message in restored.messages] == [
+        "keep this question",
+        "keep this answer",
+    ]
+    assert not Path(manifest.bundle_path).exists()
+    restored_row = (
+        await store.read_conn.execute_fetchall("SELECT * FROM sessions WHERE session_id = ?", (state.session_id,))
+    )[0]
+    assert restored_row["storage_state"] == "hot"
+    assert restored_row["archived_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_permanent_delete_removes_all_session_owned_rows(store: SessionStore):
+    state = _make_state(session_id="purge-session")
+    await store.save_session(state, [{"role": "user", "content": "delete me", "client_id": "u-purge"}])
+    await store.record_session_event(
+        StreamRecord(seq=1, session_id=state.session_id, event=ThinkingEvent(status="delete me"))
+    )
+    assert await store.archive_session(state.session_id)
+
+    assert await store.permanently_delete_session(state.session_id)
+
+    assert not await store.read_conn.execute_fetchall("SELECT 1 FROM sessions WHERE session_id = ?", (state.session_id,))
+    for table in await store._session_owned_tables(store.read_conn):
+        rows = await store.read_conn.execute_fetchall(
+            f'SELECT 1 FROM "{table}" WHERE session_id = ? LIMIT 1',
+            (state.session_id,),
+        )
+        assert not rows, table
+
+
+@pytest.mark.asyncio
+async def test_storage_retention_uses_last_access_when_newer_than_activity(store: SessionStore):
+    state = _make_state(session_id="accessed-session")
+    state.last_activity = datetime.now(UTC) - timedelta(days=180)
+    await store.save_session(state, [{"role": "user", "content": "old but opened"}])
+    before = (await store.list_storage_cleanup_candidates())[0]
+
+    assert await store.touch_session_access(state.session_id)
+    after = (await store.list_storage_cleanup_candidates())[0]
+
+    assert datetime.fromisoformat(before.last_activity) < datetime.now(UTC) - timedelta(days=100)
+    assert datetime.fromisoformat(after.last_activity) > datetime.now(UTC) - timedelta(minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_cold_conversion_incrementally_returns_database_pages(store: SessionStore, tmp_path: Path):
+    state = _make_state(session_id="large-cold-session")
+    await store.save_session(
+        state,
+        [{"role": "user", "content": "x" * 2_000_000, "client_id": "large-message"}],
+    )
+    assert await store.archive_session(state.session_id)
+    before = sum(path.stat().st_size for path in tmp_path.glob("sessions.db*"))
+
+    assert await store.cold_convert_session(state.session_id, cold_root=tmp_path / "cold") is not None
+    reclaimed = await store.incremental_vacuum(pages=8192)
+
+    assert (await store.database_reclaim_status())["mode"] == "incremental"
+    assert reclaimed > 0
+    after = sum(path.stat().st_size for path in tmp_path.glob("sessions.db*"))
+    assert after < before

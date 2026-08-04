@@ -134,6 +134,11 @@ export interface ServerConfig {
   compression_keep_ratio: number;
   summary_max_tokens: number;
   max_space_gb: number | null;
+  storage_backup_retention_days: number;
+  storage_allow_archived_cleanup: boolean;
+  storage_allow_current_cleanup: boolean;
+  storage_current_inactive_days: number;
+  storage_current_minimum: number;
   memory_enabled: boolean;
   integrations: Record<string, Record<string, unknown>>;
   tool_overrides: Record<string, ToolOverrideDecision>;
@@ -149,6 +154,70 @@ export interface StorageStatus {
   target_bytes: number | null;
   checked_at: string | null;
   error?: string | null;
+  categories: StorageCategory[];
+  reclaimed_by_category: Record<string, number>;
+  database_reclaim_mode: string | null;
+  last_plan?: Record<string, unknown> | null;
+  last_run?: Record<string, unknown> | null;
+  next_maintenance_at?: string | null;
+}
+
+export interface StorageCategory {
+  id: string;
+  label: string;
+  total_bytes: number;
+  reclaimable_bytes: number;
+  item_count: number;
+  policy_tier: number | null;
+  protection_reason: string | null;
+  description: string;
+  measurement_kind: "physical" | "logical_estimate";
+}
+
+export interface StoragePlanRequest {
+  target_gb?: number | null;
+  allow_archived_chats?: boolean;
+  allow_delete_cold_chats?: boolean;
+  allow_current_chats?: boolean;
+  current_session_id?: string | null;
+  pinned_session_ids?: string[];
+}
+
+export interface StoragePlanAction {
+  tier: number;
+  kind: string;
+  category_id: string;
+  resource_id: string;
+  estimated_reclaimable_bytes: number;
+  destructive: boolean;
+  description: string;
+}
+
+export interface StoragePlan {
+  plan_id: string;
+  before_bytes: number;
+  target_bytes: number;
+  estimated_after_bytes: number;
+  estimated_reclaimable_bytes: number;
+  attainable: boolean;
+  actions: StoragePlanAction[];
+  blockers: string[];
+  created_at: string;
+}
+
+export interface StorageCleanupRun {
+  plan_id: string;
+  reclaimed_bytes: number;
+  actions_completed: number;
+  status: StorageStatus;
+}
+
+export interface StorageBackup {
+  relative_path: string;
+  size_bytes: number;
+  modified_at: string;
+  kept: boolean;
+  expired: boolean;
 }
 
 export interface RoleModelSetup {
