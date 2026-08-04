@@ -644,7 +644,10 @@ def create_spawn_fn(
                 run=child_run,
                 get_services=lambda: child_ctx.services,
             ),
-            ToolResultContextBudgetMiddleware(),
+            ToolResultContextBudgetMiddleware(
+                session_id=child_state.session_id,
+                on_results_evicted=child_run.downgrade_resource_observations_for_tool_results,
+            ),
         )
         compaction_emit = parent_emit if parent_id and not background else None
         compaction_scope = "agent" if compaction_emit else "run"
@@ -666,7 +669,6 @@ def create_spawn_fn(
                     scope=compaction_scope,
                     parent_tool_call_id=parent_id if compaction_emit else None,
                 ),
-                ToolResultContextBudgetMiddleware(),
             )
 
         sub_tracker = UsageTracker()

@@ -56,7 +56,7 @@ def test_clamp_is_monotonic_old_stubs_are_frozen():
     first = clamp_tool_results_for_model_context(base)
     first_by_id = {m.get("tool_call_id"): m["content"] for m in first if m.get("role") == Role.TOOL}
 
-    grown = base + [_tool("d", big)]
+    grown = first + [_tool("d", big)]
     second = clamp_tool_results_for_model_context(grown)
     second_by_id = {m.get("tool_call_id"): m["content"] for m in second if m.get("role") == Role.TOOL}
 
@@ -64,6 +64,50 @@ def test_clamp_is_monotonic_old_stubs_are_frozen():
     for cid, content in first_by_id.items():
         if "cleared from context" in content:
             assert second_by_id[cid] == content
+
+
+def test_clamp_persists_evicted_result_and_returns_recovery_pointer(tmp_path, monkeypatch):
+    from arden.core import tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    big = "y" * (MODEL_TOOL_RESULT_KEEP_FULL_CHARS // 2 + 1000)
+    messages = [_tool("old", "important inline result"), _tool("new-1", big), _tool("new-2", big)]
+
+    clamped = clamp_tool_results_for_model_context(messages, session_id="session")
+
+    old = next(message for message in clamped if message.get("tool_call_id") == "old")
+    path = tool_result_files.result_file_path("session", "old")
+    assert path.read_text() == "important inline result"
+    assert str(path) in old["content"]
+
+
+def test_context_budget_reports_evicted_tool_call_ids():
+    import asyncio
+
+    from arden.agent.model_request import ModelRequest
+    from arden.agent.types.tool_choice import ToolChoiceMode
+    from arden.core.model_context_budget import ToolResultContextBudgetMiddleware
+
+    big = "y" * (MODEL_TOOL_RESULT_KEEP_FULL_CHARS // 2 + 1000)
+    messages = [_tool("old", "body"), _tool("new-1", big), _tool("new-2", big)]
+    request = ModelRequest(
+        step=0,
+        messages=messages,
+        model="test",
+        tools=[],
+        deferred_tools=[],
+        tool_choice=ToolChoiceMode.AUTO,
+        reasoning_effort=None,
+        previous_response=None,
+    )
+    evicted: list[set[str]] = []
+
+    async def identity(value):
+        return value
+
+    asyncio.run(ToolResultContextBudgetMiddleware(on_results_evicted=evicted.append)(request, identity))
+
+    assert evicted == [{"old", "new-1"}]
 
 
 def test_clamp_small_stub_makes_no_reread_promise():

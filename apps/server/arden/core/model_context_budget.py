@@ -1,10 +1,11 @@
 import json
+from collections.abc import Callable
 from dataclasses import replace
 
 from arden.agent.model_request import ModelRequest, ModelRequestNext
 from arden.agent.types.llm import Role
 from arden.constants import OFFLOAD_PREVIEW_CHARS
-from arden.core.tool_result_files import find_result_file
+from arden.core.tool_result_files import find_result_file, persist_result
 
 HISTORY_TOOL_RESULT_PREVIEW_CHARS = OFFLOAD_PREVIEW_CHARS
 # Default preview length for the history-display compaction helper.
@@ -17,11 +18,27 @@ MODEL_TOOL_RESULT_KEEP_FULL_CHARS = 80_000
 
 
 class ToolResultContextBudgetMiddleware:
+    def __init__(
+        self,
+        *,
+        session_id: str | None = None,
+        on_results_evicted: Callable[[set[str]], None] | None = None,
+    ):
+        self._session_id = session_id
+        self._on_results_evicted = on_results_evicted
+
     async def __call__(self, request: ModelRequest, next_request: ModelRequestNext) -> ModelRequest:
         prepared = await next_request(request)
-        messages = clamp_tool_results_for_model_context(prepared.messages)
+        messages = clamp_tool_results_for_model_context(prepared.messages, session_id=self._session_id)
         if messages is prepared.messages:
             return prepared
+        if self._on_results_evicted:
+            evicted = {
+                before["tool_call_id"]
+                for before, after in zip(prepared.messages, messages, strict=True)
+                if before is not after and isinstance(before.get("tool_call_id"), str)
+            }
+            self._on_results_evicted(evicted)
         return replace(prepared, messages=messages)
 
 
@@ -34,7 +51,7 @@ def _tool_message_size(message: dict) -> int:
     return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
 
 
-def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
+def clamp_tool_results_for_model_context(messages: list[dict], *, session_id: str | None = None) -> list[dict]:
     """Keep the most-recent tool results in full up to MODEL_TOOL_RESULT_KEEP_FULL_CHARS;
     collapse older ones to an informative stub.
 
@@ -59,19 +76,27 @@ def clamp_tool_results_for_model_context(messages: list[dict]) -> list[dict]:
     for i in tool_indices:
         if i not in keep_full:
             clamped[i] = {key: value for key, value in messages[i].items() if key != "data"} | {
-                "content": _tool_result_stub(messages[i])
+                "content": _tool_result_stub(messages[i], session_id=session_id)
             }
     return clamped
 
 
-def _tool_result_stub(message: dict) -> str:
+def _is_tool_result_stub(content: str) -> bool:
+    return content.startswith("[Older ") and " result cleared from context — " in content and content.endswith("]")
+
+
+def _tool_result_stub(message: dict, *, session_id: str | None = None) -> str:
     content = message["content"]
+    if _is_tool_result_stub(content):
+        return content
     name = message.get("name") or message.get("tool_name") or "tool"
     line_count = content.count("\n") + 1
     retrieval = ""
     tool_call_id = message.get("tool_call_id")
     if tool_call_id:
         path = find_result_file(tool_call_id)
+        if path is None and session_id is not None:
+            path = persist_result(session_id, tool_call_id, content)
         if path is not None:
             retrieval = f" Full output: file_read(path={str(path)!r}, offset=N)."
     return f"[Older {name} result cleared from context — {len(content)} chars, {line_count} lines.{retrieval}]"

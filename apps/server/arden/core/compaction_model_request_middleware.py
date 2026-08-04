@@ -94,4 +94,4 @@ class CompactionModelRequestMiddleware:
             self.on_compact()
         if self.apply_rehydration_state:
             self.apply_rehydration_state(rehydration_state)
-        return replace(prepared, messages=compacted)
+        return replace(prepared, messages=compacted, history_messages=compacted)

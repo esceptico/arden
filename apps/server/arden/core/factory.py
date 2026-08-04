@@ -178,7 +178,10 @@ def create_agent(
                 run=run_ctx,
                 get_services=lambda: executor.tool_services,
             ),
-            ToolResultContextBudgetMiddleware(),
+            ToolResultContextBudgetMiddleware(
+                session_id=session_state.session_id,
+                on_results_evicted=run_ctx.downgrade_resource_observations_for_tool_results,
+            ),
             CompactionModelRequestMiddleware(
                 compactor=config.compactor,
                 on_compact=run_ctx.downgrade_resource_observations,

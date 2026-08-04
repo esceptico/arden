@@ -282,6 +282,26 @@ async def test_read_wiki_page_uses_paths_without_exposing_storage_ids(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_repeated_unchanged_full_wiki_read_returns_receipt_until_content_is_evicted(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    execution = _execution(wiki)
+
+    first = await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
+    second = await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
+
+    assert "Interaction" in first.content
+    assert second.data["deduplicated"] is True
+    assert second.data["content_returned"] is False
+    assert "still current and visible" in second.content
+
+    execution.ctx.run.downgrade_resource_observations_for_tool_results({execution.tool_id})
+    refreshed = await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")
+
+    assert refreshed.data["content_truncated"] is False
+    assert "Interaction" in refreshed.content
+
+
+@pytest.mark.asyncio
 async def test_read_wiki_page_bounds_content_and_reports_missing_or_ambiguous_references(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -211,6 +211,7 @@ class Agent:
 
                 budget_reminder = self._budget_pressure_reminder()
                 (
+                    step_messages,
                     step_model,
                     step_tools,
                     step_tool_choice,
@@ -229,6 +230,7 @@ class Agent:
                     step_tool_choice,
                     step_reasoning_effort,
                     step_deferred_tools,
+                    request_messages=step_messages,
                     budget_reminder=budget_reminder,
                 ):
                     yield event
@@ -488,7 +490,7 @@ class Agent:
 
     async def _prepare(
         self, step: int, messages: list[dict]
-    ) -> tuple[str, list[dict], ToolChoice, str | None, list[dict]]:
+    ) -> tuple[list[dict], str, list[dict], ToolChoice, str | None, list[dict]]:
         prepared = await apply_model_request_middlewares(
             ModelRequest(
                 step=step,
@@ -503,11 +505,18 @@ class Agent:
             self.model_request_middlewares,
         )
 
-        if prepared.messages is not messages:
+        if prepared.history_messages is not None and prepared.history_messages is not messages:
             messages.clear()
-            messages.extend(prepared.messages)
+            messages.extend(prepared.history_messages)
 
-        return prepared.model, prepared.tools, prepared.tool_choice, prepared.reasoning_effort, prepared.deferred_tools
+        return (
+            prepared.messages,
+            prepared.model,
+            prepared.tools,
+            prepared.tool_choice,
+            prepared.reasoning_effort,
+            prepared.deferred_tools,
+        )
 
     async def _call_llm(
         self,
@@ -518,6 +527,7 @@ class Agent:
         reasoning_effort: str | None,
         deferred_tools: list[dict] | None = None,
         *,
+        request_messages: list[dict] | None = None,
         budget_reminder: str | None = None,
     ) -> AsyncGenerator[AgentEvent]:
         try:
@@ -565,12 +575,15 @@ class Agent:
                 kwargs["reasoning_effort"] = reasoning_effort
             if self.prompt_cache_key is not None:
                 kwargs["prompt_cache_key"] = self.prompt_cache_key
-            request_messages = (
-                [*messages, {"role": Role.SYSTEM, "content": budget_reminder}] if budget_reminder else messages
+            model_messages = request_messages if request_messages is not None else messages
+            model_messages = (
+                [*model_messages, {"role": Role.SYSTEM, "content": budget_reminder}]
+                if budget_reminder
+                else model_messages
             )
             if deferred_tools:
                 kwargs["deferred_tools"] = deferred_tools
-            async for item in self.client.stream(request_messages, model, tools, **kwargs):
+            async for item in self.client.stream(model_messages, model, tools, **kwargs):
                 if isinstance(item, str):
                     if not text_started:
                         text_started = True

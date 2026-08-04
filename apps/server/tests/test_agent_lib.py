@@ -1062,7 +1062,7 @@ async def test_model_request_middleware_can_override_model_and_tool_choice():
 
 
 @pytest.mark.asyncio
-async def test_model_request_middleware_can_replace_messages():
+async def test_model_request_middleware_can_replace_request_messages_without_mutating_history():
     async def replace_messages(request, next_request):
         return await next_request(replace(request, messages=[{"role": "system", "content": "replaced"}]))
 
@@ -1070,8 +1070,25 @@ async def test_model_request_middleware_can_replace_messages():
     agent = _make_agent(llm, FakeExecutor({}), model_request_middlewares=(replace_messages,))
     messages = _msgs()
     await agent.run(messages)
-    # Caller's list was mutated to replaced content
-    assert messages[0]["content"] == "replaced"
+    assert llm.last_messages == [{"role": "system", "content": "replaced"}]
+    assert messages[0]["content"] == "sys"
+    assert messages[-1]["content"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_model_request_middleware_explicit_history_replacement_mutates_history():
+    replacement = [{"role": "system", "content": "compacted"}]
+
+    async def replace_history(request, next_request):
+        return await next_request(replace(request, messages=replacement, history_messages=replacement))
+
+    llm = FakeLLM([_response(text="ok")])
+    agent = _make_agent(llm, FakeExecutor({}), model_request_middlewares=(replace_history,))
+    messages = _msgs()
+    await agent.run(messages)
+
+    assert messages[0]["content"] == "compacted"
+    assert messages[-1]["content"] == "ok"
 
 
 @pytest.mark.asyncio

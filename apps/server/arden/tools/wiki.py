@@ -190,6 +190,7 @@ def _observe_page(execution: ToolExecution, record: WikiPageRecord, head: str | 
         version=record.resource.version_id,
         container_version=head,
         content_read=content_read,
+        content_tool_call_id=execution.tool_id if content_read else None,
     )
 
 
@@ -648,6 +649,27 @@ async def wiki_read_page(execution: ToolExecution, args: WikiReadPageInput) -> T
         limit=args.limit,
         max_chars=_MAX_CONTENT_CHARS,
     )
+    full_content = args.offset == 1 and args.limit >= len(body.split("\n")) and not truncated
+    observation = execution.ctx.run.resource_observation(wiki_page_observation_id(record.page.page_id))
+    if (
+        full_content
+        and observation is not None
+        and observation.version == record.resource.version_id
+        and observation.content_read
+    ):
+        return ToolResult(
+            content=(
+                "Page unchanged since the earlier wiki_read_page call. Its full content is still current and "
+                "visible in this conversation; use that result instead of reading again."
+            ),
+            preview="Wiki page unchanged",
+            source_refs=(_page_ref(record),),
+            data={
+                "page": _page_data(record),
+                "content_returned": False,
+                "deduplicated": True,
+            },
+        )
     result = ToolResult(
         content=content,
         preview=record.page.title,
@@ -663,12 +685,7 @@ async def wiki_read_page(execution: ToolExecution, args: WikiReadPageInput) -> T
         execution,
         record,
         head,
-        content_read=(
-            args.offset == 1
-            and args.limit >= len(body.split("\n"))
-            and not truncated
-            and len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
-        ),
+        content_read=(full_content and len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD),
     )
     return result
 
@@ -1551,7 +1568,11 @@ wiki_move_page_tool = tool(
 wiki_read_page_tool = tool(
     display_name="ReadWikiPage",
     display_description="Read one managed wiki page.",
-    description="Read one active managed wiki page by its exact path.",
+    description=(
+        "Read one active managed wiki page by its exact path. A successful full read remains valid while that page "
+        "version is unchanged. Repeating the same full read while its result remains visible returns a compact "
+        "unchanged receipt instead of duplicating the body."
+    ),
     input_model=WikiReadPageInput,
     policy=ToolPolicy(
         action=ToolAction.READ,

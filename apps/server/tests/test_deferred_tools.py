@@ -1028,7 +1028,7 @@ async def test_create_agent_compaction_refreshes_deferred_schema():
     )
     messages = [{"role": "system", "content": "test"}, {"role": "user", "content": "search slack"}]
 
-    _, tools, _, _, deferred_tools = await agent._prepare(0, messages)
+    _, _, tools, _, _, deferred_tools = await agent._prepare(0, messages)
 
     names = {t["function"]["name"] for t in tools}
     deferred_names = {t["function"]["name"] for t in deferred_tools}
@@ -1594,7 +1594,9 @@ async def test_spawned_agent_clamps_tool_tail_after_compaction(monkeypatch):
     assert "cleared from context" in tool_content
     assert huge_result not in tool_content
     assert compactor.seen_messages is not None
-    assert huge_result not in str(compactor.seen_messages)
+    # Full compaction operates on canonical history. Request-only tool-result
+    # limiting runs on the compacted model view and must not rewrite that source.
+    assert huge_result in str(compactor.seen_messages)
 
 
 @pytest.mark.asyncio

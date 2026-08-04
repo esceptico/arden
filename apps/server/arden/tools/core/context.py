@@ -81,6 +81,9 @@ class ResourceObservation:
     version: str | None
     container_version: str | None
     content_read: bool
+    # Tool result that currently carries the model-visible full content. This
+    # is separate from the version receipt used for mutation safety.
+    content_tool_call_id: str | None = None
 
 
 _MAX_FILE_PATH_OBSERVATIONS = 10_000
@@ -167,11 +170,19 @@ class RunContext:
         version: str | None,
         container_version: str | None,
         content_read: bool,
+        content_tool_call_id: str | None = None,
     ) -> None:
         previous = self._resource_observations.get(resource_id)
         if previous is not None and previous.version == version and previous.container_version == container_version:
-            content_read = content_read or previous.content_read
-        self._resource_observations[resource_id] = ResourceObservation(version, container_version, content_read)
+            if previous.content_read and not content_read:
+                content_read = True
+                content_tool_call_id = previous.content_tool_call_id
+        self._resource_observations[resource_id] = ResourceObservation(
+            version,
+            container_version,
+            content_read,
+            content_tool_call_id if content_read else None,
+        )
 
     def resource_observation(self, resource_id: str) -> ResourceObservation | None:
         return self._resource_observations.get(resource_id)
@@ -183,6 +194,22 @@ class RunContext:
         """Keep CAS versions after compaction, but require content reads again."""
         for resource_id, observation in tuple(self._resource_observations.items()):
             if observation.content_read:
+                self._resource_observations[resource_id] = ResourceObservation(
+                    observation.version,
+                    observation.container_version,
+                    False,
+                )
+
+    def downgrade_resource_observations_for_tool_results(self, tool_call_ids: set[str]) -> None:
+        """Forget model-content visibility when request trimming evicts its result.
+
+        The version/container receipt remains valid for CAS and staleness checks;
+        only the claim that the model still has the full body is downgraded.
+        """
+        if not tool_call_ids:
+            return
+        for resource_id, observation in tuple(self._resource_observations.items()):
+            if observation.content_read and observation.content_tool_call_id in tool_call_ids:
                 self._resource_observations[resource_id] = ResourceObservation(
                     observation.version,
                     observation.container_version,
