@@ -5,9 +5,10 @@ from pydantic import BaseModel, Field
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.integrations.base import IntegrationOperationError
-from arden.integrations.calendar.client import MultiCalendarSource
+from arden.integrations.calendar.client import MultiCalendarSource, qualify_event_ref
 from arden.integrations.mutations import execute_idempotent, mutation_result
 from arden.integrations.tool_errors import operation_error_result
+from arden.search.types import RawItem
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
@@ -18,7 +19,8 @@ CALENDAR_DESCRIPTION = """Browse or search calendar events.
 Without query: lists events by time range. Use days_forward/days_back to control window.
 With query: searches events by name, attendee, or description. Use specific keywords.
 
-Returns event times, titles, and IDs. Use the event ID for edit/delete operations."""
+Returns event times, titles, and account-qualified references. Copy the full
+`account:event_id` reference into edit/delete operations."""
 
 CREATE_CALENDAR_EVENT_DESCRIPTION = """Create a new calendar event.
 
@@ -27,26 +29,22 @@ Requires user approval before creating."""
 
 EDIT_CALENDAR_EVENT_DESCRIPTION = """Edit an existing calendar event.
 
-Use calendar_search() or calendar_search(query) first to find the event ID.
+Use calendar_search() or calendar_search(query) first, then copy the full account-qualified event reference.
 Only provide the fields you want to change - others remain unchanged.
 Requires user approval before editing."""
 
 DELETE_CALENDAR_EVENT_DESCRIPTION = """Delete a calendar event by ID.
 
-Use calendar_search() or calendar_search(query) first to find the event ID.
+Use calendar_search() or calendar_search(query) first, then copy the full account-qualified event reference.
 Requires user approval before deleting."""
 
 
-def _event_source_refs(events: list) -> tuple[ToolSourceRef, ...]:
+def _event_source_refs(events: list[RawItem]) -> tuple[ToolSourceRef, ...]:
     return normalize_source_refs(
         ToolSourceRef(
             provider="calendar",
             kind="event",
-            ref=(
-                f"{calendar_id}:{event.source_id}"
-                if (calendar_id := str(event.metadata.get("calendar_id") or "").strip()) and event.source_id
-                else ""
-            ),
+            ref=event.source_id.strip(),
             title=(event.title or "").strip() or f"Calendar event {event.source_id}",
             url=event.metadata.get("html_link"),
         )
@@ -233,8 +231,8 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
             return operation_error_result(error, preview="Create failed")
         match = re.search(r"\(id: ([^)]+)\)", result)
         event_ref = match.group(1) if match else None
-        if event_ref and args.account and not event_ref.startswith(f"{args.account}:"):
-            event_ref = f"{args.account}:{event_ref}"
+        if event_ref and args.account:
+            event_ref = qualify_event_ref(args.account, event_ref)
         return mutation_result(
             content=result,
             preview="Created" if event_ref else "Create unverified",
@@ -256,7 +254,7 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
 
 
 class CalendarEditEventInput(BaseModel):
-    event_id: str = Field(description="The event ID to edit (from calendar() or calendar(query))")
+    event_id: str = Field(description="Full account:event_id reference returned by calendar_search")
     summary: str | None = Field(default=None, description="New event title (optional)")
     start: str | None = Field(default=None, description="New start time in ISO format (optional)")
     end: str | None = Field(default=None, description="New end time in ISO format (optional)")
@@ -341,7 +339,7 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
 
 
 class CalendarDeleteEventInput(BaseModel):
-    event_id: str = Field(description="The event ID to delete")
+    event_id: str = Field(description="Full account:event_id reference returned by calendar_search")
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 

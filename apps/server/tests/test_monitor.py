@@ -1,10 +1,13 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from arden.events.triggers import EventApproaching
+from arden.integrations.calendar.client import MultiCalendarSource
 from arden.monitor.calendar import CalendarMonitor
 from arden.monitor.service import Monitor
+from arden.search.types import RawItem
 
 
 def _event(event_id: str = "event-1") -> EventApproaching:
@@ -74,3 +77,32 @@ async def test_calendar_monitor_continues_after_emit_failure():
     await monitor._emit_events([_event("bad"), _event("good")])
 
     assert emitted == ["bad", "good"]
+
+
+def test_calendar_monitor_distinguishes_same_event_id_across_accounts():
+    start = datetime.now(UTC) + timedelta(minutes=1)
+
+    def account_source(account: str):
+        item = RawItem(
+            source="calendar",
+            source_id="same-id",
+            title="Review",
+            content="",
+            created_at=start,
+            updated_at=start,
+            metadata={"start": start.isoformat()},
+        )
+        return SimpleNamespace(
+            get_email_address=lambda: account,
+            get_upcoming=lambda days, limit: [item][:limit],
+        )
+
+    source = object.__new__(MultiCalendarSource)
+    source.sources = [account_source("first@example.test"), account_source("second@example.test")]
+
+    events = CalendarMonitor(source=source, state_store=object())._poll()
+
+    assert [event.event_id for event in events] == [
+        "first@example.test:same-id",
+        "second@example.test:same-id",
+    ]

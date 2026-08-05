@@ -221,6 +221,28 @@ async def test_calendar_create_maps_provider_failure_to_typed_result(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_calendar_create_keeps_case_insensitive_qualified_ref_once(tmp_path):
+    source = FakeCalendarSource([])
+    source.create_event = lambda **_kwargs: "Created event (id: me@example.test:event-123)"
+    execution = _execution("calendar", source, "calendar_create_event")
+    execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
+
+    result = await calendar_create_event(
+        execution,
+        CalendarCreateEventInput(
+            summary="Review",
+            start="2026-07-20T09:00:00+04:00",
+            account="ME@example.test",
+            idempotency_key="calendar-review-ref-1",
+        ),
+    )
+
+    assert result.data == {"event_ref": "me@example.test:event-123"}
+    assert result.outcome is not None and result.outcome.effect is not None
+    assert result.outcome.effect.after_ref == "me@example.test:event-123"
+
+
+@pytest.mark.asyncio
 async def test_slack_search_uses_message_id_title_and_existing_permalink():
     source = FakeSlackSource(
         [
@@ -430,10 +452,10 @@ async def test_calendar_search_uses_event_id_title_and_html_link():
         [
             _item(
                 "calendar",
-                "event-123",
+                "primary@example.test:event-123",
                 "Planning review",
                 metadata={
-                    "calendar_id": "primary@example.test",
+                    "calendar_id": "organizer@example.test",
                     "start": "2026-07-10T09:00:00+00:00",
                     "html_link": "https://calendar.google.com/calendar/event?eid=event-123",
                 },
@@ -508,13 +530,13 @@ async def test_calendar_equal_local_ids_from_two_calendars_remain_distinct():
         [
             _item(
                 "calendar",
-                "same-id",
+                "first@example.test:same-id",
                 "First",
                 metadata={"calendar_id": "first@example.test", "start": "2026-07-10T09:00:00+00:00"},
             ),
             _item(
                 "calendar",
-                "same-id",
+                "second@example.test:same-id",
                 "Second",
                 metadata={"calendar_id": "second@example.test", "start": "2026-07-10T10:00:00+00:00"},
             ),
@@ -526,4 +548,66 @@ async def test_calendar_equal_local_ids_from_two_calendars_remain_distinct():
     assert [ref.ref for ref in result.source_refs] == [
         "first@example.test:same-id",
         "second@example.test:same-id",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_multi_calendar_search_refs_round_trip_to_the_right_account():
+    calls: list[tuple[str, str, str]] = []
+    first_item = _item(
+        "calendar",
+        "series:instance",
+        "First",
+        metadata={"calendar_id": "organizer@example.test", "start": "2026-07-10T09:00:00+00:00"},
+    )
+    second_item = _item(
+        "calendar",
+        "series:instance",
+        "Second",
+        metadata={"calendar_id": "organizer@example.test", "start": "2026-07-10T10:00:00+00:00"},
+    )
+
+    def account_source(account: str, item: RawItem):
+        return SimpleNamespace(
+            get_email_address=lambda: account,
+            search=lambda _query, limit: [item][:limit],
+            get_upcoming=lambda days, limit: [item][:limit],
+            update_event=lambda event_id, **_kwargs: calls.append(("update", account, event_id)) or "updated",
+            delete_event=lambda event_id: calls.append(("delete", account, event_id)) or "deleted",
+        )
+
+    source = object.__new__(MultiCalendarSource)
+    source.sources = [
+        account_source("first@example.test", first_item),
+        account_source("second@example.test", second_item),
+    ]
+
+    result = await calendar_search(
+        _execution("calendar", source, "calendar_search"),
+        CalendarSearchInput(query="same", limit=10),
+    )
+
+    assert [ref.ref for ref in result.source_refs] == [
+        "first@example.test:series:instance",
+        "second@example.test:series:instance",
+    ]
+    assert "organizer@example.test:" not in result.content
+    assert first_item.source_id == "series:instance"
+    assert "account" not in first_item.metadata
+
+    listed = await calendar_search(
+        _execution("calendar", source, "calendar_search"),
+        CalendarSearchInput(days_forward=1, limit=10),
+    )
+    assert [ref.ref for ref in listed.source_refs] == [
+        "first@example.test:series:instance",
+        "second@example.test:series:instance",
+    ]
+
+    source.update_event(result.source_refs[1].ref, summary="Review")
+    source.delete_event(result.source_refs[0].ref)
+
+    assert calls == [
+        ("update", "second@example.test", "series:instance"),
+        ("delete", "first@example.test", "series:instance"),
     ]

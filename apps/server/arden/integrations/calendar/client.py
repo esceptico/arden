@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,8 +18,34 @@ from arden.search.types import RawItem
 from arden.settings import ARDEN_DIR
 
 
+def qualify_event_ref(account: str, event_id: str) -> str:
+    account = account.strip()
+    event_id = event_id.strip()
+    existing_account, separator, _provider_id = event_id.partition(":")
+    if not account or not event_id or (separator and existing_account.casefold() == account.casefold()):
+        return event_id
+    return f"{account}:{event_id}"
+
+
+def _require_account_identity(source: "GoogleCalendar") -> str:
+    account = source.get_email_address().strip()
+    if account:
+        return account
+    raise IntegrationConnectionError(
+        integration_id="calendar",
+        reason="degraded",
+        detail="Calendar account identity is unavailable. Reconnect the Calendar integration.",
+        retry_safe=True,
+    )
+
+
 def _qualify_calendar_result(result: str, account: str) -> str:
-    return re.sub(r"\(id: ([^)]+)\)", lambda match: f"(id: {account}:{match.group(1)})", result, count=1)
+    return re.sub(
+        r"\(id: ([^)]+)\)",
+        lambda match: f"(id: {qualify_event_ref(account, match.group(1))})",
+        result,
+        count=1,
+    )
 
 
 def parse_event_datetime(dt_obj: dict) -> datetime | None:
@@ -452,11 +479,15 @@ class MultiCalendarSource:
         connection_error: IntegrationConnectionError | None = None
         for src in self.sources:
             try:
-                account = src.get_email_address()
+                account = _require_account_identity(src)
                 for item in fn(src):
-                    item.source_id = f"{account}:{item.source_id}"
-                    item.metadata["account"] = account
-                    items.append(item)
+                    items.append(
+                        replace(
+                            item,
+                            source_id=qualify_event_ref(account, item.source_id),
+                            metadata={**item.metadata, "account": account},
+                        )
+                    )
             except RefreshError as e:
                 key = src.get_email_address() or src.token_path.name
                 _logger.warning("Calendar auth failed for %s: %s", key, e)
@@ -493,8 +524,14 @@ class MultiCalendarSource:
     ) -> str:
         if not account:
             # Default to first available calendar
-            if self.sources:
-                source = self.sources[0]
+            connection_error: IntegrationConnectionError | None = None
+            for source in self.sources:
+                try:
+                    source_account = _require_account_identity(source)
+                except IntegrationConnectionError as exc:
+                    connection_error = exc
+                    source.auth_error = exc.detail
+                    continue
                 result = source.create_event(
                     summary=summary,
                     start=start,
@@ -504,7 +541,9 @@ class MultiCalendarSource:
                     attendees=attendees,
                     all_day=all_day,
                 )
-                return _qualify_calendar_result(result, source.get_email_address())
+                return _qualify_calendar_result(result, source_account)
+            if connection_error is not None:
+                raise connection_error
             raise IntegrationOperationError(
                 code="not_found",
                 safe_message="No Calendar accounts are available.",
@@ -567,14 +606,29 @@ class MultiCalendarSource:
         account, separator, event_id = event_ref.partition(":")
         if not separator:
             if len(self.sources) == 1:
+                _require_account_identity(self.sources[0])
                 return self.sources[0], event_ref
             raise IntegrationOperationError(
                 code="invalid_ref",
                 safe_message="Calendar event references must be account-qualified.",
             )
+        connection_error: IntegrationConnectionError | None = None
+        identified_sources = 0
         for source in self.sources:
-            if source.get_email_address().lower() == account.lower():
+            try:
+                source_account = _require_account_identity(source)
+            except IntegrationConnectionError as exc:
+                connection_error = exc
+                continue
+            identified_sources += 1
+            if source_account.casefold() == account.casefold():
                 return source, event_id
+        if len(self.sources) == 1 and "@" not in account:
+            if connection_error is not None:
+                raise connection_error
+            return self.sources[0], event_ref
+        if identified_sources == 0 and connection_error is not None:
+            raise connection_error
         raise IntegrationOperationError(
             code="invalid_ref",
             safe_message=f"Calendar account not found in event reference: {account}",
