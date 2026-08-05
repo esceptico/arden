@@ -5,10 +5,9 @@ import { fetchAutomations } from "@/actions/automations";
 import { fetchAreasOverview, fetchAreaDetail } from "@/actions/areas";
 import { applyAppDestination } from "@/actions/navigation";
 import { refreshAreas, refreshSessions } from "@/actions/sessions";
+import { parseAutomationEvent, type AutomationEvent } from "@/api/automationEvents";
 import type { AppConfig } from "@/api/core";
 import { invalidateMemoryArtifactCache } from "@/api/memoryArtifacts";
-import type { AppDestination } from "@/api/navigation";
-import type { SessionListItem } from "@/api/types";
 import { createStallWatchdog } from "@/lib/streamWatchdog";
 import { openSseStream } from "@/lib/sseTransport";
 import { automationToast } from "@/lib/taskToast";
@@ -17,25 +16,6 @@ import type { MemoryVaultChange } from "@/stores/types";
 // The automation stream keepalives every 5s; treat ~3x silence as stalled.
 const AUTOMATION_STALL_MS = 15_000;
 const AUTOMATION_STALL_CHECK_MS = 5_000;
-
-/** SSE events emitted on `/automations/events`. The backend multiplexes
- *  all automations onto this single stream (one channel for the whole
- *  system, not per-task). `status` is a short human-readable string the
- *  backend assembles from the latest tool call, e.g. "bash_exec..." or
- *  "read_file: tasks.md". `automation_finished` carries the final result
- *  string and signals that the row should drop out of the running list.
- *  `session_created` announces a channel session an automation just
- *  provisioned, so the sidebar adds the row live instead of after Cmd+R. */
-export type AutomationEvent =
-  | { type: "automation_progress"; task_id: string; status: string; seq?: number }
-  | { type: "automation_finished"; task_id: string; result: string | null; seq?: number }
-  | { type: "session_created"; session: SessionListItem; seq?: number }
-  | { type: "session_activity"; session: SessionListItem; seq?: number }
-  | { type: "memory_changed"; paths: string[]; revision?: string | null; seq?: number }
-  | { type: "areas_changed"; keys: string[]; seq?: number }
-  | { type: "navigation_requested"; origin_session_id: string; destination: AppDestination; label: string; seq?: number }
-  | { type: "stream_keepalive"; latest_seq: number; seq?: number }
-  | { type: "stream_reset"; reason: string; seq?: number };
 
 interface AutomationProjectionRefreshes {
   automations: () => Promise<void>;
@@ -54,73 +34,6 @@ const projectionRefreshes: AutomationProjectionRefreshes = {
   areasOverview: fetchAreasOverview,
   areaDetail: fetchAreaDetail,
 };
-
-type JsonObject = Record<string, unknown>;
-
-function requireObject(value: unknown, label: string): JsonObject {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  return value as JsonObject;
-}
-
-function requireString(value: JsonObject, field: string): void {
-  if (typeof value[field] !== "string") throw new Error(`${field} must be a string`);
-}
-
-function requireOptionalSequence(value: JsonObject): void {
-  if (value.seq !== undefined && !Number.isInteger(value.seq)) {
-    throw new Error("seq must be an integer");
-  }
-}
-
-export function parseAutomationEvent(data: string): AutomationEvent {
-  const event = requireObject(JSON.parse(data), "automation event");
-  requireString(event, "type");
-  requireOptionalSequence(event);
-
-  switch (event.type) {
-    case "automation_progress":
-      requireString(event, "task_id");
-      requireString(event, "status");
-      break;
-    case "automation_finished":
-      requireString(event, "task_id");
-      if (event.result !== null && typeof event.result !== "string") {
-        throw new Error("result must be a string or null");
-      }
-      break;
-    case "session_created":
-    case "session_activity":
-      requireString(requireObject(event.session, "session"), "session_id");
-      break;
-    case "memory_changed":
-      if (!Array.isArray(event.paths) || !event.paths.every((path) => typeof path === "string")) {
-        throw new Error("paths must be an array of strings");
-      }
-      break;
-    case "areas_changed":
-      if (!Array.isArray(event.keys) || !event.keys.every((key) => typeof key === "string")) {
-        throw new Error("keys must be an array of strings");
-      }
-      break;
-    case "navigation_requested":
-      requireString(event, "origin_session_id");
-      requireString(event, "label");
-      requireString(requireObject(event.destination, "destination"), "kind");
-      break;
-    case "stream_keepalive":
-      if (!Number.isInteger(event.latest_seq)) throw new Error("latest_seq must be an integer");
-      break;
-    case "stream_reset":
-      requireString(event, "reason");
-      break;
-    default:
-      throw new Error(`unsupported automation event type: ${event.type}`);
-  }
-
-  return event as AutomationEvent;
-}
 
 function headersFor(config: AppConfig): Record<string, string> {
   return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};

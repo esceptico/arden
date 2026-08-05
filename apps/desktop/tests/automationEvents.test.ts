@@ -3,9 +3,9 @@ import {
   automationEventsUrl,
   handleAutomationEvent,
   memoryVaultChangeFromEvent,
-  parseAutomationEvent,
   reconcileAutomationStreamReset,
 } from "@/features/automations/hooks/useAutomationEvents";
+import { parseAutomationEvent } from "@/api/automationEvents";
 import { useStore } from "@/stores";
 import { MEMORY_VAULT_CHANGE_CAP } from "@/stores/memory-vault-domain";
 
@@ -36,6 +36,14 @@ describe("automation event stream helpers", () => {
       .toThrow("status must be a string");
     expect(() => parseAutomationEvent('{"type":"mystery"}'))
       .toThrow("unsupported automation event type: mystery");
+  });
+
+  test("requires complete session and navigation payloads", () => {
+    expect(() => parseAutomationEvent('{"type":"session_created","session":{"session_id":"session-1"}}'))
+      .toThrow("started_at must be a string");
+    expect(() => parseAutomationEvent(
+      '{"type":"navigation_requested","origin_session_id":"session-1","label":"Open","destination":{"kind":"session"}}',
+    )).toThrow("session_id must be a string");
   });
 
   test("automationEventsUrl resumes from the last seen seq", () => {
