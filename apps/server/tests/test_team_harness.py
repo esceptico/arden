@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 
 import arden.tools.core.context as context_module
-from arden.agent import Result, StopReason, Usage
+from arden.agent import AgentHooks, Result, StopReason, Usage
 from arden.context.models import SessionData, SessionState
 from arden.core import spawner as spawner_module
 from arden.core.isolation import IsolationLevel
@@ -37,6 +37,9 @@ async def test_child_system_prompt_carries_the_team_identity_fragment(monkeypatc
     captured = {}
 
     class FakeAgent:
+        def __init__(self):
+            self.hooks = AgentHooks()
+
         async def stream(self, messages):
             captured["messages"] = messages
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())

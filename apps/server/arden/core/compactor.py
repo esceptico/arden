@@ -48,6 +48,13 @@ def token_compaction_budget(
 
 
 class Compactor(Protocol):
+    def with_prompt_context(
+        self,
+        prompt_context: str,
+        *,
+        include_tool_messages: bool = False,
+    ) -> "Compactor": ...
+
     def should_compact(
         self,
         messages: list[dict],

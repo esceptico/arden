@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from arden.agent import (
     Agent,
+    AgentHooks,
     Choice,
     CompletionResponse,
     FinishReason,
@@ -50,6 +51,14 @@ READ_EXTERNAL_DEFERRED = ToolPolicy(action=ToolAction.READ, scope=ToolScope.EXTE
 WRITE_EXTERNAL_DEFERRED = ToolPolicy(
     action=ToolAction.WRITE, scope=ToolScope.EXTERNAL, requires_approval=True, deferred=True
 )
+
+
+class _SessionService:
+    async def provision_state(self, _state, _messages):
+        return None
+
+    async def save(self, _state, _messages):
+        return None
 
 
 class SearchInput(BaseModel):
@@ -1225,6 +1234,7 @@ async def test_spawned_agents_inherit_deferred_loading(monkeypatch):
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -1238,6 +1248,7 @@ async def test_spawned_agents_inherit_deferred_loading(monkeypatch):
         registry=registry,
         run=RunContext(run_id="run", max_depth=3, deferred_tools_enabled=True),
         io=IOBridge(),
+        services={"session": _SessionService()},
     )
     parent_ctx.spawn_fn = create_spawn_fn(
         executor=FakeExecutor(registry),
@@ -1287,6 +1298,7 @@ async def test_spawned_agent_compaction_refreshes_deferred_schema(monkeypatch):
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -1304,6 +1316,7 @@ async def test_spawned_agent_compaction_refreshes_deferred_schema(monkeypatch):
             loaded_tools={"slack_search"},
         ),
         io=IOBridge(emit=emit),
+        services={"session": _SessionService()},
     )
     parent_ctx.spawn_fn = create_spawn_fn(
         executor=FakeExecutor(registry),
@@ -1368,6 +1381,7 @@ async def test_spawned_agent_compaction_uses_research_handoff_prompt_only_for_re
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -1381,6 +1395,7 @@ async def test_spawned_agent_compaction_uses_research_handoff_prompt_only_for_re
         registry=registry,
         run=RunContext(run_id="run", max_depth=3, deferred_tools_enabled=True),
         io=IOBridge(),
+        services={"session": _SessionService()},
     )
     parent_ctx.spawn_fn = create_spawn_fn(
         executor=_Executor(registry),
@@ -1445,6 +1460,7 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -1458,6 +1474,7 @@ async def test_spawned_agent_extra_tools_are_child_only(monkeypatch):
         registry=registry,
         run=RunContext(run_id="run", max_depth=3, deferred_tools_enabled=True),
         io=IOBridge(),
+        services={"session": _SessionService()},
     )
     parent_ctx.spawn_fn = create_spawn_fn(
         executor=executor,
@@ -1529,6 +1546,7 @@ async def test_spawned_agent_uses_explicit_compaction_without_request_trimming(m
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -1541,6 +1559,7 @@ async def test_spawned_agent_uses_explicit_compaction_without_request_trimming(m
         registry=registry,
         run=RunContext(run_id="run", max_depth=3, deferred_tools_enabled=True),
         io=IOBridge(),
+        services={"session": _SessionService()},
     )
     compactor = CompactsToHugeToolTail()
     parent_ctx.spawn_fn = create_spawn_fn(

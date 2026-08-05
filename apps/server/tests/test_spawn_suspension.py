@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from arden.agent import Choice, CompletionResponse, Message, Usage
+from arden.agent import AgentHooks, Choice, CompletionResponse, Message, Usage
 from arden.context.models import SessionState
 from arden.core import spawner as spawner_module
 from arden.core.spawner import create_spawn_fn
@@ -243,7 +243,8 @@ async def test_terminal_session_persistence_failure_is_settled_once_as_failed(mo
 @pytest.mark.asyncio
 async def test_awaited_spawn_store_settles_cancelled(monkeypatch):
     class SlowAgent:
-        hooks = SimpleNamespace(on_response=None)
+        def __init__(self):
+            self.hooks = AgentHooks()
 
         async def stream(self, messages):
             messages.append({"role": "assistant", "content": "Found useful evidence."})

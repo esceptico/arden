@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 import arden.database as database
 import arden.tools.research as research_module
 import arden.tools.research_artifacts as research_artifacts_module
-from arden.agent import Result, SharedLedger, StopReason, ToolCompleted, ToolStarted, Usage
+from arden.agent import AgentHooks, Result, SharedLedger, StopReason, ToolCompleted, ToolStarted, Usage
 from arden.agent.types.tools import ToolSourceRef
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
@@ -279,11 +279,19 @@ def _base_registry() -> ToolRegistry:
 
 
 def _spawn_parent_ctx(registry: ToolRegistry) -> ToolContext:
+    class SessionService:
+        async def provision_state(self, _state, _messages):
+            return None
+
+        async def save(self, _state, _messages):
+            return None
+
     ctx = ToolContext(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
         registry=registry,
         run=RunContext(run_id="run", current_depth=0, max_depth=3),
         io=IOBridge(),
+        services={"session": SessionService()},
         background_tasks=BackgroundTaskRegistry(session_id="parent"),
     )
     ctx.spawn_fn = create_spawn_fn(executor=_CapExecutor(registry), model="test-model", max_depth=3, current_depth=0)
@@ -300,6 +308,7 @@ async def test_research_profile_builds_read_only_child_toolset(monkeypatch):
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -330,6 +339,7 @@ async def test_nested_research_profile_does_not_double_register_ledger_tools(mon
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -357,7 +367,7 @@ async def test_spawner_carries_child_tool_calls_and_source_refs(monkeypatch):
 
     class FakeAgent:
         def __init__(self, **kwargs):
-            pass
+            self.hooks = AgentHooks()
 
         async def stream(self, messages):
             yield ToolStarted(

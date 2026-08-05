@@ -12,6 +12,7 @@ import pytest
 
 import arden.database as database
 from arden.agent import (
+    AgentHooks,
     Choice,
     CompletionResponse,
     FunctionCall,
@@ -32,7 +33,7 @@ from arden.context.store import SessionStore
 from arden.core import spawner as spawner_module
 from arden.core.isolation import IsolationLevel
 from arden.core.spawn_lifecycle import cancel_and_join, collect_failure
-from arden.core.spawner import create_spawn_fn
+from arden.core.spawner import create_spawn_fn, get_response_cost
 from arden.events.sse import (
     BackgroundTaskEvent,
     TaskFinishedEvent,
@@ -51,6 +52,13 @@ from tests.helpers import make_executor, make_text_response
 class ParentTracker:
     def __init__(self, cost: float = 0.0):
         self.cost = cost
+
+
+def test_response_cost_rejects_unknown_model():
+    response = CompletionResponse(choices=[], usage=Usage(), model="missing/model")
+
+    with pytest.raises(ValueError, match="Unknown model: missing/model"):
+        get_response_cost(response)
 
 
 def _persisted_context(**kwargs) -> ToolContext:
@@ -254,6 +262,7 @@ async def test_spawned_agent_cannot_widen_parent_tool_scope(monkeypatch):
 
     class FakeAgent:
         def __init__(self, **kwargs):
+            self.hooks = AgentHooks()
             captured.update(kwargs)
 
         async def stream(self, messages):
@@ -281,6 +290,9 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     captured = {}
 
     class FakeAgent:
+        def __init__(self):
+            self.hooks = AgentHooks()
+
         async def stream(self, messages):
             captured["messages"] = messages
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
@@ -671,7 +683,8 @@ async def test_foreground_subagent_cancel_returns_explicit_failure(monkeypatch):
         emitted.append(event)
 
     class SlowAgent:
-        hooks = SimpleNamespace(on_response=None)
+        def __init__(self):
+            self.hooks = AgentHooks()
 
         async def stream(self, messages):
             messages.append({"role": "assistant", "content": "Found useful evidence."})
@@ -1721,8 +1734,9 @@ async def test_full_subagent_streams_to_own_child_bus(monkeypatch):
     child session behaves exactly like a normal run instead of being static."""
 
     class FakeAgent:
-        # No `hooks` attr → the spawner skips hook wiring; this agent just
-        # streams a small text turn so we can watch where its events land.
+        def __init__(self):
+            self.hooks = AgentHooks()
+
         async def stream(self, messages):
             yield TextStarted(depth=1, parent_id="call-research", message_id="m1")
             yield TextDelta(depth=1, parent_id="call-research", message_id="m1", content="child answer")
@@ -1893,6 +1907,9 @@ async def test_awaited_spawn_visible_in_registry_while_running(monkeypatch):
     release = asyncio.Event()
 
     class GatedAgent:
+        def __init__(self):
+            self.hooks = AgentHooks()
+
         async def stream(self, messages):
             started.set()
             await release.wait()
@@ -1938,6 +1955,9 @@ async def test_awaited_spawns_reserve_uncapped(monkeypatch):
     gate = asyncio.Event()
 
     class GatedAgent:
+        def __init__(self):
+            self.hooks = AgentHooks()
+
         async def stream(self, messages):
             nonlocal streaming
             streaming += 1
@@ -1983,6 +2003,9 @@ async def test_run_cancel_cascades_to_awaited_child(monkeypatch):
     cancel mirror gets the pair and the parent's await raises CancelledError."""
 
     class SlowAgent:
+        def __init__(self):
+            self.hooks = AgentHooks()
+
         async def stream(self, messages):
             await asyncio.sleep(60)
             yield Result(text="never", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())

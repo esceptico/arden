@@ -173,20 +173,14 @@ def _compactor_with_prompt_context(
         return compactor
     if compactor is None:
         return None
-    with_prompt_context = getattr(compactor, "with_prompt_context", None)
-    if callable(with_prompt_context):
-        return with_prompt_context(
-            RESEARCH_AGENT_COMPACTION_CONTEXT,
-            include_tool_messages=include_tool_messages,
-        )
-    return compactor
+    return compactor.with_prompt_context(
+        RESEARCH_AGENT_COMPACTION_CONTEXT,
+        include_tool_messages=include_tool_messages,
+    )
 
 
 def get_response_cost(response) -> float:
-    try:
-        return get_model(response.model).pricing.cost(response.usage)
-    except ValueError:
-        return 0.0
+    return get_model(response.model).pricing.cost(response.usage)
 
 
 async def _emit_visible_child_final(child_io: IOBridge | None, text: str) -> None:
@@ -554,31 +548,28 @@ def create_spawn_fn(
         # parent's `usage.prompt` is what drives the on-screen "context size"
         # gauge, and the parent's context never actually held the subagent's
         # internal back-and-forth.
-        # `hasattr` so test-fake agents without hooks don't trip — they just
-        # won't accumulate usage, which is the right behavior for a fake.
-        if hasattr(sub_agent, "hooks"):
-            sub_agent.hooks.on_response = sub_tracker.track
-            if calling_ctx.parent_tracker is not None:
+        sub_agent.hooks.on_response = sub_tracker.track
+        if calling_ctx.parent_tracker is not None:
 
-                async def track_parent(response) -> None:
-                    await sub_tracker.track(response)
-                    cost = get_response_cost(response)
-                    calling_ctx.parent_tracker.cost += cost
-                    if parent_emit:
-                        await parent_emit(
-                            TokenUsageEvent(
-                                run_id=calling_ctx.run.run_id,
-                                usage=response.usage.to_dict(),
-                                cost=cost,
-                                scope="tool",
-                                task_id=lifecycle_task_id,
-                                child_run_id=child_run_id,
-                                workflow_id=workflow_id,
-                                phase=phase,
-                            )
+            async def track_parent(response) -> None:
+                await sub_tracker.track(response)
+                cost = get_response_cost(response)
+                calling_ctx.parent_tracker.cost += cost
+                if parent_emit:
+                    await parent_emit(
+                        TokenUsageEvent(
+                            run_id=calling_ctx.run.run_id,
+                            usage=response.usage.to_dict(),
+                            cost=cost,
+                            scope="tool",
+                            task_id=lifecycle_task_id,
+                            child_run_id=child_run_id,
+                            workflow_id=workflow_id,
+                            phase=phase,
                         )
+                    )
 
-                sub_agent.hooks.on_response = track_parent
+            sub_agent.hooks.on_response = track_parent
         # Hand sub_tracker down so a nested sub-subagent rolls its cost into
         # *this* subagent's tracker — costs cascade up one level at a time.
         child_ctx.parent_tracker = sub_tracker
@@ -772,8 +763,7 @@ def create_spawn_fn(
         try:
             await child_lifecycle.provision()
             await child_lifecycle.acquire_io()
-            if hasattr(sub_agent, "hooks"):
-                sub_agent.hooks.on_step_finish = child_lifecycle.save_step
+            sub_agent.hooks.on_step_finish = child_lifecycle.save_step
             start_disposition = await registry.record_started(
                 task_id=task_id,
                 command=label,
@@ -801,27 +791,25 @@ def create_spawn_fn(
 
         # Steering channel, both wait modes: the parent (or user) can send
         # messages to this running agent via registry.queue_injection(task_id,
-        # …); the agent drains them at its next step. `hasattr` guards
-        # test-fake agents.
-        if hasattr(sub_agent, "hooks"):
-            # Only a child with its OWN registry gets a roster: when it shares
-            # the parent's registry (SHARED isolation / no io factory), that
-            # roster lists the child itself and its siblings — the parent's
-            # team, not this agent's.
-            child_owns_registry = child_lifecycle.background_tasks is not calling_ctx.background_tasks
+        # …); the agent drains them at its next step.
+        # Only a child with its OWN registry gets a roster: when it shares
+        # the parent's registry (SHARED isolation / no io factory), that
+        # roster lists the child itself and its siblings — the parent's
+        # team, not this agent's.
+        child_owns_registry = child_lifecycle.background_tasks is not calling_ctx.background_tasks
 
-            async def _drain_steering() -> list[dict]:
-                batch = registry.drain_injections(task_id)
-                if child_owns_registry:
-                    # The child's own roster — its spawns register through the
-                    # CHILD session's registry — rendered only when the live
-                    # set changed, so it never repeats every step.
-                    roster = child_lifecycle.background_tasks.roster_note_if_changed()
-                    if roster is not None:
-                        batch.append(roster)
-                return batch
+        async def _drain_steering() -> list[dict]:
+            batch = registry.drain_injections(task_id)
+            if child_owns_registry:
+                # The child's own roster — its spawns register through the
+                # CHILD session's registry — rendered only when the live
+                # set changed, so it never repeats every step.
+                roster = child_lifecycle.background_tasks.roster_note_if_changed()
+                if roster is not None:
+                    batch.append(roster)
+            return batch
 
-            sub_agent.hooks.get_pending_messages = _drain_steering
+        sub_agent.hooks.get_pending_messages = _drain_steering
 
         undelivered_steering: list[str] = []
 
