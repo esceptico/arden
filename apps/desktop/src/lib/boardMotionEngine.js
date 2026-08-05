@@ -95,7 +95,6 @@
 
   const scale = Object.freeze({ iconSwapStart: .25 });
   const limits = Object.freeze({ traceTail: 3 });
-  const progressiveBlurDefaults = Object.freeze({ layers: 8, intensity: .25 });
 
   const spring = Object.freeze({
     peek: Object.freeze({ type: "spring", stiffness: 210, damping: 26 }),
@@ -1864,50 +1863,6 @@
 
   const pageEntrance = Object.freeze({ bind: bindPageEntrance });
 
-  const progressiveBlurAngles = Object.freeze({ top: 0, right: 90, bottom: 180, left: 270 });
-  function mountProgressiveBlur(element, options = {}) {
-    if (!element) return null;
-    const direction = options.direction || "bottom";
-    const blurLayers = options.blurLayers ?? progressiveBlurDefaults.layers;
-    const blurIntensity = options.blurIntensity ?? progressiveBlurDefaults.intensity;
-    const layers = Math.max(blurLayers, 2);
-    const segmentSize = 1 / (blurLayers + 1);
-    const angle = progressiveBlurAngles[direction] ?? progressiveBlurAngles.bottom;
-    const fragment = document.createDocumentFragment();
-
-    Array.from({ length: layers }).forEach((_, index) => {
-      const gradientStops = [
-        index * segmentSize,
-        (index + 1) * segmentSize,
-        (index + 2) * segmentSize,
-        (index + 3) * segmentSize,
-      ].map((position, positionIndex) =>
-        `rgba(255, 255, 255, ${positionIndex === 1 || positionIndex === 2 ? 1 : 0}) ${position * 100}%`
-      );
-      const gradient = `linear-gradient(${angle}deg, ${gradientStops.join(", ")})`;
-      const layer = document.createElement("i");
-      layer.className = "t-progressive-blur-layer";
-      layer.dataset.progressiveBlurLayer = String(index);
-      layer.style.position = "absolute";
-      layer.style.inset = "0";
-      layer.style.pointerEvents = "none";
-      layer.style.borderRadius = "inherit";
-      layer.style.maskImage = gradient;
-      layer.style.webkitMaskImage = gradient;
-      layer.style.backdropFilter = `blur(${index * blurIntensity}px)`;
-      layer.style.webkitBackdropFilter = `blur(${index * blurIntensity}px)`;
-      fragment.append(layer);
-    });
-
-    element.replaceChildren(fragment);
-    return element;
-  }
-
-  const progressiveBlur = Object.freeze({
-    angles: progressiveBlurAngles,
-    mount: mountProgressiveBlur,
-  });
-
   const motion = Object.freeze({
     duration,
     surface,
@@ -1948,7 +1903,6 @@
     spinningCounter,
     skeletonReveal,
     pageEntrance,
-    progressiveBlur,
     distance,
     blur,
     scale,
