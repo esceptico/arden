@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from arden.agent_surface.schedules import compile_schedules_to_automations
@@ -60,15 +61,28 @@ _logger = get_logger(__name__)
 _WIKI_MAINTENANCE_RETRY_DELAY = timedelta(minutes=1)
 
 
-def _wiki_page_read_proof(call: Mapping[str, object]) -> str | None:
-    outcome = call.get("outcome")
-    if not isinstance(outcome, Mapping) or outcome.get("status") != "succeeded":
-        return None
-    verification = outcome.get("verification")
-    if not isinstance(verification, Mapping) or verification.get("postcondition") != WIKI_PAGE_READ_POSTCONDITION:
-        return None
-    observed = verification.get("observed")
-    return observed if isinstance(observed, str) else None
+@dataclass(frozen=True)
+class WikiPageReadProof:
+    observed: str
+
+    @classmethod
+    def from_successful_call(cls, call: Mapping[str, object]) -> "WikiPageReadProof":
+        """Parse the durable audit contract for one successful page read."""
+
+        outcome = call.get("outcome")
+        if not isinstance(outcome, Mapping):
+            raise RuntimeError("successful wiki_read_page audit is missing its outcome")
+        if outcome.get("status") != "succeeded":
+            raise RuntimeError("successful wiki_read_page audit has a non-succeeded outcome")
+        verification = outcome.get("verification")
+        if not isinstance(verification, Mapping):
+            raise RuntimeError("successful wiki_read_page audit is missing its verification")
+        if verification.get("postcondition") != WIKI_PAGE_READ_POSTCONDITION:
+            raise RuntimeError("successful wiki_read_page audit has the wrong verification postcondition")
+        observed = verification.get("observed")
+        if not isinstance(observed, str) or not observed:
+            raise RuntimeError("successful wiki_read_page audit is missing its observed proof")
+        return cls(observed)
 
 
 class AutomationRuntime:
@@ -157,7 +171,7 @@ class AutomationRuntime:
         for call in calls:
             if call["tool_name"] != WIKI_READ_PAGE_TOOL_NAME or call["status"] != "success":
                 continue
-            if _wiki_page_read_proof(call) in owned_read_proofs:
+            if WikiPageReadProof.from_successful_call(call).observed in owned_read_proofs:
                 return
         raise RuntimeError("wiki producer finished without successfully reading its owned page")
 

@@ -347,7 +347,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             await runtime.automation._validate_completed_run(_wiki_producer(), "missing-run")
 
         await record_read("wrong-legacy-run", preview="Another Page")
-        with pytest.raises(RuntimeError, match="owned page"):
+        with pytest.raises(RuntimeError, match="missing its verification"):
             await runtime.automation._validate_completed_run(_wiki_producer(), "wrong-legacy-run")
 
         await record_read(
@@ -360,7 +360,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             await runtime.automation._validate_completed_run(_wiki_producer(), "wrong-semantic-run")
 
         await record_read("legacy-owned-run", preview="Email Updates")
-        with pytest.raises(RuntimeError, match="owned page"):
+        with pytest.raises(RuntimeError, match="missing its verification"):
             await runtime.automation._validate_completed_run(_wiki_producer(), "legacy-owned-run")
 
         await record_read(
@@ -369,7 +369,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             observed=wiki_page_read_proof_id("feed-email-updates"),
             postcondition="something_else",
         )
-        with pytest.raises(RuntimeError, match="owned page"):
+        with pytest.raises(RuntimeError, match="wrong verification postcondition"):
             await runtime.automation._validate_completed_run(_wiki_producer(), "wrong-postcondition-run")
 
         await record_read(
@@ -377,7 +377,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             preview="Email Updates",
             postcondition=WIKI_PAGE_READ_POSTCONDITION,
         )
-        with pytest.raises(RuntimeError, match="owned page"):
+        with pytest.raises(RuntimeError, match="missing its observed proof"):
             await runtime.automation._validate_completed_run(_wiki_producer(), "missing-observed-run")
 
         await record_read(
@@ -387,7 +387,7 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             postcondition=WIKI_PAGE_READ_POSTCONDITION,
             outcome_status="uncertain",
         )
-        with pytest.raises(RuntimeError, match="owned page"):
+        with pytest.raises(RuntimeError, match="non-succeeded outcome"):
             await runtime.automation._validate_completed_run(_wiki_producer(), "uncertain-outcome-run")
 
         await record_read(
