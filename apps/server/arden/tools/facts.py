@@ -16,9 +16,15 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef, normalize_source_refs
+from arden.agent.types.tools import (
+    ToolEffect,
+    ToolOutcome,
+    ToolOutcomeStatus,
+    ToolSourceRef,
+    canonical_source_title,
+    normalize_source_refs,
+)
 from arden.constants import BUILTIN_MEMORY_RETENTION_ID
-from arden.core.public_refs import public_ref
 from arden.memory.facts.boundary import fact_read_scopes, fact_write_scope, source_time
 from arden.memory.facts.models import (
     Fact,
@@ -47,10 +53,11 @@ from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
 
 FACT_SERVICE = "facts"
-_MAX_FACT_RESULTS = 100
+_MAX_FACT_RESULTS = 50
 _MAX_HISTORY_SOURCES = 50
 _INTERNAL_SOURCE_EXTRA_FIELDS = frozenset(
     {
+        "session_id",
         "version",
         "wiki_commit_id",
         "page_version",
@@ -60,6 +67,15 @@ _INTERNAL_SOURCE_EXTRA_FIELDS = frozenset(
 )
 _MAX_CURSOR_CHARS = 2_048
 _CURSOR_VERSION = 1
+_INTERNAL_EVENT_PAYLOAD_FIELDS = frozenset(
+    {
+        "fact_id",
+        "successor_id",
+        "plan_id",
+        "event_id",
+        "evidence_fact_ids",
+    }
+)
 
 
 class _Input(BaseModel):
@@ -486,7 +502,10 @@ def _source_summary(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) ->
     return {"count": len(sources), "kinds": kinds}
 
 
-def _sources_data(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) -> dict[str, Any]:
+def _sources_data(
+    sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...],
+    fact_refs: Mapping[str, str],
+) -> dict[str, Any]:
     items = []
     for source in sources[:_MAX_HISTORY_SOURCES]:
         if not isinstance(source, Mapping):
@@ -498,6 +517,11 @@ def _sources_data(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) -> d
                 item["extra"] = public_extra
             else:
                 item.pop("extra")
+        source_ref = item.pop("ref", None)
+        if item.get("kind") == "fact":
+            if not isinstance(source_ref, str) or source_ref not in fact_refs:
+                raise FactValidationError("Fact provenance contains an unreadable fact reference.")
+            item["fact_ref"] = fact_refs[source_ref]
         items.append(item)
     return {
         "items": items,
@@ -506,10 +530,20 @@ def _sources_data(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) -> d
     }
 
 
-def _fact_data(fact: Fact, *, include_sources: bool = False) -> dict[str, Any]:
+def _fact_data(
+    fact: Fact,
+    fact_refs: Mapping[str, str],
+    *,
+    include_sources: bool = False,
+) -> dict[str, Any]:
+    successor_fact_ref = None
+    if fact.successor_id is not None:
+        try:
+            successor_fact_ref = fact_refs[fact.successor_id]
+        except KeyError as exc:
+            raise FactValidationError("Fact successor is not visible to this session.") from exc
     value: dict[str, Any] = {
         "fact_ref": fact_public_ref(fact),
-        "fact_id": fact.fact_id,
         "text": fact.text,
         "kind": fact.kind,
         "labels": list(fact.labels),
@@ -524,33 +558,95 @@ def _fact_data(fact: Fact, *, include_sources: bool = False) -> dict[str, Any]:
         "review_at": _time(fact.review_at),
         "review_basis": fact.review_basis,
         "expires_at": _time(fact.expires_at),
-        "successor_id": fact.successor_id,
+        "successor_fact_ref": successor_fact_ref,
         "source_summary": _source_summary(fact.sources),
     }
     if include_sources:
-        value["sources"] = _sources_data(fact.sources)
+        value["sources"] = _sources_data(fact.sources, fact_refs)
     return value
 
 
-def _event_data(event: FactEvent) -> dict[str, Any]:
+def _fact_ref(fact_refs: Mapping[str, str], fact_id: object) -> str:
+    if not isinstance(fact_id, str):
+        raise FactValidationError("Fact event contains an invalid fact reference.")
+    try:
+        return fact_refs[fact_id]
+    except KeyError as exc:
+        raise FactValidationError("Fact event references a fact outside this session's visibility.") from exc
+
+
+def _event_data(event: FactEvent, fact_refs: Mapping[str, str]) -> dict[str, Any]:
     payload = dict(event.record["payload"])
     sources = payload.pop("sources", ())
     payload.pop("review_window", None)
     payload.pop("expected_version", None)
+    if "successor_id" in payload:
+        successor_id = payload.pop("successor_id")
+        payload["successor_fact_ref"] = _fact_ref(fact_refs, successor_id)
+    if "supersedes" in payload:
+        supersedes = payload.pop("supersedes")
+        if not isinstance(supersedes, list):
+            raise FactValidationError("Fact event contains invalid supersession references.")
+        payload["supersedes_fact_refs"] = [_fact_ref(fact_refs, fact_id) for fact_id in supersedes]
+    if _INTERNAL_EVENT_PAYLOAD_FIELDS & payload.keys():
+        raise FactValidationError("Fact event contains an internal storage reference.")
     value: dict[str, Any] = {
-        "event_id": event.event_id,
-        "plan_id": event.plan_id,
-        "fact_id": event.fact_id,
+        "fact_ref": _fact_ref(fact_refs, event.fact_id),
         "op": event.op,
         "occurred_at": _time(event.occurred_at),
-        "actor": event.actor,
         "origin": event.origin,
         "reason": event.plan_reason,
         "payload": payload,
     }
     if isinstance(sources, list):
-        value["sources"] = _sources_data(tuple(sources))
+        value["sources"] = _sources_data(tuple(sources), fact_refs)
     return value
+
+
+async def _public_fact_refs(
+    service: FactService,
+    principal: FactPrincipal,
+    *,
+    facts: tuple[Fact, ...] = (),
+    events: tuple[FactEvent, ...] = (),
+    planned: bool = False,
+) -> dict[str, str]:
+    fact_ids = {fact.fact_id for fact in facts}
+    for fact in facts:
+        if fact.successor_id is not None:
+            fact_ids.add(fact.successor_id)
+        fact_ids.update(_source_fact_ids(fact.sources))
+    new_facts: dict[str, str] = {}
+    for event in events:
+        if planned and event.op == "create":
+            text = event.record["payload"].get("text")
+            if not isinstance(text, str):
+                raise FactValidationError("Created fact event has no text.")
+            new_facts[event.fact_id] = text
+        else:
+            fact_ids.add(event.fact_id)
+        payload = event.record["payload"]
+        successor_id = payload.get("successor_id")
+        if isinstance(successor_id, str):
+            fact_ids.add(successor_id)
+        supersedes = payload.get("supersedes")
+        if isinstance(supersedes, list):
+            fact_ids.update(fact_id for fact_id in supersedes if isinstance(fact_id, str))
+        sources = payload.get("sources")
+        if isinstance(sources, list):
+            fact_ids.update(_source_fact_ids(tuple(sources)))
+    refs = await service.public_refs(principal, fact_ids - new_facts.keys())
+    if new_facts:
+        refs.update(await service.new_public_refs(new_facts))
+    return refs
+
+
+def _source_fact_ids(sources: tuple[Mapping[str, Any], ...] | tuple[Any, ...]) -> set[str]:
+    return {
+        source["ref"]
+        for source in sources
+        if isinstance(source, Mapping) and source.get("kind") == "fact" and isinstance(source.get("ref"), str)
+    }
 
 
 def _fact_line(fact: Fact) -> str:
@@ -562,21 +658,7 @@ def _fact_line(fact: Fact) -> str:
     )
 
 
-async def _plan_preview_content(
-    service: FactService,
-    principal: FactPrincipal,
-    events: tuple[FactEvent, ...],
-) -> str:
-    refs = {fact.fact_id: fact_public_ref(fact) for fact in await service.visible_facts(principal)}
-    for event in events:
-        if event.op != "create":
-            continue
-        text = event.record["payload"]["text"]
-        ref = public_ref(text, event.fact_id, empty_slug="fact")
-        if ref in refs.values():
-            raise FactValidationError("A fact_ref collision prevents an exact plan preview.")
-        refs[event.fact_id] = ref
-
+def _plan_preview_content(events: tuple[FactEvent, ...], refs: Mapping[str, str]) -> str:
     lines = []
     for event in events:
         payload = event.record["payload"]
@@ -768,7 +850,13 @@ def _visibility(principal) -> dict[str, Any]:
 
 def _fact_refs(facts: tuple[Fact, ...] | list[Fact]) -> tuple[ToolSourceRef, ...]:
     return normalize_source_refs(
-        ToolSourceRef(provider="memory", kind="fact", ref=fact.fact_id, title=fact.text[:256]) for fact in facts
+        ToolSourceRef(
+            provider="memory",
+            kind="fact",
+            ref=fact_public_ref(fact),
+            title=canonical_source_title(fact.text, fallback=fact_public_ref(fact)),
+        )
+        for fact in facts
     )
 
 
@@ -794,10 +882,7 @@ def _failure(exc: Exception) -> ToolResult:
             recovery_action="Retry fact_commit_changes with the same plan_ref.",
             data={
                 "plan_ref": plan_ref,
-                "plan_id": exc.result.plan_id,
                 "committed": True,
-                "events": [_event_data(event) for event in exc.result.events],
-                "facts": [_fact_data(fact, include_sources=True) for fact in exc.result.facts],
             },
         )
     if isinstance(exc, FactScopeError | FactPlanOwnershipError):
@@ -901,6 +986,7 @@ async def fact_search(execution: ToolExecution, args: FactSearchInput) -> ToolRe
         if await service.revision() != revision:
             return _stale_page()
         selected = page.items
+        fact_refs = await _public_fact_refs(service, principal, facts=selected)
         next_cursor = (
             _encode_cursor(
                 "search",
@@ -916,7 +1002,7 @@ async def fact_search(execution: ToolExecution, args: FactSearchInput) -> ToolRe
             content=content,
             preview=f"{page.total} fact(s)",
             data={
-                "facts": [_fact_data(fact) for fact in selected],
+                "facts": [_fact_data(fact, fact_refs) for fact in selected],
                 "total": page.total,
                 "has_more": page.has_more,
                 "next_cursor": next_cursor,
@@ -934,10 +1020,11 @@ async def fact_get(execution: ToolExecution, args: FactGetInput) -> ToolResult:
     try:
         principal = await _principal(execution, service)
         fact = await _resolve_exact_fact(service, principal, args.fact_ref)
+        fact_refs = await _public_fact_refs(service, principal, facts=(fact,))
         return ToolResult(
             content=_fact_line(fact),
             preview=f"Fact {fact_public_ref(fact)}",
-            data={"fact": _fact_data(fact, include_sources=True)},
+            data={"fact": _fact_data(fact, fact_refs, include_sources=True)},
             source_refs=_fact_refs([fact]),
         )
     except Exception as exc:
@@ -952,6 +1039,7 @@ async def fact_history(execution: ToolExecution, args: FactHistoryInput) -> Tool
         principal = await _principal(execution, service)
         fact = await _resolve_exact_fact(service, principal, args.fact_ref)
         events = await service.history(principal, fact.fact_id)
+        fact_refs = await _public_fact_refs(service, principal, facts=(fact,), events=events)
         paged = _page(
             list(events),
             limit=args.limit,
@@ -972,8 +1060,7 @@ async def fact_history(execution: ToolExecution, args: FactHistoryInput) -> Tool
             preview=f"{page['total']} event(s)",
             data={
                 "fact_ref": args.fact_ref,
-                "fact_id": fact.fact_id,
-                "events": [_event_data(event) for event in selected],
+                "events": [_event_data(event, fact_refs) for event in selected],
                 **page,
             },
         )
@@ -1011,6 +1098,11 @@ async def fact_due_reviews(execution: ToolExecution, args: FactDueReviewsInput) 
         if await service.revision() != revision:
             return _stale_page()
         selected = page.items
+        fact_refs = await _public_fact_refs(
+            service,
+            principal,
+            facts=tuple(fact for item in selected for fact in (item.fact, *item.related_facts)),
+        )
         next_cursor = (
             _encode_cursor(
                 "due",
@@ -1023,10 +1115,10 @@ async def fact_due_reviews(execution: ToolExecution, args: FactDueReviewsInput) 
         )
         items = [
             {
-                "fact": _fact_data(item.fact),
+                "fact": _fact_data(item.fact, fact_refs),
                 "due_at": _time(item.due_at),
                 "explicit_expiry_due": item.explicit_expiry_due,
-                "related_facts": [_fact_data(fact) for fact in item.related_facts],
+                "related_facts": [_fact_data(fact, fact_refs) for fact in item.related_facts],
             }
             for item in selected
         ]
@@ -1068,13 +1160,13 @@ async def fact_plan_changes(execution: ToolExecution, args: FactPlanChangesInput
             reason=args.reason,
         )
         plan_ref = fact_plan_ref(preview.plan_id)
+        fact_refs = await _public_fact_refs(service, principal, events=preview.events, planned=True)
         return ToolResult(
-            content=f"Fact change plan ref: {plan_ref}\n\n{await _plan_preview_content(service, principal, preview.events)}",
+            content=f"Fact change plan ref: {plan_ref}\n\n{_plan_preview_content(preview.events, fact_refs)}",
             preview=f"{len(preview.events)} planned event(s)",
             data={
                 "plan_ref": plan_ref,
-                "plan_id": preview.plan_id,
-                "events": [_event_data(event) for event in preview.events],
+                "events": [_event_data(event, fact_refs) for event in preview.events],
             },
         )
     except Exception as exc:
@@ -1089,14 +1181,14 @@ async def fact_commit_changes(execution: ToolExecution, args: FactCommitChangesI
         principal = await _principal(execution, service)
         plan_id = await _resolve_plan_ref(service, principal, args.plan_ref)
         committed = await service.commit(principal, plan_id)
+        fact_refs = await _public_fact_refs(service, principal, facts=committed.facts, events=committed.events)
         return ToolResult(
             content=f"Committed {len(committed.events)} fact event(s).",
             preview="Fact plan committed",
             data={
                 "plan_ref": args.plan_ref,
-                "plan_id": committed.plan_id,
-                "events": [_event_data(event) for event in committed.events],
-                "facts": [_fact_data(fact, include_sources=True) for fact in committed.facts],
+                "events": [_event_data(event, fact_refs) for event in committed.events],
+                "facts": [_fact_data(fact, fact_refs, include_sources=True) for fact in committed.facts],
             },
             source_refs=_fact_refs(committed.facts),
             outcome=ToolOutcome(

@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -127,6 +127,7 @@ class FactService:
     _ref_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _ref_revision: str | None = field(default=None, init=False, repr=False)
     _ref_index: Mapping[str, Fact] = field(default_factory=dict, init=False, repr=False)
+    _fact_ref_index: Mapping[str, str] = field(default_factory=dict, init=False, repr=False)
     _ref_index_ready: bool = field(default=False, init=False, repr=False)
 
     async def search(
@@ -173,20 +174,7 @@ class FactService:
             return ()
         if any(not is_public_ref(ref) for ref in fact_refs):
             raise KeyError("unknown fact_ref")
-        current_revision = await self.current_revision()
-        async with self._ref_lock:
-            if not self._ref_index_ready or self._ref_revision != current_revision:
-                snapshot = await asyncio.to_thread(self.ledger.read_snapshot)
-                index: dict[str, Fact] = {}
-                for fact in snapshot.facts.values():
-                    ref = fact_public_ref(fact)
-                    if ref in index:
-                        raise FactValidationError("fact_ref collision prevents exact resolution")
-                    index[ref] = fact
-                self._ref_index = MappingProxyType(index)
-                self._ref_revision = snapshot.revision
-                self._ref_index_ready = True
-            index = self._ref_index
+        index, _ = await self._ref_indexes()
 
         facts: list[Fact] = []
         for ref in fact_refs:
@@ -198,6 +186,58 @@ class FactService:
                 raise KeyError("unknown fact_ref")
             facts.append(fact)
         return tuple(facts)
+
+    async def public_refs(self, principal: FactPrincipal, fact_ids: Iterable[str]) -> dict[str, str]:
+        """Resolve internal fact identities to public refs through the cached exact index."""
+
+        ids = tuple(dict.fromkeys(fact_ids))
+        if any(not isinstance(fact_id, str) or not fact_id for fact_id in ids):
+            raise ValueError("fact IDs must be non-empty strings")
+        index, refs = await self._ref_indexes()
+        result: dict[str, str] = {}
+        for fact_id in ids:
+            try:
+                fact_ref = refs[fact_id]
+                fact = index[fact_ref]
+            except KeyError as exc:
+                raise KeyError("unknown fact") from exc
+            if not principal.can_read(_scope(fact)):
+                raise KeyError("unknown fact")
+            result[fact_id] = fact_ref
+        return result
+
+    async def new_public_refs(self, facts: Mapping[str, str]) -> dict[str, str]:
+        """Allocate preview-only public refs without rereading the ledger."""
+
+        index, _ = await self._ref_indexes()
+        result: dict[str, str] = {}
+        for fact_id, text in facts.items():
+            if not isinstance(fact_id, str) or not fact_id or not isinstance(text, str) or not text:
+                raise ValueError("new facts require non-empty IDs and text")
+            fact_ref = public_ref(text, fact_id, empty_slug="fact")
+            if fact_ref in index or fact_ref in result.values():
+                raise FactValidationError("fact_ref collision prevents exact plan preview")
+            result[fact_id] = fact_ref
+        return result
+
+    async def _ref_indexes(self) -> tuple[Mapping[str, Fact], Mapping[str, str]]:
+        current_revision = await self.current_revision()
+        async with self._ref_lock:
+            if not self._ref_index_ready or self._ref_revision != current_revision:
+                snapshot = await asyncio.to_thread(self.ledger.read_snapshot)
+                index: dict[str, Fact] = {}
+                by_id: dict[str, str] = {}
+                for fact in snapshot.facts.values():
+                    ref = fact_public_ref(fact)
+                    if ref in index:
+                        raise FactValidationError("fact_ref collision prevents exact resolution")
+                    index[ref] = fact
+                    by_id[fact.fact_id] = ref
+                self._ref_index = MappingProxyType(index)
+                self._fact_ref_index = MappingProxyType(by_id)
+                self._ref_revision = snapshot.revision
+                self._ref_index_ready = True
+            return self._ref_index, self._fact_ref_index
 
     async def search_page(
         self,

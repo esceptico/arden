@@ -221,6 +221,28 @@ async def test_fact_ref_index_replays_only_after_the_ledger_revision_changes(tmp
         await conn.close()
 
 
+async def test_public_fact_refs_share_the_revision_keyed_exact_index(tmp_path: Path, monkeypatch) -> None:
+    service, _plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    try:
+        first = await _plan(service, principal)
+        await service.commit(principal, first.plan_id)
+        original_read_snapshot = service.ledger.read_snapshot
+        reads = 0
+
+        def counted_snapshot():
+            nonlocal reads
+            reads += 1
+            return original_read_snapshot()
+
+        monkeypatch.setattr(service.ledger, "read_snapshot", counted_snapshot)
+        assert (await service.public_refs(principal, ("a",)))["a"] == fact_public_ref(await service.get(principal, "a"))
+        assert (await service.public_refs(principal, ("a",)))["a"] == fact_public_ref(await service.get(principal, "a"))
+        assert reads == 1
+    finally:
+        await conn.close()
+
+
 async def test_post_commit_is_at_least_once_and_only_after_durable_commit(tmp_path: Path) -> None:
     service, plans, conn, _ = await _service(tmp_path)
     principal = _principal()
