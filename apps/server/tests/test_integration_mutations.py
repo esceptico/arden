@@ -224,7 +224,7 @@ async def test_proven_no_effect_failure_releases_claim_for_same_key_retry(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_raised_provider_mutation_is_uncertain_and_not_replayed(tmp_path):
+async def test_untyped_mutation_failure_propagates_and_blocks_blind_retry(tmp_path):
     ledger = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
     execution = ToolExecution(
         tool_id="call-1",
@@ -238,13 +238,14 @@ async def test_raised_provider_mutation_is_uncertain_and_not_replayed(tmp_path):
         calls += 1
         raise RuntimeError("provider transport failed")
 
-    first = await execute_idempotent(
-        execution,
-        namespace="gmail:send:acct",
-        idempotency_key="send-key-1",
-        payload={"body": "hello"},
-        invoke=invoke,
-    )
+    with pytest.raises(RuntimeError, match="provider transport failed"):
+        await execute_idempotent(
+            execution,
+            namespace="gmail:send:acct",
+            idempotency_key="send-key-1",
+            payload={"body": "hello"},
+            invoke=invoke,
+        )
     second = await execute_idempotent(
         execution,
         namespace="gmail:send:acct",
@@ -253,7 +254,6 @@ async def test_raised_provider_mutation_is_uncertain_and_not_replayed(tmp_path):
         invoke=invoke,
     )
 
-    assert first.outcome.status is ToolOutcomeStatus.UNCERTAIN
     assert second.outcome.status is ToolOutcomeStatus.UNCERTAIN
     assert calls == 1
 
