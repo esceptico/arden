@@ -337,25 +337,22 @@ class Agent:
 
                 if reason := self._budget_stop_reason(started_at):
                     if reason == StopReason.MAX_TOKEN_BUDGET:
-                        try:
-                            async for event in self._call_llm(
-                                messages,
-                                step_model,
-                                [],
-                                ToolChoiceMode.NONE,
-                                step_reasoning_effort,
-                                [],
-                                budget_reminder=(
-                                    "Output-token budget exhausted. Return the final answer now from the tool results "
-                                    "already present. No new tool calls, no apology, no process recap. If incomplete, "
-                                    "report partial findings and gaps."
-                                ),
-                            ):
-                                yield event
-                            response_message = self._last_response.choices[0].message
-                            result_text = (response_message.content or "").strip()
-                        except Exception:
-                            result_text = ""
+                        async for event in self._call_llm(
+                            messages,
+                            step_model,
+                            [],
+                            ToolChoiceMode.NONE,
+                            step_reasoning_effort,
+                            [],
+                            budget_reminder=(
+                                "Output-token budget exhausted. Return the final answer now from the tool results "
+                                "already present. No new tool calls, no apology, no process recap. If incomplete, "
+                                "report partial findings and gaps."
+                            ),
+                        ):
+                            yield event
+                        response_message = self._last_response.choices[0].message
+                        result_text = (response_message.content or "").strip()
                     yield self._result(result_text, reason, step, messages)
                     return
 

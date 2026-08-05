@@ -1135,7 +1135,12 @@ async def test_max_token_budget_after_tool_work_returns_recent_result():
         budget.output_tokens = 75
         return ToolResult(content="child agent completed the requested analysis", preview="child done")
 
-    llm = FakeLLM([_response(tool_calls=[_tc("c1", "t", {})], usage=Usage(completion_tokens=10))])
+    llm = FakeLLM(
+        [
+            _response(tool_calls=[_tc("c1", "t", {})], usage=Usage(completion_tokens=10)),
+            _response(text=""),
+        ]
+    )
     executor = FakeExecutor({"t": child_agent_result})
     agent = _make_agent(llm, executor, budget=budget)
 
@@ -1148,6 +1153,26 @@ async def test_max_token_budget_after_tool_work_returns_recent_result():
         "Stopped because max_token_budget was reached after tool work. Recent tool results:\n"
         "- child agent completed the requested analysis"
     )
+
+
+@pytest.mark.asyncio
+async def test_max_token_budget_final_answer_failure_propagates():
+    budget = RunBudget(total=50)
+
+    def child_agent_result(args):
+        budget.output_tokens = 75
+        return ToolResult(content="child evidence", preview="child done")
+
+    llm = FakeLLM(
+        [
+            _response(tool_calls=[_tc("c1", "t", {})], usage=Usage(completion_tokens=10)),
+            RuntimeError("provider failed"),
+        ]
+    )
+    agent = _make_agent(llm, FakeExecutor({"t": child_agent_result}), budget=budget)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await agent.run(_msgs())
 
 
 @pytest.mark.asyncio
