@@ -4,7 +4,7 @@ import { ChevronDown, Folder, Inbox, Pin, Plus } from "@/components/icons";
 import { MOTION, EASE_EMPHASIZED, EASE_OUT } from "@/lib/tokens/motion";
 import { useStore } from "@/stores";
 import type { SessionListItem } from "@/api/types";
-import { archiveArea, archiveSession, createSession, moveSessionToArea, switchSession, toggleSessionPin } from "@/actions/sessions";
+import { archiveArea, archiveSession, goToNewSessionHome, moveSessionToArea, switchSession, toggleSessionPin } from "@/actions/sessions";
 import { ICON } from "@/lib/icons";
 import { useTimeTicker } from "@/lib/hooks";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -251,7 +251,7 @@ export function SessionList() {
                       tone="faint"
                       aria-label={`New chat in ${group.label}`}
                       title={`New chat in ${group.label}`}
-                      onClick={() => void createSession(group.area?.area_id ?? null)}
+                      onClick={() => goToNewSessionHome(group.area?.area_id ?? null)}
                       className="!absolute top-1/2 right-7 -translate-y-1/2 opacity-0 transition-opacity duration-check ease-out group-hover/heading:opacity-100 focus-visible:opacity-100"
                     >
                       <Plus size={ICON.XS} />
@@ -330,7 +330,7 @@ export function SessionList() {
           {
             id: "new-chat",
             label: "New chat",
-            onSelect: () => void createSession(areaMenu.areaId),
+            onSelect: () => goToNewSessionHome(areaMenu.areaId),
           },
           {
             id: "set-aside",

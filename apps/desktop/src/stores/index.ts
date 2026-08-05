@@ -244,6 +244,8 @@ export const useStore = create<State & Actions>((set) => ({
   sessions: [],
   sessionView: createInitialSessionViewState(),
   currentSessionId: null,
+  pendingNewChatAreaId: null,
+  pendingNewChatDraftId: 0,
   messages: new Map(),
   order: [],
   activeRunSessionIds: new Set(),
@@ -390,6 +392,9 @@ export const useStore = create<State & Actions>((set) => ({
         const patch: Partial<State> = {};
         if (unread !== s.unreadDoneSessionIds) patch.unreadDoneSessionIds = unread;
         if (areas !== s.areas) patch.areas = areas;
+        if (currentSessionId && s.pendingNewChatAreaId !== null) {
+          patch.pendingNewChatAreaId = null;
+        }
         return patch;
       }
       // Snapshot outgoing session into cache so a switch-back can
@@ -409,6 +414,7 @@ export const useStore = create<State & Actions>((set) => ({
         areas,
         sessionView,
         currentSessionId: sessionView.currentSessionId,
+        pendingNewChatAreaId: currentSessionId ? null : s.pendingNewChatAreaId,
         sourceTurnId: null,
         sourceRefsRevision: s.sourceRefsRevision + 1,
         sessionCache: cache,
@@ -432,6 +438,11 @@ export const useStore = create<State & Actions>((set) => ({
         ...(unread !== s.unreadDoneSessionIds ? { unreadDoneSessionIds: unread } : {}),
       };
     }),
+  beginNewChatDraft: (pendingNewChatAreaId) =>
+    set((s) => ({
+      pendingNewChatAreaId,
+      pendingNewChatDraftId: s.pendingNewChatDraftId + 1,
+    })),
 
   setHistory: (messages, page) =>
     set((s) => {

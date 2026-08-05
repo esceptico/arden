@@ -19,13 +19,15 @@ export async function switchSession(sessionId: string, historyOptions: LoadHisto
   void fetchSessionTodo(sessionId);
 }
 
-/** Land on Home (the no-session branch in App.tsx). Home's hero input
- *  creates a session lazily on first send (see sendMessage). Explicit
- *  "New chat" intents (⌘N, the palette entry, the sidebar group "+")
- *  do NOT come here — they eagerly provision via createSession(). */
-export function goToNewSessionHome(): void {
+/** Start an unpersisted Home draft. The first non-empty send provisions it. */
+export function goToNewSessionHome(areaId: string | null = null): void {
   const s = getState();
+  s.closeMemory();
+  s.closeAutomations();
+  s.closeSettings();
+  s.closePalette();
   s.setCurrentSession(null);
+  s.beginNewChatDraft(areaId);
   s.openArea(null);
 }
 
@@ -44,7 +46,7 @@ export async function goToChat(): Promise<void> {
   await createSession();
 }
 
-export async function createSession(areaId?: string | null): Promise<void> {
+export async function provisionSession(areaId?: string | null): Promise<SessionListItem> {
   const s = getState();
   const targetAreaId =
     areaId !== undefined
@@ -56,7 +58,12 @@ export async function createSession(areaId?: string | null): Promise<void> {
     method: "POST",
     body: JSON.stringify({ area_id: targetAreaId }),
   });
-  s.prependSession(session);
+  getState().prependSession(session);
+  return session;
+}
+
+export async function createSession(areaId?: string | null): Promise<void> {
+  const session = await provisionSession(areaId);
   await switchSession(session.session_id);
 }
 
@@ -71,7 +78,9 @@ export async function createArea(): Promise<Area> {
 export async function archiveArea(areaId: string): Promise<void> {
   const s = getState();
   await archiveAreaApi(s.config, areaId);
-  s.archiveAreaRecord(areaId);
+  const latest = getState();
+  latest.archiveAreaRecord(areaId);
+  if (latest.pendingNewChatAreaId === areaId) latest.beginNewChatDraft(null);
 }
 
 export async function moveSessionToArea(sessionId: string, areaId: string | null): Promise<void> {

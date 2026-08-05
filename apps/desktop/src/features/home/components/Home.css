@@ -74,6 +74,17 @@
   margin-top: var(--space-5);
 }
 
+.mission-control__capture-scope {
+  margin: 0 var(--space-1) var(--space-2);
+  color: var(--faint);
+  font-size: var(--text-label);
+}
+
+.mission-control__capture-scope span {
+  color: var(--ink-soft);
+  font-weight: var(--weight-medium);
+}
+
 /* The veil sits above resting furniture (strips are z-sticky) and below the
    awake field + its sheet (z-popover). Focus on the field = the room hushes. */
 .mission-control__veil {

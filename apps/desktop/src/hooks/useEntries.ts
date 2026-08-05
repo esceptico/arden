@@ -26,7 +26,7 @@ import {
 } from "@/components/icons";
 import { useStore } from "@/stores";
 import { loadHistory } from "@/actions/history";
-import { archiveSession, branchAtMessage, createArea, createSession, renameSession, switchSession } from "@/actions/sessions";
+import { archiveSession, branchAtMessage, createArea, goToNewSessionHome, renameSession, switchSession } from "@/actions/sessions";
 import { goHome } from "@/actions/navigation";
 import { stopRun } from "@/actions/messages";
 import { runBuiltinCommand } from "@/actions/builtins";
@@ -69,7 +69,7 @@ export function useEntries(): CommandEntry[] {
       label: "New chat",
       icon: Pencil,
       shortcut: "⌘N",
-      run: () => void createSession(),
+      run: () => goToNewSessionHome(),
       search: "new session create chat",
     });
     entries.push({

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { AreasOverview } from "@/api/areas";
+import { goToNewSessionHome } from "@/actions/sessions";
 import { Home } from "@/features/home/components/Home";
 import { getState, setState } from "@/stores";
 
@@ -20,13 +21,18 @@ function response(data: unknown) {
 /** Enough of the API surface for `sendMessage`'s create-session → send flow
  *  to resolve without throwing — the router reuses that exact path
  *  unchanged, so these tests only need it to not blow up, not to be exact. */
-function installBridge() {
+function installBridge(options: {
+  failSessionCreation?: boolean;
+  sessionCreationGate?: Promise<void>;
+} = {}) {
   window.ardenDesktop = {
     api: {
       request: async (_config, request) => {
         requests.push({ path: request.path, method: request.method ?? "GET", body: request.body });
         if (request.path === "/areas/overview") return response(overview());
         if (request.path === "/sessions" && request.method === "POST") {
+          await options.sessionCreationGate;
+          if (options.failSessionCreation) throw new Error("creation failed");
           return response({ session_id: "new-session", started_at: "", last_activity: "", name: null, message_count: 0 });
         }
         if (request.path.startsWith("/session/history")) return response({ messages: [], active_run_id: null });
@@ -43,6 +49,8 @@ function seed() {
   setState({
     connected: true,
     currentSessionId: null,
+    pendingNewChatAreaId: null,
+    pendingNewChatDraftId: 0,
     draft: "",
     sessions: [{
       session_id: "roadmap-1",
@@ -52,11 +60,19 @@ function seed() {
       message_count: 3,
     }],
     automations: [],
+    error: null,
     paletteOpen: false,
     settingsOpen: false,
     automationsOpen: false,
     memoryOpen: false,
-    areas: { ...getState().areas, overview: overview(), overviewPhase: "ready", openAreaKey: null },
+    areas: {
+      ...getState().areas,
+      recordsById: {},
+      recordOrder: [],
+      overview: overview(),
+      overviewPhase: "ready",
+      openAreaKey: null,
+    },
   });
 }
 
@@ -123,6 +139,8 @@ afterEach(async () => {
   window.ardenDesktop = originalDesktop;
   setState({
     connected: false,
+    pendingNewChatAreaId: null,
+    pendingNewChatDraftId: 0,
     paletteOpen: false,
     settingsOpen: false,
     automationsOpen: false,
@@ -147,6 +165,35 @@ test("empty field shows no sheet, quiet as today", async () => {
   // Both hint states stay mounted (constant slot width); quiet state is the
   // one without data-ask — visibility is the attribute, not DOM presence.
   expect(app.querySelector(".mission-control__capture-shortcut")?.hasAttribute("data-ask")).toBe(false);
+});
+
+test("an Area-scoped draft names where its first chat will be created", async () => {
+  installBridge();
+  seed();
+  getState().setAreaRecords([
+    {
+      area_id: "area-1",
+      name: "Launch",
+      default_cwd: null,
+      instructions: null,
+      knowledge_scope: "area",
+      page_path: null,
+      autonomy: "observe",
+      attention: "ambient",
+      interrupts: "asks",
+      paused_at: null,
+      created_at: "",
+      updated_at: "",
+      archived_at: null,
+    },
+  ]);
+  setState({ pendingNewChatAreaId: "area-1" });
+
+  const app = await renderHome();
+
+  expect(app.querySelector(".mission-control__capture-scope")?.textContent).toContain(
+    "New chat in Launch",
+  );
 });
 
 test("typing opens a docked sheet grouped by chats and actions, capped and combobox-wired", async () => {
@@ -214,6 +261,66 @@ test("no-results Enter still starts the chat — the router never dead-ends", as
 
   expect(getState().draft).toBe("");
   await waitFor(() => requests.some((r) => r.path === "/sessions" && r.method === "POST"));
+});
+
+test("failed creation restores the submitted Home draft", async () => {
+  installBridge({ failSessionCreation: true });
+  seed();
+  const app = await renderHome();
+  const input = await typeQuery(app, "retry this exactly  ");
+
+  await act(async () => {
+    keydownOnInput(input, "Enter", { metaKey: true });
+    await waitFor(() => getState().error === "creation failed");
+  });
+
+  expect(getState().draft).toBe("retry this exactly  ");
+  expect(input.value).toBe("retry this exactly  ");
+});
+
+test("failed creation never overwrites a draft typed after submit", async () => {
+  let releaseCreation = () => {};
+  const sessionCreationGate = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  installBridge({ failSessionCreation: true, sessionCreationGate });
+  seed();
+  const app = await renderHome();
+  const input = await typeQuery(app, "first draft");
+
+  await act(async () => keydownOnInput(input, "Enter", { metaKey: true }));
+  await waitFor(() => requests.some((r) => r.path === "/sessions" && r.method === "POST"));
+  await typeQuery(app, "new draft");
+  await act(async () => {
+    releaseCreation();
+    await waitFor(() => getState().error === "creation failed");
+  });
+
+  expect(getState().draft).toBe("new draft");
+  expect(input.value).toBe("new draft");
+});
+
+test("failed creation never restores into a newer New Chat draft", async () => {
+  let releaseCreation = () => {};
+  const sessionCreationGate = new Promise<void>((resolve) => {
+    releaseCreation = resolve;
+  });
+  installBridge({ failSessionCreation: true, sessionCreationGate });
+  seed();
+  const app = await renderHome();
+  const input = await typeQuery(app, "old draft");
+
+  await act(async () => keydownOnInput(input, "Enter", { metaKey: true }));
+  await waitFor(() => requests.some((r) => r.path === "/sessions" && r.method === "POST"));
+  await act(async () => goToNewSessionHome("area-b"));
+  await act(async () => {
+    releaseCreation();
+    await waitFor(() => getState().error === "creation failed");
+  });
+
+  expect(getState().pendingNewChatAreaId).toBe("area-b");
+  expect(getState().draft).toBe("");
+  expect(input.value).toBe("");
 });
 
 test("Escape closes the sheet keeping the text, a second Escape clears it", async () => {

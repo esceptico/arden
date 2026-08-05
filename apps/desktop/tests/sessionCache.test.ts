@@ -11,6 +11,8 @@ function blank() {
   setState({
     sessionView: createInitialSessionViewState(),
     currentSessionId: null,
+    pendingNewChatAreaId: null,
+    pendingNewChatDraftId: 0,
     messages: new Map(),
     order: [],
     running: false,
@@ -820,18 +822,33 @@ test("resetCancellingQueuedMessages releases an interrupted send back to pending
   expect(getState().queuedMessages.map((q) => q.status)).toEqual(["pending", "pending"]);
 });
 
-test("goToNewSessionHome clears the current session and closes an open area room", () => {
+test("goToNewSessionHome keeps only an unpersisted Area intent", () => {
   // "New session" (sidebar nav row / ⌘N / command palette) must land on
   // Home, not eagerly provision an empty session — Home's hero input
   // creates the session lazily on first send.
   const s = getState();
   s.setCurrentSession("A");
   s.openArea("o-1a");
+  s.openMemory();
+  s.openAutomations();
+  s.openSettings();
   expect(getState().areas.openAreaKey).toBe("o-1a");
 
-  goToNewSessionHome();
+  goToNewSessionHome("o-1a");
 
   expect(getState().currentSessionId).toBeNull();
+  expect(getState().pendingNewChatAreaId).toBe("o-1a");
   expect(getState().areas.openAreaKey).toBeNull();
+  expect(getState().memoryOpen).toBe(false);
+  expect(getState().automationsOpen).toBe(false);
+  expect(getState().settingsOpen).toBe(false);
   expect(getState().order).toEqual([]);
+});
+
+test("opening a real session clears pending New Chat Area intent", () => {
+  goToNewSessionHome("o-1a");
+
+  getState().setCurrentSession("A");
+
+  expect(getState().pendingNewChatAreaId).toBeNull();
 });

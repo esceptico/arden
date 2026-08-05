@@ -44,7 +44,7 @@ import {
   type ShellLayout,
 } from "@/lib/shellOwnership";
 import { bootstrap, startServerConnectionPolling } from "@/actions/bootstrap";
-import { createSession, switchSession } from "@/actions/sessions";
+import { createSession, goToNewSessionHome, switchSession } from "@/actions/sessions";
 import { goBack, goForward, navigateHome, recordCurrentDestination } from "@/actions/navigation";
 import { sendMessage } from "@/actions/messages";
 
@@ -265,7 +265,7 @@ export function App() {
         }
         if (k === "n" && !e.shiftKey) {
           e.preventDefault();
-          void createSession();
+          goToNewSessionHome();
           return;
         }
         if (k === "h" && e.shiftKey) {

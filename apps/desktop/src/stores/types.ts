@@ -427,6 +427,10 @@ export interface State {
   sessions: SessionListItem[];
   sessionView: SessionViewState;
   currentSessionId: string | null;
+  /** Area intent for an unpersisted Home draft. */
+  pendingNewChatAreaId: string | null;
+  /** Monotonic identity prevents in-flight creation from crossing New Chat intents. */
+  pendingNewChatDraftId: number;
   messages: Map<string, UiMessage>;
   order: string[];
   /** Session ids with a foreground run that should drive composer UI. */
@@ -554,6 +558,7 @@ export interface Actions {
     options?: { clearApprovals?: boolean; markBackgrounded?: boolean },
   ) => void;
   setCurrentSession: (sessionId: string | null) => void;
+  beginNewChatDraft: (areaId: string | null) => void;
   setHistory: (messages: UiMessage[], page?: import("@/api/chat").HistoryPage) => void;
   prependHistory: (messages: UiMessage[], page?: import("@/api/chat").HistoryPage) => void;
   appendHistoryPage: (

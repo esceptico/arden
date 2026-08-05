@@ -1,4 +1,11 @@
-import { useCallback, useLayoutEffect, useState, type MutableRefObject, type RefObject } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type RefObject,
+} from "react";
 import { AnimatePresence } from "motion/react";
 import { useStore } from "@/stores";
 import { sendMessage } from "@/actions/messages";
@@ -26,8 +33,13 @@ export function HeroInput({
 }) {
   const draft = useStore((s) => s.draft);
   const setDraft = useStore((s) => s.setDraft);
+  const pendingAreaId = useStore((s) => s.pendingNewChatAreaId);
+  const pendingAreaName = useStore((s) =>
+    pendingAreaId ? s.areas.recordsById[pendingAreaId]?.name : null,
+  );
   const [dismissed, setDismissed] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const draftRevision = useRef(0);
 
   const hasQuery = draft.trim().length > 0;
   const { groups, flat } = useOmniboxResults(draft);
@@ -45,9 +57,23 @@ export function HeroInput({
   const activateNewChat = useCallback(() => {
     const text = draft.trim();
     if (!text) return;
+    const submittedDraft = draft;
+    const submittedRevision = draftRevision.current;
+    const submittedDraftId = useStore.getState().pendingNewChatDraftId;
     setDraft("");
     setDismissed(false);
-    void sendMessage(text);
+    void sendMessage(text).then((sent) => {
+      if (sent || draftRevision.current !== submittedRevision) return;
+      const state = useStore.getState();
+      const stillOnHome =
+        state.pendingNewChatDraftId === submittedDraftId
+        && state.currentSessionId === null
+        && state.areas.openAreaKey === null
+        && !state.memoryOpen
+        && !state.automationsOpen
+        && !state.settingsOpen;
+      if (stillOnHome && state.draft === "") setDraft(submittedDraft);
+    });
   }, [draft, setDraft]);
 
   const activateEntry = useCallback((entry: CommandEntry) => {
@@ -86,6 +112,11 @@ export function HeroInput({
         activateNewChat();
       }}
     >
+      {pendingAreaId && (
+        <div className="mission-control__capture-scope" aria-live="polite">
+          New chat in <span>{pendingAreaName ?? "selected Area"}</span>
+        </div>
+      )}
       <div className="mission-control__capture-field" data-sheet-open={sheetVisible || undefined}>
         <input
           ref={inputRef}
@@ -99,6 +130,7 @@ export function HeroInput({
           autoComplete="off"
           value={draft}
           onChange={(e) => {
+            draftRevision.current += 1;
             setDraft(e.target.value);
             setDismissed(false);
           }}

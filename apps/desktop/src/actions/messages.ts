@@ -11,7 +11,7 @@ import {
 } from "@/stores/run-lifecycle";
 import { clearCachedStoppingRun } from "@/stores/session-cache";
 import { mergeSourceRefs } from "@/stores/sourceRefs";
-import { createSession } from "@/actions/sessions";
+import { provisionSession } from "@/actions/sessions";
 
 interface SendMessageOptions {
   meta?: boolean;
@@ -25,6 +25,62 @@ interface ChatMessageResponse {
   status?: "queued" | string;
 }
 
+const pendingHomeSessionCreations = new Map<number, Promise<string>>();
+
+async function resolveHomeMessageSession(): Promise<string | null> {
+  const initial = getState();
+  const draftId = initial.pendingNewChatDraftId;
+  let creation = pendingHomeSessionCreations.get(draftId);
+  if (!creation) {
+    creation = provisionSession(initial.pendingNewChatAreaId).then((session) => session.session_id);
+    pendingHomeSessionCreations.set(draftId, creation);
+  }
+  try {
+    const sessionId = await creation;
+    const latest = getState();
+    const stillOwnsDraft =
+      latest.pendingNewChatDraftId === draftId
+      && (latest.currentSessionId === null || latest.currentSessionId === sessionId)
+      && latest.areas.openAreaKey === null
+      && !latest.memoryOpen
+      && !latest.automationsOpen
+      && !latest.settingsOpen;
+    if (stillOwnsDraft && latest.currentSessionId === null) {
+      latest.setCurrentSession(sessionId);
+    }
+    return sessionId;
+  } catch (error) {
+    getState().setError(error instanceof Error ? error.message : String(error));
+    return null;
+  } finally {
+    if (pendingHomeSessionCreations.get(draftId) === creation) {
+      pendingHomeSessionCreations.delete(draftId);
+    }
+  }
+}
+
+function markMessageRunStarted(sessionId: string, runId: string | null): void {
+  setState((state) => {
+    if (state.currentSessionId !== null) {
+      return reduceRunStarted(state, { runId, sessionId });
+    }
+    const activeRunSessionIds = new Set(state.activeRunSessionIds);
+    activeRunSessionIds.add(sessionId);
+    return { activeRunSessionIds };
+  });
+}
+
+function markMessageRunFailed(sessionId: string): void {
+  setState((state) => {
+    if (state.currentSessionId !== null) {
+      return reduceRunFailed(state, { runId: null, sessionId });
+    }
+    const activeRunSessionIds = new Set(state.activeRunSessionIds);
+    activeRunSessionIds.delete(sessionId);
+    return { activeRunSessionIds };
+  });
+}
+
 export async function sendMessage(
   text: string,
   images: ImageBlock[] = [],
@@ -35,17 +91,18 @@ export async function sendMessage(
 
   // Home has no current session (the door, not a room — see Areas spec
   // Placement) — the FIRST message from its hero input is what actually
-  // provisions the session, lazily, reusing the same createSession path
-  // the sidebar's "new session in area" rows use.
-  if (!getState().currentSessionId) {
-    await createSession();
-  }
+  // provisions the pending Inbox/Area draft.
+  // Do not introduce an async boundary for an already-selected session: an
+  // edit must begin its revert before a following navigation can switch the
+  // transcript underneath it.
+  const currentSessionId = getState().currentSessionId;
+  const sendSessionId = currentSessionId ?? await resolveHomeMessageSession();
+  if (!sendSessionId) return false;
 
   const s = getState();
-  if (!s.currentSessionId) return false;
-  const sendSessionId = s.currentSessionId;
+  const isForeground = s.currentSessionId === sendSessionId;
 
-  if (s.editingId) {
+  if (isForeground && s.editingId) {
     // Truncate the *server's* saved message list at the message being
     // edited too — without this, the agent's next run sees both the
     // original message and the edit and the chat snowballs.
@@ -75,7 +132,7 @@ export async function sendMessage(
   // Use the same id locally and on the server so /session/revert can match
   // this user message back to its saved row when the user later edits it.
   const userMessageId = options.clientId ?? crypto.randomUUID();
-  if (!options.meta) {
+  if (isForeground && !options.meta) {
     s.appendMessage({
       id: userMessageId,
       role: "user",
@@ -84,10 +141,8 @@ export async function sendMessage(
       images: images.length > 0 ? images : undefined,
     });
   }
-  messagesScroll.scrollToBottom?.("smooth");
-  setState((state) =>
-    reduceRunStarted(state, { runId: null, sessionId: sendSessionId }),
-  );
+  if (isForeground) messagesScroll.scrollToBottom?.("smooth");
+  markMessageRunStarted(sendSessionId, null);
 
   try {
     const response = await apiWithConfig<{ run_id: string }>(s.config, "/chat/message", {
@@ -100,14 +155,10 @@ export async function sendMessage(
         client_id: options.meta ? `goal:${Date.now()}` : userMessageId,
       }),
     });
-    setState((state) =>
-      reduceRunStarted(state, { runId: response.run_id, sessionId: sendSessionId }),
-    );
+    markMessageRunStarted(sendSessionId, response.run_id);
     return true;
   } catch (error) {
-    setState((state) =>
-      reduceRunFailed(state, { runId: null, sessionId: sendSessionId }),
-    );
+    markMessageRunFailed(sendSessionId);
     if (getState().currentSessionId === sendSessionId) {
       if (options.fromQueue && !options.meta) {
         setState((state) => {
