@@ -28,23 +28,6 @@ from arden.llm.openai_responses import (
 from arden.llm.utils import blocks_to_text
 from arden.observability.judgment import trace_client
 
-# Keys we attach for arden internals that must be stripped before an API call.
-_INTERNAL_MESSAGE_KEYS = frozenset(
-    {
-        "client_id",
-        "created_at",
-        "message_id",
-        "compaction",
-        "data",
-        "outcome",
-        "anthropic_content",
-        "provider_tool_calls",
-        "openai_response_items",
-        "background_status",
-        "background_result_ref",
-    }
-)
-
 
 def _map_finish_reason(reason: str | None) -> FinishReason:
     if not reason:
@@ -378,27 +361,40 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
         await self._client.close()
 
     def _preprocess_messages(self, messages: list[dict]) -> list[dict]:
-        # Drop arden-internal keys before sending to the OpenAI API. Most
-        # notably `client_id`, which we keep on stored messages so the
-        # desktop can match user rows for edit/branch flows but which the
-        # provider doesn't recognize.
-        result = []
-        for msg in messages:
-            stripped = {k: v for k, v in msg.items() if k not in _INTERNAL_MESSAGE_KEYS}
-            if msg.get("role") == Role.TOOL:
-                stripped["content"] = tool_result_content_for_model(stripped.get("content") or "", msg.get("outcome"))
-            content = stripped["content"]
-            if not isinstance(content, list):
-                result.append(stripped)
-                continue
-            match stripped["role"]:
-                case Role.SYSTEM:
-                    result.append({**stripped, "content": blocks_to_text(content)})
-                case Role.USER:
-                    result.append({**stripped, "content": self._convert_user_content(content)})
-                case _:
-                    result.append(stripped)
-        return result
+        return [self._project_chat_message(message) for message in messages]
+
+    def _project_chat_message(self, message: dict) -> dict:
+        """Build the Chat Completions shape from provider-neutral history."""
+        role = message["role"]
+        content = message.get("content")
+        projected: dict = {"role": role, "content": content}
+
+        if role == Role.ASSISTANT and message.get("tool_calls"):
+            projected["tool_calls"] = [self._project_chat_tool_call(call) for call in message["tool_calls"]]
+        elif role == Role.TOOL:
+            tool_content = blocks_to_text(content) if isinstance(content, list) else content or ""
+            projected["content"] = tool_result_content_for_model(tool_content, message.get("outcome"))
+            projected["tool_call_id"] = message["tool_call_id"]
+
+        if isinstance(projected["content"], list):
+            projected["content"] = (
+                self._convert_user_content(projected["content"])
+                if role == Role.USER
+                else blocks_to_text(projected["content"])
+            )
+        return projected
+
+    @staticmethod
+    def _project_chat_tool_call(tool_call: dict) -> dict:
+        function = tool_call["function"]
+        return {
+            "id": tool_call["id"],
+            "type": "function",
+            "function": {
+                "name": function["name"],
+                "arguments": function.get("arguments", "{}"),
+            },
+        }
 
     def _convert_user_content(self, content: list) -> list[dict]:
         result = []

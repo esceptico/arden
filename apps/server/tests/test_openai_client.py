@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 import httpx
@@ -158,6 +159,95 @@ def test_chat_completions_request_strips_openai_response_items():
     )
 
     assert request["messages"] == [{"role": "assistant", "content": "done"}]
+
+
+def test_chat_completions_projects_foreign_provider_history_without_mutation():
+    client = OpenAIClient(api_key="test")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "provider reasoning",
+            "reasoning_encrypted_content": "responses-only-state",
+            "anthropic_content": [{"type": "thinking", "signature": "anthropic-state"}],
+            "provider_tool_calls": [{"provider_item": {"type": "tool_search_call"}}],
+            "openai_response_items": [{"type": "reasoning", "encrypted_content": "opaque"}],
+            "metadata": {"provider": "foreign"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "thought_signature": "gemini-state",
+                    "function": {
+                        "name": "Search",
+                        "arguments": '{"q":"arden"}',
+                        "provider_state": "opaque",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "found it",
+            "data": {"raw": "internal"},
+            "background_result_ref": "bg-1",
+        },
+    ]
+    original = deepcopy(messages)
+
+    request = client._prepare(
+        messages=messages,
+        model="gpt-5.2",
+        tools=None,
+        tool_choice=None,
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort=None,
+        response_format=None,
+    )
+
+    assert request["messages"] == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "Search", "arguments": '{"q":"arden"}'},
+                }
+            ],
+        },
+        {"role": "tool", "content": "found it", "tool_call_id": "call_1"},
+    ]
+    assert messages == original
+
+
+def test_responses_request_retains_encrypted_reasoning_replay():
+    client = OpenAIClient(api_key="test")
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_encrypted_content": "responses-only-state",
+        }
+    ]
+    original = deepcopy(messages)
+
+    request = client._prepare_responses(
+        messages=messages,
+        model="gpt-5.5",
+        tools=None,
+        tool_choice=None,
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort="high",
+        response_format=None,
+    )
+
+    assert request["input"] == [{"type": "reasoning", "encrypted_content": "responses-only-state", "summary": []}]
+    assert messages == original
 
 
 def test_responses_request_formats_image_blocks_as_input_images():
