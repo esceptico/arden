@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from arden.config import Config
+from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE
 from arden.llm.models import EmbeddingModel, Provider
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.core import Runtime
@@ -45,6 +46,13 @@ async def _noop_sync_mcp(_config=None):
 def test_config_rejects_non_positive_max_depth():
     with pytest.raises(ValidationError):
         Config(memory=False, max_depth=0)
+
+
+def test_runtime_injects_one_config_scoped_idempotency_ledger(tmp_path):
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False))
+
+    assert runtime.tool_services[IDEMPOTENCY_LEDGER_SERVICE] is runtime.idempotency_ledger
+    assert runtime.idempotency_ledger.path == tmp_path / "idempotency.sqlite3"
 
 
 @pytest.mark.parametrize(
@@ -311,8 +319,8 @@ async def test_runtime_index_status_reports_progress_error_and_concurrent_rebuil
         await runtime.update_embedding_model(None, confirmed=True)
 
     release.set()
-    assert runtime._index_task is not None
-    await runtime._index_task
+    assert runtime.search.task is not None
+    await runtime.search.task
     assert await runtime.get_index_status() == {
         "state": "ready",
         "model": "test-embedding",
@@ -352,7 +360,7 @@ async def test_runtime_reload_stops_active_rebuild_before_reloading_knowledge(tm
             stopped.set()
 
     old_task = asyncio.create_task(active_rebuild())
-    runtime._index_task = old_task
+    runtime.search.task = old_task
     await started.wait()
 
     async def reload_config():
@@ -363,8 +371,9 @@ async def test_runtime_reload_stops_active_rebuild_before_reloading_knowledge(tm
     await runtime.reload_config()
 
     assert old_task.cancelled()
-    assert runtime._index_task is not old_task
-    await runtime._index_task
+    assert runtime.search.task is not old_task
+    assert runtime.search.task is not None
+    await runtime.search.task
 
 
 @pytest.mark.asyncio
@@ -391,8 +400,8 @@ async def test_runtime_reports_rebuild_failure_when_a_projection_cannot_finish(t
     runtime.fact_index_projection = Projection()
 
     assert await runtime.start_indexing() is True
-    assert runtime._index_task is not None
-    await runtime._index_task
+    assert runtime.search.task is not None
+    await runtime.search.task
 
     status = await runtime.get_index_status()
     assert status["state"] == "error"
@@ -433,8 +442,8 @@ async def test_runtime_does_not_mark_existing_unavailable_partitions_as_rebuilt(
     runtime.knowledge.search_index = Index(store)
 
     assert await runtime.start_indexing() is True
-    assert runtime._index_task is not None
-    await runtime._index_task
+    assert runtime.search.task is not None
+    await runtime.search.task
 
     status = await runtime.get_index_status()
     assert status["state"] == "error"

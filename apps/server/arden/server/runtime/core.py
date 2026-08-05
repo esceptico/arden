@@ -1,123 +1,77 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import HTTPException, Request
 
 import arden.database as database
-from arden.areas.agent import CUSTODIAN_ACTOR_PREFIX
-from arden.automation.builtins import BUILTINS
 from arden.config import Config, get_config
-from arden.constants import (
-    BUILTIN_MEMORY_CONSOLIDATE_ID,
-    BUILTIN_MEMORY_RETENTION_ID,
-    BUILTIN_MEMORY_SYNTHESIZE_ID,
-    BUILTIN_WIKI_MAINTENANCE_ID,
-)
 from arden.core.factory import AgentConfig
 from arden.execution.backend import ClientExecutionBackend
 from arden.execution.gateway import ExecutorGateway
 from arden.integrations import ALL_INTEGRATIONS, IntegrationRegistry
+from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
 from arden.integrations.slack.client import SlackClient
 from arden.llm.base import CompletionClient
-from arden.llm.models import Provider, get_embedding_model
 from arden.llm.openai_codex_catalog import refresh_codex_models
 from arden.llm.router import close as llm_close
 from arden.llm.router import get_completion_client
 from arden.llm.router import init as llm_init
 from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
-from arden.memory.facts.capture.runner import CaptureTurn, FactCapture
+from arden.memory.facts.capture.runner import FactCapture
 from arden.memory.facts.capture.store import SessionConsumerWatermarkStore
-from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
 from arden.memory.facts.consumer_store import FactConsumerStore
-from arden.memory.facts.index import FACT_SEARCH_SOURCE, FactIndexProjection
+from arden.memory.facts.index import FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
-from arden.memory.facts.maintenance.runner import (
-    CONSUMER_ID as FACT_MAINTENANCE_CONSUMER_ID,
-)
 from arden.memory.facts.maintenance.runner import (
     FactMaintenance,
     FactMaintenanceReviewer,
 )
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
-from arden.memory.facts.synthesis import CONSUMER_ID as FACT_SYNTHESIS_CONSUMER_ID
 from arden.memory.facts.synthesis import FactSynthesis
 from arden.monitor.slack import SlackMonitor
 from arden.notifiers.base import NotifierContext
 from arden.notifiers.service import NotifierService
 from arden.observability import init_tracing, shutdown_tracing
 from arden.operator.runner import OperatorDeps
-from arden.revisions import CollectionReport, ManagedFileRepository, RevisionConflictError
+from arden.revisions import CollectionReport, ManagedFileRepository
 from arden.server.app_control import AppControlService
-from arden.server.indexer import IndexProgress, IndexStatus
 from arden.server.runtime.automation import AutomationRuntime
 from arden.server.runtime.config import RuntimeConfig
+from arden.server.runtime.indexing import SearchIndexRuntime
 from arden.server.runtime.knowledge import KnowledgeRuntime
+from arden.server.runtime.memory_automation import MemoryAutomationRuntime
+from arden.server.runtime.storage import StorageRuntime
+from arden.server.runtime.wiki_projection import WikiProjectionRuntime
 from arden.server.startup import startup_phase
 from arden.server.state import RunRegistry
 from arden.server.stores import Stores
-from arden.server.wiki_health import dangling_fact_citation_issues
 from arden.services.session import SessionService
 from arden.skills.registry import SkillMeta, SkillRegistry
 from arden.skills.service import SkillService, get_skills_dirs
-from arden.storage_budget import (
-    StorageSessionCandidate,
-    build_storage_cleanup_plan,
-    enforce_storage_budget,
-    execute_storage_file_action,
-    inspect_storage,
-    list_storage_backups,
-    set_backup_keep,
-)
 from arden.tools.connections import ConnectionService
 from arden.tools.executor import ToolExecutor
 from arden.wiki.approval_store import WikiRenameApprovalStore
 from arden.wiki.approvals import WikiRenameApprovalCoordinator
 from arden.wiki.constants import (
-    AUTOMATIONS_PATH_PREFIX,
-    README_FILENAME,
-    WIKI_HEALTH_ORIGIN,
-    WIKI_MAINTENANCE_ACTOR,
     WIKI_POST_COMMIT_SERVICE,
 )
-from arden.wiki.context import WIKI_PAGE_SOURCE, WikiContextBuilder, WikiPageIndexProjection
+from arden.wiki.context import WikiContextBuilder, WikiPageIndexProjection
 from arden.wiki.curation.completion import CompletionWikiEditCuratorReviewer
 from arden.wiki.curation.engine import WikiEditCurator
 from arden.wiki.curation.queue import WikiEditCuratorQueueStore
 from arden.wiki.curation.worker import WikiEditCuratorWorker
-from arden.wiki.health import (
-    WikiHealthIndex,
-    WikiHealthInput,
-    WikiHealthIssue,
-    WikiHealthIssueCode,
-    WikiHealthIssueOwner,
-    WikiHealthProjector,
-    WikiHealthWorker,
-)
 from arden.wiki.maintenance.runner import (
     WikiMaintenance,
     WikiMaintenanceReviewer,
 )
 from arden.wiki.maintenance.store import WikiMaintenanceStore
-from arden.wiki.models import WikiChangesReport
-from arden.wiki.service import WIKI_RENAME_ORIGIN, WikiService
+from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
-
-_HEALTH_PHASE_IDS = frozenset(
-    {
-        BUILTIN_MEMORY_CONSOLIDATE_ID,
-        BUILTIN_MEMORY_RETENTION_ID,
-        BUILTIN_MEMORY_SYNTHESIZE_ID,
-        BUILTIN_WIKI_MAINTENANCE_ID,
-    }
-)
-_HEALTH_PHASES = tuple(spec for spec in BUILTINS if spec.task_id in _HEALTH_PHASE_IDS)
-
 
 class Runtime:
     dispatch_session_message: (
@@ -135,6 +89,7 @@ class Runtime:
         self.integrations = IntegrationRegistry(ALL_INTEGRATIONS)
         self.integrations.sync(initial_config)
         self.connection_service = ConnectionService(self.integrations)
+        self.idempotency_ledger = IdempotencyLedger(initial_config.arden_dir / "idempotency.sqlite3")
         self.run_registry = RunRegistry()
         self.knowledge = KnowledgeRuntime(initial_config)
 
@@ -160,9 +115,6 @@ class Runtime:
         self._wiki_maintenance_store: WikiMaintenanceStore | None = None
         self._wiki_curator_store: WikiEditCuratorQueueStore | None = None
         self.wiki_curator_worker: WikiEditCuratorWorker | None = None
-        self._wiki_health_lock = asyncio.Lock()
-        self._wiki_projection_lock = asyncio.Lock()
-        self._wiki_change_head: str | None = None
         self.fact_service: FactService | None = None
         self._fact_plan_conn: database.aiosqlite.Connection | None = None
         self._fact_consumer_store: FactConsumerStore | None = None
@@ -183,27 +135,6 @@ class Runtime:
             "automations": False,
             "storage": False,
         }
-        self._storage_maintenance_task: asyncio.Task[None] | None = None
-        self._storage_status: dict = {
-            "status": "pending",
-            "total_bytes": 0,
-            "reclaimable_bytes": 0,
-            "protected_bytes": 0,
-            "reclaimed_bytes": 0,
-            "max_bytes": None,
-            "target_bytes": None,
-            "checked_at": None,
-            "categories": [],
-            "reclaimed_by_category": {},
-            "database_reclaim_mode": None,
-            "last_plan": None,
-            "last_run": None,
-            "next_maintenance_at": None,
-        }
-        self._index_lock = asyncio.Lock()
-        self._index_task: asyncio.Task[None] | None = None
-        self._index_progress = IndexProgress(status=IndexStatus.PENDING)
-        self._index_error: str | None = None
 
         self.config_runtime = RuntimeConfig(
             initial_config,
@@ -213,8 +144,23 @@ class Runtime:
             sync_mcp=lambda config: self.sync_mcp(config),
             is_closing=lambda: self._closing,
             refresh_models=refresh_codex_models,
-            after_reload=self._after_config_reload,
         )
+        self.search = SearchIndexRuntime(
+            get_config=lambda: self.config,
+            config_service=self.config_runtime.service,
+            knowledge=self.knowledge,
+            reload_config=lambda: self.config_runtime.reload(),
+            get_fact_projection=lambda: self.fact_index_projection,
+            get_wiki_projection=lambda: self.wiki_page_projection,
+        )
+        self.storage = StorageRuntime(
+            get_config=lambda: self.config,
+            get_session_service=lambda: self.session_service,
+            run_registry=self.run_registry,
+            mark_ready=lambda: self.set_warmup_capability("storage"),
+        )
+        self.wiki_projection = WikiProjectionRuntime(self)
+        self.memory_automation = MemoryAutomationRuntime(self)
 
     @property
     def connected(self) -> bool:
@@ -240,7 +186,7 @@ class Runtime:
         }
 
     def storage_status(self) -> dict:
-        return dict(self._storage_status)
+        return self.storage.status()
 
     def begin_warmup(self) -> None:
         self._warmup_status = "running"
@@ -262,9 +208,6 @@ class Runtime:
         self._warmup_status = "error"
         self._warmup_phase = None
         self._warmup_error = f"{type(error).__name__}: {error}"
-
-    def _set_warmup_capability(self, capability: str, ready: bool = True) -> None:
-        self.set_warmup_capability(capability, ready)
 
     def auxiliary_completion(self) -> tuple[CompletionClient, str, str | None]:
         model = self.config.auxiliary_model
@@ -318,6 +261,7 @@ class Runtime:
     def tool_services(self) -> dict[str, object]:
         services: dict[str, object] = dict(self.integrations.clients)
         services["connections"] = self.connection_service
+        services[IDEMPOTENCY_LEDGER_SERVICE] = self.idempotency_ledger
         if self.wiki_service is not None:
             services["wiki"] = self.wiki_service
             services[WIKI_POST_COMMIT_SERVICE] = self.project_wiki_change_after_commit
@@ -370,162 +314,19 @@ class Runtime:
     # --- Subsystem lifecycle ---
 
     async def reload_config(self) -> None:
-        async with self._index_lock:
-            was_indexing = self._index_is_running()
-            await self._cancel_indexing()
-            previous_embedding = self.config.embedding
-            await self.config_runtime.reload()
-
-            if self.config.embedding is None:
-                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
-                self._index_error = None
-            elif not self.indexer.vector_enabled:
-                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                self._index_error = "Vector index is unavailable; full-text search remains available"
-            elif (
-                was_indexing
-                or self.config.embedding != previous_embedding
-                or self.indexer.needs_rebuild
-                or self._index_progress.status is IndexStatus.ERROR
-            ):
-                self._start_indexing_locked()
-
-    async def _after_config_reload(self) -> None:
-        return
+        await self.search.reload()
 
     def embedding_model_available(self, model_id: str) -> bool:
-        model = get_embedding_model(model_id)
-        if model.provider is Provider.OPENAI:
-            return bool(self.config.openai_api_key)
-        if model.provider is Provider.GOOGLE:
-            return bool(self.config.gemini_api_key)
-        return model.provider is Provider.CUSTOM
+        return self.search.model_available(model_id)
 
     async def update_embedding_model(self, model_id: str | None, confirmed: bool) -> None:
-        async with self._index_lock:
-            if model_id == self.config.embedding_model:
-                return
-            if self._index_is_running():
-                raise HTTPException(status_code=409, detail="Embedding reindex is already running")
-            if not confirmed:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Changing the embedding model re-embeds all facts and wiki pages; resend with confirmed=true",
-                )
-            if model_id is not None:
-                try:
-                    available = self.embedding_model_available(model_id)
-                except ValueError as error:
-                    raise HTTPException(status_code=400, detail=str(error)) from error
-                if not available:
-                    raise HTTPException(status_code=400, detail=f"Embedding model {model_id!r} is not available")
-            await self.config_service.update(embedding_model=model_id)
-            if self.config.embedding is None:
-                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
-                self._index_error = None
-                return
-            if not self.indexer.vector_enabled:
-                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                self._index_error = "Vector index is unavailable; full-text search remains available"
-                return
-            self._start_indexing_locked()
+        await self.search.update_model(model_id, confirmed)
 
     async def start_indexing(self) -> bool:
-        async with self._index_lock:
-            if self._index_is_running():
-                raise HTTPException(status_code=409, detail="Embedding reindex is already running")
-            if self.config.embedding is None:
-                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
-                self._index_error = None
-                return False
-            if not self.indexer.vector_enabled:
-                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                self._index_error = "Vector index is unavailable; full-text search remains available"
-                return False
-            self._start_indexing_locked()
-            return True
-
-    def _start_indexing_locked(self) -> None:
-        self._index_progress = IndexProgress(status=IndexStatus.INDEXING, phase="facts")
-        self._index_error = None
-        self._index_task = asyncio.create_task(self._run_indexing())
-
-    def _index_is_running(self) -> bool:
-        return self._index_task is not None and not self._index_task.done()
-
-    async def _run_indexing(self) -> None:
-        try:
-            rebuilt_sources: set[str] = set()
-            if self.fact_index_projection is not None:
-                if (
-                    await self.fact_index_projection.sync(
-                        progress_callback=self._index_progress_callback("facts"),
-                        raise_on_error=True,
-                        force=True,
-                    )
-                    is None
-                ):
-                    raise RuntimeError("fact index rebuild did not complete")
-                rebuilt_sources.add(FACT_SEARCH_SOURCE)
-            if self.wiki_page_projection is not None:
-                if (
-                    await self.wiki_page_projection.sync(
-                        progress_callback=self._index_progress_callback("wiki"),
-                        raise_on_error=True,
-                        force=True,
-                    )
-                    is None
-                ):
-                    raise RuntimeError("wiki index rebuild did not complete")
-                rebuilt_sources.add(WIKI_PAGE_SOURCE)
-            if self.search_index is not None:
-                existing_sources = set(await self.search_index.store.get_stats())
-                unavailable = {FACT_SEARCH_SOURCE, WIKI_PAGE_SOURCE}.intersection(existing_sources).difference(
-                    rebuilt_sources
-                )
-                if unavailable:
-                    raise RuntimeError(f"cannot rebuild unavailable sources: {', '.join(sorted(unavailable))}")
-                await self.search_index.store.mark_embedding_ready()
-                self.indexer.needs_rebuild = False
-            self._index_progress.status = IndexStatus.DONE
-            self._index_progress.phase = None
-        except asyncio.CancelledError:
-            self._index_progress.status = IndexStatus.PENDING
-            self._index_progress.phase = None
-            raise
-        except Exception as error:
-            self._index_error = f"{type(error).__name__}: {error}"
-            self._index_progress.status = IndexStatus.ERROR
-            self._index_progress.phase = None
-
-    def _index_progress_callback(self, phase: str) -> Callable[[int, int], None]:
-        def update(done: int, total: int) -> None:
-            self._index_progress.phase = phase
-            self._index_progress.done = done
-            self._index_progress.total = total
-
-        return update
+        return await self.search.start()
 
     async def get_index_status(self) -> dict:
-        retry_at = self.indexer.rate_limit_retry_at
-        return {
-            "state": self._index_progress.status.value,
-            "model": self.config.embedding_model,
-            "phase": self._index_progress.phase,
-            "done": self._index_progress.done,
-            "total": self._index_progress.total,
-            "retry_at": retry_at.isoformat() if retry_at is not None else None,
-            "error": self._index_error,
-        }
-
-    async def _cancel_indexing(self) -> None:
-        if self._index_task is None or self._index_task.done():
-            return
-        self._index_task.cancel()
-        try:
-            await self._index_task
-        except asyncio.CancelledError:
-            pass
+        return self.search.status()
 
     async def sync_mcp(self, config: Config | None = None) -> None:
         config = config or self.config
@@ -569,65 +370,16 @@ class Runtime:
             await self._init_facts(fact_ledger)
             await self._init_wiki_curator(reconcile_history=not defer_warmup)
             await self.knowledge.connect(self.stores)
+            self._init_wiki_projection()
 
         with startup_phase(_logger, "runtime.index_sync"):
-            rebuild_pending = (
-                self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
-            )
-            if self.fact_index_projection is not None:
-                if not rebuild_pending and not defer_warmup:
-                    try:
-                        await self.fact_index_projection.sync(raise_on_error=self.config.embedding is not None)
-                    except Exception:
-                        _logger.warning("initial fact index sync failed", exc_info=True)
-            if self.fact_service is not None and self.wiki_service is not None:
-                projection = WikiPageIndexProjection(
-                    self.wiki_service,
-                    lambda: self.search_index,
-                    self.fact_service.revision,
-                    on_state_change=lambda _state: self.project_wiki_health(),
-                    fact_revision_hint=self.fact_service.current_revision,
-                )
-                self.wiki_page_projection = projection
-                self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
-                if not rebuild_pending and not defer_warmup:
-                    try:
-                        await projection.sync(
-                            raise_on_error=self.config.embedding is not None,
-                            notify_state_change=False,
-                        )
-                    except Exception:
-                        _logger.warning("initial wiki index sync failed", exc_info=True)
-            if defer_warmup:
-                self._index_progress = IndexProgress(status=IndexStatus.PENDING)
-            elif self.config.embedding is None:
-                self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
-            elif rebuild_pending:
-                self._index_progress = IndexProgress(status=IndexStatus.PENDING)
-            elif self.indexer.vector_enabled:
-                failed_projection = next(
-                    (
-                        projection.last_state
-                        for projection in (self.fact_index_projection, self.wiki_page_projection)
-                        if projection is not None and projection.last_state.status != "ready"
-                    ),
-                    None,
-                )
-                if failed_projection is None:
-                    self._index_progress = IndexProgress(status=IndexStatus.DONE)
-                else:
-                    self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                    self._index_error = failed_projection.detail or "Initial index rebuild did not complete"
-            else:
-                self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                self._index_error = "Vector index is unavailable; full-text search remains available"
+            rebuild_pending = await self.search.synchronize(deferred=defer_warmup)
             if self._wiki_maintenance_store is not None:
-                self._wiki_change_head = await self._wiki_maintenance_store.get_projection_revision()
+                self.wiki_projection.head = await self._wiki_maintenance_store.get_projection_revision()
 
         with startup_phase(_logger, "runtime.skills"):
             self._init_skills()
-            if self.stores:
-                await self.hydrate_device_skills()
+            await self.hydrate_device_skills()
 
         with startup_phase(_logger, "runtime.notifiers_automation"):
             await self._init_notifiers()
@@ -642,7 +394,7 @@ class Runtime:
                 await self._init_mcp()
             self._init_tools()
             if not defer_warmup:
-                self._set_warmup_capability("mcp")
+                self.set_warmup_capability("mcp")
 
         if not defer_warmup:
             with startup_phase(_logger, "runtime.workers"):
@@ -650,13 +402,13 @@ class Runtime:
                     self.wiki_curator_worker.start()
 
         self._connected = True
-        self._set_warmup_capability("core")
+        self.set_warmup_capability("core")
         with startup_phase(_logger, "runtime.index_rebuild_start"):
             if rebuild_pending and not defer_warmup:
                 await self.start_indexing()
         if not defer_warmup:
-            self._set_warmup_capability("search")
-            self._set_warmup_capability("wiki_health")
+            self.set_warmup_capability("search")
+            self.set_warmup_capability("wiki_health")
         _logger.info(
             "Runtime ready",
             integrations=len(self.integrations.clients),
@@ -671,7 +423,8 @@ class Runtime:
     async def hydrate_device_skills(self) -> None:
         """Load cached device-advertised skills into the registry so they
         survive server restarts and stay usable while the device is offline."""
-        assert self.stores and self.skill_registry
+        if self.stores is None or self.skill_registry is None:
+            raise RuntimeError("Device skills require initialized stores and skill registry")
         entries = []
         for skill in await self.stores.device_skills.all_loaded():
             meta = SkillMeta(
@@ -682,6 +435,19 @@ class Runtime:
             )
             entries.append((meta, skill.body or ""))
         self.skill_registry.set_device_skills(entries)
+
+    def _init_wiki_projection(self) -> None:
+        if self.fact_service is None or self.wiki_service is None:
+            return
+        projection = WikiPageIndexProjection(
+            self.wiki_service,
+            lambda: self.search_index,
+            self.fact_service.revision,
+            on_state_change=lambda _state: self.project_wiki_health(),
+            fact_revision_hint=self.fact_service.current_revision,
+        )
+        self.wiki_page_projection = projection
+        self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
 
     async def _init_wiki(self) -> None:
         wiki_root = self.config.memory_artifacts_dir / "wiki"
@@ -795,13 +561,13 @@ class Runtime:
         if (
             self.wiki_service is not None
             and self._wiki_maintenance_store is not None
-            and self._wiki_change_head is None
+            and self.wiki_projection.head is None
             and self.wiki_service.repository.head is not None
         ):
-            self._wiki_change_head = self.wiki_service.repository.head
+            self.wiki_projection.head = self.wiki_service.repository.head
             await self._wiki_maintenance_store.record_projection_revision(
                 expected_revision=None,
-                revision=self._wiki_change_head,
+                revision=self.wiki_projection.head,
             )
 
     async def complete_deferred_runtime_warmup(self) -> None:
@@ -815,55 +581,15 @@ class Runtime:
         with startup_phase(_logger, "warmup.runtime.curator_reconciliation"):
             await self._reconcile_wiki_curator_history()
 
-        rebuild_pending = (
-            self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
-        )
         self.set_warmup_phase("runtime.index_sync")
         with startup_phase(_logger, "warmup.runtime.index_sync"):
-            if rebuild_pending:
-                self._index_progress = IndexProgress(status=IndexStatus.PENDING)
-            else:
-                for projection, label in (
-                    (self.fact_index_projection, "fact"),
-                    (self.wiki_page_projection, "wiki"),
-                ):
-                    if projection is None:
-                        continue
-                    try:
-                        if projection is self.wiki_page_projection:
-                            await projection.sync(
-                                raise_on_error=self.config.embedding is not None,
-                                notify_state_change=False,
-                            )
-                        else:
-                            await projection.sync(raise_on_error=self.config.embedding is not None)
-                    except Exception:
-                        _logger.warning("initial %s index sync failed", label, exc_info=True)
-                if self.config.embedding is None:
-                    self._index_progress = IndexProgress(status=IndexStatus.DISABLED)
-                elif self.indexer.vector_enabled:
-                    failed_projection = next(
-                        (
-                            projection.last_state
-                            for projection in (self.fact_index_projection, self.wiki_page_projection)
-                            if projection is not None and projection.last_state.status != "ready"
-                        ),
-                        None,
-                    )
-                    if failed_projection is None:
-                        self._index_progress = IndexProgress(status=IndexStatus.DONE)
-                    else:
-                        self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                        self._index_error = failed_projection.detail or "Initial index rebuild did not complete"
-                else:
-                    self._index_progress = IndexProgress(status=IndexStatus.ERROR)
-                    self._index_error = "Vector index is unavailable; full-text search remains available"
-        self._set_warmup_capability("search")
+            rebuild_pending = await self.search.synchronize()
+        self.set_warmup_capability("search")
 
         self.set_warmup_phase("runtime.wiki_health")
         with startup_phase(_logger, "warmup.runtime.wiki_health"):
             await self._project_initial_wiki_health()
-        self._set_warmup_capability("wiki_health")
+        self.set_warmup_capability("wiki_health")
 
         if rebuild_pending:
             self.set_warmup_phase("runtime.index_rebuild_start")
@@ -878,250 +604,25 @@ class Runtime:
         self.set_warmup_phase("runtime.mcp")
         with startup_phase(_logger, "warmup.runtime.mcp"):
             await self.sync_mcp()
-        self._set_warmup_capability("mcp")
+        self.set_warmup_capability("mcp")
 
     async def run_storage_maintenance_once(self) -> dict:
-        try:
-            await self.session_service.store.prune_expired_tool_results()
-            referenced = await self.session_service.store.list_tool_result_content_hashes()
-            reclaim_status = await self.session_service.store.database_reclaim_status()
-            report = await asyncio.to_thread(
-                enforce_storage_budget,
-                self.config.arden_dir,
-                max_space_gb=self.config.max_space_gb,
-                referenced_tool_result_hashes=referenced,
-                backup_retention_days=self.config.storage_backup_retention_days,
-                expire_backups=True,
-                database_reclaim_mode=str(reclaim_status["mode"]),
-            )
-            latest_run = await self.session_service.store.latest_storage_cleanup_run()
-            self._storage_status = {
-                **report.to_dict(),
-                "last_plan": self._storage_status.get("last_plan"),
-                "last_run": latest_run,
-                "next_maintenance_at": self._storage_status.get("next_maintenance_at"),
-            }
-        except Exception as error:
-            self._storage_status = {
-                **self._storage_status,
-                "status": "error",
-                "error": f"{type(error).__name__}: {error}",
-                "checked_at": datetime.now(UTC).isoformat(),
-            }
-            _logger.exception("Storage budget maintenance failed")
-        self._set_warmup_capability("storage")
-        return self.storage_status()
-
-    async def _storage_cleanup_plan(self, request):
-        referenced = await self.session_service.store.list_tool_result_content_hashes()
-        reclaim_status = await self.session_service.store.database_reclaim_status()
-        inventory = await asyncio.to_thread(
-            inspect_storage,
-            self.config.arden_dir,
-            max_space_gb=self.config.max_space_gb,
-            referenced_tool_result_hashes=referenced,
-            backup_retention_days=self.config.storage_backup_retention_days,
-            database_reclaim_mode=str(reclaim_status["mode"]),
-        )
-        candidates = await self.session_service.store.list_storage_cleanup_candidates()
-        pinned = set(request.pinned_session_ids)
-        inactive_before = datetime.now(UTC) - timedelta(days=self.config.storage_current_inactive_days)
-        protected: list[StorageSessionCandidate] = []
-        for candidate in candidates:
-            reasons = list(candidate.protected_reasons)
-            if candidate.session_id == request.current_session_id:
-                reasons.append("currently open chat")
-            if candidate.session_id in pinned:
-                reasons.append("pinned chat")
-            if self.run_registry.get_active_run(candidate.session_id) is not None:
-                reasons.append("active run")
-            if not candidate.archived:
-                try:
-                    last_activity = datetime.fromisoformat(candidate.last_activity)
-                except ValueError:
-                    reasons.append("invalid activity timestamp")
-                else:
-                    if last_activity > inactive_before:
-                        reasons.append(f"active within {self.config.storage_current_inactive_days} days")
-            protected.append(replace(candidate, protected_reasons=tuple(sorted(set(reasons)))))
-
-        limit_gb = request.target_gb if request.target_gb is not None else self.config.max_space_gb
-        target_bytes = inventory.report.total_bytes if limit_gb is None else int(limit_gb * (1024**3) * 0.85)
-        allow_archived = (
-            self.config.storage_allow_archived_cleanup
-            if request.allow_archived_chats is None
-            else request.allow_archived_chats
-        )
-        allow_current = (
-            self.config.storage_allow_current_cleanup
-            if request.allow_current_chats is None
-            else request.allow_current_chats
-        )
-        allow_delete_cold = (
-            self.config.storage_allow_delete_cold_chats
-            if request.allow_delete_cold_chats is None
-            else request.allow_delete_cold_chats
-        )
-        return build_storage_cleanup_plan(
-            inventory,
-            target_bytes=target_bytes,
-            sessions=protected,
-            allow_archived_chats=allow_archived,
-            allow_delete_cold_chats=allow_delete_cold,
-            allow_current_chats=allow_current,
-            current_chat_minimum=self.config.storage_current_minimum,
-        )
+        return await self.storage.run_once()
 
     async def plan_storage_cleanup(self, request) -> dict:
-        plan = await self._storage_cleanup_plan(request)
-        self._storage_status["last_plan"] = plan.to_dict()
-        return plan.to_dict()
+        return await self.storage.plan(request)
 
     async def execute_storage_cleanup(self, request) -> dict:
-        initial = await self._storage_cleanup_plan(request)
-        if initial.plan_id != request.plan_id:
-            raise HTTPException(status_code=409, detail="Storage changed; review the refreshed cleanup plan")
-        started_at = datetime.now(UTC).isoformat()
-        completed = 0
-        before = initial.before_bytes
-        receipts: list[dict] = []
-        try:
-            for action in initial.actions:
-                if action.kind in {"stale_tool_result", "expired_backup"}:
-                    fresh = await self._storage_cleanup_plan(request)
-                    if not any(
-                        item.kind == action.kind and item.resource_id == action.resource_id for item in fresh.actions
-                    ):
-                        receipts.append({**asdict(action), "status": "skipped_after_revalidation"})
-                        continue
-                    referenced = await self.session_service.store.list_tool_result_content_hashes()
-                    await asyncio.to_thread(
-                        execute_storage_file_action,
-                        self.config.arden_dir,
-                        action,
-                        referenced_tool_result_hashes=referenced,
-                        backup_retention_days=self.config.storage_backup_retention_days,
-                    )
-                    completed += 1
-                    receipts.append({**asdict(action), "status": "completed"})
-                    continue
-                async with self.run_registry.session_lock(action.resource_id):
-                    fresh = await self._storage_cleanup_plan(request)
-                    if not any(
-                        item.kind == action.kind and item.resource_id == action.resource_id for item in fresh.actions
-                    ):
-                        receipts.append({**asdict(action), "status": "skipped_after_revalidation"})
-                        continue
-                    changed = False
-                    if action.kind == "cold_convert_session":
-                        changed = await self.session_service.cold_convert(action.resource_id) is not None
-                    elif action.kind == "delete_cold_session":
-                        changed = await self.session_service.permanently_delete(action.resource_id)
-                    elif action.kind == "delete_current_session":
-                        changed = await self.session_service.permanently_delete_current(action.resource_id)
-                    completed += int(changed)
-                    receipts.append({**asdict(action), "status": "completed" if changed else "skipped"})
-            await self.session_service.store.incremental_vacuum()
-            await self.run_storage_maintenance_once()
-        except Exception as error:
-            after = int(self.storage_status().get("total_bytes") or before)
-            run_id = await self.session_service.store.record_storage_cleanup_run(
-                plan_id=initial.plan_id,
-                started_at=started_at,
-                before_bytes=before,
-                target_bytes=initial.target_bytes,
-                after_bytes=after,
-                reclaimed_bytes=max(0, before - after),
-                actions=receipts,
-                status="error",
-                error=f"{type(error).__name__}: {error}",
-            )
-            self._storage_status["last_run"] = {
-                "run_id": run_id,
-                "plan_id": initial.plan_id,
-                "started_at": started_at,
-                "before_bytes": before,
-                "target_bytes": initial.target_bytes,
-                "after_bytes": after,
-                "reclaimed_bytes": max(0, before - after),
-                "actions": receipts,
-                "status": "error",
-                "error": f"{type(error).__name__}: {error}",
-            }
-            _logger.exception("Storage cleanup plan %s failed", initial.plan_id)
-            raise
-        after = int(self._storage_status["total_bytes"])
-        reclaimed = max(0, before - after)
-        run_id = await self.session_service.store.record_storage_cleanup_run(
-            plan_id=initial.plan_id,
-            started_at=started_at,
-            before_bytes=before,
-            target_bytes=initial.target_bytes,
-            after_bytes=after,
-            reclaimed_bytes=reclaimed,
-            actions=receipts,
-            status="completed",
-        )
-        self._storage_status["last_run"] = {
-            "run_id": run_id,
-            "plan_id": initial.plan_id,
-            "started_at": started_at,
-            "before_bytes": before,
-            "target_bytes": initial.target_bytes,
-            "after_bytes": after,
-            "reclaimed_bytes": reclaimed,
-            "actions": receipts,
-            "status": "completed",
-        }
-        _logger.info(
-            "Storage cleanup completed plan=%s actions=%d reclaimed_bytes=%d",
-            initial.plan_id,
-            completed,
-            reclaimed,
-        )
-        return {
-            "plan_id": initial.plan_id,
-            "reclaimed_bytes": reclaimed,
-            "actions_completed": completed,
-            "status": self.storage_status(),
-        }
+        return await self.storage.execute(request)
 
     async def list_storage_backups(self) -> list[dict]:
-        backups = await asyncio.to_thread(
-            list_storage_backups,
-            self.config.arden_dir,
-            backup_retention_days=self.config.storage_backup_retention_days,
-        )
-        return [backup.__dict__ for backup in backups]
+        return await self.storage.backups()
 
     async def set_storage_backup_keep(self, relative_path: str, *, keep: bool) -> list[dict]:
-        await asyncio.to_thread(set_backup_keep, self.config.arden_dir, relative_path, keep=keep)
-        return await self.list_storage_backups()
+        return await self.storage.set_backup_keep(relative_path, keep=keep)
 
     def start_storage_maintenance(self, *, interval_seconds: float = 3600) -> None:
-        if self._storage_maintenance_task is not None:
-            return
-
-        async def _loop() -> None:
-            while True:
-                self._storage_status["next_maintenance_at"] = (
-                    datetime.now(UTC) + timedelta(seconds=interval_seconds)
-                ).isoformat()
-                await asyncio.sleep(interval_seconds)
-                await self.run_storage_maintenance_once()
-
-        self._storage_maintenance_task = asyncio.create_task(_loop(), name="arden-storage-maintenance")
-
-    async def _stop_storage_maintenance(self) -> None:
-        task = self._storage_maintenance_task
-        if task is None:
-            return
-        self._storage_maintenance_task = None
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        self.storage.start(interval_seconds=interval_seconds)
 
     async def enqueue_wiki_user_edit(self, commit_id: str) -> None:
         """Durably enqueue one exact user wiki commit for background curation."""
@@ -1158,380 +659,40 @@ class Runtime:
                 await self.project_wiki_health()
 
     async def _after_automation_finished(self, task_id: str, success: bool) -> None:
-        wiki_changed = self.wiki_service is not None and self.wiki_service.repository.head != self._wiki_change_head
-        if task_id not in _HEALTH_PHASE_IDS and not wiki_changed:
-            return
-        if success and task_id == BUILTIN_MEMORY_RETENTION_ID:
-            await self._record_retention_checkpoint()
-        if wiki_changed:
-            await self.project_wiki_state()
-        else:
-            await self.project_wiki_health()
+        await self.wiki_projection.after_automation_finished(task_id, success, self._record_retention_checkpoint)
 
     async def _record_retention_checkpoint(self) -> None:
-        """Persist Retention coverage only after the backend proves no review remains due."""
-
-        if self._fact_ledger is None or self.fact_service is None or self._fact_consumer_store is None:
-            return
-        revision, evaluated_at, due_reviews = await asyncio.to_thread(self._fact_ledger.due_review_snapshot)
-        if due_reviews or await self.fact_service.revision() != revision:
-            return
-        await self._fact_consumer_store.record_retention_checkpoint(
-            BUILTIN_MEMORY_RETENTION_ID,
-            revision=revision,
-            evaluated_at=evaluated_at,
-        )
+        await self.memory_automation.record_retention_checkpoint()
 
     def _get_fact_synthesis(self) -> FactSynthesis | None:
-        model = self.config.memory_model
-        if self._fact_ledger is None or self._fact_consumer_store is None or self.wiki_service is None or not model:
-            return None
-        return FactSynthesis(
-            self._fact_ledger,
-            self._fact_consumer_store,
-            self.wiki_service,
-            CompletionFactSynthesisRenderer(
-                get_completion_client(model),
-                model,
-                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
-            ),
-        )
+        return self.memory_automation.fact_synthesis()
 
     def _create_fact_capture(self) -> FactCapture | None:
-        if (
-            self.fact_service is None
-            or self._session_watermark_store is None
-            or self.stores is None
-            or not self.config.memory_model
-        ):
-            return None
-        sessions = self.stores.sessions.store
-        facts = self.fact_service
-        watermarks = self._session_watermark_store
-
-        async def eligible_sessions() -> list[tuple[str, int]]:
-            return await sessions.list_capture_eligible_sessions()
-
-        async def messages_after(session_id: str, after_seq: int, limit: int) -> list[CaptureTurn]:
-            rows = await sessions.list_transcript_messages_after(session_id, after_seq, limit)
-            return [_capture_turn(row) for row in rows]
-
-        async def latest_messages(session_id: str, limit: int) -> list[CaptureTurn]:
-            rows = await sessions.list_latest_transcript_messages(session_id, limit)
-            return [_capture_turn(row) for row in rows]
-
-        return FactCapture(
-            watermarks=watermarks,
-            facts=facts,
-            eligible_sessions=eligible_sessions,
-            messages_after=messages_after,
-            latest_messages=latest_messages,
-        )
+        return self.memory_automation.fact_capture()
 
     def _create_fact_maintenance(self, reviewer: FactMaintenanceReviewer) -> FactMaintenance | None:
-        model = self.config.memory_model
-        if (
-            self.fact_service is None
-            or self._fact_consumer_store is None
-            or self.wiki_service is None
-            or self._wiki_maintenance_store is None
-            or not model
-        ):
-            return None
-        return FactMaintenance(
-            self.fact_service,
-            self._fact_consumer_store,
-            reviewer,
-            wiki=self.wiki_service,
-            candidate_provider=self.fact_index_projection,
-        )
+        return self.memory_automation.fact_maintenance(reviewer)
 
     def _create_wiki_maintenance(self, reviewer: WikiMaintenanceReviewer) -> WikiMaintenance | None:
-        if self._wiki_maintenance_store is None or self.wiki_service is None or not self.config.memory_model:
-            return None
-        return WikiMaintenance(self._wiki_maintenance_store, self.wiki_service, reviewer)
+        return self.memory_automation.wiki_maintenance(reviewer)
 
     async def _synthesis_is_current(self) -> bool:
-        if self.fact_service is None or self._fact_consumer_store is None:
-            return False
-        before = await self.fact_service.revision()
-        watermark = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
-        after = await self.fact_service.revision()
-        if before != after:
-            return False
-        if before is None:
-            return watermark is None
-        return watermark is not None and watermark.revision == before
+        return await self.memory_automation.synthesis_is_current()
 
     async def project_wiki_health(self) -> str | None:
-        """Refresh the derived health page and surface projection failures.
-
-        Returns the projected revision, or None when nothing was projected —
-        the subsystem is unavailable, or a concurrent write superseded this
-        attempt. Losing a race is normal operation, not a failure: the writer
-        that won it queues its own projection, so the health page converges on
-        the next pass. Real faults (a corrupt repository, a domain violation)
-        still raise.
-        """
-
-        if (
-            self._fact_ledger is None
-            or self.fact_service is None
-            or self._fact_consumer_store is None
-            or self._wiki_maintenance_store is None
-            or self.wiki_service is None
-            or self.wiki_page_projection is None
-        ):
-            return None if self.wiki_service is None else self.wiki_service.repository.head
-        async with self._wiki_health_lock:
-            for attempt in range(2):
-                try:
-                    fact_revision, _evaluated_at, due_reviews = await asyncio.to_thread(
-                        self._fact_ledger.due_review_snapshot
-                    )
-                    fact_maintenance = await self._fact_consumer_store.get(FACT_MAINTENANCE_CONSUMER_ID)
-                    synthesis = await self._fact_consumer_store.get(FACT_SYNTHESIS_CONSUMER_ID)
-                    retention = await self._fact_consumer_store.get_retention_checkpoint(BUILTIN_MEMORY_RETENTION_ID)
-                    maintenance = await self._wiki_maintenance_store.get_watermark()
-                    completed_runs = await self.stores.automations.latest_completed_runs(
-                        tuple(spec.task_id for spec in _HEALTH_PHASES)
-                    )
-                    report = await asyncio.to_thread(
-                        self.wiki_service.changes_since,
-                        None,
-                        include_diffs=False,
-                    )
-                    citation_issues = await asyncio.to_thread(
-                        dangling_fact_citation_issues,
-                        self._fact_ledger,
-                        report,
-                    )
-                    if await self.fact_service.revision() != fact_revision:
-                        if attempt == 0:
-                            continue
-                        return self._superseded_wiki_health("fact ledger changed while reading it")
-
-                    observed = self._semantic_wiki_revision(report)
-                    maintenance_revision, maintenance_revision_known = self._semantic_wiki_revision_at(
-                        report,
-                        None if maintenance is None else maintenance.revision,
-                    )
-                    index_state = self.wiki_page_projection.last_state
-                    index_revision, index_revision_known = self._semantic_wiki_revision_at(
-                        report,
-                        index_state.wiki_head,
-                    )
-                    index_status = index_state.status
-                    index_detail = index_state.detail
-                    if not index_revision_known:
-                        index_status = "error"
-                        index_detail = "indexed wiki revision is not reachable from the current history"
-                    if not maintenance_revision_known:
-                        maintenance_revision = None
-
-                    workers_by_id = {
-                        BUILTIN_MEMORY_CONSOLIDATE_ID: WikiHealthWorker(
-                            "Memory Maintenance",
-                            completed_runs.get(BUILTIN_MEMORY_CONSOLIDATE_ID),
-                            None if fact_maintenance is None else fact_maintenance.revision,
-                            fact_revision,
-                        ),
-                        BUILTIN_MEMORY_RETENTION_ID: WikiHealthWorker(
-                            "Memory Retention",
-                            completed_runs.get(BUILTIN_MEMORY_RETENTION_ID),
-                            None if retention is None else retention.revision,
-                            fact_revision,
-                            None if retention is None else retention.revision == fact_revision and not due_reviews,
-                        ),
-                        BUILTIN_MEMORY_SYNTHESIZE_ID: WikiHealthWorker(
-                            "Memory Synthesis",
-                            completed_runs.get(BUILTIN_MEMORY_SYNTHESIZE_ID),
-                            None if synthesis is None else synthesis.revision,
-                            fact_revision,
-                        ),
-                        BUILTIN_WIKI_MAINTENANCE_ID: WikiHealthWorker(
-                            WIKI_MAINTENANCE_ACTOR,
-                            completed_runs.get(BUILTIN_WIKI_MAINTENANCE_ID),
-                            maintenance_revision,
-                            observed,
-                        ),
-                    }
-
-                    value = WikiHealthInput(
-                        fact_ledger_revision=fact_revision,
-                        wiki=report,
-                        workers=tuple(workers_by_id[spec.task_id] for spec in _HEALTH_PHASES),
-                        index=WikiHealthIndex(index_revision, index_status, index_detail),
-                        issues=(
-                            *(
-                                WikiHealthIssue(
-                                    WikiHealthIssueCode.FACT_REVIEW_DUE,
-                                    item.fact.fact_id,
-                                    f"review due at {item.due_at.isoformat()}",
-                                    WikiHealthIssueOwner.RETENTION,
-                                )
-                                for item in due_reviews
-                            ),
-                            *citation_issues,
-                        ),
-                    )
-                    result = await asyncio.to_thread(WikiHealthProjector(self.wiki_service).project, value)
-                    if await self.fact_service.revision() != fact_revision:
-                        if attempt == 0:
-                            continue
-                        return self._superseded_wiki_health("fact ledger changed while publishing")
-                    return report.through_revision if result.commit is None else result.commit.commit_id
-                except RevisionConflictError as exc:
-                    # WikiSnapshotChangedError subclasses this: both mean another
-                    # writer moved the head mid-projection.
-                    if attempt == 0:
-                        continue
-                    return self._superseded_wiki_health(str(exc))
-        return None
-
-    def _superseded_wiki_health(self, detail: str) -> None:
-        """A concurrent wiki write outran this projection; the next one wins."""
-
-        _logger.info("Wiki health projection superseded by a concurrent write", detail=detail)
-        return None
+        return await self.wiki_projection.project_health()
 
     async def project_wiki_state(self) -> None:
-        await self.project_wiki_change()
+        await self.wiki_projection.project_change()
 
     async def project_wiki_change_after_commit(self) -> bool:
-        """Durably queue derived consumers after a committed wiki write."""
-
-        if self.stores is None or self.wiki_service is None:
-            raise RuntimeError("managed wiki projection retry is unavailable")
-        revision = self.wiki_service.repository.head
-        if revision is None:
-            raise RuntimeError("committed wiki projection has no revision")
-        try:
-            await self.stores.outbox.enqueue_wiki_projection(revision)
-        except Exception:
-            _logger.exception(
-                "Wiki projection enqueue failed after committed write; projecting inline",
-                revision=revision,
-            )
-            await self.project_wiki_change()
-            return False
-        return True
+        return await self.wiki_projection.enqueue_after_commit()
 
     async def enqueue_startup_wiki_projection(self) -> bool:
-        """Queue the current wiki head before catch-up automations may mutate it."""
-
-        if self.stores is None or self.wiki_service is None:
-            return False
-        revision = self.wiki_service.repository.head
-        if revision is None:
-            return False
-        return await self.stores.outbox.enqueue_wiki_projection(revision)
+        return await self.wiki_projection.enqueue_startup()
 
     async def project_wiki_change(self) -> None:
-        """Publish one canonical wiki-head transition to every derived consumer."""
-
-        if self.wiki_service is None or self.wiki_page_projection is None or self._wiki_maintenance_store is None:
-            raise RuntimeError("managed wiki projection is unavailable")
-        async with self._wiki_projection_lock:
-            previous_head = self._wiki_change_head
-            if self.wiki_service.repository.head == previous_head:
-                return
-            final_head = None
-            for _attempt in range(3):
-                await self.wiki_page_projection.sync(notify_state_change=False)
-                await self.project_wiki_health()
-                await self.wiki_page_projection.sync(notify_state_change=False)
-                final_head = await self.project_wiki_health()
-                if self.wiki_service.repository.head == final_head:
-                    break
-            else:
-                # Steady contention, not a fault: the writes that outran us each
-                # queued their own projection. Leave the watermark where it is so
-                # the next pass replays this whole range.
-                _logger.info(
-                    "Wiki projection superseded by concurrent writes; deferring to the queued projection",
-                    previous_head=previous_head,
-                    head=self.wiki_service.repository.head,
-                )
-                return
-
-            if final_head == previous_head:
-                return
-            commits = await asyncio.to_thread(
-                self.wiki_service.repository.history,
-                start=final_head,
-                stop_before=previous_head,
-            )
-            paths: set[str] = set()
-            attributed_paths: set[str] = set()
-            source_areas_by_path: dict[str, set[str]] = {}
-            common_page_created = False
-            for commit in commits:
-                if commit.origin == WIKI_HEALTH_ORIGIN:
-                    continue
-                source_area_id = None
-                if commit.origin == "area.page" and commit.actor.startswith(CUSTODIAN_ACTOR_PREFIX):
-                    candidate = commit.actor.removeprefix(CUSTODIAN_ACTOR_PREFIX)
-                    if candidate and ":" not in candidate:
-                        source_area_id = candidate
-                for change in commit.changes:
-                    if (
-                        commit.origin not in {FACT_SYNTHESIS_CONSUMER_ID, WIKI_RENAME_ORIGIN}
-                        and change.before is None
-                        and change.after is not None
-                        and change.after.path.endswith(".md")
-                        and not change.after.path.startswith(AUTOMATIONS_PATH_PREFIX)
-                        and change.after.path.rsplit("/", 1)[-1] != README_FILENAME
-                    ):
-                        common_page_created = True
-                    for path in (
-                        None if change.before is None else change.before.path,
-                        None if change.after is None else change.after.path,
-                    ):
-                        if path is None:
-                            continue
-                        paths.add(path)
-                        if path in attributed_paths:
-                            continue
-                        attributed_paths.add(path)
-                        if source_area_id is not None:
-                            source_areas_by_path.setdefault(path, set()).add(source_area_id)
-            if paths and self.automation is not None:
-                await self.automation.notify_wiki_changed(
-                    sorted(paths),
-                    final_head,
-                    source_areas_by_path=source_areas_by_path,
-                )
-                if common_page_created:
-                    await self.automation.request_fact_synthesis()
-            if final_head is not None:
-                await self._wiki_maintenance_store.record_projection_revision(
-                    expected_revision=previous_head,
-                    revision=final_head,
-                )
-            self._wiki_change_head = final_head
-
-    @staticmethod
-    def _semantic_wiki_revision(report: WikiChangesReport) -> str | None:
-        return next(
-            (commit.commit_id for commit in reversed(report.commits) if commit.origin != WIKI_HEALTH_ORIGIN),
-            None,
-        )
-
-    @staticmethod
-    def _semantic_wiki_revision_at(
-        report: WikiChangesReport,
-        raw_revision: str | None,
-    ) -> tuple[str | None, bool]:
-        if raw_revision is None:
-            return None, True
-        semantic: str | None = None
-        for commit in report.commits:
-            if commit.origin != WIKI_HEALTH_ORIGIN:
-                semantic = commit.commit_id
-            if commit.commit_id == raw_revision:
-                return semantic, True
-        return None, False
+        await self.wiki_projection.project_change()
 
     async def _init_notifiers(self) -> None:
         self.notifier_service = NotifierService(
@@ -1568,24 +729,7 @@ class Runtime:
         )
 
     def _collect_managed_history(self) -> tuple[CollectionReport, CollectionReport]:
-        if self._fact_ledger is None or self.wiki_service is None:
-            raise RuntimeError("managed-history collection requires canonical facts and wiki")
-        reports: list[CollectionReport] = []
-        errors: list[Exception] = []
-        failed: list[str] = []
-        for name, collect in (
-            ("facts", self._fact_ledger.collect_history),
-            ("wiki", self.wiki_service.repository.collect),
-        ):
-            try:
-                reports.append(collect())
-            except Exception as error:
-                failed.append(name)
-                errors.append(error)
-        if errors:
-            raise ExceptionGroup(f"managed-history collection failed: {', '.join(failed)}", errors)
-        facts, wiki = reports
-        return facts, wiki
+        return self.memory_automation.collect_managed_history()
 
     async def _init_mcp(self) -> None:
         if self.config.mcp_servers:
@@ -1604,8 +748,8 @@ class Runtime:
             _logger.info("Cancelled %d active run(s)", cancelled)
 
         # Phase 2: stop background services
-        await self._cancel_indexing()
-        await self._stop_storage_maintenance()
+        await self.search.cancel()
+        await self.storage.stop()
         if self.automation:
             await self.automation.stop()
         if self.wiki_curator_worker:
@@ -1656,8 +800,8 @@ class Runtime:
 
     def get_integration_errors(self) -> dict[str, str]:
         errors = dict(self.integrations.errors)
-        if self._index_error:
-            errors["index"] = self._index_error
+        if self.search.error:
+            errors["index"] = self.search.error
         return errors
 
     def build_chat_deps(self, chat_model: str | None = None):
@@ -1709,7 +853,7 @@ class Runtime:
         if not self.automation:
             raise RuntimeError("Automation runtime is not initialized")
         await self.automation.start_scheduler()
-        self._set_warmup_capability("automations")
+        self.set_warmup_capability("automations")
 
     def start_monitor(self) -> None:
         if not self.automation:
@@ -1760,16 +904,6 @@ class Runtime:
         if not self.automation:
             return {"status": "disabled", "deleted": 0, "before": before.isoformat(), "limit": limit}
         return await self.automation.prune_outbox_completed(before=before, limit=limit)
-
-
-def _capture_turn(row: dict) -> CaptureTurn:
-    return CaptureTurn(
-        seq=int(row["seq"]),
-        role=str(row["role"]),
-        text=str(row["text"]),
-        message_id=str(row["message_id"]),
-        created_at=str(row["created_at"]),
-    )
 
 
 def get_runtime(request: Request) -> Runtime:

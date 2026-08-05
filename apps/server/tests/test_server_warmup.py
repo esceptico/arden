@@ -59,7 +59,7 @@ async def test_post_ready_warmup_is_nonblocking_and_orders_scheduler_after_recov
 
     async def start_scheduler() -> None:
         calls.append("scheduler_started")
-        runtime._set_warmup_capability("automations")
+        runtime.set_warmup_capability("automations")
 
     async def maintain_storage() -> dict:
         calls.append("storage_maintained")
