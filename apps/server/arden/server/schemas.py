@@ -236,7 +236,7 @@ class StoragePlanRequest(BaseModel):
 
     target_gb: float | None = Field(default=None, ge=0.01)
     allow_archived_chats: bool | None = None
-    allow_delete_cold_chats: bool = False
+    allow_delete_cold_chats: bool | None = None
     allow_current_chats: bool | None = None
     current_session_id: str | None = None
     pinned_session_ids: list[str] = Field(default_factory=list, max_length=10_000)
@@ -624,6 +624,7 @@ class UpdateConfigRequest(BaseModel):
     storage_backup_retention_days: int | None = Field(default=None, ge=1, le=3650)
     storage_allow_archived_cleanup: bool | None = None
     storage_allow_current_cleanup: bool | None = None
+    storage_allow_delete_cold_chats: bool | None = None
     storage_current_inactive_days: int | None = Field(default=None, ge=1, le=3650)
     storage_current_minimum: int | None = Field(default=None, ge=1, le=100_000)
     web_search: Literal["auto", "exa", "ddgs", "none"] | None = None

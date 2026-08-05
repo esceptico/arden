@@ -97,6 +97,7 @@ async def test_config_service_persists_and_clears_storage_budget(monkeypatch):
         storage_backup_retention_days=21,
         storage_allow_archived_cleanup=True,
         storage_allow_current_cleanup=True,
+        storage_allow_delete_cold_chats=True,
         storage_current_inactive_days=120,
         storage_current_minimum=150,
     )
@@ -105,14 +106,18 @@ async def test_config_service_persists_and_clears_storage_budget(monkeypatch):
         "storage_backup_retention_days": 21,
         "storage_allow_archived_cleanup": True,
         "storage_allow_current_cleanup": True,
+        "storage_allow_delete_cold_chats": True,
         "storage_current_inactive_days": 120,
         "storage_current_minimum": 150,
     }
-    await service.update(max_space_gb=None)
+    assert Config(_env_file=None, **persisted).storage_allow_delete_cold_chats is True
+
+    await service.update(max_space_gb=None, storage_allow_delete_cold_chats=False)
     assert persisted == {
         "storage_backup_retention_days": 21,
         "storage_allow_archived_cleanup": True,
         "storage_allow_current_cleanup": True,
+        "storage_allow_delete_cold_chats": False,
         "storage_current_inactive_days": 120,
         "storage_current_minimum": 150,
     }

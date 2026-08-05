@@ -131,6 +131,7 @@ def _config_response(rt: Runtime) -> dict:
         "storage_backup_retention_days": config.storage_backup_retention_days,
         "storage_allow_archived_cleanup": config.storage_allow_archived_cleanup,
         "storage_allow_current_cleanup": config.storage_allow_current_cleanup,
+        "storage_allow_delete_cold_chats": config.storage_allow_delete_cold_chats,
         "storage_current_inactive_days": config.storage_current_inactive_days,
         "storage_current_minimum": config.storage_current_minimum,
         "memory_enabled": memory_connected,

@@ -118,6 +118,7 @@ PERSIST_KEYS = frozenset(
         "storage_backup_retention_days",
         "storage_allow_archived_cleanup",
         "storage_allow_current_cleanup",
+        "storage_allow_delete_cold_chats",
         "storage_current_inactive_days",
         "storage_current_minimum",
         "mcp_servers",
@@ -225,6 +226,7 @@ class Config(BaseSettings):
     storage_backup_retention_days: int = Field(default=14, ge=1, le=3650)
     storage_allow_archived_cleanup: bool = False
     storage_allow_current_cleanup: bool = False
+    storage_allow_delete_cold_chats: bool = False
     storage_current_inactive_days: int = Field(default=90, ge=1, le=3650)
     storage_current_minimum: int = Field(default=100, ge=1, le=100_000)
 

@@ -254,10 +254,6 @@ def _load_kept_backups(root: Path) -> set[str]:
     return {value for value in values if isinstance(value, str) and value.startswith("archive/")}
 
 
-def list_kept_backups(root: Path) -> set[str]:
-    return _load_kept_backups(root.resolve())
-
-
 def set_backup_keep(root: Path, relative_path: str, *, keep: bool) -> set[str]:
     """Persist a manual Keep exception for one regular file under archive/."""
 
@@ -348,7 +344,11 @@ def inspect_storage(
             blob_relative = None
         if blob_relative is not None:
             digest = _blob_hash(blob_relative)
-            if digest is not None and digest not in referenced_tool_result_hashes and metadata.st_mtime <= orphan_before:
+            if (
+                digest is not None
+                and digest not in referenced_tool_result_hashes
+                and metadata.st_mtime <= orphan_before
+            ):
                 candidate = _Candidate(
                     kind="stale_tool_result",
                     path=path,
@@ -656,19 +656,10 @@ def build_storage_cleanup_plan(
         blockers.append(f"Target remains short by {needed - estimated} bytes with enabled cleanup tiers")
 
     created_at = created_at or datetime.now(UTC)
-    identity = {
-        "before_bytes": inventory.report.total_bytes,
-        "target_bytes": target_bytes,
-        "actions": [asdict(action) for action in actions],
-        "sessions": [asdict(session) for session in sorted(sessions, key=lambda item: item.session_id)],
-        "files": [
-            [candidate.kind, candidate.relative_path, candidate.size, candidate.modified_at]
-            for candidate in sorted(inventory.candidates, key=lambda item: item.relative_path)
-        ],
-    }
-    plan_id = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    # Identity of the work, not of the tree: hashing whole-tree bytes made every
+    # plan stale the moment a log line or a WAL page landed.
+    identity = sorted([action.kind, action.resource_id, action.estimated_reclaimable_bytes] for action in actions)
+    plan_id = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
     estimated_after = max(0, inventory.report.total_bytes - estimated)
     return StorageCleanupPlan(
         plan_id=plan_id,

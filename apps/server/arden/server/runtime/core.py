@@ -574,12 +574,10 @@ class Runtime:
             rebuild_pending = (
                 self.indexer.needs_rebuild and self.config.embedding is not None and self.indexer.vector_enabled
             )
-            if self.fact_service is not None:
-                fact_projection = FactIndexProjection(self.fact_service, lambda: self.search_index)
-                self.fact_index_projection = fact_projection
+            if self.fact_index_projection is not None:
                 if not rebuild_pending and not defer_warmup:
                     try:
-                        await fact_projection.sync(raise_on_error=self.config.embedding is not None)
+                        await self.fact_index_projection.sync(raise_on_error=self.config.embedding is not None)
                     except Exception:
                         _logger.warning("initial fact index sync failed", exc_info=True)
             if self.fact_service is not None and self.wiki_service is not None:
@@ -730,7 +728,13 @@ class Runtime:
         self._wiki_maintenance_store = maintenance
         self._session_watermark_store = session_watermarks
         self._fact_ledger = ledger
-        self.fact_service = FactService(ledger, plans, post_commit=self._after_fact_commit)
+        self.fact_index_projection = FactIndexProjection(ledger, lambda: self.search_index)
+        self.fact_service = FactService(
+            ledger,
+            plans,
+            post_commit=self._after_fact_commit,
+            ranked_search=self.fact_index_projection.ranked_fact_ids,
+        )
         self.knowledge.set_fact_service(self.fact_service)
 
     async def _init_wiki_curator(self, *, reconcile_history: bool = True) -> None:
@@ -943,12 +947,17 @@ class Runtime:
             if request.allow_current_chats is None
             else request.allow_current_chats
         )
+        allow_delete_cold = (
+            self.config.storage_allow_delete_cold_chats
+            if request.allow_delete_cold_chats is None
+            else request.allow_delete_cold_chats
+        )
         return build_storage_cleanup_plan(
             inventory,
             target_bytes=target_bytes,
             sessions=protected,
             allow_archived_chats=allow_archived,
-            allow_delete_cold_chats=request.allow_delete_cold_chats,
+            allow_delete_cold_chats=allow_delete_cold,
             allow_current_chats=allow_current,
             current_chat_minimum=self.config.storage_current_minimum,
         )
