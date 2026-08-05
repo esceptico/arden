@@ -136,6 +136,7 @@ export interface ServerConfig {
   max_space_gb: number | null;
   storage_backup_retention_days: number;
   storage_allow_archived_cleanup: boolean;
+  storage_allow_delete_cold_chats: boolean;
   storage_allow_current_cleanup: boolean;
   storage_current_inactive_days: number;
   storage_current_minimum: number;

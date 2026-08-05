@@ -749,7 +749,8 @@
 }
 
 .settings-archive-row:hover .settings-archive-actions,
-.settings-archive-row:focus-within .settings-archive-actions {
+.settings-archive-row:focus-within .settings-archive-actions,
+.settings-archive-actions[data-armed="true"] {
   opacity: 1;
 }
 

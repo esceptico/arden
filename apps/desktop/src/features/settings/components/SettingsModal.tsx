@@ -5,6 +5,7 @@ import {
   AiMagic,
   Archive01,
   Bell,
+  Database,
   Database01,
   Key01,
   Layers,
@@ -28,6 +29,7 @@ import { MCPTab } from "@/features/settings/components/mcp/MCPTab";
 import { ToolsTab } from "@/features/settings/components/ToolsTab";
 import { AppearanceTab } from "@/features/settings/components/AppearanceTab";
 import { ArchiveTab } from "@/features/settings/components/ArchiveTab";
+import { StorageTab } from "@/features/settings/components/StorageTab";
 import { SettingsPage } from "@/features/settings/components/SettingsPage";
 import { Takeover } from "@/components/workspace/Takeover";
 import { SidebarToggle } from "@/components/ui/SidebarToggle";
@@ -151,10 +153,16 @@ const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Data",
     tabs: [
       {
+        id: "storage",
+        label: "Storage",
+        icon: Database,
+        intro: "How much disk Arden may use for everything under ~/.arden, and what cleanup is allowed to reclaim when it runs out. \"Backup archives\" here are snapshot files Arden writes before risky migrations — not your archived chats, which live in Archived chats.",
+      },
+      {
         id: "archive",
-        label: "Archived",
+        label: "Archived chats",
         icon: Archive01,
-        intro: "Archived sessions leave active navigation but remain searchable and restorable. Permanent deletion stays deliberate.",
+        intro: "Chats you archived. They leave the sidebar but stay searchable here, and restoring one puts it back untouched. Deleting is permanent and takes a second click.",
       },
     ],
   },
@@ -388,7 +396,7 @@ export function SettingsModal({
               section={activeTab.groupLabel.toLowerCase()}
               title={activeTab.label}
               intro={activeTab.intro}
-              wide={activeTab.group === "capabilities" || activeTab.id === "archive"}
+              wide={activeTab.group === "capabilities" || activeTab.group === "data"}
             >
               {active === "connection" && (
                 <ConnectionTab
@@ -409,6 +417,7 @@ export function SettingsModal({
               {active === "tools" && <ToolsTab />}
               {active === "mcp" && <MCPTab />}
               {active === "appearance" && <AppearanceTab />}
+              {active === "storage" && <StorageTab />}
               {active === "archive" && <ArchiveTab />}
             </SettingsPage>
           </TabPanels>

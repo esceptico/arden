@@ -35,6 +35,13 @@ export function formatRelativeFuture(value: string): string {
   return `in ${Math.floor(hours / 24)}d`;
 }
 
+/** Compact disk-size label ("812 KB", "4.3 MB", "1.9 GB"). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 /** "job-applications" → "Job applications" — display form of a page slug. */
 export function humanizeSlug(slug: string): string {
   const spaced = slug.replace(/[-_]+/g, " ").trim();
