@@ -19,9 +19,16 @@ from arden.memory.facts.plan_store import (
     FactPlanStatus,
     FactPlanStore,
     deserialize_fact_plan,
+    fact_plan_ref,
     serialize_fact_plan,
 )
-from arden.memory.facts.service import FactPostCommitError, FactPrincipal, FactScopeError, FactService
+from arden.memory.facts.service import (
+    FactPostCommitError,
+    FactPrincipal,
+    FactScopeError,
+    FactService,
+    fact_public_ref,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -102,6 +109,114 @@ async def test_plan_is_durable_owner_scoped_and_identical_request_reuses(tmp_pat
         assert [fact.text for fact in committed.facts] == ["One"]
         assert (await plans.get(first.plan_id, owner_id=principal.owner_id)).status is FactPlanStatus.COMMITTED
         assert [fact.fact_id for fact in await service.search(principal, "one")] == ["a"]
+    finally:
+        await conn.close()
+
+
+async def test_plan_refs_are_persisted_and_resolved_by_index(tmp_path: Path) -> None:
+    service, plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    try:
+        preview = await _plan(service, principal)
+        expected_ref = fact_plan_ref(preview.plan_id)
+
+        stored = await plans.get_by_ref(expected_ref, owner_id=principal.owner_id)
+        assert stored is not None
+        assert stored.plan_id == preview.plan_id
+        assert stored.plan_ref == expected_ref
+        assert await plans.get_by_ref(expected_ref, owner_id="session:other") is None
+        assert await plans.get_by_ref(preview.plan_id, owner_id=principal.owner_id) is None
+
+        query_plan = await conn.execute_fetchall(
+            "EXPLAIN QUERY PLAN SELECT * FROM fact_plans WHERE plan_ref = ? AND owner_id = ?",
+            (expected_ref, principal.owner_id),
+        )
+        assert any("idx_fact_plans_ref" in row["detail"] for row in query_plan)
+    finally:
+        await conn.close()
+
+
+async def test_plan_store_backfills_refs_from_the_previous_schema(tmp_path: Path) -> None:
+    conn = await connect(tmp_path / "workflow.db")
+    await conn.execute(
+        """
+        CREATE TABLE fact_plans (
+            plan_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            request_key TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            scope_json TEXT NOT NULL,
+            plan_json TEXT NOT NULL,
+            plan_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('planned', 'committing', 'committed')),
+            created_at TEXT NOT NULL,
+            committed_at TEXT
+        )
+        """
+    )
+    ledger = FactLedger(tmp_path / "facts", clock=lambda: JULY)
+    plan = ledger.plan(
+        [_create("a", "One")],
+        actor="curator:1",
+        origin="memory.curator",
+        reason="verified evidence",
+    )
+    plan_json = serialize_fact_plan(plan)
+    scope_json = '[["area","project"]]'
+    fingerprint = hashlib.sha256(f"{plan_json}\0{scope_json}".encode()).hexdigest()
+    await conn.execute(
+        """
+        INSERT INTO fact_plans (
+            plan_id, owner_id, request_key, request_fingerprint, scope_json,
+            plan_json, plan_fingerprint, status, created_at
+        ) VALUES (?, 'session:one', 'request:1', 'request-fingerprint', ?, ?, ?, 'planned', ?)
+        """,
+        (plan.plan_id, scope_json, plan_json, fingerprint, JULY.isoformat()),
+    )
+    await conn.commit()
+
+    store = FactPlanStore(conn)
+    try:
+        await store.init_schema()
+        await store.init_schema()
+        stored = await store.get_by_ref(fact_plan_ref(plan.plan_id), owner_id="session:one")
+        assert stored is not None
+        assert stored.plan_id == plan.plan_id
+        columns = await conn.execute_fetchall("PRAGMA table_info(fact_plans)")
+        assert next(row for row in columns if row["name"] == "plan_ref")["notnull"] == 1
+    finally:
+        await conn.close()
+
+
+async def test_fact_ref_index_replays_only_after_the_ledger_revision_changes(tmp_path: Path, monkeypatch) -> None:
+    service, _plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    try:
+        first = await _plan(service, principal)
+        await service.commit(principal, first.plan_id)
+        first_ref = fact_public_ref(await service.get(principal, "a"))
+        original_read_snapshot = service.ledger.read_snapshot
+        reads = 0
+
+        def counted_snapshot():
+            nonlocal reads
+            reads += 1
+            return original_read_snapshot()
+
+        monkeypatch.setattr(service.ledger, "read_snapshot", counted_snapshot)
+        assert (await service.resolve_ref(principal, first_ref)).fact_id == "a"
+        assert (await service.resolve_ref(principal, first_ref)).fact_id == "a"
+        assert reads == 1
+
+        hidden = _principal(scopes=frozenset({OTHER_AREA}))
+        with pytest.raises(KeyError, match="unknown fact_ref"):
+            await service.resolve_ref(hidden, first_ref)
+        assert reads == 1
+
+        second = await _plan(service, principal, fact_id="b", text="Two", request_key="request:2")
+        await service.commit(principal, second.plan_id)
+        assert (await service.resolve_ref(principal, first_ref)).fact_id == "a"
+        assert reads == 2
     finally:
         await conn.close()
 

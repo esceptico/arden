@@ -11,6 +11,7 @@ from typing import Any
 
 import aiosqlite
 
+from arden.core.public_refs import is_public_ref, public_ref
 from arden.memory.facts.models import FactEvent, FactPlan
 
 _PLAN_SCHEMA_VERSION = 1
@@ -30,9 +31,15 @@ _EVENT_FIELDS = frozenset(
 )
 _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS fact_plans (
+
+def _create_table(table: str, *, if_missing: bool = False) -> str:
+    if table not in {"fact_plans", "fact_plans_with_refs"}:
+        raise ValueError("unsupported fact plan table")
+    clause = "IF NOT EXISTS " if if_missing else ""
+    return f"""
+CREATE TABLE {clause}{table} (
     plan_id TEXT PRIMARY KEY,
+    plan_ref TEXT NOT NULL,
     owner_id TEXT NOT NULL,
     request_key TEXT NOT NULL,
     request_fingerprint TEXT NOT NULL,
@@ -42,10 +49,7 @@ CREATE TABLE IF NOT EXISTS fact_plans (
     status TEXT NOT NULL CHECK (status IN ('planned', 'committing', 'committed')),
     created_at TEXT NOT NULL,
     committed_at TEXT
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_fact_plans_owner_request
-    ON fact_plans(owner_id, request_key);
+)
 """
 
 
@@ -74,6 +78,7 @@ class FactPlanCorruptionError(FactPlanStoreError):
 @dataclass(frozen=True, slots=True)
 class StoredFactPlan:
     plan_id: str
+    plan_ref: str
     owner_id: str
     request_key: str
     request_fingerprint: str
@@ -92,6 +97,13 @@ class StoredFactPlan:
         if _binding_fingerprint(self.plan_json, scope_json) != self.plan_fingerprint:
             raise FactPlanCorruptionError("persisted fact plan binding fingerprint does not match")
         return deserialize_fact_plan(self.plan_json)
+
+
+def fact_plan_ref(plan_id: str) -> str:
+    """Return the persisted model-facing handle for one fact plan."""
+
+    plan_id = _required_text("plan_id", plan_id)
+    return public_ref("fact-plan", plan_id, empty_slug="fact-plan")
 
 
 def _required_text(name: str, value: object) -> str:
@@ -258,20 +270,25 @@ def _validated_scope(kind: object, key: object) -> tuple[str, str | None]:
 
 def _row(row: aiosqlite.Row) -> StoredFactPlan:
     try:
+        plan_id = _required_text("plan_id", row["plan_id"])
+        plan_ref = _required_text("plan_ref", row["plan_ref"])
+        if plan_ref != fact_plan_ref(plan_id):
+            raise FactPlanCorruptionError("persisted fact plan ref does not match its identity")
         scopes = _decode_scopes(json.loads(row["scope_json"], object_pairs_hook=_unique_object))
         created_at = _utc(row["created_at"], "created_at")
         committed_at = _utc(row["committed_at"], "committed_at") if row["committed_at"] else None
         result = StoredFactPlan(
-            _required_text("plan_id", row["plan_id"]),
-            _required_text("owner_id", row["owner_id"]),
-            _required_text("request_key", row["request_key"]),
-            _required_text("request_fingerprint", row["request_fingerprint"]),
-            scopes,
-            _required_text("plan_json", row["plan_json"]),
-            _required_text("plan_fingerprint", row["plan_fingerprint"]),
-            FactPlanStatus(row["status"]),
-            created_at,
-            committed_at,
+            plan_id=plan_id,
+            plan_ref=plan_ref,
+            owner_id=_required_text("owner_id", row["owner_id"]),
+            request_key=_required_text("request_key", row["request_key"]),
+            request_fingerprint=_required_text("request_fingerprint", row["request_fingerprint"]),
+            scopes=scopes,
+            plan_json=_required_text("plan_json", row["plan_json"]),
+            plan_fingerprint=_required_text("plan_fingerprint", row["plan_fingerprint"]),
+            status=FactPlanStatus(row["status"]),
+            created_at=created_at,
+            committed_at=committed_at,
         )
         result.plan()
         return result
@@ -290,8 +307,59 @@ class FactPlanStore:
 
     async def init_schema(self) -> None:
         async with self._lock:
-            await self.conn.executescript(_SCHEMA)
-            await self.conn.commit()
+            try:
+                await self.conn.execute("BEGIN IMMEDIATE")
+                await self.conn.execute(_create_table("fact_plans", if_missing=True))
+                columns = await self.conn.execute_fetchall("PRAGMA table_info(fact_plans)")
+                if "plan_ref" not in {row["name"] for row in columns}:
+                    rows = await self.conn.execute_fetchall("SELECT * FROM fact_plans")
+                    migrated = []
+                    for row in rows:
+                        value = dict(row)
+                        value["plan_ref"] = fact_plan_ref(row["plan_id"])
+                        _row(value)
+                        migrated.append(value)
+                    if len({row["plan_ref"] for row in migrated}) != len(migrated):
+                        raise FactPlanCorruptionError("fact plan refs collide during migration")
+                    await self.conn.execute(_create_table("fact_plans_with_refs"))
+                    await self.conn.executemany(
+                        """
+                        INSERT INTO fact_plans_with_refs (
+                            plan_id, plan_ref, owner_id, request_key, request_fingerprint,
+                            scope_json, plan_json, plan_fingerprint, status, created_at, committed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                row["plan_id"],
+                                row["plan_ref"],
+                                row["owner_id"],
+                                row["request_key"],
+                                row["request_fingerprint"],
+                                row["scope_json"],
+                                row["plan_json"],
+                                row["plan_fingerprint"],
+                                row["status"],
+                                row["created_at"],
+                                row["committed_at"],
+                            )
+                            for row in migrated
+                        ],
+                    )
+                    await self.conn.execute("DROP TABLE fact_plans")
+                    await self.conn.execute("ALTER TABLE fact_plans_with_refs RENAME TO fact_plans")
+                await self.conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_fact_plans_owner_request "
+                    "ON fact_plans(owner_id, request_key)"
+                )
+                await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_fact_plans_ref ON fact_plans(plan_ref)")
+                await self.conn.commit()
+            except sqlite3.IntegrityError as exc:
+                await self.conn.rollback()
+                raise FactPlanCorruptionError("fact plan schema migration violates a uniqueness constraint") from exc
+            except Exception:
+                await self.conn.rollback()
+                raise
 
     async def get(self, plan_id: str, *, owner_id: str) -> StoredFactPlan:
         _required_text("plan_id", plan_id)
@@ -314,16 +382,18 @@ class FactPlanStore:
             )
         return _row(rows[0]) if rows else None
 
-    async def plan_ids_for_owner(self, owner_id: str) -> tuple[str, ...]:
-        """Return storage identities for exact owner-scoped lookup."""
+    async def get_by_ref(self, plan_ref: str, *, owner_id: str) -> StoredFactPlan | None:
+        """Resolve one exact persisted public handle with an indexed lookup."""
 
+        if not is_public_ref(plan_ref, slug="fact-plan"):
+            return None
         _required_text("owner_id", owner_id)
         async with self._lock:
             rows = await self.conn.execute_fetchall(
-                "SELECT plan_id FROM fact_plans WHERE owner_id = ? ORDER BY created_at, plan_id",
-                (owner_id,),
+                "SELECT * FROM fact_plans WHERE plan_ref = ? AND owner_id = ?",
+                (plan_ref, owner_id),
             )
-        return tuple(_required_text("plan_id", row["plan_id"]) for row in rows)
+        return _row(rows[0]) if rows else None
 
     async def create_or_reuse(
         self,
@@ -337,6 +407,7 @@ class FactPlanStore:
         owner_id = _required_text("owner_id", owner_id)
         request_key = _required_text("request_key", request_key)
         request_fingerprint = _required_text("request_fingerprint", request_fingerprint)
+        plan_ref = fact_plan_ref(plan.plan_id)
         plan_json = serialize_fact_plan(plan)
         scope_json = _scope_json(scopes)
         plan_fingerprint = _binding_fingerprint(plan_json, scope_json)
@@ -346,12 +417,13 @@ class FactPlanStore:
                 cursor = await self.conn.execute(
                     """
                     INSERT OR IGNORE INTO fact_plans (
-                        plan_id, owner_id, request_key, request_fingerprint, scope_json,
+                        plan_id, plan_ref, owner_id, request_key, request_fingerprint, scope_json,
                         plan_json, plan_fingerprint, status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?)
                     """,
                     (
                         plan.plan_id,
+                        plan_ref,
                         owner_id,
                         request_key,
                         request_fingerprint,
@@ -367,21 +439,29 @@ class FactPlanStore:
                 raise FactPlanStoreError("fact plan persistence failed") from exc
             if cursor.rowcount:
                 return StoredFactPlan(
-                    plan.plan_id,
-                    owner_id,
-                    request_key,
-                    request_fingerprint,
-                    _decode_scopes(json.loads(scope_json)),
-                    plan_json,
-                    plan_fingerprint,
-                    FactPlanStatus.PLANNED,
-                    _utc(now, "created_at"),
-                    None,
+                    plan_id=plan.plan_id,
+                    plan_ref=plan_ref,
+                    owner_id=owner_id,
+                    request_key=request_key,
+                    request_fingerprint=request_fingerprint,
+                    scopes=_decode_scopes(json.loads(scope_json)),
+                    plan_json=plan_json,
+                    plan_fingerprint=plan_fingerprint,
+                    status=FactPlanStatus.PLANNED,
+                    created_at=_utc(now, "created_at"),
+                    committed_at=None,
                 )
             rows = await self.conn.execute_fetchall(
                 "SELECT * FROM fact_plans WHERE owner_id = ? AND request_key = ?", (owner_id, request_key)
             )
         if not rows:
+            async with self._lock:
+                collision = await self.conn.execute_fetchall(
+                    "SELECT plan_id FROM fact_plans WHERE plan_ref = ?",
+                    (plan_ref,),
+                )
+            if collision:
+                raise FactPlanStoreError("generated fact plan ref collides with another plan")
             raise FactPlanStoreError("fact plan request was not persisted")
         existing = _row(rows[0])
         if existing.request_fingerprint != request_fingerprint:

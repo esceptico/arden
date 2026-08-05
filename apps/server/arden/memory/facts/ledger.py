@@ -164,7 +164,7 @@ class FactLedger:
                 continue
             scope_value = scope(payload["scope"])
             scopes.add((scope_value["kind"], scope_value["key"]))
-        return FactReadSnapshot(MappingProxyType(snapshot.state), frozenset(scopes))
+        return FactReadSnapshot(snapshot.head, MappingProxyType(snapshot.state), frozenset(scopes))
 
     def facts_at(self, revision: str | None) -> Mapping[str, Fact]:
         """Return the immutable fact state at one reachable revision.

@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Protocol
 
+from arden.core.public_refs import is_public_ref, public_ref
 from arden.logging import get_logger
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import Fact, FactChangeFeed, FactConflictError, FactEvent, FactPlan, FactValidationError
@@ -24,6 +26,12 @@ _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 DEFAULT_RESULT_LIMIT = 100
 BATCH_FACT_LIMIT = 100
 _logger = get_logger(__name__)
+
+
+def fact_public_ref(fact: Fact) -> str:
+    """Return the canonical model-facing handle for one immutable fact."""
+
+    return public_ref(fact.text, fact.fact_id, empty_slug="fact")
 
 
 class RankedFactSearch(Protocol):
@@ -116,6 +124,10 @@ class FactService:
     # None = no search index configured; queries then use the ledger's
     # exhaustive substring scan, as `include_inactive` archaeology always does.
     ranked_search: RankedFactSearch | None = None
+    _ref_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _ref_revision: str | None = field(default=None, init=False, repr=False)
+    _ref_index: Mapping[str, Fact] = field(default_factory=dict, init=False, repr=False)
+    _ref_index_ready: bool = field(default=False, init=False, repr=False)
 
     async def search(
         self,
@@ -148,6 +160,44 @@ class FactService:
                 key=lambda fact: (fact.created_at, fact.fact_id),
             )
         )
+
+    async def resolve_ref(self, principal: FactPrincipal, fact_ref: str) -> Fact:
+        """Resolve one exact public handle without replaying an unchanged ledger."""
+
+        return (await self.resolve_refs(principal, (fact_ref,)))[0]
+
+    async def resolve_refs(self, principal: FactPrincipal, fact_refs: tuple[str, ...]) -> tuple[Fact, ...]:
+        """Resolve exact handles against one revision-keyed canonical index."""
+
+        if not fact_refs:
+            return ()
+        if any(not is_public_ref(ref) for ref in fact_refs):
+            raise KeyError("unknown fact_ref")
+        current_revision = await self.current_revision()
+        async with self._ref_lock:
+            if not self._ref_index_ready or self._ref_revision != current_revision:
+                snapshot = await asyncio.to_thread(self.ledger.read_snapshot)
+                index: dict[str, Fact] = {}
+                for fact in snapshot.facts.values():
+                    ref = fact_public_ref(fact)
+                    if ref in index:
+                        raise FactValidationError("fact_ref collision prevents exact resolution")
+                    index[ref] = fact
+                self._ref_index = MappingProxyType(index)
+                self._ref_revision = snapshot.revision
+                self._ref_index_ready = True
+            index = self._ref_index
+
+        facts: list[Fact] = []
+        for ref in fact_refs:
+            try:
+                fact = index[ref]
+            except KeyError as exc:
+                raise KeyError("unknown fact_ref") from exc
+            if not principal.can_read(_scope(fact)):
+                raise KeyError("unknown fact_ref")
+            facts.append(fact)
+        return tuple(facts)
 
     async def search_page(
         self,

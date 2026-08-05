@@ -54,6 +54,7 @@ class Fact:
 class FactReadSnapshot:
     """One immutable current fact view and its canonical access scopes."""
 
+    revision: str | None
     facts: Mapping[str, Fact]
     known_scopes: frozenset[tuple[str, str | None]]
 
