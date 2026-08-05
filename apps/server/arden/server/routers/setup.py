@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel
 
+from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
 from arden.integrations.google_auth.accounts import GoogleService
 from arden.integrations.google_auth.auth import (
     SCOPES_CALENDAR,
@@ -218,11 +219,11 @@ async def setup_slack_verify(req: SlackVerifyRequest):
         client = SlackClient(user_token=req.api_key)
 
     try:
-        data = await client.auth_test(token_kind)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not verify Slack token: {e}")
+        data = await client.transport.auth_test(token_kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (IntegrationConnectionError, IntegrationOperationError) as exc:
+        raise HTTPException(status_code=400, detail=f"Could not verify Slack token: {exc}") from exc
 
     return {
         "ok": True,

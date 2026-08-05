@@ -135,7 +135,7 @@ def test_slack_auth_error_is_typed_for_recovery():
     client = SlackClient(bot_token="bad")
 
     with pytest.raises(IntegrationConnectionError) as raised:
-        client._raise_for_error("conversations.history", {"error": "token_revoked"}, {})
+        client.transport.raise_for_error("conversations.history", {"error": "token_revoked"}, {})
 
     assert raised.value.integration_id == "slack"
     assert raised.value.reason == "auth_required"
@@ -146,7 +146,7 @@ def test_slack_missing_scope_error_includes_required_scopes():
     client = SlackClient(bot_token="token")
 
     with pytest.raises(IntegrationConnectionError) as raised:
-        client._raise_for_error(
+        client.transport.raise_for_error(
             "conversations.history",
             {"error": "missing_scope", "needed": "channels:history,groups:history"},
             {},

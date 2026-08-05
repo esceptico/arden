@@ -10,10 +10,12 @@ _RECOVERY_ACTIONS = {
 
 
 def operation_error_result(error: IntegrationOperationError, *, preview: str) -> ToolResult:
+    data = {"retry_after_seconds": error.retry_after_seconds} if error.retry_after_seconds is not None else None
     return ToolResult.failure(
         code=error.code,
         message=error.safe_message,
         preview=preview,
         retryable=error.retryable,
         recovery_action=_RECOVERY_ACTIONS.get(error.code, "Inspect the request and retry."),
+        data=data,
     )

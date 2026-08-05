@@ -30,17 +30,20 @@ from arden.integrations.gmail.tools import (
 )
 from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
 from arden.integrations.slack.client import SlackClient
-from arden.integrations.slack.models import SlackChannel, SlackMessage, SlackThreadResult
-from arden.integrations.slack.tools import (
+from arden.integrations.slack.models import SlackChannel, SlackMessage, SlackMessagePage, SlackThreadResult
+from arden.integrations.slack.read_tools import (
+    SlackChannelInput,
     SlackChannelsInput,
-    SlackPostBlocksInput,
+    SlackFileInput,
     SlackSearchInput,
     SlackThreadInput,
-    approve_slack_post_blocks,
+    SlackUserInput,
     slack_channels,
     slack_search,
     slack_thread,
 )
+from arden.integrations.slack.tool_input import SlackToolInput
+from arden.integrations.slack.write_tools import SlackPostBlocksInput, approve_slack_post_blocks
 from arden.search.types import RawItem
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -80,14 +83,31 @@ def _execution(service_name: str, service: object, tool_name: str) -> ToolExecut
 
 
 class FakeSlackSource(SlackClient):
-    def __init__(self, messages: list[SlackMessage]):
-        self.messages = messages
+    def __init__(self, messages: list[SlackMessage], *, next_page_ref: str | None = None):
+        async def search_messages(*_args, **_kwargs) -> SlackMessagePage:
+            return SlackMessagePage(messages=tuple(messages), next_page_ref=next_page_ref)
 
-    async def search_messages(self, *args, **kwargs) -> list[SlackMessage]:
-        return self.messages
+        async def read_thread(_thread_ref: str, *, after_ref: str | None = None) -> SlackThreadResult | None:
+            assert after_ref is None
+            return SlackThreadResult(text="thread body")
 
-    async def read_thread(self, source_id: str) -> SlackThreadResult | None:
-        return SlackThreadResult(text="thread body")
+        self.messages = SimpleNamespace(search_messages=search_messages)
+        self.media = SimpleNamespace(read_thread=read_thread)
+        self.directory = SimpleNamespace()
+
+
+def test_slack_tool_locators_use_refs_and_reject_unknown_fields():
+    assert all(model.model_config["extra"] == "forbid" for model in SlackToolInput.__subclasses__())
+    assert "thread_ref" in SlackThreadInput.model_fields
+    assert "message_ref" not in SlackThreadInput.model_fields
+    assert "user_ref" in SlackUserInput.model_fields
+    assert "user_id" not in SlackUserInput.model_fields
+    assert "file_ref" in SlackFileInput.model_fields
+    assert "file_id" not in SlackFileInput.model_fields
+    assert "page_ref" in SlackSearchInput.model_fields
+    assert "page_ref" in SlackChannelInput.model_fields
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        SlackSearchInput.model_validate({"query": "release", "unknown": True})
 
 
 class FakeGmailSource(MultiGmailSource):
@@ -383,7 +403,7 @@ async def test_calendar_delete_uses_typed_qualified_receipt(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_slack_search_uses_message_id_title_and_existing_permalink():
+async def test_slack_search_uses_message_ref_title_and_existing_permalink():
     source = FakeSlackSource(
         [
             SlackMessage(
@@ -394,6 +414,7 @@ async def test_slack_search_uses_message_id_title_and_existing_permalink():
                 author_name="Ada",
                 text="result content",
                 created_at=datetime(2026, 7, 10, tzinfo=UTC),
+                thread_ref="C123:1710000000.000100",
                 permalink="https://workspace.slack.com/archives/C123/p1710000000000100",
             )
         ]
@@ -413,12 +434,25 @@ async def test_slack_search_uses_message_id_title_and_existing_permalink():
 
 
 @pytest.mark.asyncio
-async def test_slack_thread_uses_input_message_id_without_permalink_lookup():
+async def test_slack_search_exposes_exact_page_ref_even_for_empty_page():
+    source = FakeSlackSource([], next_page_ref="page-2")
+
+    result = await slack_search(
+        _execution("slack", source, "slack_search"),
+        SlackSearchInput(query="roadmap"),
+    )
+
+    assert "continue with page_ref: page-2" in result.content
+    assert result.data == {"count": 0, "next_page_ref": "page-2"}
+
+
+@pytest.mark.asyncio
+async def test_slack_thread_uses_exact_thread_ref_without_permalink_lookup():
     source = FakeSlackSource([])
 
     result = await slack_thread(
         _execution("slack", source, "slack_thread"),
-        SlackThreadInput(message_id="C123:1710000000.000100"),
+        SlackThreadInput(thread_ref="C123:1710000000.000100"),
     )
 
     assert [ref.to_dict() for ref in result.source_refs] == [
@@ -426,7 +460,7 @@ async def test_slack_thread_uses_input_message_id_without_permalink_lookup():
             "provider": "slack",
             "kind": "message",
             "ref": "C123:1710000000.000100",
-            "title": "Slack message C123:1710000000.000100",
+            "title": "Slack thread C123:1710000000.000100",
         }
     ]
 
@@ -438,10 +472,10 @@ async def test_slack_channels_consumes_typed_channel_records():
     async def channels(_query: str | None, *, limit: int):
         return [SlackChannel(ref="C123", name="product")]
 
-    source.search_channels = channels  # type: ignore[method-assign]
+    source.directory.search_channels = channels
     result = await slack_channels(_execution("slack", source, "slack_channels"), SlackChannelsInput())
 
-    assert result.content == "• #product  (C123)"
+    assert result.content == "• #product  (ref: C123)"
     assert [ref.to_dict() for ref in result.source_refs] == [
         {"provider": "slack", "kind": "channel", "ref": "C123", "title": "product"}
     ]
@@ -451,19 +485,20 @@ async def test_slack_channels_consumes_typed_channel_records():
 async def test_slack_thread_missing_message_is_typed_and_recoverable():
     source = FakeSlackSource([])
 
-    async def missing_thread(_source_id: str) -> SlackThreadResult | None:
+    async def missing_thread(_thread_ref: str, *, after_ref: str | None = None) -> SlackThreadResult | None:
+        assert after_ref is None
         return None
 
-    source.read_thread = missing_thread  # type: ignore[method-assign]
+    source.media.read_thread = missing_thread
     result = await slack_thread(
         _execution("slack", source, "slack_thread"),
-        SlackThreadInput(message_id="C404:0"),
+        SlackThreadInput(thread_ref="C404:0"),
     )
 
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
     assert result.outcome.error.code == "not_found"
-    assert result.outcome.error.recovery_action == "Call slack_search first to obtain a current message reference."
+    assert result.outcome.error.recovery_action == "Call slack_search first to obtain a current thread reference."
 
 
 @pytest.mark.asyncio

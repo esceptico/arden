@@ -424,12 +424,17 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
     assert updated.tool_scope == "all"
 
 
-class _FakeSlack:
+class _FakeSlackDirectory:
     async def resolve_channel(self, name: str) -> SlackChannel:
         return SlackChannel(ref=f"C-{name}", name=name)
 
     async def resolve_user(self, name: str) -> SlackUser:
         return SlackUser(ref=f"U-{name}", name=name, username=name, email=None, title=None)
+
+
+class _FakeSlack:
+    def __init__(self):
+        self.directory = _FakeSlackDirectory()
 
 
 @pytest.mark.asyncio

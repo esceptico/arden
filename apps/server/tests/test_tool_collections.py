@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from arden.integrations.calendar.tools import CalendarSearchInput
 from arden.integrations.gmail.tools import EmailSearchInput
-from arden.integrations.slack.tools import SlackSearchInput
+from arden.integrations.slack.read_tools import SlackSearchInput
 from arden.tools.core.collections import format_timestamp, paginate
 from arden.tools.workflow import _render
 

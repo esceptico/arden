@@ -18,7 +18,7 @@ from arden.integrations.mutations import (
     execute_idempotent,
     mutation_result,
 )
-from arden.integrations.slack.tools import SlackPostBlocksInput, SlackPostMessageInput
+from arden.integrations.slack.write_tools import SlackPostBlocksInput, SlackPostMessageInput
 from arden.tools.core.context import ToolExecution
 
 

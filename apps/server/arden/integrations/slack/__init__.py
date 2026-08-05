@@ -2,19 +2,18 @@ from arden.config import Config
 from arden.integrations.base import Integration, IntegrationConnectionSpec, IntegrationField
 from arden.integrations.slack.client import SlackClient
 from arden.integrations.slack.notifier import SlackNotifier
-from arden.integrations.slack.tools import (
+from arden.integrations.slack.read_tools import (
     slack_channel_tool,
     slack_channels_tool,
     slack_dm_tool,
     slack_dms_tool,
     slack_file_tool,
-    slack_post_blocks_tool,
-    slack_post_message_tool,
     slack_search_tool,
     slack_thread_tool,
     slack_user_tool,
     slack_users_tool,
 )
+from arden.integrations.slack.write_tools import slack_post_blocks_tool, slack_post_message_tool
 
 
 def _build(config: Config) -> SlackClient | None:

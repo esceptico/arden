@@ -7,8 +7,14 @@ An **Integration** bundles everything Arden needs to connect to an external serv
 ```
 arden/integrations/slack/
   __init__.py    # exports the SLACK Integration declaration
-  client.py      # SlackClient — the HTTP/API wrapper
-  tools.py       # tool(...) declarations and input models
+  client.py      # SlackClient — composition root
+  transport.py   # HTTP, authentication, payload validation, pagination
+  directory.py   # channels, users, and direct messages
+  messages.py    # search, history, and posting
+  media.py       # threads, files, and image downloads
+  read_tools.py  # read tool declarations and input models
+  write_tools.py # mutation tool declarations and approvals
+  tool_*.py      # shared input and formatting helpers
   notifier.py    # SlackNotifier (optional)
 ```
 

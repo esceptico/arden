@@ -6,14 +6,17 @@ import pytest
 from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
 from arden.integrations.calendar.client import CalendarMutationResult, MultiCalendarSource, qualify_event_ref
 from arden.integrations.gmail.client import MultiGmailSource
-from arden.integrations.slack.client import SlackClient, SlackPayloadError
+from arden.integrations.slack.client import SlackClient
+from arden.integrations.slack.messages import SlackMessages
 from arden.integrations.slack.models import (
     SlackAuthResult,
+    SlackChannel,
     SlackHistoryMessage,
     SlackIdentity,
     SlackMessage,
     SlackUser,
 )
+from arden.integrations.slack.transport import SlackPayloadError
 from arden.search.types import RawItem
 
 
@@ -206,7 +209,7 @@ def test_calendar_event_ref_qualification_is_idempotent_and_case_insensitive():
 
 @pytest.mark.asyncio
 async def test_slack_user_search_paginates_until_match():
-    client = object.__new__(SlackClient)
+    client = SlackClient(bot_token="xoxb-test")
     cursors: list[str] = []
 
     async def get(_session, _method, **params):
@@ -227,40 +230,35 @@ async def test_slack_user_search_paginates_until_match():
             "response_metadata": {"next_cursor": ""},
         }
 
-    client._get = get
-    users = await client.search_users("Ada", limit=50)
+    client.transport.get = get
+    users = await client.directory.search_users("Ada", limit=50)
 
     assert [user.ref for user in users] == ["U2"]
     assert cursors == ["", "page-2"]
 
 
 @pytest.mark.asyncio
-async def test_slack_user_search_rejects_malformed_provider_member():
-    client = object.__new__(SlackClient)
+async def test_slack_user_search_skips_unnamed_provider_member():
+    client = SlackClient(bot_token="xoxb-test")
 
     async def get(_session, _method, **_params):
         return {"members": [{"id": "U2"}], "response_metadata": {"next_cursor": ""}}
 
-    client._get = get
+    client.transport.get = get
 
-    with pytest.raises(SlackPayloadError, match="expected boolean 'deleted'") as raised:
-        await client.search_users("Ada", limit=50)
-    assert raised.value.code == "invalid_provider_response"
-    assert not raised.value.retryable
+    assert await client.directory.search_users("Ada", limit=50) == []
 
 
-@pytest.mark.asyncio
-async def test_slack_search_message_is_decoded_to_typed_record():
-    client = object.__new__(SlackClient)
+def test_slack_search_message_is_decoded_to_typed_record():
+    client = SlackClient(bot_token="xoxb-test")
 
-    message = await client._decode_search_message(
-        None,
+    message = client.messages._decode_search_message(
         {
             "channel_id": "C1",
             "channel_name": "product",
-            "ts": "1710000000.000100",
-            "user_id": "U1",
-            "author_user_name": "Ada",
+            "message_ts": "1710000000.000100",
+            "author_user_id": "U1",
+            "author_name": "Ada",
             "content": "ship it",
             "permalink": "https://example.slack.com/archives/C1/p1710000000000100",
         },
@@ -271,16 +269,14 @@ async def test_slack_search_message_is_decoded_to_typed_record():
     assert message.author_name == "Ada"
 
 
-@pytest.mark.asyncio
-async def test_slack_search_message_rejects_missing_provider_identity():
-    client = object.__new__(SlackClient)
+def test_slack_search_message_rejects_missing_provider_identity():
+    client = SlackClient(bot_token="xoxb-test")
 
-    with pytest.raises(SlackPayloadError, match=r"expected channel_id or channel\.id"):
-        await client._decode_search_message(
-            None,
+    with pytest.raises(SlackPayloadError, match="expected non-empty string 'channel_id'"):
+        client.messages._decode_search_message(
             {
-                "ts": "1710000000.000100",
-                "author_user_name": "Ada",
+                "message_ts": "1710000000.000100",
+                "author_name": "Ada",
                 "content": "ship it",
             },
         )
@@ -293,10 +289,10 @@ async def test_slack_channel_resolution_rejects_missing_name():
     async def get(_session, _method, **_params):
         return {"channel": {"id": "C1", "is_im": False}}
 
-    client._get = get
+    client.transport.get = get
 
     with pytest.raises(SlackPayloadError, match="non-DM channel has no name"):
-        await client.resolve_channel("C1")
+        await client.directory.resolve_channel("C1")
 
 
 @pytest.mark.asyncio
@@ -306,10 +302,31 @@ async def test_slack_channel_index_requires_pagination_metadata():
     async def get(_session, _method, **_params):
         return {"channels": []}
 
-    client._get = get
+    client.transport.get = get
 
     with pytest.raises(SlackPayloadError, match="response_metadata"):
-        await client.search_channels()
+        await client.directory.search_channels()
+
+
+@pytest.mark.asyncio
+async def test_slack_channel_search_reuses_loaded_index():
+    client = SlackClient(bot_token="xoxb-test")
+    calls = 0
+
+    async def get(_session, method, **_params):
+        nonlocal calls
+        assert method == "conversations.list"
+        calls += 1
+        return {
+            "channels": [{"id": "C1", "name": "general", "is_im": False}],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    client.transport.get = get
+
+    assert await client.directory.search_channels() == [SlackChannel(ref="C1", name="general")]
+    assert await client.directory.search_channels() == [SlackChannel(ref="C1", name="general")]
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -319,14 +336,14 @@ async def test_slack_open_dm_rejects_missing_channel_id():
     async def post(_session, _method, **_params):
         return {"channel": {}}
 
-    client._post = post
+    client.transport.post = post
 
     with pytest.raises(SlackPayloadError, match="expected non-empty string 'id'"):
-        await client.open_dm("U1")
+        await client.directory.open_dm("U1")
 
 
 def test_slack_monitor_history_decoder_returns_typed_message():
-    message = SlackClient._decode_monitor_message({"ts": "100.0", "text": "hello", "user": "U1"})
+    message = SlackMessages.decode_monitor_message({"type": "message", "ts": "100.0", "text": "hello", "user": "U1"})
 
     assert isinstance(message, SlackHistoryMessage)
     assert message.user_ref == "U1"
@@ -345,14 +362,14 @@ async def test_slack_whoami_returns_typed_identity():
             bot_ref=None,
         )
 
-    client.auth_test = auth_test
+    client.transport.auth_test = auth_test
 
-    assert await client.whoami() == SlackIdentity(user_ref="U1", user_name="Ada")
+    assert await client.transport.whoami() == SlackIdentity(user_ref="U1", user_name="Ada")
 
 
 @pytest.mark.asyncio
-async def test_slack_semantic_user_resolution_rejects_ambiguity():
-    client = object.__new__(SlackClient)
+async def test_slack_semantic_user_resolution_requires_exact_match():
+    client = SlackClient(bot_token="xoxb-test")
 
     async def users(_query, limit):
         return [
@@ -360,7 +377,7 @@ async def test_slack_semantic_user_resolution_rejects_ambiguity():
             SlackUser(ref="U2", name="Ada Two", username="ada2", email=None, title=None),
         ]
 
-    client.search_users = users
+    client.directory.search_users = users
 
-    with pytest.raises(RuntimeError, match="Ambiguous Slack user"):
-        await client.resolve_dm_target("Ada")
+    with pytest.raises(RuntimeError, match="No exact Slack user"):
+        await client.directory.resolve_dm_target("Ada")

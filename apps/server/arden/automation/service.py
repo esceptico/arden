@@ -133,7 +133,7 @@ class AutomationService:
             raw_channels = [raw_channels]
         channels: list[dict] = []
         for channel_name in raw_channels or []:
-            channel = await slack.resolve_channel(channel_name)
+            channel = await slack.directory.resolve_channel(channel_name)
             channels.append({"id": channel.ref, "name": channel.name})
         if not channels:
             raise ValueError("a Slack message trigger needs at least one channel")
@@ -141,7 +141,7 @@ class AutomationService:
         from_user_id: str | None = None
         from_user_name: str | None = None
         if from_user := payload.get("from_user"):
-            resolved = await slack.resolve_user(from_user)
+            resolved = await slack.directory.resolve_user(from_user)
             from_user_id = resolved.ref
             from_user_name = resolved.name
 
