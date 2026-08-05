@@ -25,99 +25,87 @@ function page(overrides: Partial<WikiPageSummary> = {}): WikiPageSummary {
   };
 }
 
-test("an older snapshot cannot replace a newer committed snapshot", () => {
+test("only the latest read can replace a snapshot", () => {
   const cache = new MemoryPageCache();
   const older = cache.beginRead(configA);
   const newer = cache.beginRead(configA);
   const renamed = page({ path: "topics/renamed.md", version: "page-a:v2" });
 
-  expect(cache.commitSnapshot(newer, [renamed])).toBe(true);
-  expect(cache.commitSnapshot(older, [page()])).toBe(false);
+  expect(cache.commitSnapshot(newer, "head-1", [renamed])).toBe(true);
+  expect(cache.commitSnapshot(older, "head-1", [page()])).toBe(false);
   expect(cache.getByPath(configA, renamed.path)).toBe(renamed);
   expect(cache.getByPath(configA, "topics/a.md")).toBeUndefined();
 });
 
-test("an older full snapshot merges unrelated pages around a newer point read", () => {
-  const cache = new MemoryPageCache();
-  const a = page();
-  const b = page({ pageId: "page-b", path: "topics/b.md", title: "B" });
-  cache.commitSnapshot(cache.beginRead(configA), [a, b]);
-  const fullRead = cache.beginRead(configA);
-  const pointRead = cache.beginRead(configA);
-  const freshA = { ...a, version: "page-a:v2" };
-  const renamedB = { ...b, path: "topics/renamed-b.md", version: "page-b:v2" };
-
-  expect(cache.commitPage(pointRead, freshA)).toBe(true);
-  expect(cache.commitSnapshot(fullRead, [a, renamedB])).toBe(true);
-  expect(cache.getById(configA, a.pageId)).toBe(freshA);
-  expect(cache.getByPath(configA, renamedB.path)).toBe(renamedB);
-  expect(cache.getByPath(configA, b.path)).toBeUndefined();
-});
-
-test("older snapshots preserve newer mutations and tombstones while updating other pages", () => {
-  const cache = new MemoryPageCache();
-  const a = page();
-  const b = page({ pageId: "page-b", path: "topics/b.md", title: "B" });
-  cache.commitSnapshot(cache.beginRead(configA), [a, b]);
-
-  const beforeEdit = cache.beginRead(configA);
-  const editedA = { ...a, path: "topics/edited-a.md", version: "page-a:v2" };
-  const renamedB = { ...b, path: "topics/renamed-b.md", version: "page-b:v2" };
-  cache.commitMutation(configA, editedA);
-  expect(cache.commitSnapshot(beforeEdit, [a, renamedB])).toBe(true);
-  expect(cache.getByPath(configA, editedA.path)).toBe(editedA);
-  expect(cache.getByPath(configA, renamedB.path)).toBe(renamedB);
-
-  const beforeArchive = cache.beginRead(configA);
-  const renamedAgainB = { ...renamedB, path: "topics/final-b.md", version: "page-b:v3" };
-  cache.commitRemoval(configA, editedA);
-  expect(cache.commitSnapshot(beforeArchive, [editedA, renamedAgainB])).toBe(true);
-  expect(cache.getById(configA, editedA.pageId)).toBeUndefined();
-  expect(cache.getByPath(configA, renamedAgainB.path)).toBe(renamedAgainB);
-});
-
-test("one read can publish a snapshot then a page only until a newer read begins", () => {
+test("one read can publish its snapshot and detail", () => {
   const cache = new MemoryPageCache();
   const read = cache.beginRead(configA);
   const detailed = page({ version: "page-a:v2" });
 
-  expect(cache.commitSnapshot(read, [page()])).toBe(true);
+  expect(cache.commitSnapshot(read, "head-1", [page()])).toBe(true);
   expect(cache.commitPage(read, detailed)).toBe(true);
-  cache.beginRead(configA);
-  expect(cache.commitPage(read, page())).toBe(false);
   expect(cache.getById(configA, detailed.pageId)).toBe(detailed);
 });
 
-test("path and page identity stay bijective through rename and reuse", () => {
+test("a newer read rejects an older point response", () => {
+  const cache = new MemoryPageCache();
+  const older = cache.beginRead(configA);
+  cache.beginRead(configA);
+
+  expect(cache.commitPage(older, page())).toBe(false);
+  expect(cache.getById(configA, "page-a")).toBeUndefined();
+});
+
+test("a head change drops pages from the previous snapshot", () => {
+  const cache = new MemoryPageCache();
+  const first = page();
+  const second = page({ pageId: "page-b", path: "topics/b.md", title: "B" });
+  cache.commitSnapshot(cache.beginRead(configA), "head-1", [first, second]);
+
+  const changed = { ...first, version: "page-a:v2", repositoryHead: "head-2" };
+  cache.commitMutation(configA, changed);
+
+  expect(cache.getById(configA, changed.pageId)).toBe(changed);
+  expect(cache.getById(configA, second.pageId)).toBeUndefined();
+});
+
+test("path and page identity stay bijective", () => {
   const cache = new MemoryPageCache();
   const first = page();
   cache.commitMutation(configA, first);
-  cache.commitMutation(configA, { ...first, path: "topics/renamed.md" });
+
+  const renamed = { ...first, path: "topics/renamed.md" };
+  const read = cache.beginRead(configA);
+  expect(cache.commitPage(read, renamed)).toBe(true);
   expect(cache.getByPath(configA, first.path)).toBeUndefined();
 
-  const replacement = page({ pageId: "page-b", path: "topics/renamed.md", title: "B" });
-  cache.commitMutation(configA, replacement);
+  const replacement = page({ pageId: "page-b", path: renamed.path, title: "B" });
+  expect(cache.commitPage(read, replacement)).toBe(true);
   expect(cache.getById(configA, first.pageId)).toBeUndefined();
-  expect(cache.getByPath(configA, replacement.path)).toBe(replacement);
-
-  cache.commitRemoval(configA, first);
   expect(cache.getByPath(configA, replacement.path)).toBe(replacement);
 });
 
-test("invalidation clears state and rejects reads started before an unknown mutation", () => {
+test("snapshot identity and head conflicts fail explicitly", () => {
+  const cache = new MemoryPageCache();
+  expect(() => cache.commitSnapshot(cache.beginRead(configA), "head-2", [page()]))
+    .toThrow("Wiki snapshot head mismatch");
+
+  const duplicate = page({ pageId: "page-b" });
+  expect(() => cache.commitSnapshot(cache.beginRead(configA), "head-1", [page(), duplicate]))
+    .toThrow("Duplicate wiki page path");
+});
+
+test("invalidation clears state and rejects older reads", () => {
   const cache = new MemoryPageCache();
   cache.commitMutation(configA, page());
   const stale = cache.beginRead(configA);
   cache.invalidate(configA);
 
-  expect(cache.commitSnapshot(stale, [page()])).toBe(false);
+  expect(cache.commitSnapshot(stale, "head-1", [page()])).toBe(false);
   expect(cache.getById(configA, "page-a")).toBeUndefined();
-  const refreshed = page({ path: "topics/refreshed.md" });
-  expect(cache.commitSnapshot(cache.beginRead(configA), [refreshed])).toBe(true);
-  expect(cache.getByPath(configA, refreshed.path)).toBe(refreshed);
 });
 
-test("aborted, foreign, and other-config reads cannot disturb committed state", () => {
+test("aborted, foreign, and other-config reads cannot disturb state", () => {
   const cache = new MemoryPageCache();
   const kept = page();
   cache.commitMutation(configA, kept);
@@ -125,9 +113,9 @@ test("aborted, foreign, and other-config reads cannot disturb committed state", 
   const controller = new AbortController();
   controller.abort();
 
-  expect(cache.commitSnapshot(aborted, [], controller.signal)).toBe(false);
+  expect(cache.commitSnapshot(aborted, "head-1", [], controller.signal)).toBe(false);
   const foreign = new MemoryPageCache().beginRead(configA);
-  expect(cache.commitSnapshot(foreign, [])).toBe(false);
+  expect(cache.commitSnapshot(foreign, "head-1", [])).toBe(false);
   cache.commitMutation(configB, page({ path: "topics/b.md" }));
   expect(cache.getByPath(configA, kept.path)).toBe(kept);
   expect(cache.getByPath(configB, "topics/b.md")?.path).toBe("topics/b.md");

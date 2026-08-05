@@ -398,9 +398,9 @@ async function loadPages(
   signal?: AbortSignal,
   cacheRead: MemoryPageCacheRead = pageCache.beginRead(config),
 ): Promise<WikiPageSummary[]> {
-  const pages = await listWikiPages(config, { signal });
-  pageCache.commitSnapshot(cacheRead, pages, signal);
-  return pages;
+  const snapshot = await listWikiPages(config, { signal });
+  pageCache.commitSnapshot(cacheRead, snapshot.repositoryHead, snapshot.pages, signal);
+  return snapshot.pages;
 }
 
 async function pageForPath(
@@ -617,7 +617,7 @@ export async function archiveMemoryArtifact(
     expectedVersion: page.version,
     expectedHead: page.repositoryHead,
   });
-  pageCache.commitRemoval(config, page);
+  pageCache.invalidate(config);
 }
 
 export interface RestorePageMaintenanceChangeInput {

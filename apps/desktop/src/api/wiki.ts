@@ -132,9 +132,20 @@ function mapWikiPageSummary(raw: RawWikiPage): WikiPageSummary {
   return summary;
 }
 
-export function listWikiPages(config: AppConfig, options: { signal?: AbortSignal } = {}): Promise<WikiPageSummary[]> {
-  return apiWithConfig<{ pages: RawWikiPage[] }>(config, "/admin/wiki/pages", { signal: options.signal })
-    .then((response) => response.pages.map(mapWikiPageSummary));
+export interface WikiPageSnapshot {
+  repositoryHead: string | null;
+  pages: WikiPageSummary[];
+}
+
+export function listWikiPages(config: AppConfig, options: { signal?: AbortSignal } = {}): Promise<WikiPageSnapshot> {
+  return apiWithConfig<{ repository_head: string | null; pages: RawWikiPage[] }>(
+    config,
+    "/admin/wiki/pages",
+    { signal: options.signal },
+  ).then((response) => ({
+    repositoryHead: response.repository_head,
+    pages: response.pages.map(mapWikiPageSummary),
+  }));
 }
 
 export function readWikiPage(config: AppConfig, pageId: string, options: { signal?: AbortSignal } = {}): Promise<WikiPage> {

@@ -83,6 +83,7 @@ interface ResourceFixture {
 interface BridgeState {
   pages: Map<string, WikiPageFixture>;
   facts: Map<string, FactFixture>;
+  repositoryHead: string;
 }
 
 export interface CanonicalMemoryBridgeOptions {
@@ -118,7 +119,7 @@ export function error(status: number, detail: unknown): BridgeResponse {
   };
 }
 
-function rawPage(page: WikiPageFixture, includeContent: boolean) {
+function rawPage(page: WikiPageFixture, includeContent: boolean, repositoryHead = page.repositoryHead ?? "wiki-head-1") {
   return {
     page_id: page.pageId,
     path: page.path,
@@ -129,7 +130,7 @@ function rawPage(page: WikiPageFixture, includeContent: boolean) {
     redirect_to: page.redirectTo ?? null,
     metadata: page.metadata ?? {},
     version: page.version ?? `${page.pageId}:v1`,
-    repository_head: page.repositoryHead ?? "wiki-head-1",
+    repository_head: repositoryHead,
     created_at: page.createdAt ?? "2026-07-13T08:00:00Z",
     updated_at: page.updatedAt ?? "2026-07-13T08:00:00Z",
     ...(includeContent ? { content: page.content } : {}),
@@ -197,6 +198,7 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
   const state: BridgeState = {
     pages: new Map((options.pages ?? []).map((page) => [page.pageId, { ...page }])),
     facts: new Map((options.facts ?? []).map((fact) => [fact.factId, { ...fact }])),
+    repositoryHead: options.pages?.find((page) => page.repositoryHead)?.repositoryHead ?? "wiki-head-1",
   };
   const requests: Array<{ path: string; method: string; body: unknown }> = [];
 
@@ -233,7 +235,10 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
           return fact ? ok({ fact: rawFact(fact) }) : error(404, "fact not found");
         }
         if (request.path === "/admin/wiki/pages") {
-          return ok({ repository_head: "wiki-head-1", pages: [...state.pages.values()].map((page) => rawPage(page, false)) });
+          return ok({
+            repository_head: state.repositoryHead,
+            pages: [...state.pages.values()].map((page) => rawPage(page, false, state.repositoryHead)),
+          });
         }
 
         const pageId = requestPageId(request.path);
@@ -284,12 +289,13 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
         }
         if (request.path.endsWith("/archive") && method === "POST") {
           state.pages.delete(pageId);
+          state.repositoryHead = "wiki-head-2";
           return ok({
             page_id: pageId,
             path: page.path,
             resource_state: "archived",
             version: page.version ?? `${pageId}:v1`,
-            repository_head: "wiki-head-2",
+            repository_head: state.repositoryHead,
           });
         }
         if (method === "PUT") {
@@ -302,9 +308,10 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
             updatedAt: "2026-07-13T08:01:00Z",
           };
           state.pages.set(pageId, next);
-          return ok(rawPage(next, true));
+          state.repositoryHead = next.repositoryHead;
+          return ok(rawPage(next, true, state.repositoryHead));
         }
-        return ok(rawPage(page, true));
+        return ok(rawPage(page, true, state.repositoryHead));
       },
     },
   } as Window["ardenDesktop"];
@@ -314,6 +321,7 @@ export function installCanonicalMemoryBridge(options: CanonicalMemoryBridgeOptio
     state,
     updatePage(page: WikiPageFixture) {
       state.pages.set(page.pageId, { ...page });
+      if (page.repositoryHead) state.repositoryHead = page.repositoryHead;
     },
   };
 }

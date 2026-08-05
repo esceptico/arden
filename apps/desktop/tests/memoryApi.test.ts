@@ -250,7 +250,7 @@ test("an older detail response cannot restore a path replaced by a newer list", 
   expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(listsBeforeDetail);
 });
 
-test("a newer detail does not suppress unrelated pages from an older full list", async () => {
+test("a stale full list cannot overwrite a newer detail cache entry", async () => {
   const currentConfig = config();
   const listGate = deferred();
   let holdNextList = false;
@@ -284,7 +284,9 @@ test("a newer detail does not suppress unrelated pages from an older full list",
 
   expect((await readMemoryArtifactDetail(currentConfig, freshA.path)).artifact.path).toBe(freshA.path);
   expect((await readMemoryArtifactDetail(currentConfig, renamedB.path)).artifact.path).toBe(renamedB.path);
-  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(2);
+  // The stale snapshot is rejected as one coherent revision. Resolving B therefore
+  // performs one fresh list read instead of merging rows from incompatible heads.
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(3);
 });
 
 test("rebuild is a canonical list refresh, not a legacy rebuild command", async () => {
