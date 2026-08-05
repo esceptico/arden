@@ -1,3 +1,5 @@
+import ast
+import re
 from pathlib import Path
 
 from arden.server.app import app
@@ -10,13 +12,46 @@ def server_path(path: str) -> Path:
     return Path(path)
 
 
+def _sql_strings(source: str) -> list[str]:
+    strings: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            strings.append(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            strings.append("".join(part.value for part in node.values if isinstance(part, ast.Constant)))
+    return strings
+
+
+def _references_sql_table(source: str, table: str) -> bool:
+    name = re.escape(table)
+    pattern = re.compile(
+        rf"(?:"
+        rf"\b(?:from|join|into|update|delete\s+from|alter\s+table|drop\s+table)\s+[`\"\[]?{name}\b"
+        rf"|\bcreate\s+table(?:\s+if\s+not\s+exists)?\s+[`\"\[]?{name}\b"
+        rf"|\bcreate(?:\s+unique)?\s+index\b.*?\bon\s+[`\"\[]?{name}\b"
+        rf"|\bpragma\s+table_info\s*\(\s*[`\"\[]?{name}\b"
+        rf")",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return any(pattern.search(value) for value in _sql_strings(source))
+
+
 def test_backend_persistence_tables_are_only_referenced_by_owner_modules():
+    automation_persistence = {
+        server_path("arden/automation/store.py"),
+        server_path("arden/automation/store_queries.py"),
+        server_path("arden/automation/store_schema.py"),
+    }
     table_owners = {
         "outbox_events": {server_path("arden/outbox/store.py")},
-        "scheduled_tasks": {server_path("arden/automation/store.py")},
-        "automation_event_dedupe": {server_path("arden/automation/store.py")},
-        "automation_event_queue": {server_path("arden/automation/store.py")},
-        "automation_count_state": {server_path("arden/automation/store.py")},
+        "scheduled_tasks": automation_persistence,
+        "automation_runs": automation_persistence,
+        "automation_event_dedupe": automation_persistence,
+        "automation_event_queue": automation_persistence,
+        "automation_event_dead_letter": automation_persistence,
+        "automation_count_state": automation_persistence,
+        "automation_meta": automation_persistence,
+        "automation_idempotency_claims": automation_persistence,
         "monitor_state": {server_path("arden/monitor/store.py")},
     }
 
@@ -25,10 +60,16 @@ def test_backend_persistence_tables_are_only_referenced_by_owner_modules():
         rel = path.relative_to(SERVER_DIR)
         source = path.read_text()
         for table, allowed_paths in table_owners.items():
-            if table in source and rel not in allowed_paths:
+            if _references_sql_table(source, table) and rel not in allowed_paths:
                 violations.append(f"{table} referenced from {rel}")
 
     assert violations == []
+
+
+def test_persistence_boundary_ignores_semantic_names_but_finds_sql():
+    assert not _references_sql_table('automation_runs = {}\ndef list_automation_runs(): ...', "automation_runs")
+    assert _references_sql_table('QUERY = "SELECT * FROM automation_runs"', "automation_runs")
+    assert _references_sql_table('QUERY = "PRAGMA table_info(automation_runs)"', "automation_runs")
 
 
 def test_services_do_not_import_runtime_composition_root():
