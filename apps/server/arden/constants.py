@@ -114,7 +114,7 @@ SESSION_HANDOFF_MARKER = "[Session State Handoff]"
 # output without leaving a continuation path. Results above OFFLOAD_THRESHOLD are written
 # to a session-local file (core.tool_result_files) and ArdenToolExecutor's result boundary
 # returns a head+tail preview pointing at file_read(path=...) so the agent reads more by path.
-ARDEN_TMP_BASE = "/tmp/arden"  # background-task result staging (see context.RESULT_BASE)
+ARDEN_TMP_BASE = "/tmp/arden"  # Background-task result staging.
 OFFLOAD_THRESHOLD = 50000  # chars — results above this are reduced to a preview + durable file
 OFFLOAD_PREVIEW_LINES = 30  # lines kept in compact reference (structural summary, not raw chars)
 OFFLOAD_PREVIEW_CHARS = 12000  # hard cap for compact references; full content is in the durable file
