@@ -1,5 +1,5 @@
 import { apiWithConfig, type AppConfig } from "@/api/core";
-import type { Area, SessionListItem, SessionType } from "@/api/types";
+import type { Area, ContextBudgetSnapshot, SessionListItem, SessionType } from "@/api/types";
 
 const SESSION_PAGE_SIZE = 500;
 
@@ -94,8 +94,8 @@ export async function updateSessionModelApi(
   config: AppConfig,
   sessionId: string,
   chatModel: string | null,
-): Promise<void> {
-  await apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/model`, {
+): Promise<{ session_id: string; chat_model: string | null; context_budget?: ContextBudgetSnapshot }> {
+  return apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/model`, {
     method: "PUT",
     body: JSON.stringify({ chat_model: chatModel }),
   });

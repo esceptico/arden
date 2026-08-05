@@ -4,10 +4,15 @@ import { isActivityContinuationMessage } from "@/lib/messageVisibility";
 import { mergeSourceRefs } from "@/stores/sourceRefs";
 
 export const initialUsage: SessionUsage = {
-  lastPrompt: 0,
+  contextInputTokens: 0,
+  observedPromptTokens: 0,
+  observedCompletionTokens: 0,
+  observedCacheReadTokens: 0,
+  observedCacheWriteTokens: 0,
   totalTokens: 0,
   totalCost: 0,
   messageCount: 0,
+  contextBudget: null,
 };
 
 export function blankSessionView(): CachedSessionState {

@@ -1902,6 +1902,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                     usage=response.usage.to_dict(),
                     cost=tracker.cost,
                     message_count=len(_persistable_messages(run)),
+                    context_input_tokens=_response_input_tokens(response),
                 )
             )
 
@@ -2051,6 +2052,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
 
         usage_dict = run.usage.to_dict()
         usage_dict["cost"] = tracker.cost
+        usage_dict["exclusive_cost"] = tracker.own_cost
         run_finished_event = RunFinishedEvent(
             run_id=run.run_id,
             usage=usage_dict,

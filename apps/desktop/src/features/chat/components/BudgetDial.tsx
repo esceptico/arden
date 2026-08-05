@@ -3,12 +3,9 @@ import { useStore } from "@/stores";
 import { RollingToken } from "@/components/ui/RollingToken";
 import { HoverPopover } from "@/components/ui/HoverPopover";
 
-/** Compact "two scales on one ring" budget meter. Outer arc = token
- *  pressure (parent context only — subagent internals don't count, per
- *  the compactor logic). Inner arc = message pressure. Token pressure
- *  near the configured limit or message pressure at the cap triggers
- *  auto-compaction on the server. Hover or click for the
- *  breakdown. */
+/** Compact two-scale budget meter. The outer arc is current model-visible
+ * context against the model's hard window; the inner arc is transcript
+ * messages against the compaction cap. */
 
 const SIZE = 18;
 const STROKE = 2.2;
@@ -41,29 +38,35 @@ function formatPct(n: number): string {
 export function BudgetDial() {
   const usage = useStore((s) => s.usage);
   const serverConfig = useStore((s) => s.serverConfig);
+  const currentSessionId = useStore((s) => s.currentSessionId);
 
-  const modelCeiling = serverConfig?.chat_model_max_context ?? 0;
-  const compressionPct = serverConfig
-    ? Math.round(serverConfig.compression_threshold * 100)
-    : 80;
-  const tokenLimit =
-    serverConfig?.compaction_token_limit
-      ?? (modelCeiling > 0 ? Math.floor(modelCeiling * 0.8) : 0);
-  const tokenTrigger = serverConfig?.compaction_token_trigger ?? 0;
-  const messageLimit = serverConfig?.max_messages ?? 0;
-  const tokenRatio = tokenLimit > 0 ? Math.min(1, usage.lastPrompt / tokenLimit) : 0;
+  // An unsaved Home composer uses the configured default. Real sessions only
+  // use their history snapshot, so switching models cannot flash global limits.
+  const defaultBudget = serverConfig
+    ? {
+        model: serverConfig.chat_model,
+        usesDefaultModel: true,
+        hardLimit: serverConfig.chat_model_max_context || null,
+        compactionTrigger: serverConfig.compaction_token_trigger || null,
+        messageLimit: serverConfig.max_messages,
+      }
+    : null;
+  const budget = currentSessionId === null || usage.contextBudget?.usesDefaultModel
+    ? defaultBudget
+    : usage.contextBudget;
+  const hardLimit = budget?.hardLimit ?? null;
+  const tokenTrigger = budget?.compactionTrigger ?? null;
+  const messageLimit = budget?.messageLimit ?? 0;
+  const tokenRatio = hardLimit && hardLimit > 0
+    ? Math.min(1, usage.contextInputTokens / hardLimit)
+    : 0;
   const messageRatio = messageLimit > 0 ? Math.min(1, usage.messageCount / messageLimit) : 0;
   const maxRatio = Math.max(tokenRatio, messageRatio);
-  const hasAnyData = usage.lastPrompt > 0 || usage.messageCount > 0 || usage.totalCost > 0;
+  const hasAnyData = usage.contextInputTokens > 0 || usage.messageCount > 0 || usage.totalCost > 0;
 
-  // Visible compact label: prefer cost when present (most useful at a
-  // glance), else the last prompt's tokens, else a tiny "—" placeholder
-  // so the dial always has a hover target with text in it.
-  const compactLabel = usage.totalCost > 0
-    ? formatCost(usage.totalCost)
-    : usage.lastPrompt > 0
-      ? `${formatTokens(usage.lastPrompt)}`
-      : "—";
+  const compactLabel = usage.contextInputTokens > 0
+    ? formatTokens(usage.contextInputTokens)
+    : "—";
 
   return (
     <span className="inline-flex items-center">
@@ -81,7 +84,7 @@ export function BudgetDial() {
             aria-expanded={open}
             title={
               hasAnyData
-                ? `${formatTokens(usage.lastPrompt)} / ${formatTokens(tokenLimit)} tokens · ${usage.messageCount} / ${messageLimit} msgs`
+                ? `${formatTokens(usage.contextInputTokens)} / ${hardLimit ? formatTokens(hardLimit) : "unknown"} context tokens · ${usage.messageCount} / ${messageLimit || "unknown"} msgs`
                 : "Context budget"
             }
             className={clsx(
@@ -150,25 +153,21 @@ export function BudgetDial() {
       >
         <div className="mb-2 flex items-baseline justify-between gap-2">
           <span className="text-xs font-medium text-muted">Context budget</span>
-          {serverConfig?.chat_model && (
+          {budget?.model && (
             <span
               className="text-2xs text-faint truncate max-w-[170px]"
-              title={serverConfig.chat_model}
+              title={budget.model}
             >
-              {serverConfig.chat_model}
+              {budget.model}
             </span>
           )}
         </div>
         <Row
-          label="Tokens"
-          value={`${formatTokens(usage.lastPrompt)} / ${formatTokens(tokenLimit)}`}
-          hint={tokenLimit > 0 ? formatPct(tokenRatio) : "—"}
+          label="Context"
+          value={`${formatTokens(usage.contextInputTokens)} / ${hardLimit ? formatTokens(hardLimit) : "—"}`}
+          hint={hardLimit ? formatPct(tokenRatio) : "—"}
           color={ratioColor(tokenRatio)}
-          detail={
-            modelCeiling > 0
-              ? `${formatTokens(modelCeiling)} ceiling · budget ${compressionPct}%`
-              : undefined
-          }
+          detail={tokenTrigger ? `Compacts at ${formatTokens(tokenTrigger)}` : undefined}
         />
         <Row
           label="Messages"
@@ -177,13 +176,14 @@ export function BudgetDial() {
           color={ratioColor(messageRatio)}
         />
         <div className="mt-2 pt-2 border-t border-line-soft grid grid-cols-2 gap-y-1 gap-x-3">
+          <span className="col-span-2 text-2xs font-medium text-faint">This app session</span>
           {/* Spend row hidden when zero — for OAuth-backed providers
               (openai-codex, claude-pro, etc.) the server has no
               pricing data and "$0" is misleading. The provider just
               doesn't meter per-token from us. */}
           {usage.totalCost > 0 && (
             <>
-              <span className="text-muted">Session spend</span>
+              <span className="text-muted">Observed cost</span>
               <span className="tabular-nums text-ink-soft text-right">
                 {formatCost(usage.totalCost)}
               </span>
@@ -191,18 +191,34 @@ export function BudgetDial() {
           )}
           {usage.totalTokens > 0 && (
             <>
-              <span className="text-muted">Total tokens</span>
+              <span className="text-muted">Observed tokens</span>
               <span className="tabular-nums text-ink-soft text-right">
                 {formatTokens(usage.totalTokens)}
               </span>
             </>
           )}
+          <ObservedRow label="Prompt" value={usage.observedPromptTokens} />
+          <ObservedRow label="Output" value={usage.observedCompletionTokens} />
+          <ObservedRow label="Cache read" value={usage.observedCacheReadTokens} />
+          <ObservedRow label="Cache write" value={usage.observedCacheWriteTokens} />
         </div>
         <div className="mt-2 text-2xs text-muted leading-snug">
-          Auto-compacts at {formatTokens(tokenTrigger)} tokens or when messages hit 100%. Tool-agent tokens count toward session totals, not context pressure.
+          {tokenTrigger
+            ? `Compaction starts at ${formatTokens(tokenTrigger)} context tokens or when messages hit 100%. `
+            : "Compaction threshold is unavailable for this model. "}
+          Tool-agent usage affects observed totals only.
         </div>
       </HoverPopover>
     </span>
+  );
+}
+
+function ObservedRow({ label, value }: { label: string; value: number }) {
+  return (
+    <>
+      <span className="text-muted">{label}</span>
+      <span className="tabular-nums text-ink-soft text-right">{formatTokens(value)}</span>
+    </>
   );
 }
 

@@ -4,8 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from arden.agent import Role
 from arden.areas.triage import TriageDecision, triage_chat
-from arden.constants import HISTORY_MESSAGE_LIMIT
-from arden.core.compactor import is_handoff_message
+from arden.constants import (
+    COMPRESSION_THRESHOLD,
+    COMPRESSION_TOKEN_HEADROOM,
+    HISTORY_MESSAGE_LIMIT,
+    MAX_MESSAGES,
+)
+from arden.context.models import SessionData
+from arden.core.compactor import is_handoff_message, token_compaction_budget
 from arden.core.content import blocks_to_text
 from arden.core.llm_client import llm_client
 from arden.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS, compact_tool_result_text
@@ -19,6 +25,7 @@ from arden.server.runtime import Runtime, get_runtime
 from arden.server.schemas import (
     BranchRequest,
     ClearSessionRequest,
+    ContextBudgetResponse,
     CreateSessionRequest,
     GoalProposalResponse,
     MoveSessionAreaRequest,
@@ -336,6 +343,37 @@ async def _triage_candidates(svc: SessionService) -> list[dict]:
     return [{"key": p["area_id"], "title": p.get("name", "")} for p in await svc.list_areas()]
 
 
+def _context_budget_snapshot(data: SessionData, runtime: Runtime) -> ContextBudgetResponse:
+    config = getattr(runtime, "config", None)
+    model = data.state.chat_model or getattr(config, "chat_model", None)
+    threshold = getattr(config, "compression_threshold", COMPRESSION_THRESHOLD)
+    message_limit = getattr(config, "max_messages", MAX_MESSAGES)
+    message_count = data.last_message_count if data.last_message_count is not None else len(data.messages)
+    hard_limit = None
+    compaction_trigger = None
+    if model:
+        try:
+            budget = token_compaction_budget(
+                model,
+                threshold=threshold,
+                token_headroom=COMPRESSION_TOKEN_HEADROOM,
+            )
+        except ValueError:
+            pass
+        else:
+            hard_limit = budget.hard_limit
+            compaction_trigger = budget.compaction_trigger
+    return ContextBudgetResponse(
+        model=model,
+        uses_default_model=data.state.chat_model is None,
+        hard_limit=hard_limit,
+        compaction_trigger=compaction_trigger,
+        message_limit=message_limit,
+        input_tokens=data.last_input_tokens or 0,
+        message_count=message_count,
+    )
+
+
 @router.get("/session/history")
 async def get_session_history(
     svc: SessionService = Depends(require_session_service),
@@ -491,6 +529,7 @@ async def get_session_history(
             "last_input_tokens": data.last_input_tokens or 0,
             "message_count": data.last_message_count if data.last_message_count is not None else len(data.messages),
         },
+        "context_budget": _context_budget_snapshot(data, runtime).model_dump(),
     }
 
 
@@ -841,12 +880,17 @@ async def update_session_model(
     req: UpdateSessionModelRequest,
     svc: SessionService = Depends(require_session_service),
     runs: RunRegistry = Depends(require_run_registry),
+    runtime: Runtime = Depends(get_runtime),
 ):
-    updated = await svc.update_chat_model(session_id, req.chat_model)
-    if not updated:
+    data = await svc.update_chat_model(session_id, req.chat_model)
+    if not data:
         raise HTTPException(status_code=404, detail="Session not found")
     runs.sync_session_chat_model(session_id, req.chat_model)
-    return {"session_id": session_id, "chat_model": req.chat_model}
+    return {
+        "session_id": session_id,
+        "chat_model": req.chat_model,
+        "context_budget": _context_budget_snapshot(data, runtime).model_dump(),
+    }
 
 
 @router.post("/sessions/{session_id}/area")

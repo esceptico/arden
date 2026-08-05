@@ -602,6 +602,7 @@ class TokenUsageEvent(SSEEvent):
     usage: dict = field(default_factory=dict)
     cost: float = 0.0
     message_count: int | None = None
+    context_input_tokens: int | None = None
     scope: str = "run"
     task_id: str | None = None
     child_run_id: str | None = None

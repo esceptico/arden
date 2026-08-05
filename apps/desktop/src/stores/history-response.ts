@@ -1,5 +1,6 @@
 import type { HistoryMessage, HistoryPage } from "@/api/chat";
 import type { SessionRuntimeSnapshot } from "@/api/events";
+import type { ContextBudgetSnapshot } from "@/api/types";
 import { isForegroundRunStatus } from "@/lib/runStatus";
 import {
   newestHistoryActivityId,
@@ -19,6 +20,7 @@ import type {
   ActivityItem,
   ApprovalState,
   CachedSessionState,
+  SessionContextBudget,
   UiMessage,
 } from "@/stores/types";
 
@@ -28,6 +30,20 @@ export interface HistoryResponse {
   runtime?: SessionRuntimeSnapshot;
   page?: HistoryPage;
   usage?: { last_input_tokens: number; message_count: number };
+  context_budget?: ContextBudgetSnapshot;
+}
+
+export function sessionContextBudgetFromHistory(
+  budget: HistoryResponse["context_budget"],
+): SessionContextBudget | null {
+  if (!budget) return null;
+  return {
+    model: budget.model,
+    usesDefaultModel: budget.uses_default_model,
+    hardLimit: budget.hard_limit,
+    compactionTrigger: budget.compaction_trigger,
+    messageLimit: budget.message_limit,
+  };
 }
 
 export interface HistoryProjection {
@@ -149,7 +165,7 @@ export function cachedSessionFromHistory(
   skipApprovals: boolean,
 ): CachedSessionState {
   const base = existing ?? blankSessionView();
-  const { runtime, page, usage } = history;
+  const { runtime, page, usage, context_budget: contextBudget } = history;
   const { activeForegroundRunId, activeActivityId, items } = areaHistoryResponse(
     history,
     page?.has_more_after !== true,
@@ -178,11 +194,14 @@ export function cachedSessionFromHistory(
     order,
     running: view.hasForegroundRun,
     currentRunId: view.currentRunId,
-    usage: usage
+    usage: contextBudget || usage
       ? {
           ...(base.usage ?? initialUsage),
-          lastPrompt: usage.last_input_tokens,
-          messageCount: usage.message_count,
+          contextInputTokens: contextBudget?.input_tokens ?? usage?.last_input_tokens ?? 0,
+          messageCount: contextBudget?.message_count ?? usage?.message_count ?? 0,
+          contextBudget: contextBudget
+            ? sessionContextBudgetFromHistory(contextBudget)
+            : (base.usage ?? initialUsage).contextBudget,
         }
       : base.usage,
     activeActivityId,

@@ -605,11 +605,13 @@ class SessionService:
     async def rename_if_empty(self, session_id: str, name: str) -> bool:
         return await self.store.update_session_name_if_empty(session_id, name)
 
-    async def update_chat_model(self, session_id: str, chat_model: str | None) -> bool:
-        if await self.store.load_session(session_id) is None:
-            return False
+    async def update_chat_model(self, session_id: str, chat_model: str | None) -> SessionData | None:
+        data = await self.store.load_session(session_id)
+        if data is None:
+            return None
         await self.store.update_session_chat_model(session_id, chat_model)
-        return True
+        data.state.chat_model = chat_model
+        return data
 
     async def create_area(
         self,

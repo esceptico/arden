@@ -1224,7 +1224,9 @@ test("done terminal event finalizes running state once", () => {
   expect(state.running).toBe(false);
   expect(state.currentRunId).toBeNull();
   expect(state.usage).toMatchObject({
-    lastPrompt: 3,
+    contextInputTokens: 3,
+    observedPromptTokens: 3,
+    observedCompletionTokens: 4,
     totalTokens: 7,
     totalCost: 0.01,
     messageCount: 5,
@@ -1245,7 +1247,9 @@ test("usage totals include cached input tokens", () => {
   });
 
   expect(getState().usage.totalTokens).toBe(before + 18);
-  expect(getState().usage.lastPrompt).toBe(14);
+  expect(getState().usage.contextInputTokens).toBe(14);
+  expect(getState().usage.observedCacheReadTokens).toBeGreaterThanOrEqual(5);
+  expect(getState().usage.observedCacheWriteTokens).toBeGreaterThanOrEqual(6);
 });
 
 test("live token usage updates context pressure without adding final totals", () => {
@@ -1259,10 +1263,11 @@ test("live token usage updates context pressure without adding final totals", ()
     timestamp: 21,
     usage: { prompt: 7, completion: 2, total: 14, cache_read: 3, cache_write: 2 },
     cost: 0.02,
+    context_input_tokens: 17,
     message_count: 9,
   });
 
-  expect(getState().usage.lastPrompt).toBe(12);
+  expect(getState().usage.contextInputTokens).toBe(17);
   expect(getState().usage.messageCount).toBe(9);
   expect(getState().usage.totalTokens).toBe(before);
 });
@@ -1270,7 +1275,7 @@ test("live token usage updates context pressure without adding final totals", ()
 test("tool token usage updates live totals without changing context pressure", () => {
   const before = getState().usage.totalTokens;
   const costBefore = getState().usage.totalCost;
-  const promptBefore = getState().usage.lastPrompt;
+  const promptBefore = getState().usage.contextInputTokens;
   handleServerEvent({ type: "RUN_STARTED", run_id: "run-tool-usage", session_id: "session-tool-usage", seq: 24, timestamp: 24 });
   handleServerEvent({
     type: "token_usage",
@@ -1283,9 +1288,43 @@ test("tool token usage updates live totals without changing context pressure", (
     scope: "tool",
   });
 
-  expect(getState().usage.lastPrompt).toBe(promptBefore);
+  expect(getState().usage.contextInputTokens).toBe(promptBefore);
   expect(getState().usage.totalTokens).toBe(before + 12);
   expect(getState().usage.totalCost).toBe(costBefore + 0.02);
+});
+
+test("terminal aggregate cost does not recount child-agent spend", () => {
+  const costBefore = getState().usage.totalCost;
+  handleServerEvent({
+    type: "RUN_STARTED",
+    run_id: "run-cost-rollup",
+    session_id: "session-cost-rollup",
+    seq: 26,
+  });
+  handleServerEvent({
+    type: "token_usage",
+    run_id: "run-cost-rollup",
+    session_id: "session-cost-rollup",
+    seq: 27,
+    usage: { prompt: 10, completion: 2, total: 12 },
+    cost: 0.02,
+    scope: "tool",
+  });
+  handleServerEvent({
+    type: "RUN_FINISHED",
+    run_id: "run-cost-rollup",
+    session_id: "session-cost-rollup",
+    seq: 28,
+    usage: {
+      prompt: 20,
+      completion: 5,
+      total: 25,
+      cost: 0.05,
+      exclusive_cost: 0.03,
+    },
+  });
+
+  expect(getState().usage.totalCost).toBeCloseTo(costBefore + 0.05);
 });
 
 test("final cumulative usage does not overwrite context pressure", () => {
@@ -1311,7 +1350,7 @@ test("final cumulative usage does not overwrite context pressure", () => {
     message_count: 7,
   });
 
-  expect(getState().usage.lastPrompt).toBe(100);
+  expect(getState().usage.contextInputTokens).toBe(100);
   expect(getState().usage.messageCount).toBe(7);
   expect(getState().usage.totalTokens).toBe(before + 5100);
 });

@@ -153,6 +153,7 @@ export function applyChatEventToTranscript(
       s.updateLiveUsage({
         ...event.usage,
         cost: event.cost,
+        contextInputTokens: event.context_input_tokens,
         messageCount: event.message_count ?? undefined,
         scope: event.scope,
       });

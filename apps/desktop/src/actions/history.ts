@@ -30,6 +30,7 @@ import {
   areaHistoryResponse,
   runtimeView,
   type HistoryResponse,
+  sessionContextBudgetFromHistory,
 } from "@/stores/history-response";
 import { isForegroundRunStatus } from "@/lib/runStatus";
 import { refreshChildAgents } from "@/actions/childAgents";
@@ -308,7 +309,7 @@ export async function loadHistory(sessionId: string, options: LoadHistoryOptions
     pendingHistoryToolResultsBySession.delete(sessionId);
   }
 
-  const { messages, runtime, page, usage } = history;
+  const { messages, runtime, page, usage, context_budget: contextBudget } = history;
   const isNewestPage = mode !== "prepend" && page?.has_more_after !== true;
   const { activeForegroundRunId, activeActivityId, items } = areaHistoryResponse(
     history,
@@ -327,10 +328,13 @@ export async function loadHistory(sessionId: string, options: LoadHistoryOptions
     // Only hydrate the budget snapshot on a fresh load — paging in older /
     // newer chunks doesn't change "what the agent's current context size
     // looks like" so we leave the dial alone.
-    if (usage) {
+    if (contextBudget || usage) {
       s.hydrateUsageSnapshot({
-        lastPrompt: usage.last_input_tokens,
-        messageCount: usage.message_count,
+        contextInputTokens: contextBudget?.input_tokens ?? usage?.last_input_tokens ?? 0,
+        messageCount: contextBudget?.message_count ?? usage?.message_count ?? 0,
+        contextBudget: contextBudget
+          ? sessionContextBudgetFromHistory(contextBudget)
+          : undefined,
       });
     }
     // The workflows (FleetView) domain is in-memory, built only from live SSE

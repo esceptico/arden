@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
 
@@ -21,6 +22,29 @@ from arden.observability import observed_trace
 
 _COMPACTION_MAX_THREADS = 2
 _COMPACTION_SLOTS = threading.BoundedSemaphore(_COMPACTION_MAX_THREADS)
+
+
+@dataclass(frozen=True)
+class TokenCompactionBudget:
+    """The exact token thresholds used by compaction and budget surfaces."""
+
+    model: str
+    hard_limit: int
+    compaction_trigger: int
+
+
+def token_compaction_budget(
+    model: str,
+    *,
+    threshold: float = COMPRESSION_THRESHOLD,
+    token_headroom: float = COMPRESSION_TOKEN_HEADROOM,
+) -> TokenCompactionBudget:
+    hard_limit = get_model(model).max_context_tokens
+    return TokenCompactionBudget(
+        model=model,
+        hard_limit=hard_limit,
+        compaction_trigger=int(hard_limit * threshold * token_headroom),
+    )
 
 
 class Compactor(Protocol):
@@ -58,8 +82,8 @@ def compact_needed(
         return True
     if actual_input_tokens is None:
         return False
-    limit = get_model(model).max_context_tokens
-    return actual_input_tokens >= int(limit * threshold * token_headroom)
+    budget = token_compaction_budget(model, threshold=threshold, token_headroom=token_headroom)
+    return actual_input_tokens >= budget.compaction_trigger
 
 
 def compactable_range(

@@ -64,6 +64,16 @@ export interface SessionGoal {
   updated_at: string;
 }
 
+export interface ContextBudgetSnapshot {
+  model: string | null;
+  uses_default_model: boolean;
+  hard_limit: number | null;
+  compaction_trigger: number | null;
+  message_limit: number;
+  input_tokens: number;
+  message_count: number;
+}
+
 export type TodoStatus = "pending" | "in_progress" | "completed";
 
 export interface TodoListItem {

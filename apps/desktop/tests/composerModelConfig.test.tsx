@@ -64,13 +64,31 @@ function stubApi(requests: Array<{ path: string; method?: string; body?: string 
     api: {
       request: async (_config, request) => {
         requests.push(request);
+        const model = request.path.endsWith("/model")
+          ? JSON.parse(request.body ?? "{}").chat_model
+          : null;
+        const data = model
+          ? {
+              session_id: "session-1",
+              chat_model: model,
+              context_budget: {
+                model,
+                uses_default_model: false,
+                hard_limit: 180_000,
+                compaction_trigger: 136_800,
+                message_limit: 100,
+                input_tokens: 12_000,
+                message_count: 8,
+              },
+            }
+          : CONFIG;
         return {
           ok: true,
           status: 200,
           statusText: "OK",
           contentType: "application/json",
-          data: CONFIG,
-          text: JSON.stringify(CONFIG),
+          data,
+          text: JSON.stringify(data),
         };
       },
     },
@@ -89,6 +107,7 @@ function withStore<T>(patch: Record<string, unknown>, run: () => Promise<T>): Pr
       serverModels: previous.serverModels,
       currentSessionId: previous.currentSessionId,
       sessions: previous.sessions,
+      usage: previous.usage,
     });
   });
 }
@@ -150,6 +169,15 @@ test("choosing a model pins it to the session rather than editing the global def
           body: JSON.stringify({ chat_model: "anthropic/sonnet" }),
           timeout: 60_000,
         }]);
+        expect(getState().usage).toMatchObject({
+          contextInputTokens: 12_000,
+          messageCount: 8,
+          contextBudget: {
+            model: "anthropic/sonnet",
+            hardLimit: 180_000,
+            compactionTrigger: 136_800,
+          },
+        });
       } finally {
         await act(async () => root.unmount());
         restore();

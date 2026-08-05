@@ -594,34 +594,53 @@ export const useStore = create<State & Actions>((set) => ({
   setError: (error) => set({ error }),
   setDraft: (draft) => set({ draft }),
   setEditingId: (editingId) => set({ editingId }),
-  resetUsage: () => set({ usage: initialUsage }),
-  accumulateUsage: ({ prompt, completion, total, cache_read, cache_write, cost, contextInputTokens, messageCount }) =>
+  resetUsage: () =>
+    set((s) => ({ usage: { ...initialUsage, contextBudget: s.usage.contextBudget } })),
+  accumulateUsage: ({ prompt, completion, total, cache_read, cache_write, cost, exclusive_cost, contextInputTokens, messageCount }) =>
     set((s) => ({
       usage: {
-        lastPrompt: contextInputTokens ?? inputTokens({ prompt, completion, total, cache_read, cache_write }),
+        contextInputTokens: contextInputTokens ?? inputTokens({ prompt, completion, total, cache_read, cache_write }),
+        observedPromptTokens: s.usage.observedPromptTokens + prompt,
+        observedCompletionTokens: s.usage.observedCompletionTokens + completion,
+        observedCacheReadTokens: s.usage.observedCacheReadTokens + (cache_read ?? 0),
+        observedCacheWriteTokens: s.usage.observedCacheWriteTokens + (cache_write ?? 0),
         totalTokens: s.usage.totalTokens + (total ?? prompt + completion + (cache_read ?? 0) + (cache_write ?? 0)),
-        totalCost: s.usage.totalCost + cost,
+        // Child response events are counted live. The terminal event carries
+        // aggregate cost for audit plus direct-run cost for non-duplicating UI.
+        totalCost: s.usage.totalCost + (exclusive_cost ?? cost),
         messageCount: messageCount ?? s.usage.messageCount,
+        contextBudget: s.usage.contextBudget,
       },
     })),
-  updateLiveUsage: ({ prompt, completion, total, cache_read, cache_write, cost, messageCount, scope }) =>
+  updateLiveUsage: ({ prompt, completion, total, cache_read, cache_write, cost, contextInputTokens, messageCount, scope }) =>
     set((s) => ({
       usage:
         scope === "tool"
           ? {
               ...s.usage,
+              observedPromptTokens: s.usage.observedPromptTokens + prompt,
+              observedCompletionTokens: s.usage.observedCompletionTokens + completion,
+              observedCacheReadTokens: s.usage.observedCacheReadTokens + (cache_read ?? 0),
+              observedCacheWriteTokens: s.usage.observedCacheWriteTokens + (cache_write ?? 0),
               totalTokens: s.usage.totalTokens + (total ?? prompt + completion + (cache_read ?? 0) + (cache_write ?? 0)),
               totalCost: s.usage.totalCost + (cost ?? 0),
             }
           : {
               ...s.usage,
-              lastPrompt: inputTokens({ prompt, completion, total, cache_read, cache_write }),
+              contextInputTokens:
+                contextInputTokens
+                ?? inputTokens({ prompt, completion, total, cache_read, cache_write }),
               messageCount: messageCount ?? s.usage.messageCount,
             },
     })),
-  hydrateUsageSnapshot: ({ lastPrompt, messageCount }) =>
+  hydrateUsageSnapshot: ({ contextInputTokens, messageCount, contextBudget }) =>
     set((s) => ({
-      usage: { ...s.usage, lastPrompt, messageCount },
+      usage: {
+        ...s.usage,
+        contextInputTokens,
+        messageCount,
+        contextBudget: contextBudget === undefined ? s.usage.contextBudget : contextBudget,
+      },
     })),
 
   openSettings: (tab) =>

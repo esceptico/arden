@@ -358,13 +358,28 @@ export interface UiMessage {
   isMeta?: boolean;
 }
 
+export interface SessionContextBudget {
+  model: string | null;
+  usesDefaultModel: boolean;
+  hardLimit: number | null;
+  compactionTrigger: number | null;
+  messageLimit: number;
+}
+
 export interface SessionUsage {
-  lastPrompt: number;
+  /** Provider-reported input tokens for the current model-visible context. */
+  contextInputTokens: number;
+  observedPromptTokens: number;
+  observedCompletionTokens: number;
+  observedCacheReadTokens: number;
+  observedCacheWriteTokens: number;
   totalTokens: number;
   totalCost: number;
   /** Server-side message count after the latest run. Drives the message
    *  scale on the budget dial. 0 before the first run finishes. */
   messageCount: number;
+  /** Model-specific limits captured with this session's history. */
+  contextBudget: SessionContextBudget | null;
 }
 
 export interface MarkdownViewState {
@@ -565,6 +580,7 @@ export interface Actions {
     cache_read?: number;
     cache_write?: number;
     cost: number;
+    exclusive_cost?: number;
     contextInputTokens?: number | null;
     messageCount?: number;
   }) => void;
@@ -575,6 +591,7 @@ export interface Actions {
     cache_read?: number;
     cache_write?: number;
     cost?: number;
+    contextInputTokens?: number | null;
     messageCount?: number;
     scope?: "run" | "tool";
   }) => void;
@@ -582,7 +599,11 @@ export interface Actions {
    *  Used when loading a session's persisted state — last prompt size and
    *  message count come from disk; cumulative cost/tokens start fresh
    *  for the session view (server doesn't persist running totals). */
-  hydrateUsageSnapshot: (snapshot: { lastPrompt: number; messageCount: number }) => void;
+  hydrateUsageSnapshot: (snapshot: {
+    contextInputTokens: number;
+    messageCount: number;
+    contextBudget?: SessionContextBudget | null;
+  }) => void;
   openSettings: (tab?: SettingsTabId) => void;
   closeSettings: () => void;
   setConnectionDraft: (patch: Partial<AppConfig>) => void;

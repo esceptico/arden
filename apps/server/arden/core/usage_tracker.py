@@ -6,6 +6,9 @@ class UsageTracker:
     def __init__(self) -> None:
         self.usage = Usage()
         self.cost: float = 0.0
+        # Direct responses only. `cost` additionally includes child-agent
+        # rollups so budget enforcement sees the whole run.
+        self.own_cost: float = 0.0
 
     async def track(self, response: CompletionResponse) -> None:
         self.usage += response.usage
@@ -13,6 +16,8 @@ class UsageTracker:
         # the agent loop. Hit by tests using stub model names and by users
         # adding custom models that haven't yet declared pricing.
         try:
-            self.cost += get_model(response.model).pricing.cost(response.usage)
+            response_cost = get_model(response.model).pricing.cost(response.usage)
+            self.cost += response_cost
+            self.own_cost += response_cost
         except ValueError:
             pass

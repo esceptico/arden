@@ -23,6 +23,7 @@ from arden.core.compactor import (
     compact_summarize,
     compactable_range,
     is_handoff_message,
+    token_compaction_budget,
 )
 from arden.llm.models import get_model
 
@@ -247,6 +248,18 @@ def test_compact_needed_uses_headroom_before_configured_threshold(monkeypatch):
 
     assert compact_needed(messages, "test-model", actual_input_tokens=760, threshold=0.8)
     assert not compact_needed(messages, "test-model", actual_input_tokens=759, threshold=0.8)
+
+
+def test_token_budget_reports_the_same_trigger_used_by_compaction(monkeypatch):
+    monkeypatch.setattr(
+        "arden.core.compactor.get_model",
+        lambda _model: type("Model", (), {"max_context_tokens": 1000})(),
+    )
+
+    budget = token_compaction_budget("test-model", threshold=0.8)
+
+    assert budget.hard_limit == 1000
+    assert budget.compaction_trigger == 760
 
 
 def test_compact_needed_triggers_at_message_ceiling():

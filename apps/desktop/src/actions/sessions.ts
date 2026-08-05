@@ -5,6 +5,7 @@ import { getState } from "@/stores";
 import { fetchGoal } from "@/actions/goals";
 import { fetchSessionTodo } from "@/actions/todos";
 import { loadHistory, type LoadHistoryOptions } from "@/actions/history";
+import { sessionContextBudgetFromHistory } from "@/stores/history-response";
 
 export async function switchSession(sessionId: string, historyOptions: LoadHistoryOptions = {}): Promise<void> {
   const s = getState();
@@ -94,13 +95,20 @@ export async function refreshSessions(): Promise<void> {
 }
 
 export async function updateSessionModelAction(sessionId: string, chatModel: string): Promise<void> {
+  const response = await updateSessionModelApi(getState().config, sessionId, chatModel);
   const s = getState();
   s.setSessions(
     s.sessions.map((sess) =>
       sess.session_id === sessionId ? { ...sess, chat_model: chatModel } : sess,
     ),
   );
-  await updateSessionModelApi(s.config, sessionId, chatModel);
+  if (s.currentSessionId === sessionId && response.context_budget) {
+    s.hydrateUsageSnapshot({
+      contextInputTokens: response.context_budget.input_tokens,
+      messageCount: response.context_budget.message_count,
+      contextBudget: sessionContextBudgetFromHistory(response.context_budget),
+    });
+  }
 }
 
 export async function renameSession(sessionId: string, name: string): Promise<void> {

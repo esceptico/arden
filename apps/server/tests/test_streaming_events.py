@@ -2178,8 +2178,10 @@ async def test_run_chat_emits_live_token_usage_after_model_response(monkeypatch)
     assert event.usage == {"prompt": 10, "completion": 2, "total": 19, "cache_read": 3, "cache_write": 4}
     assert event.cost == 0.0
     assert event.message_count == 2
+    assert event.context_input_tokens == 17
     finished_events = [record.event for record in bus._recent if record.event.type.value == "RUN_FINISHED"]
     assert finished_events[-1].context_input_tokens == 17
+    assert finished_events[-1].usage["exclusive_cost"] == 0.0
 
 
 @pytest.mark.asyncio

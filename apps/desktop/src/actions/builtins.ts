@@ -40,7 +40,7 @@ export async function runBuiltinCommand(name: string, args: string): Promise<voi
     case "cost": {
       const u = s.usage;
       appendStatus(
-        `Last context: ${formatTokens(u.lastPrompt)} tokens · Total: ${formatTokens(u.totalTokens)} tokens · ${formatCost(u.totalCost)}`,
+        `Current context: ${formatTokens(u.contextInputTokens)} tokens · Observed: ${formatTokens(u.totalTokens)} tokens · ${formatCost(u.totalCost)}`,
       );
       return;
     }

@@ -8,12 +8,19 @@ import pytest_asyncio
 import arden.database as database
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
+from arden.core.compactor import token_compaction_budget
 from arden.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS
 from arden.events.sse import ThinkingEvent
 from arden.integrations.base import IntegrationConnectionDescriptor
 from arden.server.bus import BusRegistry
 from arden.server.routers import session as session_router
-from arden.server.routers.session import _history_tool_calls, get_session_history, list_sessions
+from arden.server.routers.session import (
+    _history_tool_calls,
+    get_session_history,
+    list_sessions,
+    update_session_model,
+)
+from arden.server.schemas import UpdateSessionModelRequest
 from arden.server.state import RunRegistry, RunStatus
 from arden.services.session import SessionService
 
@@ -94,6 +101,113 @@ async def test_history_includes_runtime_snapshot_for_active_session(session_serv
     assert result["runtime"]["active_run"]["status"] == "running"
     assert result["runtime"]["pending_approvals"][0]["tool_id"] == "tool-1"
     assert result["runtime"]["queued_messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_history_context_budget_uses_session_model_and_exact_compaction_trigger(
+    session_service: SessionService,
+):
+    state = _state("sess-budget")
+    state.chat_model = "gpt-5.2"
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+    await session_service.save(
+        state,
+        messages,
+        metadata={"last_input_tokens": 12_345, "last_message_count": 7},
+    )
+    runtime = SimpleNamespace(
+        run_registry=RunRegistry(),
+        executor=None,
+        config=SimpleNamespace(
+            chat_model="openai-codex/gpt-5.6-sol",
+            compression_threshold=0.8,
+            max_messages=99,
+        ),
+    )
+
+    result = await get_session_history(
+        session_service, runtime, BusRegistry(), "sess-budget", limit=100, around_seq=None
+    )
+
+    expected = token_compaction_budget("gpt-5.2", threshold=0.8)
+    assert result["context_budget"] == {
+        "model": "gpt-5.2",
+        "uses_default_model": False,
+        "hard_limit": expected.hard_limit,
+        "compaction_trigger": expected.compaction_trigger,
+        "message_limit": 99,
+        "input_tokens": 12_345,
+        "message_count": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_history_context_budget_keeps_usage_when_model_is_unknown(
+    session_service: SessionService,
+):
+    state = _state("sess-unknown-budget")
+    state.chat_model = "custom/missing-model"
+    await session_service.save(
+        state,
+        [{"role": "user", "content": "hi"}],
+        metadata={"last_input_tokens": 321},
+    )
+    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+
+    result = await get_session_history(
+        session_service,
+        runtime,
+        BusRegistry(),
+        "sess-unknown-budget",
+        limit=100,
+        around_seq=None,
+    )
+
+    assert result["context_budget"] == {
+        "model": "custom/missing-model",
+        "uses_default_model": False,
+        "hard_limit": None,
+        "compaction_trigger": None,
+        "message_limit": 120,
+        "input_tokens": 321,
+        "message_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_update_returns_the_new_session_budget(session_service: SessionService):
+    state = _state("sess-model-update")
+    await session_service.save(
+        state,
+        [{"role": "user", "content": "hi"}],
+        metadata={"last_input_tokens": 456, "last_message_count": 3},
+    )
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(
+            chat_model="openai-codex/gpt-5.6-sol",
+            compression_threshold=0.8,
+            max_messages=88,
+        )
+    )
+
+    result = await update_session_model(
+        "sess-model-update",
+        UpdateSessionModelRequest(chat_model="gpt-5.2"),
+        session_service,
+        RunRegistry(),
+        runtime,
+    )
+
+    expected = token_compaction_budget("gpt-5.2", threshold=0.8)
+    assert result["context_budget"] == {
+        "model": "gpt-5.2",
+        "uses_default_model": False,
+        "hard_limit": expected.hard_limit,
+        "compaction_trigger": expected.compaction_trigger,
+        "message_limit": 88,
+        "input_tokens": 456,
+        "message_count": 3,
+    }
 
 
 @pytest.mark.asyncio
