@@ -4,12 +4,12 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from inspect import Parameter, signature
 from uuid import uuid4
 
 from arden.agent import Agent, Role, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
+from arden.agent.types.llm import CompletionResponse
 from arden.agent.types.tool_call import PendingToolCall
 from arden.areas.agent import is_custodian_task_id
 from arden.automation.prompts import AUTOMATION_SUFFIX, CUSTODIAN_SUFFIX
@@ -163,9 +163,10 @@ async def _checkpoint_tool_step(
     await session_service.save_progress(session_state, _persistable_messages(run))
     for call in incomplete.pending_calls:
         tool = executor.registry.get(call.name)
-        policy = getattr(tool, "policy", None)
-        action = getattr(getattr(policy, "action", None), "value", None) or str(getattr(policy, "action", "unknown"))
-        scope = getattr(getattr(policy, "scope", None), "value", None) or str(getattr(policy, "scope", "internal"))
+        if tool is None:
+            raise RuntimeError(f"Cannot checkpoint unknown tool call {call.name!r}")
+        action = tool.policy.action.value
+        scope = tool.policy.scope.value
         _, behavior_args = split_tool_arguments(call.args)
         args_json = json.dumps(behavior_args, sort_keys=True, separators=(",", ":"))
         await session_service.store.record_tool_call_created(
@@ -288,7 +289,7 @@ async def _apply_generated_session_name(ctx: ChatContext, bus: SessionBus) -> No
 
 
 async def _record_run_started(
-    service: object,
+    service: SessionService,
     run_id: str,
     session_id: str,
     *,
@@ -296,18 +297,16 @@ async def _record_run_started(
     loop_task_id: str | None = None,
     automation_id: str | None = None,
 ) -> None:
-    fn = getattr(service, "record_chat_run_started", None)
-    if fn:
-        metadata = {
-            key: value
-            for key, value in (
-                ("client_id", client_id),
-                ("loop_task_id", loop_task_id),
-                ("automation_id", automation_id),
-            )
-            if value is not None
-        }
-        await fn(run_id, session_id, metadata=metadata)
+    metadata = {
+        key: value
+        for key, value in (
+            ("client_id", client_id),
+            ("loop_task_id", loop_task_id),
+            ("automation_id", automation_id),
+        )
+        if value is not None
+    }
+    await service.record_chat_run_started(run_id, session_id, metadata=metadata)
 
 
 @dataclass(frozen=True)
@@ -371,8 +370,8 @@ def _durable_io_callbacks(session_service: SessionService) -> _DurableIOCallback
 def _wire_background_registry(bg_registry, session_service: SessionService, session_id: str) -> None:
     bg_registry.record_event = _background_event_recorder(session_service)
     bg_registry.read_result = lambda task_id: session_service.store.get_background_agent_result(session_id, task_id)
-    bg_registry.claim_completion = getattr(session_service.store, "claim_background_agent_completion", None)
-    bg_registry.mark_completion_delivered = getattr(session_service.store, "mark_background_completion_delivered", None)
+    bg_registry.claim_completion = session_service.store.claim_background_agent_completion
+    bg_registry.mark_completion_delivered = session_service.store.mark_background_completion_delivered
 
 
 def _background_event_recorder(session_service: SessionService):
@@ -422,7 +421,7 @@ def _background_event_recorder(session_service: SessionService):
 
 
 async def _record_run_status(
-    service: object,
+    service: SessionService,
     run_id: str,
     status: str,
     *,
@@ -431,22 +430,14 @@ async def _record_run_status(
     error_code: str | None = None,
     error_message: str | None = None,
 ) -> None:
-    fn = getattr(service, "record_chat_run_status", None)
-    if fn:
-        kwargs = {
-            "stop_reason": stop_reason,
-            "last_seq": last_seq,
-            "error_code": error_code,
-            "error_message": error_message,
-        }
-        try:
-            sig = signature(fn)
-            accepts_kwargs = any(p.kind == Parameter.VAR_KEYWORD for p in sig.parameters.values())
-            if not accepts_kwargs:
-                kwargs = {key: value for key, value in kwargs.items() if key in sig.parameters}
-        except (TypeError, ValueError):
-            pass
-        await fn(run_id, status, **kwargs)
+    await service.record_chat_run_status(
+        run_id,
+        status,
+        stop_reason=stop_reason,
+        last_seq=last_seq,
+        error_code=error_code,
+        error_message=error_message,
+    )
 
 
 def _is_anthropic(model: str) -> bool:
@@ -787,10 +778,8 @@ async def prepare_chat(
     run.automation_id = automation_id
 
     tools = deps.executor.get_tools(scope=resolve(tool_scope)) if tool_scope else deps.executor.get_tools()
-    get_goal = getattr(deps.session_service, "get_goal", None)
-    goal_context = await get_goal(session_state.session_id) if get_goal else None
-    get_todo_override = getattr(deps.session_service, "get_todo_override", None)
-    todo_override = await get_todo_override(session_state.session_id) if get_todo_override else None
+    goal_context = await deps.session_service.get_goal(session_state.session_id)
+    todo_override = await deps.session_service.get_todo_override(session_state.session_id)
     area_record = await deps.session_service.get_area(session_state.area_id) if session_state.area_id else None
     area_context = _area_context_from_record(area_record)
     # Area context = the container's topic page (a capability on the area
@@ -1498,10 +1487,10 @@ def _merge_background_messages(current: list[dict], background: list[dict]) -> l
     return [*current, *background[prefix_len:]]
 
 
-def _response_input_tokens(response) -> int | None:
-    usage = getattr(response, "usage", None)
-    if not usage:
+def _response_input_tokens(response: CompletionResponse | None) -> int | None:
+    if response is None:
         return None
+    usage = response.usage
     return usage.prompt_tokens + usage.cache_read_tokens + usage.cache_write_tokens
 
 
@@ -1861,7 +1850,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
 
         def _configure_agent(next_agent: Agent) -> Agent:
             async def _recover_tool_calls(calls: list[PendingToolCall]) -> dict[str, ToolResult]:
-                prepare_result = getattr(next_agent.executor, "prepare_recovered_result", None)
+                prepare_result = next_agent.executor.prepare_recovered_result
                 return await _recover_durable_tool_calls(
                     ctx.session_service.store,
                     run.run_id,
@@ -1876,24 +1865,20 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             return next_agent
 
         async def _force_context_compaction() -> bool:
-            compactor = getattr(ctx.config, "compactor", None)
+            compactor = ctx.config.compactor
             if compactor is None:
                 return False
             source_messages = _compaction_source_messages(run)
             before_count = len(source_messages)
             await bus.emit(CompactionStartedEvent(run_id=run.run_id))
             try:
-                force_compact = getattr(compactor, "force_compact", None)
-                model = getattr(ctx.config, "model", "")
-                if force_compact:
-                    compacted = await force_compact(source_messages, model)
-                else:
-                    forced_input_tokens = get_model(model).max_context_tokens
-                    compacted = await compactor.maybe_compact(
-                        source_messages,
-                        model,
-                        forced_input_tokens,
-                    )
+                model = ctx.config.model
+                forced_input_tokens = get_model(model).max_context_tokens
+                compacted = await compactor.maybe_compact(
+                    source_messages,
+                    model,
+                    forced_input_tokens,
+                )
             except Exception:
                 await bus.emit(
                     CompactionFinishedEvent(
@@ -1966,7 +1951,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             run_finished_event = RunFinishedEvent(
                 run_id=run.run_id,
                 usage=usage_dict,
-                context_input_tokens=_response_input_tokens(getattr(agent, "_last_response", None)),
+                context_input_tokens=_response_input_tokens(agent._last_response),
                 message_count=len(_persistable_messages(run)),
             )
             run_finished = True
@@ -2050,7 +2035,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             )
 
     if not run.backgrounded:
-        input_tokens = _response_input_tokens(getattr(agent, "_last_response", None))
+        input_tokens = _response_input_tokens(agent._last_response if agent is not None else None)
         try:
             await finalize_foreground_run(
                 ctx,

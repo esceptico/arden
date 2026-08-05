@@ -58,11 +58,13 @@ from arden.services.chat import (
     _checkpoint_tool_step,
     _drain_backgrounded,
     _recover_durable_tool_calls,
+    _response_input_tokens,
     run_chat,
 )
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import IOBridge, RunContext, ToolContext
+from arden.tools.core.types import ToolAction, ToolScope
 from tests.helpers import make_executor, make_text_response
 
 
@@ -85,6 +87,9 @@ def _stream_context(run: RunState, registry: RunRegistry | None = None) -> Simpl
 
 class _ChatCompletionMixin:
     failed_event: RunFailed | None = None
+
+    async def update_chat_idempotency_key(self, **kwargs):
+        return None
 
     async def record_chat_run_status(self, run_id, status, **kwargs):
         return None
@@ -129,6 +134,14 @@ class _ChatCompletionMixin:
         return {}
 
 
+class _BackgroundCompletionStoreMixin:
+    async def claim_background_agent_completion(self, **kwargs) -> dict:
+        return {"claimed": True, "delivered": False, "completion_id": kwargs["completion_id"]}
+
+    async def mark_background_completion_delivered(self, **kwargs) -> bool:
+        return True
+
+
 def test_text_boundary_events_convert_to_sse():
     (start,) = agent_events_to_sse(TextStarted(message_id="text-1"))
     (content,) = agent_events_to_sse(TextDelta(message_id="text-1", content="hello"))
@@ -144,7 +157,7 @@ def test_text_boundary_events_convert_to_sse():
 
 @pytest.mark.asyncio
 async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_safe_calls():
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def list_tool_calls(self, *, run_id):
             assert run_id == "run-1"
             return [
@@ -212,7 +225,7 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
 async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
     operations = []
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def record_tool_call_created(self, **kwargs):
             operations.append(("created", kwargs))
 
@@ -242,7 +255,7 @@ async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
     ]
     executor = SimpleNamespace(
         registry=SimpleNamespace(
-            get=lambda _name: SimpleNamespace(policy=SimpleNamespace(action="write", scope="internal"))
+            get=lambda _name: SimpleNamespace(policy=SimpleNamespace(action=ToolAction.WRITE, scope=ToolScope.INTERNAL))
         )
     )
 
@@ -254,6 +267,39 @@ async def test_tool_step_checkpoint_saves_assistant_turn_before_call_intents():
     assert operations[1][1]["tool_call_id"] == "c1"
     expected_args = json.dumps({"x": 1}, sort_keys=True, separators=(",", ":"))
     assert operations[1][1]["args_hash"] == hashlib.sha256(expected_args.encode()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_tool_step_checkpoint_rejects_unknown_tool_call():
+    run = RunState(run_id="run-1", session_id="s-1")
+    run.messages = [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "missing", "arguments": "{}"}}],
+        },
+    ]
+    service = SimpleNamespace(save_progress=lambda *_args: asyncio.sleep(0), store=SimpleNamespace())
+    executor = SimpleNamespace(registry=SimpleNamespace(get=lambda _name: None))
+
+    with pytest.raises(RuntimeError, match="unknown tool call 'missing'"):
+        await _checkpoint_tool_step(
+            service,
+            SessionState(session_id="s-1", started_at=datetime.now(UTC)),
+            run,
+            executor,
+        )
+
+
+def test_response_input_tokens_uses_completion_response_contract():
+    response = make_text_response("ok")
+    response.usage.prompt_tokens = 10
+    response.usage.cache_read_tokens = 2
+    response.usage.cache_write_tokens = 3
+
+    assert _response_input_tokens(response) == 15
+    assert _response_input_tokens(None) is None
 
 
 def test_tool_result_sse_exposes_source_refs_outside_result_content():
@@ -693,7 +739,11 @@ def _fake_run_registry(get_active_run=lambda _sid: None):
 
 
 def _fake_session_service():
-    return SimpleNamespace(store=SimpleNamespace())
+    class Store(_BackgroundCompletionStoreMixin):
+        async def get_background_agent_result(self, session_id: str, task_id: str) -> None:
+            return None
+
+    return SimpleNamespace(store=Store())
 
 
 @pytest.mark.asyncio
@@ -1625,7 +1675,7 @@ async def test_run_chat_keeps_backgrounded_run_active_until_drain_finishes(monke
     session_state = SessionState(session_id="sess-bg", started_at=datetime.now(UTC))
     blocker = asyncio.Future()
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -1800,7 +1850,7 @@ async def test_run_chat_emits_cancelled_when_task_cancelled_before_agent_loop():
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
@@ -1837,7 +1887,7 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
     run = registry.create_run("sess-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -1852,13 +1902,23 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
         async def save_progress(self, session_state, messages):
             return None
 
-        async def record_chat_run_status(self, run_id, status, *, stop_reason=None, last_seq=None):
+        async def record_chat_run_status(
+            self,
+            run_id,
+            status,
+            *,
+            stop_reason=None,
+            last_seq=None,
+            error_code=None,
+            error_message=None,
+        ):
             self.statuses.append((run_id, status, stop_reason, last_seq))
 
     class FakeAgent:
         def __init__(self):
             self.hooks = SimpleNamespace(on_response=None, on_step_finish=None, get_pending_messages=None)
             self.tools = []
+            self._last_response = None
 
         async def stream(self, messages):
             yield Result(text="", stop_reason=StopReason.MAX_COST, steps=0, usage=Usage())
@@ -1871,7 +1931,7 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
@@ -1898,7 +1958,7 @@ async def test_run_chat_saves_canonical_loop_messages_without_legacy_count_metad
     ]
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -1938,7 +1998,7 @@ async def test_run_chat_saves_canonical_loop_messages_without_legacy_count_metad
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
@@ -1960,7 +2020,7 @@ async def test_run_chat_final_save_failure_emits_error_not_finished(monkeypatch)
     run.loop_task_id = "loop-1"
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2005,14 +2065,15 @@ async def test_run_chat_final_save_failure_emits_error_not_finished(monkeypatch)
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
         run_registry=registry,
     )
 
-    await run_chat(ctx, bus, BusRegistry())
+    with pytest.raises(RuntimeError, match="final save down"):
+        await run_chat(ctx, bus, BusRegistry())
 
     event_types = [record.event.type.value for record in bus._recent]
     run_error = next(record.event for record in bus._recent if record.event.type.value == "RUN_ERROR")
@@ -2039,7 +2100,7 @@ async def test_run_chat_completed_outbox_failure_does_not_persist_completion(mon
     run = registry.create_run("sess-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2087,14 +2148,15 @@ async def test_run_chat_completed_outbox_failure_does_not_persist_completion(mon
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
         run_registry=registry,
     )
 
-    await run_chat(ctx, bus, BusRegistry())
+    with pytest.raises(RuntimeError, match="outbox down"):
+        await run_chat(ctx, bus, BusRegistry())
 
     event_types = [record.event.type.value for record in bus._recent]
     thinking = next(record.event for record in bus._recent if record.event.type.value == "thinking")
@@ -2116,7 +2178,7 @@ async def test_run_chat_uses_atomic_completion_before_finished_event(monkeypatch
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
     completed = []
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2178,7 +2240,7 @@ async def test_run_chat_completed_bus_failure_does_not_reclassify_run(monkeypatc
     run = registry.create_run("sess-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2223,22 +2285,23 @@ async def test_run_chat_completed_bus_failure_does_not_reclassify_run(monkeypatc
     service = RecordingSessionService()
     monkeypatch.setattr(chat_service, "create_agent", lambda **_kwargs: FakeAgent())
 
-    await run_chat(
-        ChatContext(
-            run=run,
-            session_state=session_state,
-            is_init=False,
-            executor=SimpleNamespace(),
-            tools=[],
-            config=SimpleNamespace(approval_timeout_seconds=300),
-            available_integrations=[],
-            integration_errors={},
-            session_service=service,
-            run_registry=registry,
-        ),
-        FailingFinishedBus(session_id="sess-1"),
-        BusRegistry(),
-    )
+    with pytest.raises(RuntimeError, match="subscriber fanout failed"):
+        await run_chat(
+            ChatContext(
+                run=run,
+                session_state=session_state,
+                is_init=False,
+                executor=SimpleNamespace(),
+                tools=[],
+                config=SimpleNamespace(approval_timeout_seconds=300),
+                available_integrations=[],
+                integration_errors={},
+                session_service=service,
+                run_registry=registry,
+            ),
+            FailingFinishedBus(session_id="sess-1"),
+            BusRegistry(),
+        )
 
     assert service.statuses[-1]["status"] == RunStatus.COMPLETED.value
     assert all(entry["status"] != RunStatus.ERROR.value for entry in service.statuses)
@@ -2255,7 +2318,7 @@ async def test_run_chat_emits_live_token_usage_after_model_response(monkeypatch)
     run.messages = [{"role": "user", "content": "hi"}]
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2301,7 +2364,7 @@ async def test_run_chat_emits_live_token_usage_after_model_response(monkeypatch)
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=RecordingSessionService(),
@@ -2336,7 +2399,7 @@ async def test_active_goal_dispatches_hidden_continuation_after_user_turn(monkey
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
     dispatched = []
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2419,7 +2482,7 @@ async def test_goal_meta_run_dispatches_followup_even_without_tool_activity(monk
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
     dispatched = []
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2488,7 +2551,7 @@ async def test_run_chat_does_not_overwrite_error_status(monkeypatch):
     run = registry.create_run("sess-1")
     session_state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2520,7 +2583,7 @@ async def test_run_chat_does_not_overwrite_error_status(monkeypatch):
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
@@ -2550,7 +2613,7 @@ async def test_run_chat_surfaces_context_length_provider_error(monkeypatch):
             }
         }
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2586,7 +2649,9 @@ async def test_run_chat_surfaces_context_length_provider_error(monkeypatch):
         raise ProviderError()
 
     monkeypatch.setattr(
-        chat_service, "create_agent", lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[])
+        chat_service,
+        "create_agent",
+        lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[], _last_response=None),
     )
     monkeypatch.setattr(chat_service, "run_agent_loop", failing_agent_loop)
     service = RecordingSessionService()
@@ -2597,7 +2662,7 @@ async def test_run_chat_surfaces_context_length_provider_error(monkeypatch):
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
@@ -2634,7 +2699,7 @@ async def test_run_chat_final_save_failure_preserves_provider_error(monkeypatch)
             }
         }
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2668,7 +2733,9 @@ async def test_run_chat_final_save_failure_preserves_provider_error(monkeypatch)
         raise ProviderError()
 
     monkeypatch.setattr(
-        chat_service, "create_agent", lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[])
+        chat_service,
+        "create_agent",
+        lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[], _last_response=None),
     )
     monkeypatch.setattr(chat_service, "run_agent_loop", failing_agent_loop)
     service = FailingFinalSaveService()
@@ -2679,14 +2746,15 @@ async def test_run_chat_final_save_failure_preserves_provider_error(monkeypatch)
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=service,
         run_registry=registry,
     )
 
-    await run_chat(ctx, bus, BusRegistry())
+    with pytest.raises(RuntimeError, match="final save down"):
+        await run_chat(ctx, bus, BusRegistry())
 
     run_errors = [record.event for record in bus._recent if record.event.type.value == "RUN_ERROR"]
     assert [event.code for event in run_errors] == ["context_length_exceeded"]
@@ -2711,11 +2779,11 @@ async def test_run_chat_provider_error_status_write_failure_is_not_silently_comp
             }
         }
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
-    class FailingStatusService:
+    class FailingStatusService(_ChatCompletionMixin):
         store = Store()
 
         async def save(self, session_state, messages, metadata=None):
@@ -2730,7 +2798,9 @@ async def test_run_chat_provider_error_status_write_failure_is_not_silently_comp
         raise ProviderError()
 
     monkeypatch.setattr(
-        chat_service, "create_agent", lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[])
+        chat_service,
+        "create_agent",
+        lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[], _last_response=None),
     )
     monkeypatch.setattr(chat_service, "run_agent_loop", failing_agent_loop)
     bus = SessionBus(session_id="sess-1")
@@ -2740,15 +2810,28 @@ async def test_run_chat_provider_error_status_write_failure_is_not_silently_comp
         is_init=False,
         executor=SimpleNamespace(),
         tools=[],
-        config=SimpleNamespace(approval_timeout_seconds=300),
+        config=SimpleNamespace(approval_timeout_seconds=300, compactor=None),
         available_integrations=[],
         integration_errors={},
         session_service=FailingStatusService(),
         run_registry=registry,
     )
 
-    with pytest.raises(RuntimeError, match="Failed to persist terminal status"):
+    with pytest.raises(BaseExceptionGroup) as raised:
         await run_chat(ctx, bus, BusRegistry())
+
+    leaves: list[BaseException] = []
+
+    def collect_leaves(error: BaseException) -> None:
+        if isinstance(error, BaseExceptionGroup):
+            for nested in error.exceptions:
+                collect_leaves(nested)
+        else:
+            leaves.append(error)
+
+    collect_leaves(raised.value)
+    assert any(isinstance(error, ProviderError) for error in leaves)
+    assert any("status db down" in str(error) for error in leaves)
 
     run_errors = [record.event for record in bus._recent if record.event.type.value == "RUN_ERROR"]
     assert [event.code for event in run_errors] == ["context_length_exceeded"]
@@ -2806,7 +2889,7 @@ async def test_run_chat_compacts_and_retries_context_length_provider_error(monke
                 {"role": "user", "content": "latest"},
             ]
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2850,7 +2933,9 @@ async def test_run_chat_compacts_and_retries_context_length_provider_error(monke
         return "ok", None
 
     monkeypatch.setattr(
-        chat_service, "create_agent", lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[])
+        chat_service,
+        "create_agent",
+        lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[], _last_response=None),
     )
     monkeypatch.setattr(chat_service, "run_agent_loop", flaky_agent_loop)
     compactor = RetryCompactor()
@@ -2920,7 +3005,7 @@ async def test_context_retry_compacts_full_canonical_history(monkeypatch):
                 {"role": "user", "content": "tail"},
             ]
 
-    class Store:
+    class Store(_BackgroundCompletionStoreMixin):
         async def get_background_agent_result(self, session_id, task_id):
             return None
 
@@ -2946,7 +3031,9 @@ async def test_context_retry_compacts_full_canonical_history(monkeypatch):
         return "ok", None
 
     monkeypatch.setattr(
-        chat_service, "create_agent", lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[])
+        chat_service,
+        "create_agent",
+        lambda **_kwargs: SimpleNamespace(hooks=SimpleNamespace(), tools=[], _last_response=None),
     )
     monkeypatch.setattr(chat_service, "run_agent_loop", flaky_agent_loop)
     compactor = RetryCompactor()
@@ -3083,7 +3170,7 @@ async def test_background_result_after_cancel_is_ignored_for_cancelled_run(monke
     stream_started = asyncio.Event()
     release = asyncio.Event()
 
-    class NoopStore:
+    class NoopStore(_BackgroundCompletionStoreMixin):
         async def record_background_agent_started(self, **kwargs):
             return None
 
@@ -3100,6 +3187,7 @@ async def test_background_result_after_cancel_is_ignored_for_cancelled_run(monke
         def __init__(self):
             self.hooks = SimpleNamespace(on_response=None, on_step_finish=None, get_pending_messages=None)
             self.tools = []
+            self._last_response = None
 
         async def stream(self, messages):
             stream_started.set()
@@ -3150,7 +3238,16 @@ async def test_backgrounded_drain_cancel_does_not_save_merged_output():
         async def save(self, session_state, messages, metadata=None):
             self.saved.append(list(messages))
 
-        async def record_chat_run_status(self, run_id, status, *, stop_reason=None, last_seq=None):
+        async def record_chat_run_status(
+            self,
+            run_id,
+            status,
+            *,
+            stop_reason=None,
+            last_seq=None,
+            error_code=None,
+            error_message=None,
+        ):
             self.statuses.append((status, stop_reason))
 
     async def gen():
@@ -3217,7 +3314,16 @@ async def test_backgrounded_drain_persists_budget_stop_reason():
         async def save(self, session_state, messages, metadata=None):
             return None
 
-        async def record_chat_run_status(self, run_id, status, *, stop_reason=None, last_seq=None):
+        async def record_chat_run_status(
+            self,
+            run_id,
+            status,
+            *,
+            stop_reason=None,
+            last_seq=None,
+            error_code=None,
+            error_message=None,
+        ):
             self.statuses.append((status, stop_reason))
 
     async def gen():

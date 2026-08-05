@@ -54,6 +54,35 @@ class _EmptyEventStore:
     async def get_latest_session_checkpoint_seq(self, session_id: str) -> int:
         return 0
 
+    async def claim_background_agent_completion(self, **kwargs) -> dict:
+        return {"claimed": True, "delivered": False, "completion_id": kwargs["completion_id"]}
+
+    async def mark_background_completion_delivered(self, **kwargs) -> bool:
+        return True
+
+
+class _ChatRunServiceContract:
+    async def get_goal(self, session_id: str) -> None:
+        return None
+
+    async def get_todo_override(self, session_id: str) -> None:
+        return None
+
+    async def record_chat_run_started(self, run_id: str, session_id: str, metadata: dict | None = None) -> None:
+        return None
+
+    async def record_chat_run_status(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        stop_reason: str | None = None,
+        last_seq: int | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        return None
+
 
 def _parse_sse_chunk(chunk: str) -> tuple[int, str, dict]:
     lines = chunk.splitlines()
@@ -948,7 +977,7 @@ async def test_concurrent_first_messages_share_one_top_level_run(monkeypatch):
 
     registry = RunRegistry()
 
-    class FakeSessionService:
+    class FakeSessionService(_ChatRunServiceContract):
         store = _EmptyEventStore()
 
         async def load(self, session_id=None):
@@ -1009,7 +1038,7 @@ async def test_submit_cancelled_during_setup_does_not_start_task(monkeypatch):
 
     registry = RunRegistry()
 
-    class FakeSessionService:
+    class FakeSessionService(_ChatRunServiceContract):
         store = _EmptyEventStore()
 
         def __init__(self):
@@ -1643,7 +1672,7 @@ async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
     old_run.status = RunStatus.RUNNING
     registry.cancel_run(old_run.run_id)
 
-    class FakeSessionService:
+    class FakeSessionService(_ChatRunServiceContract):
         store = _EmptyEventStore()
 
         async def load(self, session_id=None):
@@ -1701,10 +1730,7 @@ async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
 async def test_active_run_keeps_steer_transient_in_memory():
     from arden.services import chat as chat_service
 
-    class FakeSessionService:
-        def __init__(self):
-            self.queued = []
-
+    class FakeSessionService(_ChatRunServiceContract):
         async def load(self, _session_id):
             return {}
 
@@ -1713,9 +1739,6 @@ async def test_active_run_keeps_steer_transient_in_memory():
 
         async def update_chat_idempotency_key(self, **kwargs):
             return {"status": kwargs.get("status"), "run_id": kwargs.get("run_id")}
-
-        async def record_chat_queued_message(self, **kwargs):
-            self.queued.append(kwargs)
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1740,25 +1763,15 @@ async def test_active_run_keeps_steer_transient_in_memory():
 async def test_active_run_does_not_queue_message_when_idempotency_update_fails():
     from arden.services import chat as chat_service
 
-    class FakeSessionService:
-        def __init__(self):
-            self.queued = []
-            self.cancelled = []
-
+    class FakeSessionService(_ChatRunServiceContract):
         async def load(self, _session_id):
             return {}
 
         async def claim_chat_idempotency_key(self, **kwargs):
             return True, {"status": "accepted", "run_id": None, **kwargs}
 
-        async def record_chat_queued_message(self, **kwargs):
-            self.queued.append(kwargs)
-
         async def update_chat_idempotency_key(self, **kwargs):
             raise RuntimeError("idempotency down")
-
-        async def mark_chat_queued_message_cancelled(self, client_id):
-            self.cancelled.append(client_id)
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1777,7 +1790,6 @@ async def test_active_run_does_not_queue_message_when_idempotency_update_fails()
         )
 
     assert run.pending_injection_count == 0
-    assert session_service.cancelled == []
 
 
 @pytest.mark.asyncio
@@ -1786,7 +1798,7 @@ async def test_pre_task_setup_failure_clears_prepared_run(monkeypatch):
 
     registry = RunRegistry()
 
-    class FakeSessionService:
+    class FakeSessionService(_ChatRunServiceContract):
         def __init__(self):
             self.statuses = []
             self.store = _EmptyEventStore()
@@ -1860,7 +1872,7 @@ async def test_pre_start_cancelled_task_emits_terminal_fallback():
 
     registry = RunRegistry()
 
-    class FakeSessionService:
+    class FakeSessionService(_ChatRunServiceContract):
         store = _EmptyEventStore()
 
         def __init__(self):
@@ -1939,7 +1951,7 @@ async def test_submit_chat_message_primes_bus_cursor_from_durable_events(tmp_pat
     await store.init_schema()
     await store.record_session_event(StreamRecord(seq=187, session_id="sess-1", event=ThinkingEvent(status="old")))
 
-    class FakeSessionService:
+    class FakeSessionService(_ChatRunServiceContract):
         def __init__(self, store):
             self.store = store
 
