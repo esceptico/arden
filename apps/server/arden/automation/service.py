@@ -7,7 +7,7 @@ from typing import Any
 from coolname import generate_slug
 
 from arden.automation.descriptions import AutomationDescriptionGenerator
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import MessageTrigger, TimeTrigger, Trigger, build_trigger, parse_one
@@ -248,6 +248,13 @@ class AutomationService:
         return normalized
 
     @staticmethod
+    def _normalize_name(name: str) -> str:
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("automation name cannot be blank")
+        return normalized
+
+    @staticmethod
     def _normalize_description(description: str) -> str:
         normalized = description.strip()
         if not normalized:
@@ -293,6 +300,11 @@ class AutomationService:
             raise KeyError(f"Automation {task_id} not found")
         return task
 
+    async def get_by_ref(self, automation_ref: str) -> Automation:
+        if not (task := await self.store.get_by_ref(automation_ref)):
+            raise KeyError(f"Automation ref {automation_ref} not found")
+        return task
+
     async def toggle_enabled(self, task_id: str) -> bool:
         task = await self.get(task_id)
         new_enabled = not task.enabled
@@ -329,7 +341,7 @@ class AutomationService:
     ) -> dict[str, Any]:
         changes: dict[str, Any] = {}
         if name is not None:
-            changes["name"] = name
+            changes["name"] = self._normalize_name(name)
         if description is not None:
             changes["description"] = description
         if description_source is not None:
@@ -511,6 +523,7 @@ class AutomationService:
         enabled: bool = True,
         triggers_resolved: bool = False,
     ) -> Automation | None:
+        name = self._normalize_name(name)
         prompt = self._normalize_prompt(prompt)
         if idempotency_key is not None and idempotency_scope is None:
             raise ValueError("idempotency_scope required when idempotency_key is set")
@@ -582,6 +595,7 @@ class AutomationService:
 
         automation = Automation(
             task_id=task_id,
+            automation_ref=create_automation_ref(name, task_id),
             name=name,
             description=display_description,
             description_source=description_source,
@@ -733,9 +747,11 @@ class AutomationService:
         # (apps/server/arden/server/app.py) defers the actual fire until the
         # /loop creation turn ends, so the iteration renders as a fresh
         # chat turn instead of getting injected into the creator's turn.
+        loop_name = f"Loop: {prompt[:40]}"
         automation = Automation(
             task_id=task_id,
-            name=f"Loop: {prompt[:40]}",
+            automation_ref=create_automation_ref(loop_name, task_id),
+            name=loop_name,
             description=None,
             description_source=None,
             prompt=prompt,

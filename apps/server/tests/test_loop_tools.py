@@ -6,7 +6,7 @@ import pytest_asyncio
 from pydantic import ValidationError
 
 import arden.database as database
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
@@ -14,6 +14,11 @@ from arden.automation.triggers import TimeTrigger
 from arden.context.models import SessionState
 from arden.tools.automation import (
     AutomationCreateInput,
+    AutomationDeleteInput,
+    AutomationListRunsInput,
+    AutomationResultInput,
+    AutomationRunInput,
+    AutomationUpdateInput,
     LoopCreateInput,
     LoopDoneInput,
     LoopScheduleWakeupInput,
@@ -21,6 +26,7 @@ from arden.tools.automation import (
     approve_loop_create,
     automation_create,
     automation_list_runs_tool,
+    automation_result,
     loop_create,
     loop_done,
     loop_schedule_wakeup,
@@ -55,6 +61,7 @@ async def store_and_svc(tmp_path: Path):
     now = datetime.now(UTC)
     loop = Automation(
         task_id="loop-1",
+        automation_ref=create_automation_ref("x", "loop-1"),
         name="x",
         description=None,
         description_source=None,
@@ -153,7 +160,7 @@ async def test_list_automation_runs_exposes_trigger_result_and_channel(store_and
     assert not result.is_error
     assert result.data["entries"] == [
         {
-            "task_id": "loop-1",
+            "automation_ref": create_automation_ref("x", "loop-1"),
             "name": "x",
             "started_at": started.isoformat(),
             "ended_at": (started + timedelta(seconds=1)).isoformat(),
@@ -219,7 +226,7 @@ def test_automation_display_description_is_bounded():
             idempotency_key="bounded",
         )
     with pytest.raises(pydantic.ValidationError):
-        AutomationUpdateInput(task_id="bounded", description="x" * 221)
+        AutomationUpdateInput(automation_ref="bounded~000000", description="x" * 221)
 
 
 def test_create_automation_schema_does_not_expose_session_binding():
@@ -227,6 +234,43 @@ def test_create_automation_schema_does_not_expose_session_binding():
 
     assert "thread_id" not in properties
     assert "read_history" not in properties
+
+
+def test_automation_tools_expose_refs_not_internal_ids():
+    for model in (
+        AutomationUpdateInput,
+        AutomationDeleteInput,
+        AutomationResultInput,
+        AutomationRunInput,
+        AutomationListRunsInput,
+    ):
+        properties = model.model_json_schema()["properties"]
+        assert "automation_ref" in properties
+        assert "task_id" not in properties
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AutomationResultInput.model_validate({"task_id": "internal-task-id"})
+
+    loop_properties = LoopCreateInput.model_json_schema()["properties"]
+    assert "parent_automation_ref" in loop_properties
+    assert "parent_automation_id" not in loop_properties
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        LoopCreateInput.model_validate(
+            {"prompt": "watch CI", "every": "5m", "parent_automation_id": "internal-task-id"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_internal_automation_id_is_not_a_public_ref_alias(store_and_svc):
+    _, svc = store_and_svc
+
+    result = await automation_result(
+        _execution(svc, loop_task_id=None),
+        AutomationResultInput(automation_ref="loop-1"),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
 
 
 def test_create_automation_requires_retry_safe_idempotency():
@@ -275,7 +319,8 @@ async def test_create_automation_idempotency_claim_dedupes(store_and_svc):
     assert "already exists" in second.content.lower()
 
     created = next(a for a in await store.list_all() if a.name == "daily brief")
-    assert created.task_id in second.content
+    assert created.automation_ref in second.content
+    assert created.task_id not in second.content
     channels = [
         session
         for session in await svc.session_service.list_sessions(limit=10)
@@ -370,7 +415,7 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
 
     result = await automation_update(
         execution,
-        AutomationUpdateInput(task_id=created.task_id, all_tools=True),
+        AutomationUpdateInput(automation_ref=created.automation_ref, all_tools=True),
     )
 
     assert not result.is_error
@@ -460,15 +505,20 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
             idempotency_key="watch",
         ),
     )
-    task_id = next(a.task_id for a in await store.list_all())
+    created = next(a for a in await store.list_all())
 
     result = await automation_update(
         execution,
-        AutomationUpdateInput(task_id=task_id, trigger_type="message", channels=["eng-bugs"], contains=["bug"]),
+        AutomationUpdateInput(
+            automation_ref=created.automation_ref,
+            trigger_type="message",
+            channels=["eng-bugs"],
+            contains=["bug"],
+        ),
     )
     assert not result.is_error, result.content
 
-    updated = await store.get(task_id)
+    updated = await store.get(created.task_id)
     msg = [t for t in updated.triggers if isinstance(t, MessageTrigger)]
     assert len(msg) == 1
     assert msg[0].channel_ids == ["C-eng-bugs"]
@@ -544,20 +594,28 @@ async def test_create_loop_infers_parent_from_loop_ctx(store_and_svc):
 async def test_create_loop_explicit_parent_overrides_ctx(store_and_svc):
     store, svc = store_and_svc
     execution = _execution(svc, loop_task_id="loop-1")
+    explicit_parent = await svc.create(
+        name="explicit parent",
+        prompt="Own child automations.",
+        description="Owns child automations.",
+        trigger_type="time",
+        every="1h",
+        thread_id="sess-1",
+    )
 
     result = await loop_create(
         execution,
         LoopCreateInput(
             prompt="watch CI yet again",
             every="5m",
-            parent_automation_id="explicit-parent",
+            parent_automation_ref=explicit_parent.automation_ref,
         ),
     )
     assert not result.is_error
 
     rows = await store.list_all()
     child = next(a for a in rows if a.prompt == "watch CI yet again")
-    assert child.parent_automation_id == "explicit-parent"
+    assert child.parent_automation_id == explicit_parent.task_id
 
 
 @pytest.mark.asyncio
@@ -609,14 +667,13 @@ async def test_create_automation_run_scope_missing_parent_errors(store_and_svc):
         prompt="This should fail because its parent is missing.",
         trigger_type="time",
         at="09:00",
-        parent_automation_id="ghost",
+        parent_automation_ref="ghost~000000",
         idempotency_key="k1",
         idempotency_scope="run",
     )
     result = await automation_create(execution, args)
     assert result.is_error
-    assert "ghost" in result.content
-    assert "run" in result.content
+    assert "ghost~000000" in result.content
 
 
 @pytest.mark.asyncio
@@ -630,15 +687,14 @@ async def test_create_loop_attempt_scope_missing_parent_errors(store_and_svc):
         LoopCreateInput(
             prompt="x",
             every="5m",
-            parent_automation_id="ghost",
+            parent_automation_ref="ghost~000000",
             idempotency_key="k1",
             idempotency_scope="attempt",
             attempt_n=0,
         ),
     )
     assert result.is_error
-    assert "ghost" in result.content
-    assert "attempt" in result.content
+    assert "ghost~000000" in result.content
 
 
 @pytest.mark.asyncio
@@ -654,14 +710,14 @@ async def test_approve_create_automation_flags_missing_parent(store_and_svc):
         prompt="This should warn because its parent is missing.",
         trigger_type="time",
         at="09:00",
-        parent_automation_id="ghost",
+        parent_automation_ref="ghost~000000",
         idempotency_key="k1",
         idempotency_scope="run",
     )
     info = await approve_automation_create(execution, args)
     assert info is not None
-    assert "ghost" in info.preview
-    assert "missing" in info.preview.lower() or "will fail" in info.preview.lower()
+    assert "ghost~000000" in info.preview
+    assert "invalid" in info.preview.lower()
 
 
 @pytest.mark.asyncio
@@ -673,14 +729,14 @@ async def test_approve_create_loop_flags_missing_parent(store_and_svc):
     args = LoopCreateInput(
         prompt="watch",
         every="5m",
-        parent_automation_id="ghost",
+        parent_automation_ref="ghost~000000",
         idempotency_key="k1",
         idempotency_scope="run",
     )
     info = await approve_loop_create(execution, args)
     assert info is not None
-    assert "ghost" in info.preview
-    assert "missing" in info.preview.lower() or "will fail" in info.preview.lower()
+    assert "ghost~000000" in info.preview
+    assert "invalid" in info.preview.lower()
 
 
 @pytest.mark.asyncio

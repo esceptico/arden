@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 
 import arden.database as database
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
@@ -47,6 +47,7 @@ def _automation(
 ) -> Automation:
     return Automation(
         task_id=task_id,
+        automation_ref=create_automation_ref(task_id, task_id),
         name=task_id,
         description=None,
         description_source=None,
@@ -92,6 +93,7 @@ async def test_backfill_gives_agent_automations_channels(service: AutomationServ
 async def test_session_bound_classification():
     automation = Automation(
         task_id="agent2",
+        automation_ref=create_automation_ref("agent2", "agent2"),
         name="agent2",
         description=None,
         description_source=None,

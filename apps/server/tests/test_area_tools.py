@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -375,15 +376,25 @@ async def test_area_automation_run_is_locked_to_owned_children(tmp_path: Path) -
     calls: list[str] = []
 
     class Automations:
+        async def get_by_ref(self, automation_ref: str):
+            task_ids = {
+                "daily~111111": "area:area_health:daily",
+                "foreign~222222": "area:other:daily",
+                "recursive~333333": "area:area_health",
+            }
+            if automation_ref not in task_ids:
+                raise KeyError(automation_ref)
+            return SimpleNamespace(task_id=task_ids[automation_ref])
+
         async def run_now(self, task_id: str) -> None:
             calls.append(task_id)
 
     run = execution(wiki_at(tmp_path))
     run.ctx.services["automation"] = Automations()
 
-    allowed = await area_run_automation(run, AreaAutomationRunInput(task_id="area:area_health:daily"))
-    foreign = await area_run_automation(run, AreaAutomationRunInput(task_id="area:other:daily"))
-    recursive = await area_run_automation(run, AreaAutomationRunInput(task_id="area:area_health"))
+    allowed = await area_run_automation(run, AreaAutomationRunInput(automation_ref="daily~111111"))
+    foreign = await area_run_automation(run, AreaAutomationRunInput(automation_ref="foreign~222222"))
+    recursive = await area_run_automation(run, AreaAutomationRunInput(automation_ref="recursive~333333"))
 
     assert not allowed.is_error
     assert foreign.is_error and recursive.is_error

@@ -9,9 +9,9 @@ and no way to reach the user outside its own reply.
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.areas.agent import NOTIFY_ASK_TTL_HOURS
 from arden.areas.asks import nominate_focus
@@ -20,8 +20,10 @@ from arden.events.destinations import (
     AppDestination,
     AreaDestination,
     AutomationDestination,
+    HomeDestination,
     MemoryDestination,
     SessionDestination,
+    SettingsDestination,
 )
 from arden.events.sse import AreasChangedEvent, NavigationRequestedEvent
 from arden.tools.core import ToolResult, tool
@@ -132,13 +134,33 @@ class AppRequestAttentionInput(BaseModel):
     )
 
 
+class ToolAutomationDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["automation"]
+    automation_ref: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+ToolAppDestination = Annotated[
+    HomeDestination
+    | SessionDestination
+    | SettingsDestination
+    | ToolAutomationDestination
+    | MemoryDestination
+    | AreaDestination,
+    Field(discriminator="kind"),
+]
+
+
 class AppOpenInput(BaseModel):
-    destination: AppDestination = Field(
+    model_config = ConfigDict(extra="forbid")
+
+    destination: ToolAppDestination = Field(
         description=(
             'Where to send the user. One of: {"kind":"home"}, '
             '{"kind":"session","session_id":"..."}, {"kind":"settings","tab":"models"}, '
-            '{"kind":"automation","task_id":"..."}, {"kind":"memory","path":"..."}, '
-            '{"kind":"area","area_id":"..."}. task_id, tab and path may be omitted '
+            '{"kind":"automation","automation_ref":"..."}, {"kind":"memory","path":"..."}, '
+            '{"kind":"area","area_id":"..."}. automation_ref, tab and path may be omitted '
             "to open the surface itself; a memory path opens that wiki page."
         )
     )
@@ -446,7 +468,9 @@ async def app_request_attention(execution: ToolExecution, args: AppRequestAttent
     return ToolResult(content=f"Raised on Home: {args.text}", preview=f"{args.kind} raised")
 
 
-async def _invalid_destination(execution: ToolExecution, destination: AppDestination) -> ToolResult | None:
+async def _resolve_destination(
+    execution: ToolExecution, destination: ToolAppDestination
+) -> AppDestination | ToolResult:
     """A navigation prompt that lands nowhere is worse than a refusal: the user
     sees a dead card and the agent believes it succeeded. Only ref-carrying
     destinations can be wrong — home/settings/memory are fixed surfaces."""
@@ -457,24 +481,27 @@ async def _invalid_destination(execution: ToolExecution, destination: AppDestina
         case AreaDestination():
             if await execution.ctx.services["session"].get_area(destination.area_id) is None:
                 return await _unknown_area(execution, destination.area_id)
-        case AutomationDestination(task_id=str() as task_id):
+        case ToolAutomationDestination(automation_ref=str() as automation_ref):
             svc = execution.ctx.services.get("automation")
             if svc is None:
                 return ToolResult.failure(
                     code="not_found",
-                    message=f"No automation {task_id} — automations are not available here.",
+                    message=f"No automation {automation_ref} — automations are not available here.",
                     preview="No automations",
                     recovery_action="Open the automations surface itself: destination={'kind':'automation'}.",
                 )
             try:
-                await svc.get(task_id)
+                automation = await svc.get_by_ref(automation_ref)
             except KeyError:
                 return ToolResult.failure(
                     code="not_found",
-                    message=f"No automation {task_id}.",
+                    message=f"No automation {automation_ref}.",
                     preview="Unknown automation",
-                    recovery_action="Call automation_list and retry with an exact task_id.",
+                    recovery_action="Call automation_list and retry with an exact automation_ref.",
                 )
+            return AutomationDestination(kind="automation", task_id=automation.task_id)
+        case ToolAutomationDestination():
+            return AutomationDestination(kind="automation")
         case MemoryDestination(path=str() as path):
             svc = execution.ctx.services.get("wiki")
             if svc is None:
@@ -491,16 +518,17 @@ async def _invalid_destination(execution: ToolExecution, destination: AppDestina
                     preview="Unknown page",
                     recovery_action="Call read_wiki to list pages and retry with an exact path.",
                 )
-    return None
+    return destination
 
 
 async def app_open(execution: ToolExecution, args: AppOpenInput) -> ToolResult:
-    if failure := await _invalid_destination(execution, args.destination):
-        return failure
+    destination = await _resolve_destination(execution, args.destination)
+    if isinstance(destination, ToolResult):
+        return destination
     await execution.ctx.services["app_control"].emit(
         NavigationRequestedEvent(
             origin_session_id=execution.ctx.session_id,
-            destination=args.destination.model_dump(exclude_none=True),
+            destination=destination.model_dump(exclude_none=True),
             label=args.label,
         )
     )

@@ -39,7 +39,7 @@ CREATE_AUTOMATION_DESCRIPTION = (
     f" {SPAWN_SURFACE_GUIDANCE}"
 )
 
-LIST_AUTOMATIONS_DESCRIPTION = "List all automations by stable ID with their trigger, status, and next run."
+LIST_AUTOMATIONS_DESCRIPTION = "List all automations by stable ref with their trigger, status, and next run."
 
 LIST_AUTOMATION_RUNS_DESCRIPTION = (
     "List automation runs since an inclusive timestamp. Returns the configured trigger, status, result, and channel "
@@ -48,21 +48,21 @@ LIST_AUTOMATION_RUNS_DESCRIPTION = (
 
 UPDATE_AUTOMATION_DESCRIPTION = (
     "Update an existing automation. Only provide the fields you want to change. "
-    "Use automation_list to find IDs. "
+    "Use automation_list to find refs. "
     "Trigger fields (trigger_type, at, days, every, event_type, lead_minutes, start, end, and for "
     "trigger_type='message': channels, from_user, contains) are merged with the current trigger — only "
     "provide what should change. "
     "Set enabled=false to pause or enabled=true to resume."
 )
 
-DELETE_AUTOMATION_DESCRIPTION = "Delete an automation by its ID. Use automation_list to find IDs."
+DELETE_AUTOMATION_DESCRIPTION = "Delete an automation by its exact ref. Use automation_list to find refs."
 
-GET_AUTOMATION_RESULT_DESCRIPTION = "Get the last execution result of an automation by its ID."
+GET_AUTOMATION_RESULT_DESCRIPTION = "Get the last execution result of an automation by its exact ref."
 
 RUN_AUTOMATION_DESCRIPTION = (
     "Trigger an immediate execution of an automation. "
     "The automation runs in the background — use automation_result to check the outcome. "
-    "Use automation_list to find IDs."
+    "Use automation_list to find refs."
 )
 
 
@@ -73,12 +73,12 @@ def _triggers_label(triggers: list) -> str:
     return " | ".join(t.label for t in triggers)
 
 
-def _automation_not_found(task_id: str) -> ToolResult:
+def _automation_not_found(automation_ref: str) -> ToolResult:
     return ToolResult.failure(
         code="not_found",
-        message=f"Automation not found: {task_id}",
+        message=f"Automation not found: {automation_ref}",
         preview="Not found",
-        recovery_action="Call automation_list and retry with an exact returned task_id.",
+        recovery_action="Call automation_list and retry with an exact returned automation_ref.",
     )
 
 
@@ -95,17 +95,17 @@ class AutomationListRunsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     since: AwareDatetime = Field(description="Inclusive ISO timestamp, usually today's local midnight.")
-    task_id: str | None = Field(default=None, min_length=1, max_length=200)
+    automation_ref: str | None = Field(default=None, min_length=1, max_length=200)
     offset: int = Field(default=0, ge=0, le=10_000)
     limit: int = Field(default=100, ge=1, le=200)
 
 
 async def _resolve_parent_context(
     execution: "ToolExecution",
-    explicit_parent: str | None,
+    explicit_parent_ref: str | None,
     idempotency_scope: str | None,
-) -> tuple[str | None, str | None]:
-    """Default parent_automation_id to the calling loop's task_id; pull
+) -> tuple[Automation | None, str | None]:
+    """Resolve an explicit public ref or the current loop's internal owner; pull
     parent_fire_at from that parent's last_run_at when run/attempt scopes
     need it but the caller didn't supply one.
 
@@ -113,25 +113,32 @@ async def _resolve_parent_context(
     cannot be resolved — silently collapsing to global scope would break
     the agent's idempotency intent without any signal.
     """
-    parent_id = explicit_parent or execution.ctx.run.loop_task_id
-    if parent_id is None or idempotency_scope not in {"run", "attempt"}:
-        return parent_id, None
     svc = execution.ctx.services.get("automation")
-    if svc is None:
-        return parent_id, None
-    try:
-        parent = await svc.get(parent_id)
-    except KeyError as exc:
-        raise ValueError(
-            f"idempotency_scope={idempotency_scope!r} requires parent_automation_id ({parent_id!r}) to exist; not found"
-        ) from exc
+    if explicit_parent_ref is not None:
+        if svc is None:
+            raise ValueError("automation service is required to resolve parent_automation_ref")
+        try:
+            parent = await svc.get_by_ref(explicit_parent_ref)
+        except KeyError as exc:
+            raise ValueError(f"parent_automation_ref {explicit_parent_ref!r} was not found") from exc
+    elif execution.ctx.run.loop_task_id is not None:
+        if svc is None:
+            raise ValueError("automation service is required to resolve the current loop parent")
+        try:
+            parent = await svc.get(execution.ctx.run.loop_task_id)
+        except KeyError as exc:
+            raise ValueError("the current loop parent is unavailable") from exc
+    else:
+        parent = None
+    if parent is None or idempotency_scope not in {"run", "attempt"}:
+        return parent, None
     fire_at = format_timestamp(parent.last_run_at) if parent.last_run_at else None
-    return parent_id, fire_at
+    return parent, fire_at
 
 
 def _format_automation_list(automations: list[Automation]) -> str:
     lines = []
-    for a in sorted(automations, key=lambda item: item.task_id):
+    for a in sorted(automations, key=lambda item: item.automation_ref):
         status = "enabled" if a.enabled else "disabled"
         next_run = format_timestamp(a.next_run_at) if a.next_run_at else "—"
         last_run = format_timestamp(a.last_run_at) if a.last_run_at else "never"
@@ -139,7 +146,7 @@ def _format_automation_list(automations: list[Automation]) -> str:
         builtin_tag = " [builtin]" if a.builtin else ""
 
         lines.append(
-            f"[{a.task_id}] {label}{builtin_tag}\n"
+            f"[{a.automation_ref}] {label}{builtin_tag}\n"
             f"  {_triggers_label(a.triggers)} · {status}\n"
             f"  next: {next_run} · last: {last_run}" + (f"\n  model: {a.model}" if a.model else "")
         )
@@ -148,7 +155,7 @@ def _format_automation_list(automations: list[Automation]) -> str:
 
 def _automation_label(automation: Automation) -> str:
     """Never promote executable prompt text into a display label."""
-    return automation.name or automation.description or automation.task_id
+    return automation.name
 
 
 # --- Input Models ---
@@ -217,10 +224,10 @@ class AutomationCreateInput(BaseModel):
         ),
     )
     all_tools: bool = Field(default=False, description=ALL_TOOLS_DESCRIPTION)
-    parent_automation_id: str | None = Field(
+    parent_automation_ref: str | None = Field(
         default=None,
         description=(
-            "Explicit parent lineage. Defaults to the current loop's task_id when "
+            "Exact parent ref from automation_list. Defaults to the current loop when "
             "this tool is called from inside a loop iteration."
         ),
     )
@@ -259,7 +266,7 @@ class AutomationUpdateInput(BaseModel):
     # ignored, so the model believes it set something it did not.
     model_config = ConfigDict(extra="forbid")
 
-    task_id: str = Field(description="The automation ID to update")
+    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
     name: str | None = Field(default=None, description="New name")
     description: str | None = Field(default=None, max_length=220, description="New concise display summary")
     prompt: str | None = Field(default=None, description="New full execution instructions", min_length=1)
@@ -305,15 +312,18 @@ class AutomationUpdateInput(BaseModel):
 
 
 class AutomationDeleteInput(BaseModel):
-    task_id: str = Field(description="The automation ID to delete")
+    model_config = ConfigDict(extra="forbid")
+    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
 
 
 class AutomationResultInput(BaseModel):
-    task_id: str = Field(description="The automation ID to get results for")
+    model_config = ConfigDict(extra="forbid")
+    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
 
 
 class AutomationRunInput(BaseModel):
-    task_id: str = Field(description="The automation ID to run")
+    model_config = ConfigDict(extra="forbid")
+    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
 
 
 # --- Tools ---
@@ -358,17 +368,17 @@ async def approve_automation_create(execution: ToolExecution, args: AutomationCr
     lines.append("Tools: every tool" if args.all_tools else "Tools: read-only")
     lines.append("Results: dedicated automation channel")
     try:
-        inferred_parent, _ = await _resolve_parent_context(execution, args.parent_automation_id, args.idempotency_scope)
+        inferred_parent, _ = await _resolve_parent_context(
+            execution, args.parent_automation_ref, args.idempotency_scope
+        )
         parent_conflict: str | None = None
     except ValueError as exc:
-        # Resolver failure means run/attempt scope with a missing parent. Still
-        # show the would-be parent on the card so the reviewer can fix it.
-        inferred_parent = args.parent_automation_id or execution.ctx.run.loop_task_id
+        inferred_parent = None
         parent_conflict = str(exc)
     if inferred_parent:
-        lines.append(f"Parent: {inferred_parent}")
+        lines.append(f"Parent: {inferred_parent.automation_ref}")
     if parent_conflict:
-        lines.append(f"Parent {inferred_parent!r} missing — will fail on execute")
+        lines.append(f"Parent invalid: {parent_conflict}")
     if args.idempotency_scope:
         attempt = f" · attempt={args.attempt_n}" if args.attempt_n is not None else ""
         lines.append(f"Idempotency: {args.idempotency_scope} · key={args.idempotency_key}{attempt}")
@@ -386,8 +396,8 @@ async def approve_automation_create(execution: ToolExecution, args: AutomationCr
 async def automation_create(execution: ToolExecution, args: AutomationCreateInput) -> ToolResult:
     svc = execution.ctx.services["automation"]
     try:
-        parent_automation_id, parent_fire_at = await _resolve_parent_context(
-            execution, args.parent_automation_id, args.idempotency_scope
+        parent, parent_fire_at = await _resolve_parent_context(
+            execution, args.parent_automation_ref, args.idempotency_scope
         )
     except ValueError as e:
         return ToolResult.failure(
@@ -424,7 +434,7 @@ async def automation_create(execution: ToolExecution, args: AutomationCreateInpu
             start=args.start,
             end=args.end,
             model=args.model,
-            parent_automation_id=parent_automation_id,
+            parent_automation_id=parent.task_id if parent is not None else None,
             idempotency_key=args.idempotency_key,
             idempotency_scope=args.idempotency_scope,
             parent_fire_at=parent_fire_at,
@@ -443,7 +453,7 @@ async def automation_create(execution: ToolExecution, args: AutomationCreateInpu
         task_id = svc.idempotent_task_id(
             args.idempotency_scope,
             args.idempotency_key,
-            parent_automation_id,
+            parent.task_id if parent is not None else None,
             parent_fire_at,
             args.attempt_n,
         )
@@ -453,12 +463,10 @@ async def automation_create(execution: ToolExecution, args: AutomationCreateInpu
         if existing is not None:
             lines = [
                 f"Automation already exists: {_automation_label(existing)}",
-                f"ID: {existing.task_id}",
+                f"Ref: {existing.automation_ref}",
             ]
-            if existing.thread_id:
-                lines.append(f"Channel: {existing.thread_id}")
-            lines.append("No changes made. Reuse this ID; call automation_update to change it.")
-            return ToolResult(content="\n".join(lines), preview=f"Already exists ({existing.task_id})")
+            lines.append("No changes made. Reuse this ref; call automation_update to change it.")
+            return ToolResult(content="\n".join(lines), preview=f"Already exists ({existing.automation_ref})")
         return ToolResult.failure(
             code="write_conflict",
             message=(
@@ -470,19 +478,19 @@ async def automation_create(execution: ToolExecution, args: AutomationCreateInpu
 
     lines = [
         f"Created automation: {_automation_label(automation)}",
-        f"ID: {automation.task_id}",
+        f"Ref: {automation.automation_ref}",
         f"Trigger: {_triggers_label(automation.triggers)}",
     ]
     if automation.model:
         lines.append(f"Model: {automation.model}")
-    if automation.thread_id:
-        lines.append(f"Channel: {automation.thread_id}")
     if automation.parent_automation_id:
-        lines.append(f"Parent: {automation.parent_automation_id}")
+        if parent is None:
+            raise RuntimeError("created automation lost its resolved parent")
+        lines.append(f"Parent: {parent.automation_ref}")
     if automation.next_run_at:
         lines.append(f"Next run: {format_timestamp(automation.next_run_at)}")
 
-    return ToolResult(content="\n".join(lines), preview=f"Created ({automation.task_id})")
+    return ToolResult(content="\n".join(lines), preview=f"Created ({automation.automation_ref})")
 
 
 async def automation_list(execution: ToolExecution, args: EmptyInput) -> ToolResult:
@@ -498,12 +506,15 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
     service = execution.ctx.services.get("automation")
     if service is None:
         return _automation_unavailable()
-    automations = {automation.task_id: automation for automation in await service.list_all()}
-    if args.task_id is not None and args.task_id not in automations:
-        return _automation_not_found(args.task_id)
+    if args.automation_ref is not None:
+        try:
+            await service.get_by_ref(args.automation_ref)
+        except KeyError:
+            return _automation_not_found(args.automation_ref)
+    automations = {automation.automation_ref: automation for automation in await service.list_all()}
     rows = await service.store.list_runs_since(
         args.since,
-        task_id=args.task_id,
+        automation_ref=args.automation_ref,
         limit=args.limit + 1,
         offset=args.offset,
     )
@@ -512,14 +523,15 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
     entries = []
     lines = []
     for row in visible:
-        automation = automations.get(row["task_id"])
-        name = _automation_label(automation) if automation is not None else row["task_id"]
-        trigger = _triggers_label(automation.triggers) if automation is not None else "unknown"
+        automation_ref = str(row["automation_ref"])
+        automation = automations.get(automation_ref)
+        name = _automation_label(automation) if automation is not None else "Deleted automation"
+        trigger = _triggers_label(automation.triggers) if automation is not None else "deleted"
         channel = row.get("chat_session_id") or (automation.thread_id if automation is not None else None)
         summary = row.get("error") or row.get("result") or ""
         entries.append(
             {
-                "task_id": row["task_id"],
+                "automation_ref": automation_ref,
                 "name": name,
                 "started_at": row["started_at"],
                 "ended_at": row["ended_at"],
@@ -543,7 +555,7 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
         preview=f"{len(visible)} automation runs" + (" (capped)" if has_more else ""),
         data={
             "since": args.since.isoformat(),
-            "task_id": args.task_id,
+            "automation_ref": args.automation_ref,
             "offset": args.offset,
             "entries": entries,
             "has_more": has_more,
@@ -554,7 +566,7 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
 
 async def approve_automation_update(execution: ToolExecution, args: AutomationUpdateInput) -> ApprovalInfo | None:
     try:
-        automation = await execution.ctx.services["automation"].get(args.task_id)
+        automation = await execution.ctx.services["automation"].get_by_ref(args.automation_ref)
     except KeyError:
         return None
 
@@ -585,7 +597,7 @@ async def approve_automation_update(execution: ToolExecution, args: AutomationUp
 
     label = _automation_label(automation)
     return ApprovalInfo(
-        description=f"Update: {label} ({args.task_id})",
+        description=f"Update: {label} ({args.automation_ref})",
         preview="\n".join(changes) if changes else "No changes",
         diff=None,
     )
@@ -602,8 +614,9 @@ async def automation_update(execution: ToolExecution, args: AutomationUpdateInpu
         message_triggers = [message_trigger]
     try:
         automation_service = execution.ctx.services["automation"]
+        current = await automation_service.get_by_ref(args.automation_ref)
         automation = await automation_service.update(
-            args.task_id,
+            current.task_id,
             name=args.name,
             description=args.description,
             prompt=args.prompt,
@@ -624,7 +637,7 @@ async def automation_update(execution: ToolExecution, args: AutomationUpdateInpu
             tool_scope=None if args.all_tools is None else ("all" if args.all_tools else "read_only"),
         )
     except KeyError:
-        return _automation_not_found(args.task_id)
+        return _automation_not_found(args.automation_ref)
     except ValueError as e:
         return ToolResult.failure(
             code="invalid_arguments",
@@ -636,50 +649,50 @@ async def automation_update(execution: ToolExecution, args: AutomationUpdateInpu
     label = _automation_label(automation)
     lines = [
         f"Updated automation: {label}",
-        f"ID: {automation.task_id}",
+        f"Ref: {automation.automation_ref}",
         f"Trigger: {_triggers_label(automation.triggers)}",
         f"Enabled: {automation.enabled}",
     ]
     if automation.next_run_at:
         lines.append(f"Next run: {format_timestamp(automation.next_run_at)}")
 
-    return ToolResult(content="\n".join(lines), preview=f"Updated ({automation.task_id})")
+    return ToolResult(content="\n".join(lines), preview=f"Updated ({automation.automation_ref})")
 
 
 async def approve_automation_delete(execution: ToolExecution, args: AutomationDeleteInput) -> ApprovalInfo | None:
     try:
-        automation = await execution.ctx.services["automation"].get(args.task_id)
+        automation = await execution.ctx.services["automation"].get_by_ref(args.automation_ref)
     except KeyError:
         return None
     return ApprovalInfo(
-        description=f"Delete automation {args.task_id}",
+        description=f"Delete automation {args.automation_ref}",
         preview=f"Name: {_automation_label(automation)}\nPrompt: {automation.prompt}",
-        diff=f"- automation {args.task_id}",
+        diff=f"- automation {args.automation_ref}",
     )
 
 
 async def automation_delete(execution: ToolExecution, args: AutomationDeleteInput) -> ToolResult:
     try:
-        automation = await execution.ctx.services["automation"].get(args.task_id)
-        await execution.ctx.services["automation"].delete(args.task_id)
+        automation = await execution.ctx.services["automation"].get_by_ref(args.automation_ref)
+        await execution.ctx.services["automation"].delete(automation.task_id)
     except KeyError:
-        return _automation_not_found(args.task_id)
+        return _automation_not_found(args.automation_ref)
     except ValueError:
         return ToolResult.failure(
             code="write_conflict",
             message="The automation could not be deleted in its current state.",
             preview="Cannot delete",
-            recovery_action="Call automation_list and retry with a current automation ID.",
+            recovery_action="Call automation_list and retry with a current automation_ref.",
         )
 
-    return ToolResult(content=f"Deleted: {_automation_label(automation)} ({args.task_id})", preview="Deleted")
+    return ToolResult(content=f"Deleted: {_automation_label(automation)} ({args.automation_ref})", preview="Deleted")
 
 
 async def automation_result(execution: ToolExecution, args: AutomationResultInput) -> ToolResult:
     try:
-        automation = await execution.ctx.services["automation"].get(args.task_id)
+        automation = await execution.ctx.services["automation"].get_by_ref(args.automation_ref)
     except KeyError:
-        return _automation_not_found(args.task_id)
+        return _automation_not_found(args.automation_ref)
 
     if not automation.last_result:
         last_run = format_timestamp(automation.last_run_at) if automation.last_run_at else "never"
@@ -693,26 +706,28 @@ async def automation_result(execution: ToolExecution, args: AutomationResultInpu
         f"Last run: {format_timestamp(automation.last_run_at) if automation.last_run_at else '—'}\n"
         f"---\n"
     )
-    return ToolResult(content=header + automation.last_result, preview=f"Result ({automation.task_id})")
+    return ToolResult(content=header + automation.last_result, preview=f"Result ({automation.automation_ref})")
 
 
 async def approve_automation_run(execution: ToolExecution, args: AutomationRunInput) -> ApprovalInfo | None:
     try:
-        automation = await execution.ctx.services["automation"].get(args.task_id)
+        automation = await execution.ctx.services["automation"].get_by_ref(args.automation_ref)
     except KeyError:
         return None
     return ApprovalInfo(
         description=f"Run now: {_automation_label(automation)}",
-        preview=f"Automation: {args.task_id}\nPrompt: {automation.prompt}",
+        preview=f"Automation: {args.automation_ref}\nPrompt: {automation.prompt}",
         diff=None,
     )
 
 
 async def automation_run(execution: ToolExecution, args: AutomationRunInput) -> ToolResult:
     try:
-        await execution.ctx.services["automation"].run_now(args.task_id)
+        service = execution.ctx.services["automation"]
+        automation = await service.get_by_ref(args.automation_ref)
+        await service.run_now(automation.task_id)
     except KeyError:
-        return _automation_not_found(args.task_id)
+        return _automation_not_found(args.automation_ref)
     except RuntimeError:
         return ToolResult.failure(
             code="temporarily_unavailable",
@@ -723,7 +738,7 @@ async def automation_run(execution: ToolExecution, args: AutomationRunInput) -> 
         )
 
     return ToolResult(
-        content=f"Automation {args.task_id} started. Use get_automation_result to check the outcome.",
+        content=f"Automation {args.automation_ref} started. Use automation_result to check the outcome.",
         preview="Started",
     )
 
@@ -890,7 +905,7 @@ async def loop_schedule_wakeup(execution: ToolExecution, args: LoopScheduleWakeu
     if not await svc.scheduler.reschedule_run(task_id, next_run):
         return ToolResult.failure(
             code="automation_unavailable",
-            message=f"Loop {task_id} is missing or disabled.",
+            message="The current loop is missing or disabled.",
             preview="Loop unavailable",
             recovery_action="Create or enable the loop before scheduling its next iteration.",
         )
@@ -984,6 +999,8 @@ CREATE_LOOP_DESCRIPTION = (
 
 
 class LoopCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str = Field(
         description="What the loop should do on each iteration. Posted as a user message into this chat. Stand-alone.",
         min_length=1,
@@ -1006,9 +1023,9 @@ class LoopCreateInput(BaseModel):
         description="Optional hard cap in days from creation. After this many days, the loop disables itself on the next fire even if max_iterations hasn't been hit.",
         ge=1,
     )
-    parent_automation_id: str | None = Field(
+    parent_automation_ref: str | None = Field(
         default=None,
-        description="Explicit parent lineage. Defaults to the calling loop's task_id if invoked inside a loop iteration.",
+        description="Exact parent ref from automation_list. Defaults to the calling loop when invoked inside one.",
     )
     idempotency_key: str | None = Field(
         default=None,
@@ -1034,15 +1051,17 @@ async def approve_loop_create(execution: ToolExecution, args: LoopCreateInput) -
     if args.stop_when:
         lines.insert(-1, f"Stop when: {args.stop_when}")
     try:
-        inferred_parent, _ = await _resolve_parent_context(execution, args.parent_automation_id, args.idempotency_scope)
+        inferred_parent, _ = await _resolve_parent_context(
+            execution, args.parent_automation_ref, args.idempotency_scope
+        )
         parent_conflict: str | None = None
     except ValueError as exc:
-        inferred_parent = args.parent_automation_id or execution.ctx.run.loop_task_id
+        inferred_parent = None
         parent_conflict = str(exc)
     if inferred_parent:
-        lines.insert(-1, f"Parent: {inferred_parent}")
+        lines.insert(-1, f"Parent: {inferred_parent.automation_ref}")
     if parent_conflict:
-        lines.insert(-1, f"Parent {inferred_parent!r} missing — will fail on execute")
+        lines.insert(-1, f"Parent invalid: {parent_conflict}")
     if args.idempotency_scope:
         key = args.idempotency_key or "(unset)"
         lines.insert(-1, f"Idempotency: {args.idempotency_scope} · key={key}")
@@ -1068,8 +1087,8 @@ async def loop_create(execution: ToolExecution, args: LoopCreateInput) -> ToolRe
     if svc is None:
         return _automation_unavailable()
     try:
-        parent_automation_id, parent_fire_at = await _resolve_parent_context(
-            execution, args.parent_automation_id, args.idempotency_scope
+        parent, parent_fire_at = await _resolve_parent_context(
+            execution, args.parent_automation_ref, args.idempotency_scope
         )
     except ValueError as e:
         return ToolResult.failure(
@@ -1086,7 +1105,7 @@ async def loop_create(execution: ToolExecution, args: LoopCreateInput) -> ToolRe
             max_iterations=args.max_iterations,
             stop_when=args.stop_when,
             max_age_days=args.max_age_days,
-            parent_automation_id=parent_automation_id,
+            parent_automation_id=parent.task_id if parent is not None else None,
             idempotency_key=args.idempotency_key,
             idempotency_scope=args.idempotency_scope,
             parent_fire_at=parent_fire_at,
@@ -1107,7 +1126,7 @@ async def loop_create(execution: ToolExecution, args: LoopCreateInput) -> ToolRe
         )
 
     lines = [
-        f"Created loop {loop.task_id}",
+        f"Created loop {loop.automation_ref}",
         f"Every: {args.every}",
         f"Prompt: {loop.prompt}",
     ]
@@ -1118,7 +1137,9 @@ async def loop_create(execution: ToolExecution, args: LoopCreateInput) -> ToolRe
     if loop.stop_when:
         lines.append(f"Stop when: {loop.stop_when}")
     if loop.parent_automation_id:
-        lines.append(f"Parent: {loop.parent_automation_id}")
+        if parent is None:
+            raise RuntimeError("created loop lost its resolved parent")
+        lines.append(f"Parent: {parent.automation_ref}")
     if loop.next_run_at:
         lines.append(f"First run: {format_timestamp(loop.next_run_at)}")
     return ToolResult(content="\n".join(lines), preview=f"Loop · every {args.every}")

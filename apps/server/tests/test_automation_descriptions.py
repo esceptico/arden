@@ -6,7 +6,7 @@ import pytest
 
 import arden.database as database
 from arden.automation.descriptions import AutomationDescriptionDraft, AutomationDescriptionGenerator
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import CompletedAgentRun, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
@@ -87,6 +87,7 @@ async def test_scheduler_executes_prompt_not_display_description(tmp_path: Path,
     store, conn = await _store(tmp_path)
     automation = Automation(
         task_id="prompt-contract",
+        automation_ref=create_automation_ref("Inbox sweep", "prompt-contract"),
         name="Inbox sweep",
         description="Checks urgent inbox updates.",
         description_source="manual",

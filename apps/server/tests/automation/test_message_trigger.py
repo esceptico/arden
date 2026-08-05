@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 
 import arden.database as database
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import MessageTrigger, TimeTrigger, parse_triggers
@@ -82,6 +82,7 @@ async def _save_watcher(
     await store.save(
         Automation(
             task_id=task_id,
+            automation_ref=create_automation_ref("watcher", task_id),
             name="watcher",
             description=None,
             description_source=None,
@@ -193,6 +194,7 @@ async def test_list_message_triggered_ignores_non_message_triggers(store: Automa
     await store.save(
         Automation(
             task_id="time-only",
+            automation_ref=create_automation_ref("time", "time-only"),
             name="time",
             description=None,
             description_source=None,

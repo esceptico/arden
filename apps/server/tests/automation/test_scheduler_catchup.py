@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 
 import arden.database as database
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
@@ -30,6 +30,7 @@ async def store(tmp_path: Path):
 def _auto(**kw) -> Automation:
     base = {
         "task_id": "t",
+        "automation_ref": create_automation_ref("n", "t"),
         "name": "n",
         "description": "Runs daily memory maintenance.",
         "description_source": "manual",

@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 
 import arden.database as database
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
@@ -42,6 +42,7 @@ def _session_bound(
     now = datetime.now(UTC)
     return Automation(
         task_id=task_id,
+        automation_ref=create_automation_ref("watcher", task_id),
         name="watcher",
         description=None,
         description_source=None,

@@ -4,11 +4,12 @@ from dataclasses import replace as dc_replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import aiosqlite
 import pytest
 import pytest_asyncio
 
 import arden.database as database
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import CountTrigger, IdleTrigger, TimeTrigger, parse_triggers
@@ -45,6 +46,12 @@ async def automation_store_with_outbox(tmp_path: Path):
     await conn.close()
 
 
+async def _start_run(store: AutomationStore, task_id: str, started_at: datetime) -> int:
+    if await store.get(task_id) is None:
+        await store.save(_automation(task_id))
+    return await store.record_run_start(task_id, started_at)
+
+
 async def _finish_run(
     store: AutomationStore,
     task_id: str,
@@ -71,8 +78,8 @@ async def _finish_run(
 
 async def test_orphaned_running_rows_fail_terminal(automation_store: AutomationStore):
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
-    await automation_store.record_run_start("loop-1", t0)
-    await automation_store.record_run_start("loop-2", t0)
+    await _start_run(automation_store, "loop-1", t0)
+    await _start_run(automation_store, "loop-2", t0)
 
     swept = await automation_store.fail_orphaned_runs(t0 + timedelta(minutes=5), "interrupted by server restart")
     assert swept == 2
@@ -88,7 +95,7 @@ async def test_restart_binds_latest_unbound_automation_run_to_interrupted_chat(
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     await automation_store.save(_automation("area:health"))
     assert await automation_store.try_mark_running("area:health", started_at)
-    await automation_store.record_run_start("area:health", started_at)
+    await _start_run(automation_store, "area:health", started_at)
 
     assert await automation_store.bind_interrupted_chat_run(
         "area:health",
@@ -178,7 +185,7 @@ async def test_compare_and_set_next_run_supports_null_expected_value(automation_
 
 async def test_run_history_records_start_then_finish(automation_store: AutomationStore):
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
-    run_id = await automation_store.record_run_start("task-1", t0)
+    run_id = await _start_run(automation_store, "task-1", t0)
     assert run_id > 0
 
     runs = await automation_store.list_runs("task-1")
@@ -214,7 +221,7 @@ async def test_run_history_records_start_then_finish(automation_store: Automatio
 async def test_run_history_newest_first_and_limited(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     for i in range(5):
-        await automation_store.record_run_start("task-2", base + timedelta(minutes=i))
+        await _start_run(automation_store, "task-2", base + timedelta(minutes=i))
     runs = await automation_store.list_runs("task-2", limit=3)
     assert len(runs) == 3
     assert runs[0]["started_at"] > runs[1]["started_at"] > runs[2]["started_at"]
@@ -222,22 +229,30 @@ async def test_run_history_newest_first_and_limited(automation_store: Automation
 
 async def test_run_history_filters_across_automations_since_timestamp(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
-    await automation_store.record_run_start("old", base)
-    await automation_store.record_run_start("a", base + timedelta(hours=1))
-    await automation_store.record_run_start("b", base + timedelta(hours=2))
+    await _start_run(automation_store, "old", base)
+    await _start_run(automation_store, "a", base + timedelta(hours=1))
+    await _start_run(automation_store, "b", base + timedelta(hours=2))
 
     runs = await automation_store.list_runs_since(base + timedelta(minutes=30), limit=10)
-    assert [run["task_id"] for run in runs] == ["b", "a"]
+    assert [run["automation_ref"] for run in runs] == [
+        create_automation_ref("b", "b"),
+        create_automation_ref("a", "a"),
+    ]
+    assert all("task_id" not in run and "id" not in run and "chat_run_id" not in run for run in runs)
 
-    filtered = await automation_store.list_runs_since(base, task_id="a", limit=10)
-    assert [run["task_id"] for run in filtered] == ["a"]
+    filtered = await automation_store.list_runs_since(
+        base,
+        automation_ref=create_automation_ref("a", "a"),
+        limit=10,
+    )
+    assert [run["automation_ref"] for run in filtered] == [create_automation_ref("a", "a")]
 
 
 async def test_recent_run_statuses_newest_first_per_task(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
-    r1 = await automation_store.record_run_start("A", base)
+    r1 = await _start_run(automation_store, "A", base)
     await _finish_run(automation_store, "A", r1, status="completed", result="ok", error=None, ended_at=base)
-    r2 = await automation_store.record_run_start("A", base + timedelta(minutes=1))
+    r2 = await _start_run(automation_store, "A", base + timedelta(minutes=1))
     await _finish_run(
         automation_store,
         "A",
@@ -247,8 +262,8 @@ async def test_recent_run_statuses_newest_first_per_task(automation_store: Autom
         error="x",
         ended_at=base + timedelta(minutes=1),
     )
-    await automation_store.record_run_start("A", base + timedelta(minutes=2))  # still running
-    await automation_store.record_run_start("B", base)
+    await _start_run(automation_store, "A", base + timedelta(minutes=2))  # still running
+    await _start_run(automation_store, "B", base)
 
     res = await automation_store.recent_run_statuses(["A", "B", "C"], per_task=4)
     assert res["A"] == ["running", "failed", "completed"]  # newest first
@@ -259,14 +274,14 @@ async def test_recent_run_statuses_newest_first_per_task(automation_store: Autom
 async def test_recent_run_statuses_respects_per_task_cap(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     for i in range(6):
-        await automation_store.record_run_start("A", base + timedelta(minutes=i))
+        await _start_run(automation_store, "A", base + timedelta(minutes=i))
     res = await automation_store.recent_run_statuses(["A"], per_task=4)
     assert len(res["A"]) == 4
 
 
 async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(automation_store: AutomationStore):
     base = datetime(2026, 1, 1, tzinfo=UTC)
-    completed = await automation_store.record_run_start("A", base)
+    completed = await _start_run(automation_store, "A", base)
     await _finish_run(
         automation_store,
         "A",
@@ -276,7 +291,7 @@ async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(a
         error=None,
         ended_at=base + timedelta(minutes=1),
     )
-    failed = await automation_store.record_run_start("A", base + timedelta(minutes=2))
+    failed = await _start_run(automation_store, "A", base + timedelta(minutes=2))
     await _finish_run(
         automation_store,
         "A",
@@ -286,13 +301,13 @@ async def test_latest_completed_runs_ignores_newer_failed_and_running_attempts(a
         error="boom",
         ended_at=base + timedelta(minutes=3),
     )
-    await automation_store.record_run_start("A", base + timedelta(minutes=4))
+    await _start_run(automation_store, "A", base + timedelta(minutes=4))
 
     assert await automation_store.latest_completed_runs(("A", "missing")) == {"A": base + timedelta(minutes=1)}
 
 
 async def test_run_history_truncates_long_result(automation_store: AutomationStore):
-    rid = await automation_store.record_run_start("task-3", datetime(2026, 1, 1, tzinfo=UTC))
+    rid = await _start_run(automation_store, "task-3", datetime(2026, 1, 1, tzinfo=UTC))
     await _finish_run(
         automation_store,
         "task-3",
@@ -315,7 +330,7 @@ async def test_settle_run_commits_one_automation_settled_event(automation_store_
     next_run = ended_at + timedelta(hours=6)
     await store.save(_automation("task-1", next_run_at=next_run))
     assert await store.try_mark_running("task-1", ended_at)
-    run_id = await store.record_run_start("task-1", ended_at)
+    run_id = await _start_run(store, "task-1", ended_at)
 
     assert await store.settle_run(
         task_id="task-1",
@@ -360,7 +375,7 @@ async def test_settlement_observer_retries_after_committed_run(automation_store_
     ended_at = datetime(2026, 1, 1, tzinfo=UTC)
     await store.save(_automation("task-1"))
     assert await store.try_mark_running("task-1", ended_at)
-    run_id = await store.record_run_start("task-1", ended_at)
+    run_id = await _start_run(store, "task-1", ended_at)
     assert await store.settle_run(
         task_id="task-1",
         run_id=run_id,
@@ -419,7 +434,7 @@ async def test_settle_run_rolls_back_when_outbox_insert_fails(tmp_path: Path):
     ended_at = datetime(2026, 1, 1, tzinfo=UTC)
     await store.save(_automation("task-1"))
     assert await store.try_mark_running("task-1", ended_at)
-    run_id = await store.record_run_start("task-1", ended_at)
+    run_id = await _start_run(store, "task-1", ended_at)
 
     try:
         with pytest.raises(RuntimeError, match="outbox unavailable"):
@@ -456,7 +471,7 @@ async def test_settlement_transaction_cannot_be_committed_by_another_store(
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     await store.save(_automation("task-1"))
     assert await store.try_mark_running("task-1", started_at)
-    run_id = await store.record_run_start("task-1", started_at)
+    run_id = await _start_run(store, "task-1", started_at)
 
     cadence_started = asyncio.Event()
     release_cadence = asyncio.Event()
@@ -516,9 +531,11 @@ def _automation(
     handler: str | None = None,
     builtin: bool = False,
 ) -> Automation:
+    automation_name = name or task_id
     return Automation(
         task_id=task_id,
-        name=name or task_id,
+        automation_ref=create_automation_ref(automation_name, task_id),
+        name=automation_name,
         description=None,
         description_source=None,
         prompt=f"Run {task_id}.",
@@ -690,6 +707,7 @@ async def test_loop_fields_roundtrip(automation_store: AutomationStore):
     now = datetime.now(UTC)
     loop = Automation(
         task_id="loop-foo",
+        automation_ref=create_automation_ref("Loop: check CI", "loop-foo"),
         name="Loop: check CI",
         description=None,
         description_source=None,
@@ -728,6 +746,7 @@ async def test_list_loops_by_session_filters_correctly(automation_store: Automat
     def _loop(task_id: str, session_id: str) -> Automation:
         return Automation(
             task_id=task_id,
+            automation_ref=create_automation_ref(task_id, task_id),
             name=task_id,
             description=None,
             description_source=None,
@@ -763,6 +782,7 @@ async def test_increment_iteration_advances_count(automation_store: AutomationSt
     now = datetime.now(UTC)
     loop = Automation(
         task_id="loop-iter",
+        automation_ref=create_automation_ref("x", "loop-iter"),
         name="x",
         description=None,
         description_source=None,
@@ -795,6 +815,7 @@ async def test_v5_fields_roundtrip(automation_store: AutomationStore):
     now = datetime.now(UTC)
     automation = Automation(
         task_id="post-mode-foo",
+        automation_ref=create_automation_ref("Post offer update", "post-mode-foo"),
         name="Post offer update",
         description=None,
         description_source=None,
@@ -903,7 +924,7 @@ async def test_v4_to_v10_migration_backfills_loop_rows(tmp_path: Path):
         INSERT INTO scheduled_tasks (
             task_id, name, description, model, triggers, enabled, created_at,
             kind, target_session_id, loop_prompt
-        ) VALUES (?, '', 'loop a', NULL, '[]', 1, ?, 'loop', 'sess-A', 'prompt a')
+        ) VALUES (?, 'Loop A', 'loop a', NULL, '[]', 1, ?, 'loop', 'sess-A', 'prompt a')
         """,
         ("loop-row", now),
     )
@@ -912,7 +933,7 @@ async def test_v4_to_v10_migration_backfills_loop_rows(tmp_path: Path):
         INSERT INTO scheduled_tasks (
             task_id, name, description, model, triggers, enabled, created_at,
             kind, target_session_id, loop_prompt
-        ) VALUES (?, '', 'plain', NULL, '[]', 1, ?, 'automation', NULL, NULL)
+        ) VALUES (?, 'Plain', 'plain', NULL, '[]', 1, ?, 'automation', NULL, NULL)
         """,
         ("plain-row", now),
     )
@@ -982,7 +1003,7 @@ async def test_migration_is_idempotent(tmp_path: Path):
         INSERT INTO scheduled_tasks (
             task_id, name, description, model, triggers, enabled, created_at,
             kind, target_session_id, loop_prompt
-        ) VALUES (?, '', 'loop a', NULL, '[]', 1, ?, 'loop', 'sess-A', 'prompt a')
+        ) VALUES (?, 'Loop A', 'loop a', NULL, '[]', 1, ?, 'loop', 'sess-A', 'prompt a')
         """,
         ("loop-row", now),
     )
@@ -1024,6 +1045,128 @@ async def test_migration_surfaces_invalid_trigger_json(tmp_path: Path):
     rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
     assert rows[0]["value"] == "1"
     await conn.close()
+
+
+async def _downgrade_refs_to_v16(store: AutomationStore) -> None:
+    await store.conn.execute("DROP INDEX idx_automation_runs_ref")
+    await store.conn.execute("DROP INDEX idx_scheduled_tasks_automation_ref")
+    await store.conn.execute("ALTER TABLE automation_runs DROP COLUMN automation_ref")
+    await store.conn.execute("ALTER TABLE scheduled_tasks DROP COLUMN automation_ref")
+    await store.conn.execute("UPDATE automation_meta SET value = '16' WHERE key = 'schema_version'")
+    await store.conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_v17_migration_backfills_task_and_run_refs(tmp_path: Path):
+    conn = await database.connect(tmp_path / "v16.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    automation = _automation("internal-task-id", name="Daily Brief")
+    await store.save(automation)
+    await store.record_run_start(automation.task_id, datetime.now(UTC))
+    await _downgrade_refs_to_v16(store)
+
+    await store.init_schema()
+
+    loaded = await store.get(automation.task_id)
+    assert loaded is not None
+    assert loaded.automation_ref == create_automation_ref("Daily Brief", "internal-task-id")
+    runs = await store.list_runs_since(datetime(2000, 1, 1, tzinfo=UTC))
+    assert runs[0]["automation_ref"] == loaded.automation_ref
+    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "17"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v17_migration_preserves_runs_for_deleted_automations(tmp_path: Path):
+    conn = await database.connect(tmp_path / "deleted-v16.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    automation = _automation("deleted-task", name="Ephemeral")
+    await store.save(automation)
+    await store.record_run_start(automation.task_id, datetime.now(UTC))
+    assert await store.delete(automation.task_id)
+    await _downgrade_refs_to_v16(store)
+
+    await store.init_schema()
+
+    runs = await store.list_runs_since(datetime(2000, 1, 1, tzinfo=UTC))
+    assert runs[0]["automation_ref"] == create_automation_ref("Deleted automation", automation.task_id)
+    assert await store.get(automation.task_id) is None
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v17_migration_rejects_public_ref_collisions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    conn = await database.connect(tmp_path / "collision.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await store.save(_automation("one", name="One"))
+    await store.save(_automation("two", name="Two"))
+    await _downgrade_refs_to_v16(store)
+    monkeypatch.setattr("arden.automation.store.create_automation_ref", lambda _name, _task_id: "same~000000")
+
+    with pytest.raises(RuntimeError, match="public-ref collision"):
+        await store.init_schema()
+
+    columns = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
+    assert "automation_ref" not in {row["name"] for row in columns}
+    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "16"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_automation_ref_is_immutable(automation_store: AutomationStore):
+    automation = _automation("immutable", name="Original")
+    await automation_store.save(automation)
+
+    with pytest.raises(ValueError, match="immutable"):
+        await automation_store.save(
+            dc_replace(automation, automation_ref=create_automation_ref("Changed", automation.task_id))
+        )
+
+    loaded = await automation_store.get(automation.task_id)
+    assert loaded is not None
+    assert loaded.automation_ref == automation.automation_ref
+    assert not automation_store.conn.in_transaction
+    assert not await automation_store.delete("missing-after-rejection")
+
+
+@pytest.mark.asyncio
+async def test_automation_ref_collision_rolls_back_before_next_transaction(automation_store: AutomationStore):
+    first = _automation("first-ref-owner", name="First")
+    await automation_store.save(first)
+
+    with pytest.raises(aiosqlite.IntegrityError):
+        await automation_store.save(
+            dc_replace(_automation("second-ref-owner", name="Second"), automation_ref=first.automation_ref)
+        )
+
+    assert not automation_store.conn.in_transaction
+    assert not await automation_store.delete("missing-after-collision")
+
+
+@pytest.mark.asyncio
+async def test_missing_run_owner_rolls_back_before_next_transaction(automation_store: AutomationStore):
+    with pytest.raises(KeyError, match="missing-owner"):
+        await automation_store.record_run_start("missing-owner", datetime.now(UTC))
+
+    assert not automation_store.conn.in_transaction
+    assert not await automation_store.delete("missing-after-run-rejection")
+
+
+@pytest.mark.asyncio
+async def test_run_keeps_public_ref_after_automation_deletion(automation_store: AutomationStore):
+    automation = _automation("delete-me", name="Ephemeral")
+    await automation_store.save(automation)
+    await automation_store.record_run_start(automation.task_id, datetime.now(UTC))
+
+    assert await automation_store.delete(automation.task_id)
+
+    runs = await automation_store.list_runs_since(datetime(2000, 1, 1, tzinfo=UTC))
+    assert runs[0]["automation_ref"] == automation.automation_ref
 
 
 @pytest.mark.asyncio
@@ -1255,7 +1398,7 @@ async def test_seed_builtins_enforces_system_timing_but_preserves_pause_and_hist
                 last_result="Previous result.",
             )
         )
-    run_id = await automation_store.record_run_start(BUILTIN_MEMORY_SYNTHESIZE_ID, last_run)
+    run_id = await _start_run(automation_store, BUILTIN_MEMORY_SYNTHESIZE_ID, last_run)
     await _finish_run(
         automation_store,
         BUILTIN_MEMORY_SYNTHESIZE_ID,

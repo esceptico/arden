@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from arden.agent import Usage
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.triggers import TimeTrigger
 from arden.config import Config
 from arden.constants import (
@@ -84,6 +84,7 @@ def _seed_fact(config: Config) -> FactLedger:
 def _wiki_producer() -> Automation:
     return Automation(
         task_id="producer",
+        automation_ref=create_automation_ref("Producer", "producer"),
         name="Producer",
         prompt="Update one feed.",
         model="test",

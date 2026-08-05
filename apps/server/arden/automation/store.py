@@ -4,8 +4,9 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from arden.automation.models import Automation, IdempotencyClaim
+from arden.automation.models import Automation, IdempotencyClaim, create_automation_ref
 from arden.automation.triggers import parse_triggers
+from arden.core.public_refs import is_public_ref
 from arden.logging import get_logger
 from arden.outbox.store import OutboxStore
 
@@ -28,10 +29,27 @@ _AUTOMATION_RUN_FIELDS = (
     "error",
 )
 
+_MODEL_AUTOMATION_RUN_FIELDS = (
+    "automation_ref",
+    "chat_session_id",
+    "started_at",
+    "ended_at",
+    "status",
+    "result",
+    "error",
+)
+
 
 def _automation_run_dict(row: aiosqlite.Row) -> dict[str, object]:
     """Project one persisted run without silently dropping channel identity."""
     return {field: row[field] for field in _AUTOMATION_RUN_FIELDS}
+
+
+def _model_automation_run_dict(row: aiosqlite.Row) -> dict[str, object]:
+    automation_ref = row["automation_ref"]
+    if not isinstance(automation_ref, str) or not is_public_ref(automation_ref):
+        raise RuntimeError("persisted automation run has an invalid automation_ref")
+    return {field: row[field] for field in _MODEL_AUTOMATION_RUN_FIELDS}
 
 
 _CONTROL_BYTES = ("\x1f", "\x00")
@@ -100,6 +118,7 @@ def _build_claim_id(
 def _row_to_automation(row: dict) -> Automation:
     return Automation(
         task_id=row["task_id"],
+        automation_ref=row["automation_ref"],
         name=row["name"],
         description=row["description"],
         description_source=row["description_source"],
@@ -138,6 +157,7 @@ def _serialize_triggers(triggers: list) -> str:
 def _automation_values(automation: Automation) -> tuple[object, ...]:
     return (
         automation.task_id,
+        automation.automation_ref,
         automation.name,
         automation.description,
         automation.description_source,
@@ -172,6 +192,7 @@ def _automation_values(automation: Automation) -> tuple[object, ...]:
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
     task_id TEXT PRIMARY KEY,
+    automation_ref TEXT NOT NULL,
     name TEXT NOT NULL DEFAULT '',
     description TEXT,
     description_source TEXT CHECK (description_source IN ('manual', 'generated') OR description_source IS NULL),
@@ -212,6 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enable
 CREATE TABLE IF NOT EXISTS automation_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
+    automation_ref TEXT NOT NULL,
     chat_run_id TEXT,
     chat_session_id TEXT,
     started_at TEXT NOT NULL,
@@ -299,7 +321,7 @@ ON automation_idempotency_claims(parent_automation_id);
 """
 
 _COLUMNS = (
-    "task_id, name, description, description_source, prompt, model, triggers, enabled, "
+    "task_id, automation_ref, name, description, description_source, prompt, model, triggers, enabled, "
     "created_at, last_run_at, next_run_at, last_result, running_since, "
     "auto_approve, handler, builtin, cooldown_minutes, "
     "kind, max_iterations, iteration_count, stop_when, max_age_days, "
@@ -308,16 +330,47 @@ _COLUMNS = (
 )
 
 _SQL_SAVE = f"""
-INSERT OR REPLACE INTO scheduled_tasks ({_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO scheduled_tasks ({_COLUMNS})
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET
+    name = excluded.name,
+    description = excluded.description,
+    description_source = excluded.description_source,
+    prompt = excluded.prompt,
+    model = excluded.model,
+    triggers = excluded.triggers,
+    enabled = excluded.enabled,
+    created_at = excluded.created_at,
+    last_run_at = excluded.last_run_at,
+    next_run_at = excluded.next_run_at,
+    last_result = excluded.last_result,
+    running_since = excluded.running_since,
+    auto_approve = excluded.auto_approve,
+    handler = excluded.handler,
+    builtin = excluded.builtin,
+    cooldown_minutes = excluded.cooldown_minutes,
+    kind = excluded.kind,
+    max_iterations = excluded.max_iterations,
+    iteration_count = excluded.iteration_count,
+    stop_when = excluded.stop_when,
+    max_age_days = excluded.max_age_days,
+    thread_id = excluded.thread_id,
+    read_history = excluded.read_history,
+    parent_automation_id = excluded.parent_automation_id,
+    idempotency_key = excluded.idempotency_key,
+    idempotency_scope = excluded.idempotency_scope,
+    tool_scope = excluded.tool_scope,
+    triggers_source = excluded.triggers_source
+WHERE scheduled_tasks.automation_ref = excluded.automation_ref
 """
 
 _SQL_INSERT = f"""
 INSERT INTO scheduled_tasks ({_COLUMNS})
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _SQL_GET_BY_ID = f"SELECT {_COLUMNS} FROM scheduled_tasks WHERE task_id = ?"
+_SQL_GET_BY_REF = f"SELECT {_COLUMNS} FROM scheduled_tasks WHERE automation_ref = ?"
 
 _SQL_LIST_ALL = f"SELECT {_COLUMNS} FROM scheduled_tasks ORDER BY created_at"
 
@@ -441,7 +494,12 @@ WHERE task_id = ?
 
 _SQL_CLEAR_RUNNING = "UPDATE scheduled_tasks SET running_since = NULL WHERE task_id = ?"
 
-_SQL_INSERT_RUN = "INSERT INTO automation_runs (task_id, started_at, status) VALUES (?, ?, 'running')"
+_SQL_INSERT_RUN = """
+INSERT INTO automation_runs (task_id, automation_ref, started_at, status)
+SELECT task_id, automation_ref, ?, 'running'
+FROM scheduled_tasks
+WHERE task_id = ?
+"""
 _SQL_DELETE_UNSTARTED_RUN = """
 DELETE FROM automation_runs
 WHERE id = ? AND task_id = ? AND status = 'running' AND chat_run_id IS NULL
@@ -806,7 +864,7 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
 """
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 17
 
 _LOOP_COLUMNS: tuple[tuple[str, str], ...] = (
     ("kind", "TEXT NOT NULL DEFAULT 'automation'"),
@@ -1005,6 +1063,68 @@ async def _migrate_v14(conn: aiosqlite.Connection) -> None:
             WHERE idempotency_key IS NOT NULL;
             """
         )
+
+
+async def _migrate_v17(conn: aiosqlite.Connection) -> None:
+    task_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
+    run_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
+    if "automation_ref" in task_columns and "automation_ref" in run_columns:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_automation_ref ON scheduled_tasks(automation_ref)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_automation_runs_ref ON automation_runs(automation_ref, started_at)"
+        )
+        return
+
+    task_rows = await conn.execute_fetchall("SELECT task_id, name FROM scheduled_tasks")
+    names_by_task = {row["task_id"]: row["name"] for row in task_rows}
+    run_task_rows = await conn.execute_fetchall("SELECT DISTINCT task_id FROM automation_runs")
+    for row in run_task_rows:
+        names_by_task.setdefault(row["task_id"], "Deleted automation")
+
+    refs_by_task: dict[str, str] = {}
+    tasks_by_ref: dict[str, str] = {}
+    for task_id, name in names_by_task.items():
+        try:
+            automation_ref = create_automation_ref(name, task_id)
+        except ValueError as error:
+            raise RuntimeError(f"automation {task_id!r} cannot receive a public ref") from error
+        other_task = tasks_by_ref.get(automation_ref)
+        if other_task is not None:
+            raise RuntimeError(
+                f"automation public-ref collision between {other_task!r} and {task_id!r}: {automation_ref}"
+            )
+        refs_by_task[task_id] = automation_ref
+        tasks_by_ref[automation_ref] = task_id
+
+    if "automation_ref" not in task_columns:
+        await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN automation_ref TEXT")
+    if "automation_ref" not in run_columns:
+        await conn.execute("ALTER TABLE automation_runs ADD COLUMN automation_ref TEXT")
+    for task_id, automation_ref in refs_by_task.items():
+        await conn.execute(
+            "UPDATE scheduled_tasks SET automation_ref = ? WHERE task_id = ?",
+            (automation_ref, task_id),
+        )
+        await conn.execute(
+            "UPDATE automation_runs SET automation_ref = ? WHERE task_id = ?",
+            (automation_ref, task_id),
+        )
+    missing_task_refs = await conn.execute_fetchall(
+        "SELECT task_id FROM scheduled_tasks WHERE automation_ref IS NULL OR automation_ref = '' LIMIT 1"
+    )
+    missing_run_refs = await conn.execute_fetchall(
+        "SELECT id FROM automation_runs WHERE automation_ref IS NULL OR automation_ref = '' LIMIT 1"
+    )
+    if missing_task_refs or missing_run_refs:
+        raise RuntimeError("automation public-ref migration left an unaddressable row")
+    await conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_automation_ref ON scheduled_tasks(automation_ref)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_automation_runs_ref ON automation_runs(automation_ref, started_at)"
+    )
 
 
 async def _migrate(conn: aiosqlite.Connection) -> None:
@@ -1330,6 +1450,12 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
         await conn.commit()
         _logger.info("Migrated automation store to v16 (user-owned trigger edits)")
 
+    if version < 17:
+        await _migrate_v17(conn)
+        await _set_schema_version(conn, 17)
+        await conn.commit()
+        _logger.info("Migrated automation store to v17 (stable model-facing refs)")
+
 
 class AutomationStore:
     def __init__(
@@ -1360,8 +1486,14 @@ class AutomationStore:
         await self.conn.commit()
 
     async def save(self, automation: Automation) -> None:
-        await self.conn.execute(_SQL_SAVE, _automation_values(automation))
-        await self.conn.commit()
+        try:
+            cursor = await self.conn.execute(_SQL_SAVE, _automation_values(automation))
+            if cursor.rowcount == 0:
+                raise ValueError("automation_ref is immutable")
+            await self.conn.commit()
+        except BaseException:
+            await self.conn.rollback()
+            raise
 
     async def seed_predefined(self, seed: str, automation: Automation) -> bool:
         """Insert one user-owned default once; deletion remains deletion."""
@@ -1391,6 +1523,12 @@ class AutomationStore:
         if not rows:
             return None
         return _row_to_automation(rows[0])
+
+    async def get_by_ref(self, automation_ref: str) -> Automation | None:
+        if not is_public_ref(automation_ref):
+            return None
+        rows = await self.conn.execute_fetchall(_SQL_GET_BY_REF, (automation_ref,))
+        return _row_to_automation(rows[0]) if rows else None
 
     async def list_all(self) -> list[Automation]:
         rows = await self.conn.execute_fetchall(_SQL_LIST_ALL)
@@ -1486,9 +1624,15 @@ class AutomationStore:
         await self.conn.commit()
 
     async def record_run_start(self, task_id: str, started_at: datetime) -> int:
-        cursor = await self.conn.execute(_SQL_INSERT_RUN, (task_id, started_at.isoformat()))
-        await self.conn.commit()
-        return int(cursor.lastrowid or 0)
+        try:
+            cursor = await self.conn.execute(_SQL_INSERT_RUN, (started_at.isoformat(), task_id))
+            if cursor.rowcount == 0:
+                raise KeyError(f"Automation {task_id} not found")
+            await self.conn.commit()
+            return int(cursor.lastrowid or 0)
+        except BaseException:
+            await self.conn.rollback()
+            raise
 
     async def defer_run(
         self,
@@ -1816,7 +1960,7 @@ class AutomationStore:
         self,
         since: datetime,
         *,
-        task_id: str | None = None,
+        automation_ref: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -1826,13 +1970,15 @@ class AutomationStore:
             raise ValueError("limit must be positive and offset must be non-negative")
         where = "started_at >= ?"
         params: list[object] = [since.astimezone(UTC).isoformat()]
-        if task_id is not None:
-            where += " AND task_id = ?"
-            params.append(task_id)
+        if automation_ref is not None:
+            if not is_public_ref(automation_ref):
+                raise ValueError("automation_ref must be an exact public reference")
+            where += " AND automation_ref = ?"
+            params.append(automation_ref)
         params.extend((limit, offset))
         rows = await self.conn.execute_fetchall(
             f"""
-            SELECT id, task_id, chat_run_id, chat_session_id, started_at, ended_at, status, result, error
+            SELECT automation_ref, chat_session_id, started_at, ended_at, status, result, error
             FROM automation_runs
             WHERE {where}
             ORDER BY started_at DESC, id DESC
@@ -1840,7 +1986,7 @@ class AutomationStore:
             """,
             tuple(params),
         )
-        return [_automation_run_dict(row) for row in rows]
+        return [_model_automation_run_dict(row) for row in rows]
 
     async def delete(self, task_id: str) -> bool:
         async with self._idempotency_lock:

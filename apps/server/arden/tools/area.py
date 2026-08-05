@@ -42,7 +42,7 @@ class AreaPageWriteInput(BaseModel):
 class AreaAutomationRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    task_id: str = Field(min_length=1, max_length=200)
+    automation_ref: str = Field(min_length=1, max_length=200)
 
 
 def _target(execution: ToolExecution):
@@ -293,14 +293,6 @@ def _updated_result(
 async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunInput) -> ToolResult:
     area = execution.ctx.area
     service = execution.ctx.services.get("automation")
-    prefix = f"area:{area.area_id}:" if area is not None else None
-    if prefix is None or not args.task_id.startswith(prefix):
-        return ToolResult.failure(
-            code="permission_denied",
-            message="Only child automations owned by the current Area can be run.",
-            preview="Outside Area boundary",
-            recovery_action="Use an automation ID returned by this Area's work context.",
-        )
     if service is None:
         return ToolResult.failure(
             code="not_configured",
@@ -309,14 +301,24 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
             recovery_action="End the run and report that Area automation is unavailable.",
         )
     try:
-        await service.run_now(args.task_id)
+        automation = await service.get_by_ref(args.automation_ref)
     except KeyError:
         return ToolResult.failure(
             code="not_found",
             message="Area automation not found.",
             preview="Not found",
-            recovery_action="Retry with an exact child automation ID from the current Area.",
+            recovery_action="Retry with an exact automation_ref returned by automation_list.",
         )
+    prefix = f"area:{area.area_id}:" if area is not None else None
+    if prefix is None or not automation.task_id.startswith(prefix):
+        return ToolResult.failure(
+            code="permission_denied",
+            message="Only child automations owned by the current Area can be run.",
+            preview="Outside Area boundary",
+            recovery_action="Use an automation_ref returned by this Area's automation_list.",
+        )
+    try:
+        await service.run_now(automation.task_id)
     except RuntimeError:
         return ToolResult.failure(
             code="temporarily_unavailable",
@@ -325,7 +327,7 @@ async def area_run_automation(execution: ToolExecution, args: AreaAutomationRunI
             retryable=True,
             recovery_action="Wait for the current Area run to settle, then retry once.",
         )
-    return ToolResult(content=f"Started Area automation {args.task_id}.", preview="Area automation started")
+    return ToolResult(content=f"Started Area automation {args.automation_ref}.", preview="Area automation started")
 
 
 async def area_submit_report(execution: ToolExecution, report: AreaCustodianReport) -> ToolResult:

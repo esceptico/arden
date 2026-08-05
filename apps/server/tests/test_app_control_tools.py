@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from arden.areas.asks import AskStore
 from arden.context.models import SessionData, SessionState
@@ -86,13 +87,13 @@ class _StubSessionService:
 
 
 class _StubAutomationService:
-    def __init__(self, task_ids: set[str] | None = None):
-        self._task_ids = task_ids or set()
+    def __init__(self, refs: dict[str, str] | None = None):
+        self._refs = refs or {}
 
-    async def get(self, task_id: str):
-        if task_id not in self._task_ids:
-            raise KeyError(f"Automation {task_id} not found")
-        return {"task_id": task_id}
+    async def get_by_ref(self, automation_ref: str):
+        if automation_ref not in self._refs:
+            raise KeyError(f"Automation {automation_ref} not found")
+        return SimpleNamespace(task_id=self._refs[automation_ref], automation_ref=automation_ref)
 
 
 class _StubWikiService:
@@ -529,11 +530,16 @@ async def test_open_in_app_refuses_an_unknown_area():
 
 @pytest.mark.asyncio
 async def test_open_in_app_refuses_an_unknown_automation():
-    execution, _, app_control = _make_execution(automation=_StubAutomationService({"digest"}))
+    execution, _, app_control = _make_execution(
+        automation=_StubAutomationService({"digest~111111": "internal-digest-id"})
+    )
 
     result = await app_open(
         execution,
-        AppOpenInput(destination={"kind": "automation", "task_id": "ghost"}, label="Review the digest"),
+        AppOpenInput(
+            destination={"kind": "automation", "automation_ref": "ghost~000000"},
+            label="Review the digest",
+        ),
     )
 
     assert result.is_error
@@ -547,12 +553,43 @@ async def test_open_in_app_refuses_an_automation_ref_when_automations_are_off():
 
     result = await app_open(
         execution,
-        AppOpenInput(destination={"kind": "automation", "task_id": "digest"}, label="Review the digest"),
+        AppOpenInput(
+            destination={"kind": "automation", "automation_ref": "digest~111111"},
+            label="Review the digest",
+        ),
     )
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
     assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_open_in_app_resolves_public_automation_ref_to_internal_destination():
+    execution, _, app_control = _make_execution(
+        automation=_StubAutomationService({"digest~111111": "internal-digest-id"})
+    )
+
+    result = await app_open(
+        execution,
+        AppOpenInput(
+            destination={"kind": "automation", "automation_ref": "digest~111111"},
+            label="Review the digest",
+        ),
+    )
+
+    assert not result.is_error
+    assert app_control.emitted[0].destination == {"kind": "automation", "task_id": "internal-digest-id"}
+
+
+def test_open_in_app_rejects_internal_automation_id_field():
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AppOpenInput.model_validate(
+            {
+                "destination": {"kind": "automation", "task_id": "internal-digest-id"},
+                "label": "Review the digest",
+            }
+        )
 
 
 @pytest.mark.asyncio

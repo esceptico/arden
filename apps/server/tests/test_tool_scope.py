@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.triggers import TimeTrigger
 from arden.tools.core.base import Tool
 from arden.tools.core.registry import ToolRegistry
@@ -174,6 +174,7 @@ async def test_automation_scope_roundtrips_as_a_key(tmp_path):
     def automation(task_id: str, scope: str) -> Automation:
         return Automation(
             task_id=task_id,
+            automation_ref=create_automation_ref(task_id, task_id),
             name=task_id,
             description=None,
             description_source=None,

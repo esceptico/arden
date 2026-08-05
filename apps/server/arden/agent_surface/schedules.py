@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
 
@@ -50,6 +50,7 @@ async def compile_schedules_to_automations(
         if existing is None:
             automation = Automation(
                 task_id=task_id,
+                automation_ref=create_automation_ref(schedule.id, task_id),
                 name=schedule.id,
                 description=None,
                 description_source=None,

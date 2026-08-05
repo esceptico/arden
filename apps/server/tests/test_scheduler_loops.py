@@ -7,7 +7,7 @@ import pytest_asyncio
 
 import arden.database as database
 from arden.agent import Usage
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import CompletedAgentRun, DetachedRunBindingPending, RunDeferred, RunSkipped, Scheduler
 from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
@@ -59,6 +59,7 @@ def _loop(
     now = datetime.now(UTC)
     return Automation(
         task_id=task_id,
+        automation_ref=create_automation_ref(f"Loop: {prompt[:40]}", task_id),
         name=f"Loop: {prompt[:40]}",
         description=None,
         description_source=None,
@@ -1138,6 +1139,7 @@ async def test_aged_out_loop_clears_next_run_at(store: AutomationStore):
     old = datetime.now(UTC) - timedelta(days=8)
     loop = Automation(
         task_id="loop-old",
+        automation_ref=create_automation_ref("x", "loop-old"),
         name="x",
         description=None,
         description_source=None,
@@ -1173,6 +1175,7 @@ async def test_aged_out_loop_disables_without_firing(store: AutomationStore):
     old = datetime.now(UTC) - timedelta(days=8)
     loop = Automation(
         task_id="loop-old",
+        automation_ref=create_automation_ref("x", "loop-old"),
         name="x",
         description=None,
         description_source=None,
@@ -1404,6 +1407,7 @@ async def _save_message_automation(
     await store.save(
         Automation(
             task_id=task_id,
+            automation_ref=create_automation_ref("watcher", task_id),
             name="watcher",
             description="Triages matching messages.",
             description_source="manual",
@@ -1502,6 +1506,7 @@ async def test_post_mode_aged_out_disables_without_firing(store: AutomationStore
     old = datetime.now(UTC) - timedelta(days=8)
     loop = Automation(
         task_id="loop-old-post",
+        automation_ref=create_automation_ref("x", "loop-old-post"),
         name="x",
         description=None,
         description_source=None,
@@ -1664,6 +1669,7 @@ def test_loop_target_id_returns_none_when_unset():
 
     auto = Automation(
         task_id="t",
+        automation_ref=create_automation_ref("x", "t"),
         name="x",
         description=None,
         description_source=None,
@@ -1738,6 +1744,7 @@ async def test_handle_run_completed_fires_kind_automation_with_thread_id(
     now = datetime.now(UTC)
     auto = Automation(
         task_id="channel-auto",
+        automation_ref=create_automation_ref("x", "channel-auto"),
         name="x",
         description="Posts a status update.",
         description_source="manual",
@@ -2093,6 +2100,7 @@ async def test_count_trigger_counts_successful_user_turns_only(store: Automation
     now = datetime.now(UTC)
     auto = Automation(
         task_id="count-1",
+        automation_ref=create_automation_ref("Every two turns", "count-1"),
         name="Every two turns",
         prompt="summarize",
         model=None,

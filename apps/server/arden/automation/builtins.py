@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from dataclasses import replace as dc_replace
 from datetime import UTC, datetime
 
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import CountTrigger, IdleTrigger, TimeTrigger, Trigger
 from arden.constants import (
@@ -228,6 +228,7 @@ async def seed_builtins(
         await store.save(
             Automation(
                 task_id=spec.task_id,
+                automation_ref=create_automation_ref(spec.name, spec.task_id),
                 name=spec.name,
                 description=spec.description,
                 description_source="manual",

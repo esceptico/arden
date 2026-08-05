@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from arden.automation.triggers import Trigger
+from arden.core.public_refs import is_public_ref, public_ref
 from arden.tools.scopes import ScopeKey
 
 AutomationKind = Literal["automation", "loop"]
@@ -12,6 +13,7 @@ AutomationDescriptionSource = Literal["manual", "generated"]
 @dataclass
 class Automation:
     task_id: str
+    automation_ref: str
     name: str
     prompt: str
     model: str | None
@@ -49,6 +51,10 @@ class Automation:
     # the triggers alone instead of resetting them to the code defaults.
     triggers_source: str | None = None
 
+    def __post_init__(self) -> None:
+        if not is_public_ref(self.automation_ref):
+            raise ValueError("automation_ref must be an exact public reference")
+
     def in_cooldown(self, now: datetime) -> bool:
         if not self.cooldown_minutes or not self.last_run_at:
             return False
@@ -70,3 +76,12 @@ class IdempotencyClaim:
     attempt_n: int | None
     claimed_at: datetime
     automation_task_id: str | None
+
+
+def create_automation_ref(name: str, task_id: str) -> str:
+    """Create the immutable model-facing ref for a new automation."""
+
+    normalized_name = name.strip()
+    if not normalized_name:
+        raise ValueError("automation name cannot be blank")
+    return public_ref(normalized_name, task_id, empty_slug="automation")

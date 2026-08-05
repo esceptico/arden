@@ -1,7 +1,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
 from arden.constants import DAILY_NOTES_AUTOMATION_ID
@@ -59,6 +59,7 @@ async def seed_predefined_user_automations(store: AutomationStore) -> bool:
         DAILY_NOTES_SEED,
         Automation(
             task_id=DAILY_NOTES_AUTOMATION_ID,
+            automation_ref=create_automation_ref("Daily Notes", DAILY_NOTES_AUTOMATION_ID),
             name="Daily Notes",
             description="Summarize meaningful events and decisions into today's daily wiki note.",
             description_source="manual",

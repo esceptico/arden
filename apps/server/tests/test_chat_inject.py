@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from arden.automation.models import Automation
+from arden.automation.models import Automation, create_automation_ref
 from arden.context.models import SessionData, SessionState
 from arden.context.store import SessionStore
 from arden.core.factory import AgentConfig
@@ -1521,6 +1521,7 @@ async def test_recreated_automation_does_not_reuse_a_legacy_iteration_receipt(tm
     old_hash = sha256(json.dumps(old_payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
     recreated = Automation(
         task_id="area:proj_1",
+        automation_ref=create_automation_ref("Area agent", "area:proj_1"),
         name="Area agent",
         prompt="New incarnation prompt.",
         model=None,
