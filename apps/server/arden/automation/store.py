@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -226,10 +227,14 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_parent ON scheduled_tasks(parent_automation_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_thread_kind ON scheduled_tasks(thread_id, kind);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_kind_thread ON scheduled_tasks(kind, thread_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
+ON scheduled_tasks(idempotency_scope, idempotency_key)
+WHERE idempotency_key IS NOT NULL;
 
 -- Per-run history so the UI can show "did it fire, and what did it do?"
--- (scheduled_tasks only keeps the LAST run). Self-contained columns, so it
--- lives in _SCHEMA (CREATE TABLE before its INDEX) — no migration needed.
 CREATE TABLE IF NOT EXISTS automation_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -243,11 +248,6 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_automation_runs_task ON automation_runs(task_id, started_at);
--- thread_id-based indexes (idx_scheduled_tasks_kind_thread, thread_kind,
--- parent, idempotency_*) are created inside the v5 migration block instead
--- of here, since they reference columns that don't exist on pre-v5
--- databases. Putting them in _SCHEMA would fail on the upgrade path
--- (CREATE INDEX runs before ALTER TABLE adds the columns).
 
 CREATE TABLE IF NOT EXISTS automation_event_dedupe (
     task_id TEXT NOT NULL,
@@ -821,155 +821,29 @@ FROM automation_event_dead_letter
 
 # --- Migration ---
 
-_MIGRATION_V1 = """
-CREATE TABLE IF NOT EXISTS automation_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE scheduled_tasks_new (
-    task_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL,
-    model TEXT,
-    triggers TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    last_run_at TEXT,
-    next_run_at TEXT,
-    notifiers TEXT,
-    last_result TEXT,
-    running_since TEXT,
-    writable INTEGER NOT NULL DEFAULT 0,
-    handler TEXT,
-    builtin INTEGER NOT NULL DEFAULT 0,
-    cooldown_minutes INTEGER
-);
-
-INSERT INTO scheduled_tasks_new (
-    task_id, name, description, model, triggers, enabled,
-    created_at, last_run_at, next_run_at, notifiers, last_result, running_since,
-    writable, handler, builtin, cooldown_minutes
-)
-SELECT
-    task_id, name, description, model, json_array(json(trigger)), enabled,
-    created_at, last_run_at, next_run_at, notifiers, last_result, running_since,
-    writable, NULL, 0, NULL
-FROM scheduled_tasks;
-
-DROP TABLE scheduled_tasks;
-ALTER TABLE scheduled_tasks_new RENAME TO scheduled_tasks;
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
-"""
-
 CURRENT_SCHEMA_VERSION = 17
-
-_LOOP_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("kind", "TEXT NOT NULL DEFAULT 'automation'"),
-    ("target_session_id", "TEXT"),
-    ("loop_prompt", "TEXT"),
-    ("max_iterations", "INTEGER"),
-    ("iteration_count", "INTEGER NOT NULL DEFAULT 0"),
-    ("stop_when", "TEXT"),
-    ("max_age_days", "INTEGER"),
+_REQUIRED_TABLES = frozenset(
+    {
+        "scheduled_tasks",
+        "automation_runs",
+        "automation_event_dedupe",
+        "automation_event_queue",
+        "automation_event_dead_letter",
+        "automation_count_state",
+        "automation_meta",
+        "automation_idempotency_claims",
+    }
 )
 
-_V5_AUTOMATION_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("thread_id", "TEXT"),
-    ("read_history", "INTEGER NOT NULL DEFAULT 0"),
-    ("parent_automation_id", "TEXT"),
-    ("idempotency_key", "TEXT"),
-    ("idempotency_scope", "TEXT"),
-)
 
-_DAY_INT_TO_NAME = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
-
-
-def _normalize_trigger(t: dict) -> dict:
-    """Convert any legacy trigger format to the canonical string-based format.
-
-    Handles:
-    - asdict() dicts: {"hour":16,"minute":0}, {"days":[0,1,2,...]}, {"delta":{"seconds":...}}
-    - Pre-v1 keys: "time_of_day"/"recurrence"/"repeat"
-    - Stray null values from old params() serialization
-    """
-    typ = t.get("type", "time")
-
-    if typ == "time":
-        # Pre-v1 legacy: time_of_day / recurrence / repeat
-        if "time_of_day" in t:
-            at = t["time_of_day"]
-            recurrence = t.get("recurrence") or t.get("repeat", "once")
-            out = {"type": "time", "at": at}
-            if recurrence != "once":
-                out["days"] = recurrence
-            return out
-
-        out: dict = {"type": "time"}
-        for key in ("at", "start", "end"):
-            val = t.get(key)
-            if isinstance(val, dict) and "hour" in val:
-                out[key] = f"{val['hour']:02d}:{val['minute']:02d}"
-            elif isinstance(val, str):
-                out[key] = val
-
-        val = t.get("days")
-        if isinstance(val, dict) and "days" in val:
-            days = sorted(val["days"])
-            if days == list(range(7)):
-                out["days"] = "daily"
-            elif days == list(range(5)):
-                out["days"] = "weekdays"
-            else:
-                out["days"] = ",".join(_DAY_INT_TO_NAME[d] for d in days)
-        elif isinstance(val, str):
-            out["days"] = val
-
-        val = t.get("every")
-        if isinstance(val, dict) and "delta" in val:
-            td = val["delta"]
-            secs = int(td.get("seconds", 0)) + int(td.get("hours", 0)) * 3600 + int(td.get("minutes", 0)) * 60
-            h, m = divmod(secs // 60, 60)
-            out["every"] = f"{h}h{m}m" if h and m else (f"{h}h" if h else f"{m}m")
-        elif isinstance(val, str):
-            out["every"] = val
-
-        return out
-
-    if typ == "event":
-        out = {"type": "event", "event_type": t["event_type"]}
-        if t.get("lead_minutes") is not None:
-            out["lead_minutes"] = t["lead_minutes"]
-        return out
-
-    if typ == "idle":
-        return {"type": "idle", "idle_minutes": t["idle_minutes"]}
-
-    if typ == "count":
-        return {"type": "count", "every_n": t["every_n"]}
-
-    return t
-
-
-async def _migrate_v2(conn: aiosqlite.Connection) -> None:
-    rows = await conn.execute_fetchall("SELECT task_id, triggers FROM scheduled_tasks")
-    for row in rows:
-        items = json.loads(row["triggers"])
-        normalized = [_normalize_trigger(t) for t in items]
-        new_json = json.dumps(normalized)
-        if new_json != row["triggers"]:
-            await conn.execute(
-                "UPDATE scheduled_tasks SET triggers = ? WHERE task_id = ?",
-                (new_json, row["task_id"]),
-            )
-    _logger.info("Migrated triggers to v2 (canonical string format)")
-
-
-async def _get_schema_version(conn: aiosqlite.Connection) -> int:
+async def _get_schema_version(conn: aiosqlite.Connection) -> int | None:
     rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    return int(rows[0]["value"]) if rows else 0
+    if not rows:
+        return None
+    try:
+        return int(rows[0]["value"])
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("automation schema version is invalid") from exc
 
 
 async def _set_schema_version(conn: aiosqlite.Connection, version: int) -> None:
@@ -979,103 +853,20 @@ async def _set_schema_version(conn: aiosqlite.Connection, version: int) -> None:
     )
 
 
-async def _migrate_v12(conn: aiosqlite.Connection) -> None:
-    rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-    existing = {row["name"] for row in rows}
-    if "tool_scope" not in existing:
-        await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN tool_scope TEXT")
-
-
-async def _migrate_v14(conn: aiosqlite.Connection) -> None:
-    """Split executable instructions from concise display copy.
-
-    Pre-v14 `description` contained the complete prompt. Preserve it verbatim
-    in `prompt`; deliberately leave the display description pending rather
-    than guessing or truncating it. The service exposes an explicit
-    on-demand generation endpoint for those rows.
-    """
-    rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-    existing = {row["name"] for row in rows}
-    if "prompt" not in existing or "description_source" not in existing:
-        await conn.executescript(
-            """
-            ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_v14_old;
-
-            CREATE TABLE scheduled_tasks (
-                task_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL DEFAULT '',
-                description TEXT,
-                description_source TEXT CHECK (description_source IN ('manual', 'generated') OR description_source IS NULL),
-                prompt TEXT NOT NULL,
-                model TEXT,
-                triggers TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                last_run_at TEXT,
-                next_run_at TEXT,
-                last_result TEXT,
-                running_since TEXT,
-                auto_approve INTEGER NOT NULL DEFAULT 0,
-                handler TEXT,
-                builtin INTEGER NOT NULL DEFAULT 0,
-                cooldown_minutes INTEGER,
-                kind TEXT NOT NULL DEFAULT 'automation',
-                max_iterations INTEGER,
-                iteration_count INTEGER NOT NULL DEFAULT 0,
-                stop_when TEXT,
-                max_age_days INTEGER,
-                thread_id TEXT,
-                read_history INTEGER NOT NULL DEFAULT 0,
-                parent_automation_id TEXT,
-                idempotency_key TEXT,
-                idempotency_scope TEXT,
-                tool_scope TEXT
-            );
-
-            INSERT INTO scheduled_tasks (
-                task_id, name, description, description_source, prompt, model,
-                triggers, enabled, created_at, last_run_at, next_run_at,
-                last_result, running_since, auto_approve, handler, builtin,
-                cooldown_minutes, kind, max_iterations, iteration_count,
-                stop_when, max_age_days, thread_id, read_history,
-                parent_automation_id, idempotency_key, idempotency_scope,
-                tool_scope
-            )
-            SELECT
-                task_id, name, NULL, NULL, description, model,
-                triggers, enabled, created_at, last_run_at, next_run_at,
-                last_result, running_since, auto_approve, handler, builtin,
-                cooldown_minutes, kind, max_iterations, iteration_count,
-                stop_when, max_age_days, thread_id, read_history,
-                parent_automation_id, idempotency_key, idempotency_scope,
-                tool_scope
-            FROM scheduled_tasks_v14_old;
-
-            DROP TABLE scheduled_tasks_v14_old;
-
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(enabled);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_parent ON scheduled_tasks(parent_automation_id);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_thread_kind ON scheduled_tasks(thread_id, kind);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_kind_thread ON scheduled_tasks(kind, thread_id);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
-            ON scheduled_tasks(idempotency_scope, idempotency_key)
-            WHERE idempotency_key IS NOT NULL;
-            """
-        )
+async def _ensure_v17_indexes(conn: aiosqlite.Connection) -> None:
+    await conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_automation_ref ON scheduled_tasks(automation_ref)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_automation_runs_ref ON automation_runs(automation_ref, started_at)"
+    )
 
 
 async def _migrate_v17(conn: aiosqlite.Connection) -> None:
     task_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
     run_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
-    if "automation_ref" in task_columns and "automation_ref" in run_columns:
-        await conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_automation_ref ON scheduled_tasks(automation_ref)"
-        )
-        await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_automation_runs_ref ON automation_runs(automation_ref, started_at)"
-        )
-        return
+    if "automation_ref" in task_columns or "automation_ref" in run_columns:
+        raise RuntimeError("automation schema v16 has a partial public-ref migration")
 
     task_rows = await conn.execute_fetchall("SELECT task_id, name FROM scheduled_tasks")
     names_by_task = {row["task_id"]: row["name"] for row in task_rows}
@@ -1098,10 +889,8 @@ async def _migrate_v17(conn: aiosqlite.Connection) -> None:
         refs_by_task[task_id] = automation_ref
         tasks_by_ref[automation_ref] = task_id
 
-    if "automation_ref" not in task_columns:
-        await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN automation_ref TEXT")
-    if "automation_ref" not in run_columns:
-        await conn.execute("ALTER TABLE automation_runs ADD COLUMN automation_ref TEXT")
+    await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN automation_ref TEXT")
+    await conn.execute("ALTER TABLE automation_runs ADD COLUMN automation_ref TEXT")
     for task_id, automation_ref in refs_by_task.items():
         await conn.execute(
             "UPDATE scheduled_tasks SET automation_ref = ? WHERE task_id = ?",
@@ -1119,342 +908,40 @@ async def _migrate_v17(conn: aiosqlite.Connection) -> None:
     )
     if missing_task_refs or missing_run_refs:
         raise RuntimeError("automation public-ref migration left an unaddressable row")
-    await conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_automation_ref ON scheduled_tasks(automation_ref)"
-    )
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_automation_runs_ref ON automation_runs(automation_ref, started_at)"
-    )
+    await _ensure_v17_indexes(conn)
 
 
 async def _migrate(conn: aiosqlite.Connection) -> None:
     version = await _get_schema_version(conn)
-
-    if version < 1:
-        # Check if old schema exists (has 'trigger' column instead of 'triggers')
-        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-        columns = {row["name"] for row in rows}
-        if "trigger" in columns and "triggers" not in columns:
-            _logger.info("Migrating automation store to v1 (trigger -> triggers)")
-            await conn.executescript(_MIGRATION_V1)
-        await _set_schema_version(conn, 1)
-        await conn.commit()
-
-    if version < 2:
-        await _migrate_v2(conn)
-        await _set_schema_version(conn, 2)
-        await conn.commit()
-
-    if version < 4:
-        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-        existing = {row["name"] for row in rows}
-        for col, definition in _LOOP_COLUMNS:
-            if col not in existing:
-                await conn.execute(f"ALTER TABLE scheduled_tasks ADD COLUMN {col} {definition}")
-        await _set_schema_version(conn, 4)
-        await conn.commit()
-        _logger.info("Migrated automation store to v4 (loop fields incl. max_age_days)")
-
-    if version < 5:
-        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-        existing = {row["name"] for row in rows}
-        for col, definition in _V5_AUTOMATION_COLUMNS:
-            if col not in existing:
-                await conn.execute(f"ALTER TABLE scheduled_tasks ADD COLUMN {col} {definition}")
-        # v5 indexes — created here (not in _SCHEMA) so they only run after
-        # the referenced columns exist. Idempotent via IF NOT EXISTS.
-        await conn.executescript(
-            """
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_parent
-            ON scheduled_tasks(parent_automation_id);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_thread_kind
-            ON scheduled_tasks(thread_id, kind);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_kind_thread
-            ON scheduled_tasks(kind, thread_id);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
-            ON scheduled_tasks(idempotency_scope, idempotency_key)
-            WHERE idempotency_key IS NOT NULL;
-            """
-        )
-        # Backfill loop rows: thread_id mirrors target_session_id, read_history=1.
-        # Guarded by thread_id IS NULL so reruns don't clobber later edits.
-        await conn.execute(
-            """
-            UPDATE scheduled_tasks
-            SET thread_id = target_session_id,
-                read_history = 1
-            WHERE kind = 'loop'
-              AND thread_id IS NULL
-              AND target_session_id IS NOT NULL
-            """
-        )
-        await _set_schema_version(conn, 5)
-        await conn.commit()
-        _logger.info("Migrated automation store to v5 (channel-aware automation fields)")
-
-    if version < 6:
-        # Idempotency claim table for channel-aware automations.
-        # SQLite treats NULL != NULL in UNIQUE constraints, so we synthesize
-        # a deterministic primary key from the (scope, key, parent_automation_id,
-        # parent_fire_at, attempt_n) tuple. The PK string is built at insert
-        # time via try_claim_idempotency() in the store layer.
-        await conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS automation_idempotency_claims (
-                claim_id TEXT PRIMARY KEY,
-                scope TEXT NOT NULL,
-                key TEXT NOT NULL,
-                parent_automation_id TEXT,
-                parent_fire_at TEXT,
-                attempt_n INTEGER,
-                claimed_at TEXT NOT NULL,
-                automation_task_id TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_automation_idempotency_claims_parent
-            ON automation_idempotency_claims(parent_automation_id);
-            """
-        )
-        await _set_schema_version(conn, 6)
-        await conn.commit()
-        _logger.info("Migrated automation store to v6 (idempotency claim table)")
-
-    if version < 7:
-        await conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS automation_event_dead_letter (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                original_queue_id INTEGER NOT NULL,
-                task_id TEXT NOT NULL,
-                event_key TEXT NOT NULL,
-                context TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                failed_at TEXT NOT NULL,
-                attempt_count INTEGER NOT NULL,
-                last_error TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_automation_event_dead_letter_task_failed
-            ON automation_event_dead_letter(task_id, failed_at);
-            """
-        )
-        await _set_schema_version(conn, 7)
-        await conn.commit()
-        _logger.info("Migrated automation store to v7 (event dead-letter table)")
-
-    if version < 8:
-        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-        existing = {row["name"] for row in rows}
-        if "writable" in existing and "auto_approve" not in existing:
-            await conn.execute("ALTER TABLE scheduled_tasks RENAME COLUMN writable TO auto_approve")
-        await _set_schema_version(conn, 8)
-        await conn.commit()
-        _logger.info("Migrated automation store to v8 (writable -> auto_approve)")
-
-    if version < 9:
-        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-        existing = {row["name"] for row in rows}
-        if "loop_prompt" in existing:
-            await conn.executescript(
-                """
-                CREATE TABLE scheduled_tasks_v9 (
-                    task_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL DEFAULT '',
-                    description TEXT NOT NULL,
-                    model TEXT,
-                    triggers TEXT NOT NULL,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    last_run_at TEXT,
-                    next_run_at TEXT,
-                    notifiers TEXT,
-                    last_result TEXT,
-                    running_since TEXT,
-                    auto_approve INTEGER NOT NULL DEFAULT 0,
-                    handler TEXT,
-                    builtin INTEGER NOT NULL DEFAULT 0,
-                    cooldown_minutes INTEGER,
-                    kind TEXT NOT NULL DEFAULT 'automation',
-                    target_session_id TEXT,
-                    max_iterations INTEGER,
-                    iteration_count INTEGER NOT NULL DEFAULT 0,
-                    stop_when TEXT,
-                    max_age_days INTEGER,
-                    thread_id TEXT,
-                    read_history INTEGER NOT NULL DEFAULT 0,
-                    parent_automation_id TEXT,
-                    idempotency_key TEXT,
-                    idempotency_scope TEXT
-                );
-
-                INSERT INTO scheduled_tasks_v9 (
-                    task_id, name, description, model, triggers, enabled,
-                    created_at, last_run_at, next_run_at, notifiers, last_result,
-                    running_since, auto_approve, handler, builtin, cooldown_minutes,
-                    kind, target_session_id, max_iterations, iteration_count,
-                    stop_when, max_age_days, thread_id, read_history,
-                    parent_automation_id, idempotency_key, idempotency_scope
-                )
-                SELECT
-                    task_id, name, description, model, triggers, enabled,
-                    created_at, last_run_at, next_run_at, notifiers, last_result,
-                    running_since, auto_approve, handler, builtin, cooldown_minutes,
-                    kind, target_session_id, max_iterations, iteration_count,
-                    stop_when, max_age_days, thread_id, read_history,
-                    parent_automation_id, idempotency_key, idempotency_scope
-                FROM scheduled_tasks;
-
-                DROP TABLE scheduled_tasks;
-                ALTER TABLE scheduled_tasks_v9 RENAME TO scheduled_tasks;
-
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
-                ON scheduled_tasks(next_run_at);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled
-                ON scheduled_tasks(enabled);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_kind_session
-                ON scheduled_tasks(kind, target_session_id);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_parent
-                ON scheduled_tasks(parent_automation_id);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_thread_kind
-                ON scheduled_tasks(thread_id, kind);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
-                ON scheduled_tasks(idempotency_scope, idempotency_key)
-                WHERE idempotency_key IS NOT NULL;
-                """
-            )
-        await _set_schema_version(conn, 9)
-        await conn.commit()
-        _logger.info("Migrated automation store to v9 (dropped loop_prompt column)")
-
-    if version < 10:
-        rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-        existing = {row["name"] for row in rows}
-        if "target_session_id" in existing:
-            # Belt-and-suspenders: backfill thread_id for any rows that were
-            # missed by v5 (e.g. old code inserted between v5 and v10). This
-            # runs and commits before executescript so the backfill lands in
-            # its own transaction.
-            await conn.execute(
-                """
-                UPDATE scheduled_tasks
-                SET thread_id = target_session_id
-                WHERE thread_id IS NULL AND target_session_id IS NOT NULL
-                """
-            )
-            await conn.commit()
-            await conn.executescript(
-                """
-                CREATE TABLE scheduled_tasks_v10 (
-                    task_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL DEFAULT '',
-                    description TEXT NOT NULL,
-                    model TEXT,
-                    triggers TEXT NOT NULL,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    last_run_at TEXT,
-                    next_run_at TEXT,
-                    notifiers TEXT,
-                    last_result TEXT,
-                    running_since TEXT,
-                    auto_approve INTEGER NOT NULL DEFAULT 0,
-                    handler TEXT,
-                    builtin INTEGER NOT NULL DEFAULT 0,
-                    cooldown_minutes INTEGER,
-                    kind TEXT NOT NULL DEFAULT 'automation',
-                    max_iterations INTEGER,
-                    iteration_count INTEGER NOT NULL DEFAULT 0,
-                    stop_when TEXT,
-                    max_age_days INTEGER,
-                    thread_id TEXT,
-                    read_history INTEGER NOT NULL DEFAULT 0,
-                    parent_automation_id TEXT,
-                    idempotency_key TEXT,
-                    idempotency_scope TEXT
-                );
-
-                INSERT INTO scheduled_tasks_v10 (
-                    task_id, name, description, model, triggers, enabled,
-                    created_at, last_run_at, next_run_at, notifiers, last_result,
-                    running_since, auto_approve, handler, builtin, cooldown_minutes,
-                    kind, max_iterations, iteration_count, stop_when, max_age_days,
-                    thread_id, read_history, parent_automation_id, idempotency_key,
-                    idempotency_scope
-                )
-                SELECT
-                    task_id, name, description, model, triggers, enabled,
-                    created_at, last_run_at, next_run_at, notifiers, last_result,
-                    running_since, auto_approve, handler, builtin, cooldown_minutes,
-                    kind, max_iterations, iteration_count, stop_when, max_age_days,
-                    thread_id, read_history, parent_automation_id, idempotency_key,
-                    idempotency_scope
-                FROM scheduled_tasks;
-
-                DROP TABLE scheduled_tasks;
-                ALTER TABLE scheduled_tasks_v10 RENAME TO scheduled_tasks;
-
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
-                ON scheduled_tasks(next_run_at);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled
-                ON scheduled_tasks(enabled);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_kind_thread
-                ON scheduled_tasks(kind, thread_id);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_parent
-                ON scheduled_tasks(parent_automation_id);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_thread_kind
-                ON scheduled_tasks(thread_id, kind);
-                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_idempotency
-                ON scheduled_tasks(idempotency_scope, idempotency_key)
-                WHERE idempotency_key IS NOT NULL;
-                """
-            )
-        await _set_schema_version(conn, 10)
-        await conn.commit()
-        _logger.info("Migrated automation store to v10 (dropped target_session_id, rewrote kind index to thread_id)")
-
-    if version < 11:
-        await _set_schema_version(conn, 11)
-        await conn.commit()
-
-    if version < 12:
-        await _migrate_v12(conn)
-        await _set_schema_version(conn, 12)
-        await conn.commit()
-        _logger.info("Migrated automation store to v12 (tool_scope allowlist)")
-
-    if version < 13:
-        await _set_schema_version(conn, 13)
-        await conn.commit()
-
-    if version < 14:
-        await _migrate_v14(conn)
-        await _set_schema_version(conn, 14)
-        await conn.commit()
-        _logger.info("Migrated automation store to v14 (prompt and display-description split)")
-
-    if version < 15:
-        columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
-        if "chat_run_id" not in columns:
-            await conn.execute("ALTER TABLE automation_runs ADD COLUMN chat_run_id TEXT")
-        if "chat_session_id" not in columns:
-            await conn.execute("ALTER TABLE automation_runs ADD COLUMN chat_session_id TEXT")
-        await _set_schema_version(conn, 15)
-        await conn.commit()
-        _logger.info("Migrated automation store to v15 (durable detached chat run identity)")
-
+    if version is None:
+        raise RuntimeError("automation schema version is missing; restore a v16 or v17 database")
     if version < 16:
-        columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
-        if "triggers_source" not in columns:
-            await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN triggers_source TEXT")
-        await _set_schema_version(conn, 16)
-        await conn.commit()
-        _logger.info("Migrated automation store to v16 (user-owned trigger edits)")
+        raise RuntimeError(
+            f"automation schema v{version} is unsupported; restore a v16 database before starting this version"
+        )
+    if version > CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(f"automation schema v{version} is newer than supported v{CURRENT_SCHEMA_VERSION}")
+    try:
+        await conn.execute("BEGIN IMMEDIATE")
+        if version == CURRENT_SCHEMA_VERSION:
+            task_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
+            run_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
+            if "automation_ref" not in task_columns or "automation_ref" not in run_columns:
+                raise RuntimeError("automation schema v17 is missing public-ref columns")
+            await _ensure_v17_indexes(conn)
+            await conn.commit()
+            return
 
-    if version < 17:
         await _migrate_v17(conn)
-        await _set_schema_version(conn, 17)
+        await _set_schema_version(conn, CURRENT_SCHEMA_VERSION)
         await conn.commit()
         _logger.info("Migrated automation store to v17 (stable model-facing refs)")
+    except sqlite3.OperationalError as exc:
+        await conn.rollback()
+        raise RuntimeError(f"automation schema v{version} is incomplete") from exc
+    except BaseException:
+        await conn.rollback()
+        raise
 
 
 class AutomationStore:
@@ -1474,16 +961,19 @@ class AutomationStore:
         self._idempotency_lock = asyncio.Lock()
 
     async def init_schema(self) -> None:
-        # _SCHEMA must run first: it CREATEs tables (idempotent for both
-        # fresh and existing DBs) so the migration's ALTER TABLE blocks
-        # can target a guaranteed-existing scheduled_tasks. With the
-        # previous order, fresh DBs hit "no such table" inside _migrate
-        # because the table wasn't created yet. Now that v4/v5 migrations
-        # no longer swallow exceptions, the ordering bug is loud.
-        await self.conn.executescript(_SCHEMA)
+        rows = await self.conn.execute_fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+        tables = _REQUIRED_TABLES.intersection(row["name"] for row in rows)
+        if not tables:
+            await self.conn.executescript(_SCHEMA)
+            await _ensure_v17_indexes(self.conn)
+            await _set_schema_version(self.conn, CURRENT_SCHEMA_VERSION)
+            await self.conn.commit()
+            return
+        if tables != _REQUIRED_TABLES:
+            missing = ", ".join(sorted(_REQUIRED_TABLES - tables))
+            raise RuntimeError(f"automation schema is incomplete; missing tables: {missing}")
         await _migrate(self.conn)
-        await _set_schema_version(self.conn, CURRENT_SCHEMA_VERSION)
-        await self.conn.commit()
+        await self.conn.executescript(_SCHEMA)
 
     async def save(self, automation: Automation) -> None:
         try:

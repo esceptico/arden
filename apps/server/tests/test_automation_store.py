@@ -1,5 +1,4 @@
 import asyncio
-import json
 from dataclasses import replace as dc_replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,7 +10,7 @@ import pytest_asyncio
 import arden.database as database
 from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
-from arden.automation.store import AutomationStore
+from arden.automation.store import CURRENT_SCHEMA_VERSION, AutomationStore
 from arden.automation.triggers import CountTrigger, IdleTrigger, TimeTrigger, parse_triggers
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
@@ -879,174 +878,6 @@ async def test_update_metadata_persists_v5_identity_fields(automation_store: Aut
     assert loaded.idempotency_scope == "thread"
 
 
-@pytest.mark.asyncio
-async def test_v4_to_v10_migration_backfills_loop_rows(tmp_path: Path):
-    """v4 → v10: loop rows get thread_id = target_session_id, read_history = True,
-    and the legacy target_session_id / loop_prompt columns are dropped."""
-    db_path = tmp_path / "v4.db"
-    conn = await database.connect(db_path)
-
-    # Manually build a v4 schema: scheduled_tasks with loop columns, no v5 columns.
-    await conn.executescript(
-        """
-        CREATE TABLE automation_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE scheduled_tasks (
-            task_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL,
-            model TEXT,
-            triggers TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            last_run_at TEXT,
-            next_run_at TEXT,
-            notifiers TEXT,
-            last_result TEXT,
-            running_since TEXT,
-            writable INTEGER NOT NULL DEFAULT 0,
-            handler TEXT,
-            builtin INTEGER NOT NULL DEFAULT 0,
-            cooldown_minutes INTEGER,
-            kind TEXT NOT NULL DEFAULT 'automation',
-            target_session_id TEXT,
-            loop_prompt TEXT,
-            max_iterations INTEGER,
-            iteration_count INTEGER NOT NULL DEFAULT 0,
-            stop_when TEXT,
-            max_age_days INTEGER
-        );
-        INSERT INTO automation_meta (key, value) VALUES ('schema_version', '4');
-        """
-    )
-    now = datetime.now(UTC).isoformat()
-    await conn.execute(
-        """
-        INSERT INTO scheduled_tasks (
-            task_id, name, description, model, triggers, enabled, created_at,
-            kind, target_session_id, loop_prompt
-        ) VALUES (?, 'Loop A', 'loop a', NULL, '[]', 1, ?, 'loop', 'sess-A', 'prompt a')
-        """,
-        ("loop-row", now),
-    )
-    await conn.execute(
-        """
-        INSERT INTO scheduled_tasks (
-            task_id, name, description, model, triggers, enabled, created_at,
-            kind, target_session_id, loop_prompt
-        ) VALUES (?, 'Plain', 'plain', NULL, '[]', 1, ?, 'automation', NULL, NULL)
-        """,
-        ("plain-row", now),
-    )
-    await conn.commit()
-
-    # Run migration via init_schema.
-    store = AutomationStore(conn)
-    await store.init_schema()
-
-    loaded_loop = await store.get("loop-row")
-    assert loaded_loop is not None
-    assert loaded_loop.thread_id == "sess-A"
-    assert loaded_loop.read_history is True
-
-    loaded_plain = await store.get("plain-row")
-    assert loaded_plain is not None
-    assert loaded_plain.thread_id is None
-    assert loaded_plain.read_history is False
-
-    rows = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-    col_names = {r["name"] for r in rows}
-    assert "loop_prompt" not in col_names
-    assert "target_session_id" not in col_names
-
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_migration_is_idempotent(tmp_path: Path):
-    """Running migration twice doesn't double-write or fail across v4 → v10."""
-    db_path = tmp_path / "v4.db"
-    conn = await database.connect(db_path)
-    await conn.executescript(
-        """
-        CREATE TABLE automation_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE scheduled_tasks (
-            task_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL,
-            model TEXT,
-            triggers TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            last_run_at TEXT,
-            next_run_at TEXT,
-            notifiers TEXT,
-            last_result TEXT,
-            running_since TEXT,
-            writable INTEGER NOT NULL DEFAULT 0,
-            handler TEXT,
-            builtin INTEGER NOT NULL DEFAULT 0,
-            cooldown_minutes INTEGER,
-            kind TEXT NOT NULL DEFAULT 'automation',
-            target_session_id TEXT,
-            loop_prompt TEXT,
-            max_iterations INTEGER,
-            iteration_count INTEGER NOT NULL DEFAULT 0,
-            stop_when TEXT,
-            max_age_days INTEGER
-        );
-        INSERT INTO automation_meta (key, value) VALUES ('schema_version', '4');
-        """
-    )
-    now = datetime.now(UTC).isoformat()
-    await conn.execute(
-        """
-        INSERT INTO scheduled_tasks (
-            task_id, name, description, model, triggers, enabled, created_at,
-            kind, target_session_id, loop_prompt
-        ) VALUES (?, 'Loop A', 'loop a', NULL, '[]', 1, ?, 'loop', 'sess-A', 'prompt a')
-        """,
-        ("loop-row", now),
-    )
-    await conn.commit()
-
-    store = AutomationStore(conn)
-    await store.init_schema()
-    # After v5, this row has thread_id='sess-A', read_history=True.
-    # Now hand-modify thread_id to simulate a write that should NOT be clobbered
-    # by a second migration pass.
-    await conn.execute(
-        "UPDATE scheduled_tasks SET thread_id = ? WHERE task_id = ?",
-        ("user-edited-thread", "loop-row"),
-    )
-    await conn.commit()
-
-    # Re-run init_schema; should be a no-op for the backfill since version is now 10.
-    await store.init_schema()
-    loaded = await store.get("loop-row")
-    assert loaded is not None
-    assert loaded.thread_id == "user-edited-thread"
-
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_migration_surfaces_invalid_trigger_json(tmp_path: Path):
-    conn = await database.connect(tmp_path / "invalid-migration.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    await store.save(_automation("invalid-trigger"))
-    await conn.execute("UPDATE scheduled_tasks SET triggers = '{' WHERE task_id = 'invalid-trigger'")
-    await conn.execute("UPDATE automation_meta SET value = '1' WHERE key = 'schema_version'")
-    await conn.commit()
-
-    with pytest.raises(json.JSONDecodeError):
-        await store.init_schema()
-
-    rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    assert rows[0]["value"] == "1"
-    await conn.close()
-
-
 async def _downgrade_refs_to_v16(store: AutomationStore) -> None:
     await store.conn.execute("DROP INDEX idx_automation_runs_ref")
     await store.conn.execute("DROP INDEX idx_scheduled_tasks_automation_ref")
@@ -1054,6 +885,82 @@ async def _downgrade_refs_to_v16(store: AutomationStore) -> None:
     await store.conn.execute("ALTER TABLE scheduled_tasks DROP COLUMN automation_ref")
     await store.conn.execute("UPDATE automation_meta SET value = '16' WHERE key = 'schema_version'")
     await store.conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_fresh_schema_starts_at_current_version_and_restarts(tmp_path: Path):
+    path = tmp_path / "fresh.db"
+    conn = await database.connect(path)
+    await AutomationStore(conn).init_schema()
+    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == str(CURRENT_SCHEMA_VERSION)
+    await conn.close()
+
+    restarted = await database.connect(path)
+    await AutomationStore(restarted).init_schema()
+    integrity = await restarted.execute_fetchall("PRAGMA integrity_check")
+    assert integrity[0][0] == "ok"
+    await restarted.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [0, 15])
+async def test_legacy_schema_versions_are_rejected(tmp_path: Path, version: int):
+    conn = await database.connect(tmp_path / f"v{version}.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await conn.execute("UPDATE automation_meta SET value = ? WHERE key = 'schema_version'", (str(version),))
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match=rf"schema v{version} is unsupported"):
+        await store.init_schema()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_future_schema_version_is_rejected(tmp_path: Path):
+    conn = await database.connect(tmp_path / "future.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await conn.execute(
+        "UPDATE automation_meta SET value = ? WHERE key = 'schema_version'",
+        (str(CURRENT_SCHEMA_VERSION + 1),),
+    )
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="newer than supported"):
+        await store.init_schema()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_schema_version_is_rejected(tmp_path: Path):
+    conn = await database.connect(tmp_path / "missing-version.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await conn.execute("DELETE FROM automation_meta WHERE key = 'schema_version'")
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="schema version is missing"):
+        await store.init_schema()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_incomplete_current_schema_is_rejected_without_repair(tmp_path: Path):
+    conn = await database.connect(tmp_path / "incomplete.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await conn.execute("DROP TABLE automation_event_dead_letter")
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="missing tables: automation_event_dead_letter"):
+        await store.init_schema()
+    tables = await conn.execute_fetchall(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automation_event_dead_letter'"
+    )
+    assert not tables
+    await conn.close()
 
 
 @pytest.mark.asyncio
@@ -1075,6 +982,46 @@ async def test_v17_migration_backfills_task_and_run_refs(tmp_path: Path):
     assert runs[0]["automation_ref"] == loaded.automation_ref
     version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
     assert version[0]["value"] == "17"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v17_migration_rejects_partial_ref_columns(tmp_path: Path):
+    conn = await database.connect(tmp_path / "partial-v16.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await _downgrade_refs_to_v16(store)
+    await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN automation_ref TEXT")
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="partial public-ref migration"):
+        await store.init_schema()
+    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "16"
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v17_migration_rolls_back_after_a_late_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    conn = await database.connect(tmp_path / "late-failure-v16.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await store.save(_automation("rollback", name="Rollback"))
+    await _downgrade_refs_to_v16(store)
+
+    async def fail_indexes(_conn):
+        raise RuntimeError("index write failed")
+
+    monkeypatch.setattr("arden.automation.store._ensure_v17_indexes", fail_indexes)
+    with pytest.raises(RuntimeError, match="index write failed"):
+        await store.init_schema()
+
+    task_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
+    run_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
+    assert "automation_ref" not in task_columns
+    assert "automation_ref" not in run_columns
+    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "16"
     await conn.close()
 
 
