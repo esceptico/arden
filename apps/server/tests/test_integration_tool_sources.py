@@ -5,12 +5,16 @@ import pytest
 
 from arden.agent import ToolOutcomeStatus
 from arden.context.models import SessionState
-from arden.integrations.base import IntegrationOperationError
-from arden.integrations.calendar.client import GoogleCalendar, MultiCalendarSource
+from arden.integrations.base import IntegrationOperationError, IntegrationProviderError
+from arden.integrations.calendar.client import CalendarMutationResult, GoogleCalendar, MultiCalendarSource
 from arden.integrations.calendar.tools import (
     CalendarCreateEventInput,
+    CalendarDeleteEventInput,
+    CalendarEditEventInput,
     CalendarSearchInput,
     calendar_create_event,
+    calendar_delete_event,
+    calendar_edit_event,
     calendar_search,
 )
 from arden.integrations.gmail.client import GmailSource, MultiGmailSource
@@ -119,6 +123,9 @@ class FakeCalendarSource(MultiCalendarSource):
 
 
 class FailingGoogleService:
+    def calendars(self):
+        return self
+
     def users(self):
         return self
 
@@ -136,6 +143,20 @@ class FailingGoogleService:
 
     def execute(self):
         raise RuntimeError("provider secret")
+
+
+class ReturningGoogleService:
+    def __init__(self, result: dict):
+        self.result = result
+
+    def events(self):
+        return self
+
+    def insert(self, **kwargs):
+        return self
+
+    def execute(self):
+        return self.result
 
 
 def test_gmail_send_raises_sanitized_provider_failure(monkeypatch):
@@ -160,6 +181,68 @@ def test_calendar_create_raises_sanitized_provider_failure(monkeypatch):
         )
 
     assert "provider secret" not in str(exc_info.value)
+
+
+def test_calendar_identity_lookup_preserves_provider_failure(monkeypatch):
+    source = GoogleCalendar()
+    monkeypatch.setattr(source, "_get_service", lambda: FailingGoogleService())
+
+    with pytest.raises(IntegrationProviderError) as exc_info:
+        source.get_email_address()
+
+    assert exc_info.value.code == "provider_error"
+    assert "provider secret" not in str(exc_info.value)
+
+
+def test_calendar_identity_lookup_does_not_rewrap_typed_operation_error(monkeypatch):
+    expected = IntegrationOperationError(
+        code="rate_limited",
+        safe_message="Calendar identity lookup was rate limited.",
+        retryable=True,
+    )
+
+    class TypedFailureService:
+        def calendars(self):
+            return self
+
+        def get(self, **_kwargs):
+            return self
+
+        def execute(self):
+            raise expected
+
+    source = GoogleCalendar()
+    monkeypatch.setattr(source, "_get_service", lambda: TypedFailureService())
+
+    with pytest.raises(IntegrationOperationError) as exc_info:
+        source.get_email_address()
+
+    assert exc_info.value is expected
+
+
+def test_calendar_create_requires_provider_event_reference(monkeypatch):
+    source = GoogleCalendar()
+    monkeypatch.setattr(source, "_get_service", lambda: ReturningGoogleService({"summary": "Review"}))
+
+    with pytest.raises(IntegrationOperationError, match="did not include an event reference") as exc_info:
+        source.create_event(summary="Review", start=datetime(2026, 7, 20, 9, tzinfo=UTC))
+
+    assert exc_info.value.code == "provider_error"
+
+
+def test_calendar_read_rejects_invalid_provider_time():
+    source = GoogleCalendar()
+
+    with pytest.raises(IntegrationOperationError, match="invalid event start time") as exc_info:
+        source._parse_event(
+            {
+                "id": "event-1",
+                "start": {"dateTime": "not-a-time"},
+                "end": {"dateTime": "2026-07-20T10:00:00+00:00"},
+            }
+        )
+
+    assert exc_info.value.code == "provider_error"
 
 
 @pytest.mark.asyncio
@@ -226,7 +309,11 @@ async def test_calendar_create_maps_provider_failure_to_typed_result(tmp_path):
 @pytest.mark.asyncio
 async def test_calendar_create_keeps_case_insensitive_qualified_ref_once(tmp_path):
     source = FakeCalendarSource([])
-    source.create_event = lambda **_kwargs: "Created event (id: me@example.test:event-123)"
+    source.create_event = lambda **_kwargs: CalendarMutationResult(
+        event_ref="me@example.test:event-123",
+        summary="Review",
+        url="https://calendar.example/event-123",
+    )
     execution = _execution("calendar", source, "calendar_create_event")
     execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
 
@@ -243,6 +330,52 @@ async def test_calendar_create_keeps_case_insensitive_qualified_ref_once(tmp_pat
     assert result.data == {"event_ref": "me@example.test:event-123"}
     assert result.outcome is not None and result.outcome.effect is not None
     assert result.outcome.effect.after_ref == "me@example.test:event-123"
+    assert result.outcome.receipt == "me@example.test:event-123"
+    assert result.content == ("Created event: Review `[me@example.test:event-123]`\nhttps://calendar.example/event-123")
+
+
+@pytest.mark.asyncio
+async def test_calendar_update_uses_typed_qualified_receipt(tmp_path):
+    source = FakeCalendarSource([])
+    source.update_event = lambda **_kwargs: CalendarMutationResult(
+        event_ref="me@example.test:event-123",
+        summary="Updated review",
+    )
+    execution = _execution("calendar", source, "calendar_edit_event")
+    execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
+
+    result = await calendar_edit_event(
+        execution,
+        CalendarEditEventInput(
+            event_ref="me@example.test:event-123",
+            summary="Updated review",
+            idempotency_key="calendar-update-ref-1",
+        ),
+    )
+
+    assert result.data == {"event_ref": "me@example.test:event-123"}
+    assert result.outcome is not None and result.outcome.receipt == "me@example.test:event-123"
+    assert result.content == "Updated event: Updated review `[me@example.test:event-123]`"
+
+
+@pytest.mark.asyncio
+async def test_calendar_delete_uses_typed_qualified_receipt(tmp_path):
+    source = FakeCalendarSource([])
+    source.delete_event = lambda _event_ref: CalendarMutationResult(event_ref="me@example.test:event-123")
+    execution = _execution("calendar", source, "calendar_delete_event")
+    execution.ctx.services[IDEMPOTENCY_LEDGER_SERVICE] = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
+
+    result = await calendar_delete_event(
+        execution,
+        CalendarDeleteEventInput(
+            event_ref="me@example.test:event-123",
+            idempotency_key="calendar-delete-ref-1",
+        ),
+    )
+
+    assert result.data == {"event_ref": "me@example.test:event-123"}
+    assert result.outcome is not None and result.outcome.receipt == "me@example.test:event-123"
+    assert result.content == "Deleted event `[me@example.test:event-123]`"
 
 
 @pytest.mark.asyncio
@@ -575,8 +708,12 @@ async def test_multi_calendar_search_refs_round_trip_to_the_right_account():
             get_email_address=lambda: account,
             search=lambda _query, limit: [item][:limit],
             get_upcoming=lambda days, limit: [item][:limit],
-            update_event=lambda event_id, **_kwargs: calls.append(("update", account, event_id)) or "updated",
-            delete_event=lambda event_id: calls.append(("delete", account, event_id)) or "deleted",
+            update_event=lambda event_id, **_kwargs: (
+                calls.append(("update", account, event_id)) or CalendarMutationResult(event_ref=event_id)
+            ),
+            delete_event=lambda event_id: (
+                calls.append(("delete", account, event_id)) or CalendarMutationResult(event_ref=event_id)
+            ),
         )
 
     source = object.__new__(MultiCalendarSource)

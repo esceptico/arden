@@ -1,11 +1,10 @@
-import re
 from datetime import datetime
 
 from pydantic import BaseModel, Field
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.integrations.base import IntegrationOperationError
-from arden.integrations.calendar.client import MultiCalendarSource, qualify_event_ref
+from arden.integrations.calendar.client import CalendarMutationResult, MultiCalendarSource
 from arden.integrations.mutations import execute_idempotent, mutation_result
 from arden.integrations.tool_errors import operation_error_result
 from arden.search.types import RawItem
@@ -80,6 +79,14 @@ def _format_events(events: list) -> str:
         location = f" @ {meta['location']}" if meta.get("location") else ""
         lines.append(f"• {time_str}: {event.title}{location} `[{event.source_id}]`")
 
+    return "\n".join(lines)
+
+
+def _format_mutation(action: str, result: CalendarMutationResult) -> str:
+    subject = f": {result.summary}" if result.summary else ""
+    lines = [f"{action} event{subject} `[{result.event_ref}]`"]
+    if result.url:
+        lines.append(result.url)
     return "\n".join(lines)
 
 
@@ -227,19 +234,15 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
             )
         except IntegrationOperationError as error:
             return operation_error_result(error, preview="Create failed")
-        match = re.search(r"\(id: ([^)]+)\)", result)
-        event_ref = match.group(1) if match else None
-        if event_ref:
-            event_ref = qualify_event_ref(args.account, event_ref)
         return mutation_result(
-            content=result,
-            preview="Created" if event_ref else "Create unverified",
+            content=_format_mutation("Created", result),
+            preview="Created",
             operation="create",
             target=args.summary,
-            receipt=match.group(1) if match else args.idempotency_key,
-            after_ref=event_ref,
-            observed=(f"Calendar returned event {event_ref}" if event_ref else None),
-            data={"event_ref": event_ref} if event_ref else None,
+            receipt=result.event_ref,
+            after_ref=result.event_ref,
+            observed=f"Calendar returned event {result.event_ref}",
+            data={"event_ref": result.event_ref},
         )
 
     return await execute_idempotent(
@@ -317,14 +320,15 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
         except IntegrationOperationError as error:
             return operation_error_result(error, preview="Update failed")
         return mutation_result(
-            content=result,
+            content=_format_mutation("Updated", result),
             preview="Updated",
             operation="update",
-            target=args.event_ref,
-            receipt=args.idempotency_key,
+            target=result.event_ref,
+            receipt=result.event_ref,
             before_ref=args.event_ref,
-            after_ref=args.event_ref,
-            observed=f"Calendar acknowledged update of {args.event_ref}",
+            after_ref=result.event_ref,
+            observed=f"Calendar acknowledged update of {result.event_ref}",
+            data={"event_ref": result.event_ref},
         )
 
     return await execute_idempotent(
@@ -359,14 +363,15 @@ async def calendar_delete_event(execution: ToolExecution, args: CalendarDeleteEv
         except IntegrationOperationError as error:
             return operation_error_result(error, preview="Delete failed")
         return mutation_result(
-            content=result,
+            content=_format_mutation("Deleted", result),
             preview="Deleted",
             operation="delete",
-            target=args.event_ref,
-            receipt=args.idempotency_key,
-            before_ref=args.event_ref,
+            target=result.event_ref,
+            receipt=result.event_ref,
+            before_ref=result.event_ref,
             after_ref="absent",
-            observed=f"Calendar acknowledged deletion of {args.event_ref}",
+            observed=f"Calendar acknowledged deletion of {result.event_ref}",
+            data={"event_ref": result.event_ref},
         )
 
     return await execute_idempotent(

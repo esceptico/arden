@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
-from arden.integrations.calendar.client import MultiCalendarSource, qualify_event_ref
+from arden.integrations.calendar.client import CalendarMutationResult, MultiCalendarSource, qualify_event_ref
 from arden.integrations.gmail.client import MultiGmailSource
 from arden.integrations.slack.client import SlackClient
 from arden.search.types import RawItem
@@ -34,7 +34,9 @@ def test_calendar_qualified_ref_updates_only_named_account():
     def source(account: str):
         return SimpleNamespace(
             get_email_address=lambda: account,
-            update_event=lambda event_id, **kwargs: calls.append((account, event_id)) or "updated",
+            update_event=lambda event_id, **kwargs: (
+                calls.append((account, event_id)) or CalendarMutationResult(event_ref=event_id, summary="Review")
+            ),
         )
 
     multi = object.__new__(MultiCalendarSource)
@@ -42,7 +44,10 @@ def test_calendar_qualified_ref_updates_only_named_account():
 
     result = multi.update_event("second@example.test:shared-id", summary="Review")
 
-    assert result == "updated"
+    assert result == CalendarMutationResult(
+        event_ref="second@example.test:shared-id",
+        summary="Review",
+    )
     assert calls == [("second@example.test", "shared-id")]
 
 
@@ -52,7 +57,9 @@ def test_calendar_rejects_unqualified_event_ref_even_with_one_account():
     multi.sources = [
         SimpleNamespace(
             get_email_address=lambda: "only@example.test",
-            update_event=lambda event_id, **_kwargs: calls.append(event_id) or "updated",
+            update_event=lambda event_id, **_kwargs: (
+                calls.append(event_id) or CalendarMutationResult(event_ref=event_id)
+            ),
         )
     ]
 
@@ -68,11 +75,10 @@ def test_calendar_missing_account_identity_fails_before_read_or_create():
     source = SimpleNamespace(
         get_email_address=lambda: "",
         search=lambda *_args, **_kwargs: calls.append("search") or [],
-        create_event=lambda **_kwargs: calls.append("create") or "Created (id: event-1)",
-        update_event=lambda *_args, **_kwargs: calls.append("update") or "updated",
-        delete_event=lambda *_args, **_kwargs: calls.append("delete") or "deleted",
+        create_event=lambda **_kwargs: calls.append("create") or CalendarMutationResult(event_ref="event-1"),
+        update_event=lambda *_args, **_kwargs: calls.append("update") or CalendarMutationResult(event_ref="event-1"),
+        delete_event=lambda *_args, **_kwargs: calls.append("delete") or CalendarMutationResult(event_ref="event-1"),
         token_path=SimpleNamespace(name="calendar-token.json"),
-        auth_error=None,
     )
     multi = object.__new__(MultiCalendarSource)
     multi.sources = [source]
@@ -93,13 +99,11 @@ def test_calendar_create_requires_an_exact_account():
     calls: list[str] = []
     unavailable = SimpleNamespace(
         get_email_address=lambda: "",
-        create_event=lambda **_kwargs: calls.append("unavailable") or "Created (id: wrong)",
-        auth_error=None,
+        create_event=lambda **_kwargs: calls.append("unavailable") or CalendarMutationResult(event_ref="wrong"),
     )
     available = SimpleNamespace(
         get_email_address=lambda: "second@example.test",
-        create_event=lambda **_kwargs: calls.append("second") or "Created (id: event-1)",
-        auth_error=None,
+        create_event=lambda **_kwargs: calls.append("second") or CalendarMutationResult(event_ref="event-1"),
     )
     multi = object.__new__(MultiCalendarSource)
     multi.sources = [unavailable, available]
@@ -135,6 +139,56 @@ def test_calendar_multi_account_read_fails_instead_of_returning_partial_results(
 
     with pytest.raises(IntegrationOperationError, match="Second account failed"):
         multi.search("review")
+
+
+def test_calendar_event_resolution_does_not_skip_account_identity_failure():
+    calls: list[str] = []
+
+    def missing_identity() -> str:
+        raise IntegrationConnectionError(
+            integration_id="calendar",
+            reason="degraded",
+            detail="First account identity failed.",
+        )
+
+    multi = object.__new__(MultiCalendarSource)
+    multi.sources = [
+        SimpleNamespace(get_email_address=missing_identity),
+        SimpleNamespace(
+            get_email_address=lambda: "second@example.test",
+            update_event=lambda *_args, **_kwargs: (
+                calls.append("update") or CalendarMutationResult(event_ref="event-1")
+            ),
+        ),
+    ]
+
+    with pytest.raises(IntegrationConnectionError, match="First account identity failed"):
+        multi.update_event("second@example.test:event-1", summary="Review")
+
+    assert calls == []
+
+
+def test_calendar_connection_verification_checks_every_account():
+    calls: list[str] = []
+
+    def fail_second() -> None:
+        calls.append("second")
+        raise IntegrationConnectionError(
+            integration_id="calendar",
+            reason="auth_required",
+            detail="Second account needs reconnection.",
+        )
+
+    multi = object.__new__(MultiCalendarSource)
+    multi.sources = [
+        SimpleNamespace(verify_connection=lambda: calls.append("first")),
+        SimpleNamespace(verify_connection=fail_second),
+    ]
+
+    with pytest.raises(IntegrationConnectionError, match="Second account needs reconnection"):
+        multi.verify_connection()
+
+    assert calls == ["first", "second"]
 
 
 def test_calendar_event_ref_qualification_is_idempotent_and_case_insensitive():
