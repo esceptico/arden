@@ -19,6 +19,7 @@ from arden.execution import (
     LeaseStore,
     StaleLeaseError,
 )
+from arden.execution.command_envelope import ExecutorToolContext
 from arden.execution.results import DeviceResultEnvelope
 from arden.server.app import app
 from arden.settings import hash_api_key
@@ -58,6 +59,16 @@ async def _client_invocation(gateway: ExecutorGateway, invocation_id: str = "inv
     )
 
 
+def _command_context() -> ExecutorToolContext:
+    return ExecutorToolContext(
+        default_cwd=None,
+        offload_dir="/tmp/arden-results/",
+        offload_threshold=50_000,
+        resource_observations={},
+        file_discovery={"observed_paths": {}, "miss_counts": {}},
+    )
+
+
 # -- devices --
 
 
@@ -84,12 +95,30 @@ async def test_dispatch_execute_result_roundtrip(gateway):
     lease = await gateway.connect(device)
     invocation = await _client_invocation(gateway)
 
-    await gateway.dispatch(device.executor_id, invocation)
+    await gateway.dispatch(device.executor_id, invocation, context=_command_context())
     commands = await gateway.pending_commands(device.executor_id, 0)
     assert len(commands) == 1
     assert commands[0].command_type == COMMAND_EXECUTE_TOOL
-    assert commands[0].payload["tool_name"] == "file_read"
-    assert commands[0].payload["arguments"] == {"path": "/tmp/x"}
+    assert commands[0].payload.tool_name == "file_read"
+    assert commands[0].payload.arguments == {"path": "/tmp/x"}
+    assert commands[0].wire_payload() == {
+        "version": 1,
+        "type": "execute_tool",
+        "invocation_id": "inv-1",
+        "tool_call_id": "call-1",
+        "tool_name": "file_read",
+        "arguments": {"path": "/tmp/x"},
+        "context": {
+            "default_cwd": None,
+            "offload_dir": "/tmp/arden-results/",
+            "offload_threshold": 50_000,
+            "resource_observations": {},
+            "file_discovery": {"observed_paths": {}, "miss_counts": {}},
+        },
+        "run_id": "run-1",
+        "session_id": "sess-1",
+        "deadline_at": None,
+    }
 
     await gateway.accept_started(device, lease.lease_id, "inv-1")
     waiter = gateway.waiter("inv-1")
@@ -111,7 +140,7 @@ async def test_dispatch_execute_result_roundtrip(gateway):
 async def test_cursor_replay_after_reconnect(gateway):
     device, _ = await _enrolled(gateway)
     await gateway.connect(device)
-    first = await gateway.dispatch(device.executor_id, await _client_invocation(gateway, "inv-1"))
+    first = await gateway.dispatch(device.executor_id, await _client_invocation(gateway, "inv-1"), context=_command_context())
     second = await gateway.dispatch(
         device.executor_id,
         await gateway.invocations.create(
@@ -123,6 +152,7 @@ async def test_cursor_replay_after_reconnect(gateway):
             placement="client",
             arguments_json="{}",
         ),
+        context=_command_context(),
     )
 
     replayed = await gateway.pending_commands(device.executor_id, first.seq)
@@ -130,6 +160,25 @@ async def test_cursor_replay_after_reconnect(gateway):
 
     lease = await gateway.connect(device)
     await gateway.heartbeat(device, lease.lease_id, acked_seq=second.seq)
+    assert await gateway.pending_commands(device.executor_id, 0) == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_malformed_persisted_arguments_before_enqueueing(gateway):
+    device, _ = await _enrolled(gateway)
+    invocation = await gateway.invocations.create(
+        invocation_id="inv-bad-json",
+        run_id="run-1",
+        session_id="sess-1",
+        tool_call_id="call-1",
+        tool_name="file_read",
+        placement="client",
+        arguments_json="not-json",
+    )
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        await gateway.dispatch(device.executor_id, invocation, context=_command_context())
+
     assert await gateway.pending_commands(device.executor_id, 0) == []
 
 
@@ -233,7 +282,7 @@ async def test_cancel_flags_invocation_and_appends_command(gateway):
     device, _ = await _enrolled(gateway)
     lease = await gateway.connect(device)
     invocation = await _client_invocation(gateway)
-    await gateway.dispatch(device.executor_id, invocation)
+    await gateway.dispatch(device.executor_id, invocation, context=_command_context())
     await gateway.accept_started(device, lease.lease_id, "inv-1")
 
     await gateway.cancel(device.executor_id, "inv-1")

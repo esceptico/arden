@@ -4,6 +4,13 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
+from arden.execution.command_envelope import (
+    CancelToolCommand,
+    ExecuteToolCommand,
+    ExecutorCommandPayloadError,
+    parse_executor_command,
+)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS executor_commands (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,9 +32,15 @@ CREATE INDEX IF NOT EXISTS idx_executor_commands_pending
 class ExecutorCommand:
     seq: int
     executor_id: str
-    command_type: str
-    payload: dict
-    invocation_id: str | None
+    payload: ExecuteToolCommand | CancelToolCommand
+    invocation_id: str
+
+    @property
+    def command_type(self) -> str:
+        return self.payload.type
+
+    def wire_payload(self) -> dict:
+        return self.payload.model_dump(mode="json")
 
 
 def _now() -> str:
@@ -51,26 +64,23 @@ class ExecutorCommandLog:
     async def append(
         self,
         executor_id: str,
-        command_type: str,
-        payload: dict,
-        *,
-        invocation_id: str | None = None,
+        payload: ExecuteToolCommand | CancelToolCommand,
     ) -> ExecutorCommand:
+        payload_json = payload.model_dump(mode="json")
         cursor = await self._conn.execute(
             """
             INSERT INTO executor_commands (executor_id, command_type, invocation_id, payload, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (executor_id, command_type, invocation_id, json.dumps(payload), _now()),
+            (executor_id, payload.type, payload.invocation_id, json.dumps(payload_json), _now()),
         )
         await self._conn.commit()
         assert cursor.lastrowid is not None
         return ExecutorCommand(
             seq=cursor.lastrowid,
             executor_id=executor_id,
-            command_type=command_type,
             payload=payload,
-            invocation_id=invocation_id,
+            invocation_id=payload.invocation_id,
         )
 
     async def after(self, executor_id: str, cursor_seq: int) -> list[ExecutorCommand]:
@@ -99,10 +109,17 @@ class ExecutorCommandLog:
 
 
 def _command_from_row(row: aiosqlite.Row) -> ExecutorCommand:
+    try:
+        payload = parse_executor_command(json.loads(row["payload"]))
+    except json.JSONDecodeError as exc:
+        raise ExecutorCommandPayloadError("executor command payload is not valid JSON") from exc
+    if row["command_type"] != payload.type:
+        raise ValueError("executor command row type does not match its payload")
+    if row["invocation_id"] != payload.invocation_id:
+        raise ValueError("executor command row invocation does not match its payload")
     return ExecutorCommand(
         seq=row["seq"],
         executor_id=row["executor_id"],
-        command_type=row["command_type"],
-        payload=json.loads(row["payload"]),
+        payload=payload,
         invocation_id=row["invocation_id"],
     )

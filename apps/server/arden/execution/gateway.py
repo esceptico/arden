@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+from arden.execution.command_envelope import CancelToolCommand, ExecuteToolCommand, ExecutorToolContext
 from arden.execution.commands import ExecutorCommand, ExecutorCommandLog
 from arden.execution.devices import ExecutorDevice, ExecutorDeviceStore
 from arden.execution.leases import ExecutorLease, LeaseStore
@@ -105,9 +106,7 @@ class ExecutorGateway:
             for device in devices:
                 await self.commands.append(
                     device.executor_id,
-                    COMMAND_CANCEL_TOOL,
-                    {"invocation_id": record.invocation_id},
-                    invocation_id=record.invocation_id,
+                    CancelToolCommand(version=1, type=COMMAND_CANCEL_TOOL, invocation_id=record.invocation_id),
                 )
             status = (
                 InvocationStatus.CANCELLED
@@ -133,22 +132,27 @@ class ExecutorGateway:
         executor_id: str,
         invocation: InvocationRecord,
         *,
-        context: dict | None = None,
+        context: ExecutorToolContext,
     ) -> ExecutorCommand:
+        try:
+            arguments = json.loads(invocation.arguments_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("executor invocation arguments are not valid JSON") from exc
+        command_payload = ExecuteToolCommand(
+            version=1,
+            type=COMMAND_EXECUTE_TOOL,
+            invocation_id=invocation.invocation_id,
+            tool_call_id=invocation.tool_call_id,
+            tool_name=invocation.tool_name,
+            arguments=arguments,
+            context=context,
+            run_id=invocation.run_id,
+            session_id=invocation.session_id,
+            deadline_at=invocation.deadline_at.isoformat() if invocation.deadline_at else None,
+        )
         command = await self.commands.append(
             executor_id,
-            COMMAND_EXECUTE_TOOL,
-            {
-                "invocation_id": invocation.invocation_id,
-                "tool_call_id": invocation.tool_call_id,
-                "tool_name": invocation.tool_name,
-                "arguments": json.loads(invocation.arguments_json),
-                "context": context or {},
-                "run_id": invocation.run_id,
-                "session_id": invocation.session_id,
-                "deadline_at": invocation.deadline_at.isoformat() if invocation.deadline_at else None,
-            },
-            invocation_id=invocation.invocation_id,
+            command_payload,
         )
         self._wakeup(executor_id).set()
         return command
@@ -157,9 +161,7 @@ class ExecutorGateway:
         await self.invocations.request_cancel(invocation_id)
         await self.commands.append(
             executor_id,
-            COMMAND_CANCEL_TOOL,
-            {"invocation_id": invocation_id},
-            invocation_id=invocation_id,
+            CancelToolCommand(version=1, type=COMMAND_CANCEL_TOOL, invocation_id=invocation_id),
         )
         self._wakeup(executor_id).set()
 

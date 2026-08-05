@@ -8,6 +8,7 @@
 // capability this executor does not have.
 const sseFrameParserModule = import("./sse-frame-parser.js");
 const { scanDeviceSkills, snapshotFingerprint } = require("./executor-skills.cjs");
+const { parseExecutorCommandEvent } = require("./executor-command-envelope.cjs");
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const RECONNECT_BASE_MS = 1_000;
@@ -124,7 +125,7 @@ function createExecutorClient({
   }
 
   async function handleExecute(config, command) {
-    const { invocation_id: invocationId, tool_name: toolName, arguments: args, context = {} } = command.payload;
+    const { invocation_id: invocationId, tool_name: toolName, arguments: args, context } = command.payload;
     const handler = handlers.get(toolName);
     if (!handler) {
       await submitResult(
@@ -157,17 +158,18 @@ function createExecutorClient({
   }
 
   async function handleCommand(config, event) {
-    if (event.type === "execute_tool") {
+    const command = parseExecutorCommandEvent(event);
+    if (command.type === "execute_tool") {
       // Fire-and-forget so the stream loop keeps consuming — cancel_tool
       // must be able to arrive while a tool is still running. The durable
       // invocation server-side owns the outcome if we crash mid-run.
-      void handleExecute(config, event).catch(error => {
+      void handleExecute(config, command).catch(error => {
         log(`tool execution failed to report: ${error?.message ?? error}`);
       });
-    } else if (event.type === "cancel_tool") {
-      running.get(event.payload.invocation_id)?.abort();
+    } else if (command.type === "cancel_tool") {
+      running.get(command.payload.invocation_id)?.abort();
     }
-    cursor = event.seq;
+    cursor = command.seq;
     await persistCursor();
   }
 

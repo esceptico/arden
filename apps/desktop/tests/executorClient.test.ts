@@ -9,6 +9,35 @@ function sse(kind: string, data: Record<string, unknown>): string {
   return `event: ${kind}\ndata: ${JSON.stringify({ kind, ...data })}\n\n`;
 }
 
+function commandContext(): Record<string, unknown> {
+  return {
+    default_cwd: null,
+    offload_dir: "/tmp/arden-results/",
+    offload_threshold: 50_000,
+    resource_observations: {},
+    file_discovery: { observed_paths: {}, miss_counts: {} },
+  };
+}
+
+function executePayload(invocationId: string, toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    version: 1,
+    type: "execute_tool",
+    invocation_id: invocationId,
+    tool_call_id: invocationId,
+    tool_name: toolName,
+    arguments: args,
+    context: commandContext(),
+    run_id: "run-1",
+    session_id: "sess-1",
+    deadline_at: null,
+  };
+}
+
+function cancelPayload(invocationId: string): Record<string, unknown> {
+  return { version: 1, type: "cancel_tool", invocation_id: invocationId };
+}
+
 function streamResponse(frames: string[], holdOpen: { promise: Promise<void> } | null = null): Response {
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -115,7 +144,7 @@ describe("executor client", () => {
               seq: 7,
               type: "execute_tool",
               invocation_id: "inv-1",
-              payload: { invocation_id: "inv-1", tool_name: "file_read", arguments: { path: "/x" } },
+              payload: executePayload("inv-1", "file_read", { path: "/x" }),
             }),
           ],
           hold,
@@ -153,7 +182,7 @@ describe("executor client", () => {
               seq: 3,
               type: "execute_tool",
               invocation_id: "inv-2",
-              payload: { invocation_id: "inv-2", tool_name: "file_read", arguments: { path: "/etc/hosts" } },
+              payload: executePayload("inv-2", "file_read", { path: "/etc/hosts" }),
             }),
           ],
           hold,
@@ -195,9 +224,9 @@ describe("executor client", () => {
               seq: 1,
               type: "execute_tool",
               invocation_id: "inv-3",
-              payload: { invocation_id: "inv-3", tool_name: "slow_tool", arguments: {} },
+              payload: executePayload("inv-3", "slow_tool", {}),
             }),
-            sse("command", { seq: 2, type: "cancel_tool", invocation_id: "inv-3", payload: { invocation_id: "inv-3" } }),
+            sse("command", { seq: 2, type: "cancel_tool", invocation_id: "inv-3", payload: cancelPayload("inv-3") }),
           ],
           hold,
         );
@@ -285,7 +314,7 @@ describe("executor client", () => {
               seq: 1,
               type: "execute_tool",
               invocation_id: "inv-retry",
-              payload: { invocation_id: "inv-retry", tool_name: "quick", arguments: {} },
+              payload: executePayload("inv-retry", "quick", {}),
             }),
           ],
           hold,
@@ -299,6 +328,43 @@ describe("executor client", () => {
     expect(resultAttempts).toBe(3);
     expect(results[0].invocation_id).toBe("inv-retry");
     hold.resolve();
+  });
+
+  test("rejects malformed commands before invoking a desktop handler", async () => {
+    const store = makeStateStore({ executorId: "exec_1", token: "device-token", cursor: 0 });
+    const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const logs: string[] = [];
+    let called = false;
+    const client = makeClient({
+      getConfig: () => ({ serverUrl: "http://server", apiKey: "" }),
+      stateStore: store,
+      log: message => logs.push(message),
+      fetchImpl: async (url: URL, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posts.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init.body)) });
+          return jsonResponse(200, {});
+        }
+        return streamResponse([
+          sse("lease", { lease_id: "lease_1" }),
+          sse("command", {
+            seq: 9,
+            type: "execute_tool",
+            invocation_id: "inv-malformed",
+            payload: { version: 1, type: "execute_tool", invocation_id: "inv-malformed" },
+          }),
+        ]);
+      },
+    });
+    client.registerHandler("file_read", async () => {
+      called = true;
+      return { status: "succeeded", payload: { content: "unexpected", preview: "unexpected" } };
+    });
+    client.start();
+
+    await until(() => logs.some(message => message.includes("execute command payload has an invalid shape")));
+    expect(called).toBe(false);
+    expect(posts).toEqual([]);
+    expect(store.saves.some(saved => (saved as { cursor: number } | null)?.cursor === 9)).toBe(false);
   });
 
   test("advertises device skills on lease and uploads needed bodies", async () => {

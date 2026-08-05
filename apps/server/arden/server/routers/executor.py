@@ -123,7 +123,7 @@ async def stream(
                             "seq": command.seq,
                             "type": command.command_type,
                             "invocation_id": command.invocation_id,
-                            "payload": command.payload,
+                            "payload": command.wire_payload(),
                         },
                     )
                     last_seq = command.seq

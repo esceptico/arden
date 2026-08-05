@@ -5,9 +5,10 @@ from datetime import UTC, datetime, timedelta
 
 from arden.constants import OFFLOAD_THRESHOLD
 from arden.core.tool_result_files import RESULTS_BASE
+from arden.execution.command_envelope import ExecutorToolContext
 from arden.execution.gateway import ExecutorGateway
-from arden.execution.models import TERMINAL_STATUSES, InvocationRecord
-from arden.execution.results import result_payload, tool_result_from_payload
+from arden.execution.models import TERMINAL_STATUSES, InvocationRecord, InvocationStatus
+from arden.execution.results import DeviceResultEnvelope, result_payload, tool_result_from_payload
 from arden.execution.store import InvocationStore
 from arden.tools.core.base import ToolResult
 from arden.tools.core.context import ToolExecution
@@ -65,7 +66,20 @@ class ClientExecutionBackend:
             return self._settle(record, execution)
 
         waiter = self._gateway.waiter(invocation.invocation_id)
-        await self._gateway.dispatch(executor_id, record, context=self._context(execution))
+        try:
+            await self._gateway.dispatch(executor_id, record, context=self._context(execution))
+        except ValueError as exc:
+            self._gateway.drop_waiter(invocation.invocation_id)
+            record = await self._invocations.complete(
+                invocation.invocation_id,
+                status=InvocationStatus.FAILED,
+                result_payload=DeviceResultEnvelope(
+                    content=f"Device execution command is invalid: {exc}",
+                    preview="Invalid device command",
+                ).serialized(),
+                error_code="invalid_executor_command",
+            )
+            return self._settle(record, execution)
         try:
             record = await waiter
         except asyncio.CancelledError:
@@ -80,19 +94,20 @@ class ClientExecutionBackend:
             self._gateway.drop_waiter(invocation.invocation_id)
         return self._settle(record, execution)
 
-    def _context(self, execution: ToolExecution) -> dict:
+    def _context(self, execution: ToolExecution) -> ExecutorToolContext:
         area = execution.ctx.area
         observations = {
             resource_id: {"version": observation.version, "content_read": observation.content_read}
             for resource_id, observation in execution.ctx.run.resource_observations().items()
         }
-        return {
-            "default_cwd": area.default_cwd if area else None,
-            "offload_dir": f"{RESULTS_BASE}/",
-            "offload_threshold": OFFLOAD_THRESHOLD,
-            "resource_observations": observations,
-            "file_discovery": execution.ctx.run.file_discovery_state(),
-        }
+        file_discovery = execution.ctx.run.file_discovery_state()
+        return ExecutorToolContext(
+            default_cwd=area.default_cwd if area else None,
+            offload_dir=f"{RESULTS_BASE}/",
+            offload_threshold=OFFLOAD_THRESHOLD,
+            resource_observations=observations,
+            file_discovery=file_discovery,
+        )
 
     def _settle(self, record: InvocationRecord, execution: ToolExecution) -> ToolResult:
         payload = result_payload(record)

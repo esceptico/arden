@@ -97,7 +97,7 @@ async def test_client_tool_routes_to_device_and_returns_result(rig):
             commands = await gateway.pending_commands(device.executor_id, 0)
             if commands:
                 command = commands[0]
-                assert command.payload["arguments"] == {"path": "/etc/hosts"}
+                assert command.payload.arguments == {"path": "/etc/hosts"}
                 await gateway.accept_started(device, lease.lease_id, command.invocation_id)
                 await gateway.accept_result(
                     device,
@@ -119,6 +119,26 @@ async def test_client_tool_routes_to_device_and_returns_result(rig):
     assert not result.is_error
     assert result.content == "127.0.0.1 localhost"
     assert result.preview == "Read hosts"
+
+
+@pytest.mark.asyncio
+async def test_oversized_client_arguments_fail_before_device_dispatch(rig):
+    gateway, router, registry = rig
+    device, _ = await gateway.devices.enroll(name="mac", capabilities=[])
+    await gateway.connect(device)
+
+    result = await router.execute(
+        ToolInvocation(
+            invocation_id="call-too-large",
+            tool_name="read_device_file",
+            arguments={"payload": "x" * (1_048_577)},
+        ),
+        _make_execution(registry),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "invalid_executor_command"
+    assert await gateway.pending_commands(device.executor_id, 0) == []
 
 
 @pytest.mark.asyncio
@@ -168,7 +188,7 @@ async def test_client_file_discovery_updates_are_carried_to_the_next_device_call
         for _ in range(100):
             commands = await gateway.pending_commands(device.executor_id, 1)
             if commands:
-                assert commands[0].payload["context"]["file_discovery"] == {
+                assert commands[0].payload.context.file_discovery.model_dump() == {
                     "observed_paths": {"/workspace": "directory"},
                     "miss_counts": {"/workspace": 1},
                 }
