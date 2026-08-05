@@ -355,8 +355,8 @@ RESULT_BASE = Path(ARDEN_TMP_BASE)
 # Bound all terminal injections. The full result remains durable and can be
 # paged back exactly through agent_result_read.
 # ToolResult itself is JSON-serialized after execution. Four thousand characters
-# remains below the 50k payload bound even when every character expands to a
-# JSON control escape twice (page JSON, then ToolResult JSON).
+# remains below the 50k payload bound even when every character becomes a JSON
+# control escape in that final envelope.
 BACKGROUND_RESULT_READ_MAX_CHARS = 4_000
 _COMPLETED_NOTIFICATION_CHAR_LIMIT = 24_000
 _FAILED_RESULT_CHAR_LIMIT = 3_600

@@ -1,14 +1,17 @@
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from judgeval import Tracer
 
 from arden import logging
-from arden.agent import ToolMeta, ToolOutcomeStatus, ToolResult
+from arden.agent import ToolMeta, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.ledger import SharedLedger, access_key, format_arguments
 from arden.agent.types.tool_presentation import tool_presentation
+from arden.agent.types.tools import ToolSourceRef
 from arden.constants import (
     DEFAULT_EXTERNAL_TOOL_TIMEOUT_SECONDS,
     OFFLOAD_PREVIEW_CHARS,
@@ -38,7 +41,88 @@ from arden.tools.executor import ToolExecutor
 LIVE_READ_TOOLS = frozenset({"session_list"})
 AUDIT_PREVIEW_MAX_CHARS = 500
 OFFLOAD_CONTINUATION_FIELDS = frozenset({"has_more", "next_cursor", "next_offset"})
+OFFLOAD_DATA_SUMMARY_MAX_KEYS = 50
+OFFLOAD_DATA_KEY_MAX_BYTES = 128
+OFFLOAD_OUTCOME_FIELD_MAX_BYTES = 512
+OFFLOAD_CONTINUATION_VALUE_MAX_BYTES = 4_096
 _logger = logging.get_logger(__name__)
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    marker = "..."
+    return encoded[: max_bytes - len(marker)].decode("utf-8", errors="ignore").rstrip() + marker
+
+
+def _bounded_optional(value: str | None, max_bytes: int = OFFLOAD_OUTCOME_FIELD_MAX_BYTES) -> str | None:
+    return _truncate_utf8(value, max_bytes) if value else None
+
+
+def _compact_outcome(outcome: ToolOutcome | None) -> ToolOutcome | None:
+    if outcome is None:
+        return None
+    error = (
+        replace(
+            outcome.error,
+            code=_truncate_utf8(outcome.error.code, OFFLOAD_DATA_KEY_MAX_BYTES),
+            recovery_action=_bounded_optional(outcome.error.recovery_action),
+            diagnostic_ref=_bounded_optional(outcome.error.diagnostic_ref),
+        )
+        if outcome.error
+        else None
+    )
+    effect = (
+        replace(
+            outcome.effect,
+            operation=_truncate_utf8(outcome.effect.operation, OFFLOAD_DATA_KEY_MAX_BYTES),
+            target=_truncate_utf8(outcome.effect.target, OFFLOAD_OUTCOME_FIELD_MAX_BYTES),
+            before_ref=_bounded_optional(outcome.effect.before_ref),
+            after_ref=_bounded_optional(outcome.effect.after_ref),
+        )
+        if outcome.effect
+        else None
+    )
+    verification = (
+        replace(
+            outcome.verification,
+            postcondition=_truncate_utf8(outcome.verification.postcondition, OFFLOAD_OUTCOME_FIELD_MAX_BYTES),
+            observed=_truncate_utf8(outcome.verification.observed, OFFLOAD_OUTCOME_FIELD_MAX_BYTES),
+        )
+        if outcome.verification
+        else None
+    )
+    return replace(
+        outcome,
+        error=error,
+        effect=effect,
+        verification=verification,
+        receipt=_bounded_optional(outcome.receipt),
+    )
+
+
+def _bounded_continuation_data(data: dict | None) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    bounded: dict[str, Any] = {}
+    omitted: set[str] = set()
+    existing_omissions = data.get("continuation_fields_omitted")
+    if isinstance(existing_omissions, list | tuple):
+        omitted.update(
+            value for value in existing_omissions if isinstance(value, str) and value in OFFLOAD_CONTINUATION_FIELDS
+        )
+    for key in OFFLOAD_CONTINUATION_FIELDS:
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, str) and len(value.encode("utf-8")) > OFFLOAD_CONTINUATION_VALUE_MAX_BYTES:
+            omitted.add(key)
+        elif isinstance(value, str | int | float | bool) or value is None:
+            bounded[key] = value
+    if omitted:
+        bounded["continuation_fields_omitted"] = sorted(omitted)
+    return bounded
 
 
 def _effective_timeout_seconds(tool: Any) -> int | float | None:
@@ -412,6 +496,7 @@ class ArdenToolExecutor:
         )
 
     def _bound_result_payload(self, result: ToolResult, tool_call_id: str) -> ToolResult:
+        result = result.with_default_outcome()
         serialized = result.serialized_payload()
         if len(serialized.encode("utf-8")) <= OFFLOAD_THRESHOLD:
             return result
@@ -426,14 +511,14 @@ class ArdenToolExecutor:
             "raw_ref": blob.blob_ref,
             "raw_bytes": blob.content_bytes,
             **blob.to_internal_data(),
+            **_bounded_continuation_data(result.data),
         }
         if isinstance(result.data, dict):
-            for key, value in result.data.items():
-                if key not in OFFLOAD_CONTINUATION_FIELDS:
-                    continue
-                if isinstance(value, str | int | float | bool) or value is None:
-                    data[key] = value
-            public_keys = sorted(key for key in result.data if not key.startswith("_"))[:50]
+            public_keys = sorted(
+                _truncate_utf8(key, OFFLOAD_DATA_KEY_MAX_BYTES)
+                for key in result.data
+                if isinstance(key, str) and not key.startswith("_")
+            )[:OFFLOAD_DATA_SUMMARY_MAX_KEYS]
             if public_keys:
                 data["data_summary"] = {"keys": public_keys}
         compact = (
@@ -441,14 +526,114 @@ class ArdenToolExecutor:
             f"[Full tool result payload ({blob.content_bytes} bytes) saved to {path}.]\n"
             f"Use file_read(path={str(path)!r}, offset=N, limit=M) to retrieve it."
         )
-        return ToolResult(
+        compact_result = ToolResult(
             content=compact,
-            preview=result.preview,
+            preview=_truncate_utf8(result.preview, AUDIT_PREVIEW_MAX_CHARS),
             is_error=result.is_error,
             data=data,
             model_content=(),
             source_refs=result.source_refs,
-            outcome=result.outcome,
+            outcome=_compact_outcome(result.outcome),
+        )
+        if len(compact_result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD:
+            return compact_result
+        compact_result = self._compact_source_refs(compact_result)
+        if len(compact_result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD:
+            return compact_result
+        return self._minimal_offloaded_result(
+            compact_result,
+            payload_path=path,
+            raw_ref=blob.blob_ref,
+            raw_bytes=blob.content_bytes,
+            raw_data=blob.to_internal_data(),
+        )
+
+    def _compact_source_refs(self, result: ToolResult) -> ToolResult:
+        """Fit provenance into the live envelope; the exact payload is already durable."""
+        total = len(result.source_refs)
+        if total == 0:
+            return result
+
+        kept: list[tuple[ToolSourceRef, ToolSourceRef]] = []
+        metadata = {
+            **(result.data or {}),
+            "source_refs_compacted": True,
+            "source_refs_total": total,
+            "source_refs_included": total,
+            "source_ref_urls_omitted": total,
+        }
+        for source_ref in result.source_refs:
+            identity_ref = replace(source_ref, url=None) if source_ref.url else source_ref
+            current_refs = tuple(compact for _original, compact in kept)
+            candidate = replace(
+                result,
+                data=metadata,
+                source_refs=(*current_refs, identity_ref),
+            )
+            if len(candidate.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD:
+                kept.append((source_ref, identity_ref))
+
+        for index, (source_ref, _compact_ref) in enumerate(kept):
+            if source_ref.url is None:
+                continue
+            upgraded = [candidate_ref for _original, candidate_ref in kept]
+            upgraded[index] = source_ref
+            candidate = replace(result, data=metadata, source_refs=tuple(upgraded))
+            if len(candidate.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD:
+                kept[index] = (source_ref, source_ref)
+
+        compact_refs = tuple(compact_ref for _original, compact_ref in kept)
+        urls_omitted = sum(original.url is not None and compact.url is None for original, compact in kept)
+
+        return replace(
+            result,
+            data={
+                **metadata,
+                "source_refs_included": len(compact_refs),
+                "source_ref_urls_omitted": urls_omitted,
+            },
+            source_refs=compact_refs,
+        )
+
+    def _minimal_offloaded_result(
+        self,
+        result: ToolResult,
+        *,
+        payload_path: Path,
+        raw_ref: str,
+        raw_bytes: int,
+        raw_data: dict[str, Any],
+    ) -> ToolResult:
+        data: dict[str, Any] = {
+            "truncated": True,
+            "raw_ref": raw_ref,
+            "raw_bytes": raw_bytes,
+            **raw_data,
+            **_bounded_continuation_data(result.data),
+        }
+        source_refs_total = (
+            result.data.get("source_refs_total", len(result.source_refs))
+            if isinstance(result.data, dict)
+            else len(result.source_refs)
+        )
+        if isinstance(source_refs_total, int) and source_refs_total > 0:
+            data.update(
+                {
+                    "source_refs_compacted": True,
+                    "source_refs_total": source_refs_total,
+                    "source_refs_included": 0,
+                }
+            )
+        return ToolResult(
+            content=(
+                f"Full tool result payload ({raw_bytes} bytes) saved to {payload_path}.\n"
+                f"Use file_read(path={str(payload_path)!r}, offset=N, limit=M) to retrieve it."
+            ),
+            preview=_truncate_utf8(result.preview, AUDIT_PREVIEW_MAX_CHARS),
+            is_error=result.is_error,
+            data=data,
+            source_refs=(),
+            outcome=_compact_outcome(result.outcome),
         )
 
     def _exact_serialized_payload(self, result: ToolResult, serialized: str) -> str:

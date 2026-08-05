@@ -1,19 +1,18 @@
 import asyncio
 import hashlib
-import json
 from enum import StrEnum
-from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.constants import WEB_SEARCH_MAX_RESULTS
 from arden.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
-from arden.integrations.web.types import WebClient
+from arden.integrations.web.types import WebClient, WebSearchResult
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+from arden.utils import truncate
 
 WEB_SEARCH_DESCRIPTION = "Search the web for information. Returns titles, URLs, and content snippets."
 
@@ -30,32 +29,72 @@ class WebSearchCategory(StrEnum):
 
 
 _DEFAULT_SEARCH_RESULTS = 5
+_SEARCH_TITLE_MAX_BYTES = 180
+_SEARCH_DATE_MAX_CHARS = 80
+_SEARCH_SUMMARY_MAX_CHARS = 500
+_SEARCH_HIGHLIGHT_MAX_CHARS = 240
+_WEB_FETCH_URL_MAX_CHARS = 4_096
+_SOURCE_REF_MAX_CHARS = 2_048
+_SEARCH_DIRECT_SOURCE_URL_MAX_CHARS = 256
+_SEARCH_QUERY_DISPLAY_MAX_CHARS = 240
 
 
-def _web_page_source(url: str, title: str | None) -> ToolSourceRef | None:
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    marker = "..."
+    return encoded[: max_bytes - len(marker)].decode("utf-8", errors="ignore").rstrip() + marker
+
+
+def _single_line(value: str | None, max_chars: int) -> str:
+    if not value:
+        return ""
+    without_controls = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in value)
+    return truncate(" ".join(without_controls.split()), max_chars)
+
+
+def _single_line_bytes(value: str | None, max_bytes: int) -> str:
+    return _truncate_utf8(_single_line(value, max_bytes), max_bytes)
+
+
+def _has_unsafe_url_chars(value: str) -> bool:
+    return any(char.isspace() or char in {'"', "\\"} or ord(char) < 32 or ord(char) == 127 for char in value)
+
+
+def _web_page_source(
+    url: str,
+    title: str | None,
+    *,
+    direct_ref_max_chars: int,
+    retain_long_url: bool,
+) -> ToolSourceRef | None:
     raw_url = url.strip()
     if not raw_url:
         return None
-    display_title = (title or "").strip()
+    display_title = _single_line_bytes(title, _SEARCH_TITLE_MAX_BYTES)
     try:
         parsed = urlsplit(raw_url)
-        public_url = (
+        safe_public_url = (
             parsed.scheme.lower() in {"http", "https"}
             and bool(parsed.hostname)
             and parsed.username is None
             and parsed.password is None
             and not parsed.query
             and not parsed.fragment
+            and not _has_unsafe_url_chars(raw_url)
         )
     except ValueError:
-        public_url = False
-    if public_url:
+        safe_public_url = False
+    if safe_public_url:
+        digest = hashlib.sha256(raw_url.encode()).hexdigest()
+        direct_ref = len(raw_url) <= direct_ref_max_chars
         return ToolSourceRef(
             provider="web",
             kind="page",
-            ref=raw_url,
+            ref=raw_url if direct_ref else f"url-sha256:{digest}",
             title=display_title or raw_url,
-            url=raw_url,
+            url=(raw_url if len(raw_url) <= _WEB_FETCH_URL_MAX_CHARS and (direct_ref or retain_long_url) else None),
         )
     digest = hashlib.sha256(raw_url.encode()).hexdigest()
     return ToolSourceRef(
@@ -66,9 +105,82 @@ def _web_page_source(url: str, title: str | None) -> ToolSourceRef | None:
     )
 
 
+def _search_page_source(result: WebSearchResult) -> ToolSourceRef | None:
+    return _web_page_source(
+        result.url,
+        result.title,
+        direct_ref_max_chars=_SEARCH_DIRECT_SOURCE_URL_MAX_CHARS,
+        retain_long_url=True,
+    )
+
+
+def _fetched_page_source(url: str, title: str | None) -> ToolSourceRef | None:
+    return _web_page_source(
+        url,
+        title,
+        direct_ref_max_chars=_SOURCE_REF_MAX_CHARS,
+        retain_long_url=True,
+    )
+
+
+def _display_url(raw_url: str) -> tuple[str, bool]:
+    url = raw_url.strip()
+    if not url:
+        return "unavailable", False
+    try:
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or _has_unsafe_url_chars(url)
+        ):
+            return "omitted (invalid or credential-bearing URL)", False
+    except ValueError:
+        return "omitted (invalid URL)", False
+    public_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    if len(public_url) > _WEB_FETCH_URL_MAX_CHARS:
+        return "omitted (URL exceeds the web_fetch input limit)", False
+    return public_url, bool(parsed.query or parsed.fragment)
+
+
+def _format_search_results(
+    query: str,
+    results: list[WebSearchResult],
+    *,
+    may_have_more: bool,
+) -> str:
+    lines = [f"Web results for: {_single_line(query, _SEARCH_QUERY_DISPLAY_MAX_CHARS)}"]
+    for index, result in enumerate(results, start=1):
+        title = _single_line_bytes(result.title, _SEARCH_TITLE_MAX_BYTES) or "Untitled result"
+        display_url, parameters_omitted = _display_url(result.url)
+        lines.extend((f"{index}. {title}", f"   URL: {display_url}"))
+        if parameters_omitted:
+            lines.append("   URL note: Query and fragment parameters omitted for privacy.")
+        if published := _single_line(result.published_date, _SEARCH_DATE_MAX_CHARS):
+            lines.append(f"   Published: {published}")
+        if summary := _single_line(result.summary, _SEARCH_SUMMARY_MAX_CHARS):
+            lines.append(f"   Summary: {summary}")
+        for highlight_index, highlight in enumerate(result.highlights or (), start=1):
+            if highlight_index > 3:
+                break
+            if text := _single_line(highlight, _SEARCH_HIGHLIGHT_MAX_CHARS):
+                lines.append(f"   Highlight {highlight_index}: {text}")
+    if may_have_more:
+        recovery = (
+            f"Raise limit (max {WEB_SEARCH_MAX_RESULTS}) or narrow the query"
+            if len(results) < WEB_SEARCH_MAX_RESULTS
+            else "Narrow the query"
+        )
+        lines.append(f"Showing {len(results)} results; more may exist. {recovery} to continue.")
+    return "\n".join(lines)
+
+
 def _empty_search_content(query: str) -> str:
+    display_query = _single_line(query, _SEARCH_QUERY_DISPLAY_MAX_CHARS)
     return (
-        f'No results for "{query}". '
+        f'No results for "{display_query}". '
         "Try again with a simpler or broader query: remove quotes/operators, use fewer words, "
         "or search 1-3 core keywords."
     )
@@ -98,32 +210,19 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
             category=args.category,
         )
 
-        formatted = []
-        for r in results:
-            item: dict[str, Any] = {
-                "title": r.title,
-                "url": r.url,
-            }
-            if r.published_date:
-                item["date"] = r.published_date
-            if r.summary:
-                item["summary"] = r.summary
-            if r.highlights:
-                item["highlights"] = r.highlights[:3]
-            formatted.append(item)
-
-        if not formatted:
+        selected = list(results[: args.limit])
+        if not selected:
             return ToolResult(content=_empty_search_content(args.query), preview="0 results")
 
-        content = json.dumps({"query": args.query, "results": formatted}, indent=2, ensure_ascii=False)
+        may_have_more = len(results) >= args.limit
+        source_refs = normalize_source_refs(
+            source_ref for result in selected if (source_ref := _search_page_source(result)) is not None
+        )
         return ToolResult(
-            content=content,
-            preview=f"{len(formatted)} results",
-            source_refs=normalize_source_refs(
-                source_ref
-                for result in results
-                if (source_ref := _web_page_source(result.url, result.title)) is not None
-            ),
+            content=_format_search_results(args.query, selected, may_have_more=may_have_more),
+            preview=f"{len(selected)} results" + (" (possibly capped)" if may_have_more else ""),
+            data={"query": args.query, "count": len(selected), "may_have_more": may_have_more},
+            source_refs=source_refs,
         )
 
     except NoSearchResultsException:
@@ -135,7 +234,7 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
 
 
 class WebFetchInput(BaseModel):
-    url: str = Field(min_length=1, max_length=4_096, description="The URL to fetch")
+    url: str = Field(min_length=1, max_length=_WEB_FETCH_URL_MAX_CHARS, description="The URL to fetch")
 
 
 async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult:
@@ -169,7 +268,7 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
                 content="\n".join(output),
                 preview=f"Fetched {lines} lines",
                 source_refs=normalize_source_refs(
-                    (source_ref,) if (source_ref := _web_page_source(r.url, r.title)) is not None else ()
+                    (source_ref,) if (source_ref := _fetched_page_source(r.url, r.title)) is not None else ()
                 ),
             )
         return ToolResult(content="No content fetched. Page may be empty or require JavaScript.", preview="Empty")

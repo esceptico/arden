@@ -4,14 +4,19 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+import arden.core.tool_result_files as tool_result_files
+from arden.constants import OFFLOAD_THRESHOLD, WEB_SEARCH_MAX_RESULTS
 from arden.context.models import SessionState
+from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.web import ddgs as ddgs_module
 from arden.integrations.web.ddgs import DDGSWebSource
 from arden.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
-from arden.integrations.web.tools import WebFetchInput, WebSearchInput, web_fetch, web_search
+from arden.integrations.web.tools import WebFetchInput, WebSearchInput, web_fetch, web_search, web_search_tool
 from arden.integrations.web.types import WebContentResult, WebSearchResult
+from arden.tools.core import ToolResult
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.executor import ToolExecutor
 
 
 class FakeWebSource:
@@ -42,17 +47,33 @@ class FakeWebSource:
         return self.contents
 
 
-def _execution(source: FakeWebSource) -> ToolExecution:
+def _execution(source: FakeWebSource, registry: ToolRegistry | None = None) -> ToolExecution:
     return ToolExecution(
         tool_id="call-1",
         tool_name="web_search",
         ctx=ToolContext(
             session_state=SessionState(session_id="session-1", started_at=datetime(2026, 5, 24, tzinfo=UTC)),
-            registry=ToolRegistry(),
+            registry=registry or ToolRegistry(),
             run=RunContext(run_id="run-1"),
             io=IOBridge(),
             services={"web": source},
         ),
+    )
+
+
+def _oversized_search_source() -> FakeWebSource:
+    huge = 'line\n"😀' * 5_000
+    return FakeWebSource(
+        results=[
+            WebSearchResult(
+                title=huge,
+                url=f"https://example.com/{index}/" + "a" * 3_900,
+                published_date=huge,
+                summary=huge,
+                highlights=[huge] * 8,
+            )
+            for index in range(WEB_SEARCH_MAX_RESULTS)
+        ]
     )
 
 
@@ -99,6 +120,122 @@ async def test_web_search_self_reports_each_result_source():
 
 
 @pytest.mark.asyncio
+async def test_web_search_renders_readable_bounded_result_fields():
+    source = FakeWebSource(
+        results=[
+            WebSearchResult(
+                title=' First\nresult "quoted" ',
+                url="https://example.com/first",
+                published_date="2026-08-05\nUTC",
+                summary="Useful\nsummary with\x00 a control.",
+                highlights=["One\nline", "Second", "Third", "Ignored fourth"],
+            )
+        ]
+    )
+
+    result = await web_search(_execution(source), WebSearchInput(query="examples", limit=5))
+
+    assert result.content == (
+        'Web results for: examples\n1. First result "quoted"\n'
+        "   URL: https://example.com/first\n"
+        "   Published: 2026-08-05 UTC\n"
+        "   Summary: Useful summary with a control.\n"
+        "   Highlight 1: One line\n"
+        "   Highlight 2: Second\n"
+        "   Highlight 3: Third"
+    )
+    assert not result.content.lstrip().startswith("{")
+    assert result.data == {"query": "examples", "count": 1, "may_have_more": False}
+
+
+@pytest.mark.asyncio
+async def test_web_search_slices_provider_over_return_and_exposes_honest_cap():
+    source = FakeWebSource(
+        results=[WebSearchResult(title=f"Result {index}", url=f"https://example.com/{index}") for index in range(3)]
+    )
+
+    result = await web_search(_execution(source), WebSearchInput(query="examples", limit=2))
+
+    assert "1. Result 0" in result.content
+    assert "2. Result 1" in result.content
+    assert "Result 2" not in result.content
+    assert "more may exist" in result.content
+    assert result.preview == "2 results (possibly capped)"
+    assert result.data == {"query": "examples", "count": 2, "may_have_more": True}
+    assert [ref.ref for ref in result.source_refs] == ["https://example.com/0", "https://example.com/1"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_pathological_fields_preserve_exact_payload_for_executor_offload():
+    result = await web_search(
+        _execution(_oversized_search_source()),
+        WebSearchInput(query="x" * 2_000, limit=WEB_SEARCH_MAX_RESULTS),
+    )
+
+    assert result.content.count("Highlight 3:") == WEB_SEARCH_MAX_RESULTS
+    assert "Highlight 4:" not in result.content
+    assert "Raise limit" not in result.content
+    assert len(result.serialized_payload().encode()) > OFFLOAD_THRESHOLD
+    assert len(result.source_refs) == WEB_SEARCH_MAX_RESULTS
+    assert all(ref.ref.startswith("url-sha256:") for ref in result.source_refs)
+    assert all(ref.url and len(ref.url) > 3_900 for ref in result.source_refs)
+    assert result.data == {
+        "query": "x" * 2_000,
+        "count": WEB_SEARCH_MAX_RESULTS,
+        "may_have_more": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_web_search_executor_bounds_long_source_urls_without_losing_exact_payload(monkeypatch, tmp_path):
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    registry = ToolRegistry()
+    registry.register("web_search", web_search_tool, source="web")
+    execution = _execution(_oversized_search_source(), registry)
+    executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), execution.ctx)
+
+    result = await executor.execute(
+        "web_search",
+        {"query": "x" * 2_000, "limit": WEB_SEARCH_MAX_RESULTS},
+        "call-long-web-search",
+    )
+
+    assert len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
+    assert result.data["source_refs_compacted"] is True
+    assert result.data["source_refs_total"] == WEB_SEARCH_MAX_RESULTS
+    assert result.data["source_refs_included"] == WEB_SEARCH_MAX_RESULTS
+    assert result.data["source_ref_urls_omitted"] > 0
+    assert "file_read" in result.content
+
+    exact = ToolResult.from_serialized_payload(
+        tool_result_files.result_payload_file_path("session-1", "call-long-web-search").read_text()
+    )
+    assert exact is not None
+    assert len(exact.source_refs) == WEB_SEARCH_MAX_RESULTS
+    assert all(ref.url and len(ref.url) > 3_900 for ref in exact.source_refs)
+
+
+@pytest.mark.asyncio
+async def test_web_search_omits_credentials_and_private_url_parameters():
+    source = FakeWebSource(
+        results=[
+            WebSearchResult(title="Credential", url="https://user:password@example.com/private"),
+            WebSearchResult(title="Parameterized", url="https://example.com/item?id=123"),
+        ]
+    )
+
+    result = await web_search(_execution(source), WebSearchInput(query="private", limit=5))
+    serialized = result.serialized_payload()
+
+    assert "user:password" not in result.content
+    assert "user:password" not in serialized
+    assert "omitted (invalid or credential-bearing URL)" in result.content
+    assert "https://example.com/item" in result.content
+    assert "id=123" not in serialized
+    assert "Query and fragment parameters omitted for privacy" in result.content
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_self_reports_source_refs():
     source = FakeWebSource(
         contents=[WebContentResult(title="Example Page", url="https://example.com/canonical", text="body text")]
@@ -127,6 +264,17 @@ async def test_web_fetch_uses_url_when_page_title_is_blank():
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_keeps_clickable_provenance_for_long_public_url():
+    long_url = "https://example.com/" + "a" * 2_100
+    source = FakeWebSource(contents=[WebContentResult(title="Long page", url=long_url, text="body text")])
+
+    result = await web_fetch(_execution(source), WebFetchInput(url=long_url))
+
+    assert result.source_refs[0].ref.startswith("url-sha256:")
+    assert result.source_refs[0].url == long_url
+
+
+@pytest.mark.asyncio
 async def test_web_search_uses_opaque_identity_for_query_urls_without_persisting_secrets():
     secret_url = "https://example.com/private?signature=super-secret#download"
     source = FakeWebSource(results=[WebSearchResult(title="Private result", url=secret_url)])
@@ -142,7 +290,35 @@ async def test_web_search_uses_opaque_identity_for_query_urls_without_persisting
             "title": "Private result",
         }
     ]
-    assert "super-secret" not in repr(result.source_refs)
+    assert "super-secret" not in result.content
+    assert "super-secret" not in result.serialized_payload()
+    assert "https://example.com/private" in result.content
+    assert "Query and fragment parameters omitted for privacy" in result.content
+
+
+@pytest.mark.asyncio
+async def test_web_search_never_persists_unknown_or_camel_case_query_secrets():
+    source = FakeWebSource(
+        results=[
+            WebSearchResult(
+                title="Drive result",
+                url="https://drive.google.com/open?id=doc&resourcekey=TOP_SECRET",
+            ),
+            WebSearchResult(
+                title="OAuth result",
+                url="https://example.com/callback?accessToken=super-secret&state=private-state",
+            ),
+        ]
+    )
+
+    result = await web_search(_execution(source), WebSearchInput(query="private", limit=5))
+    serialized = result.serialized_payload()
+
+    assert "TOP_SECRET" not in serialized
+    assert "super-secret" not in serialized
+    assert "private-state" not in serialized
+    assert "https://drive.google.com/open" in result.content
+    assert "https://example.com/callback" in result.content
 
 
 @pytest.mark.asyncio

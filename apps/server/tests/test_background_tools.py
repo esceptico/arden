@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import json
 from datetime import UTC, datetime
 
 import pytest
@@ -38,31 +37,33 @@ async def test_agent_result_read_pages_exact_unicode_content():
         execution,
         background_module.AgentResultReadInput(task_id="agent-1", offset=0, limit=6),
     )
-    first_page = json.loads(first.content)
     second = await background_module.agent_result_read(
         execution,
         background_module.AgentResultReadInput(
             task_id="agent-1",
-            offset=first_page["next_offset"],
+            offset=first.data["next_offset"],
         ),
     )
-    second_page = json.loads(second.content)
 
-    assert first_page["content"] + second_page["content"] == full
-    assert first_page == {
+    assert full[:6] in first.content
+    assert full[6:] in second.content
+    assert first.data == {
         "task_id": "agent-1",
         "offset": 0,
-        "content": full[:6],
+        "end_offset": 6,
         "next_offset": 6,
         "total_chars": len(full),
         "has_more": True,
     }
-    assert second_page["next_offset"] is None
-    assert second_page["has_more"] is False
+    assert 'agent_result_read(task_id="agent-1", offset=6, limit=6)' in first.content
+    assert second.data["next_offset"] is None
+    assert second.data["has_more"] is False
+    assert "End of background agent result." in second.content
+    assert "Continue with agent_result_read" not in second.content
 
 
 @pytest.mark.asyncio
-async def test_agent_result_read_worst_case_json_page_stays_directly_parseable():
+async def test_agent_result_read_worst_case_page_stays_direct_and_bounded():
     full = ('\x00"\\💥' * 2_000) + "tail"
 
     async def read_result(_task_id: str) -> str:
@@ -73,12 +74,11 @@ async def test_agent_result_read_worst_case_json_page_stays_directly_parseable()
         ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry)),
         background_module.AgentResultReadInput(task_id="x" * 200),
     )
-    page = json.loads(result.content)
-
-    assert page["content"] == full[: background_module.BACKGROUND_RESULT_READ_MAX_CHARS]
-    assert page["next_offset"] == background_module.BACKGROUND_RESULT_READ_MAX_CHARS
+    assert full[: background_module.BACKGROUND_RESULT_READ_MAX_CHARS] in result.content
+    assert result.data["next_offset"] == background_module.BACKGROUND_RESULT_READ_MAX_CHARS
+    assert not result.content.lstrip().startswith("{")
     # The executor's unconditional final payload bound must not replace this
-    # JSON with a generic file pointer, even at maximum escaping expansion.
+    # page with a generic file pointer, even at maximum escaping expansion.
     assert len(result.serialized_payload().encode("utf-8")) <= OFFLOAD_THRESHOLD
 
 
@@ -103,6 +103,31 @@ async def test_agent_result_read_rejects_missing_result_and_past_end_offset():
     assert missing.outcome.error.code == "not_found"
     assert past_end.is_error
     assert past_end.outcome.error.code == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+async def test_agent_result_read_empty_terminal_page_and_quoted_task_locator():
+    task_id = 'agent-"quoted"\nnext'
+
+    async def read_result(candidate: str) -> str | None:
+        return "done" if candidate == task_id else None
+
+    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
+    result = await background_module.agent_result_read(
+        ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry)),
+        background_module.AgentResultReadInput(task_id=task_id, offset=4, limit=3),
+    )
+
+    assert result.data == {
+        "task_id": task_id,
+        "offset": 4,
+        "end_offset": 4,
+        "next_offset": None,
+        "total_chars": 4,
+        "has_more": False,
+    }
+    assert 'Task: "agent-\\"quoted\\"\\nnext"' in result.content
+    assert "End of background agent result." in result.content
 
 
 async def _register_live(registry: BackgroundTaskRegistry, task_id: str, command: str) -> asyncio.Task:
