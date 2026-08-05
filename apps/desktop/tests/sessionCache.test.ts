@@ -30,7 +30,6 @@ function blank() {
     backgroundedRunSessionIds: new Set(),
     unreadDoneSessionIds: new Set(),
     terminalRunIds: new Set(),
-    runStatusMiss: null,
     activeActivityId: null,
     sessionCache: new Map(),
     pendingApprovals: [],
@@ -114,20 +113,6 @@ test("switching back hydrates cached state", () => {
   expect(getState().sessionView.historyLoadedFor).toBe("A");
   expect(getState().sessionView.historyPhase).toBe("cached-preview");
   expect(getState().sessionView.canonicalHistoryRequired).toBe(true);
-});
-
-test("session switches discard time-sensitive roster misses", () => {
-  const s = getState();
-  s.setCurrentSession("A");
-  s.markRunStarted("run-A", "A");
-  setState({ runStatusMiss: { runId: "run-A", since: 1_000 } });
-
-  s.setCurrentSession("B");
-  expect(getState().runStatusMiss).toBeNull();
-
-  s.setCurrentSession("A");
-  expect(getState().currentRunId).toBe("run-A");
-  expect(getState().runStatusMiss).toBeNull();
 });
 
 test("switching back suppresses cached preview entry motion", () => {

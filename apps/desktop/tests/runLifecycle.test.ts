@@ -4,11 +4,8 @@ import {
   reduceApprovalRequested,
   reduceRunCompleted,
   reduceRunFailed,
-  reduceRunOutputObserved,
-  reduceRunProgressObserved,
   reduceRunStarted,
   reduceRunStatus,
-  RUN_STATUS_MISS_GRACE_MS,
 } from "@/stores/run-lifecycle";
 
 function lifecycleState(overrides: Partial<State> = {}): State {
@@ -26,7 +23,6 @@ function lifecycleState(overrides: Partial<State> = {}): State {
     pendingResume: null,
     stoppingRunId: null,
     terminalRunIds: new Set(),
-    runStatusMiss: null,
     ...overrides,
   } as State;
 }
@@ -96,94 +92,21 @@ test("terminal status poll clears the current run", () => {
   expect(stale.activeRunSessionIds.has("session-1")).toBe(false);
 });
 
-test("a stale missing snapshot cannot flicker a known active run off", () => {
+test("a successful empty roster clears a known active run", () => {
   const running = lifecycleState({
     running: true,
     currentRunId: "run-1",
     activeRunSessionIds: new Set(["session-1"]),
   });
 
-  const firstMiss = {
+  const state = {
     ...running,
-    ...reduceRunStatus(running, { activeRuns: [], observedAt: 1_000 }),
+    ...reduceRunStatus(running, { activeRuns: [] }),
   };
 
-  expect(firstMiss.running).toBe(true);
-  expect(firstMiss.currentRunId).toBe("run-1");
-  expect(firstMiss.activeRunSessionIds.has("session-1")).toBe(true);
-  expect(firstMiss.runStatusMiss).toEqual({ runId: "run-1", since: 1_000 });
-
-  const expired = {
-    ...firstMiss,
-    ...reduceRunStatus(firstMiss, {
-      activeRuns: [],
-      observedAt: 1_000 + RUN_STATUS_MISS_GRACE_MS,
-    }),
-  };
-
-  expect(expired.running).toBe(false);
-  expect(expired.currentRunId).toBeNull();
-  expect(expired.activeRunSessionIds.has("session-1")).toBe(false);
-  expect(expired.runStatusMiss).toBeNull();
-});
-
-test("live output clears a pending roster miss", () => {
-  const missing = lifecycleState({
-    running: true,
-    currentRunId: "run-1",
-    thinkingRunId: "run-1",
-    activeRunSessionIds: new Set(["session-1"]),
-    runStatusMiss: { runId: "run-1", since: 1_000 },
-  });
-
-  const patch = reduceRunOutputObserved(missing);
-
-  expect(patch.runStatusMiss).toBeNull();
-  expect(patch.thinkingRunId).toBeNull();
-});
-
-test("a confirmed roster recovery starts a fresh grace window", () => {
-  const running = lifecycleState({
-    running: true,
-    currentRunId: "run-1",
-    activeRunSessionIds: new Set(["session-1"]),
-  });
-  const firstMiss = {
-    ...running,
-    ...reduceRunStatus(running, { activeRuns: [], observedAt: 1_000 }),
-  };
-  const recovered = {
-    ...firstMiss,
-    ...reduceRunStatus(firstMiss, {
-      activeRuns: [{ runId: "run-1", sessionId: "session-1", status: "running" }],
-      observedAt: 2_000,
-    }),
-  };
-  const secondMiss = {
-    ...recovered,
-    ...reduceRunStatus(recovered, { activeRuns: [], observedAt: 10_000 }),
-  };
-
-  expect(recovered.runStatusMiss).toBeNull();
-  expect(secondMiss.running).toBe(true);
-  expect(secondMiss.runStatusMiss).toEqual({ runId: "run-1", since: 10_000 });
-});
-
-test("run-scoped progress clears only its own pending roster miss", () => {
-  const missing = lifecycleState({
-    running: true,
-    currentRunId: "run-1",
-    runStatusMiss: { runId: "run-1", since: 1_000 },
-  });
-
-  expect(reduceRunProgressObserved(missing, {
-    runId: "run-old",
-    sessionId: "session-1",
-  })).toEqual({});
-  expect(reduceRunProgressObserved(missing, {
-    runId: "run-1",
-    sessionId: "session-1",
-  })).toEqual({ runStatusMiss: null });
+  expect(state.running).toBe(false);
+  expect(state.currentRunId).toBeNull();
+  expect(state.activeRunSessionIds.has("session-1")).toBe(false);
 });
 
 test("empty status poll does not clear optimistic run before server run id", () => {
@@ -395,7 +318,7 @@ test("old backgrounded poll does not clear new optimistic foreground run", () =>
   expect(state.backgroundedRunSessionIds.has("session-1")).toBe(true);
 });
 
-test("stale backgrounded-only poll does not clear newer known foreground run", () => {
+test("authoritative backgrounded-only roster clears a missing known foreground run", () => {
   const foreground = lifecycleState({
     running: true,
     currentRunId: "run-new",
@@ -409,9 +332,9 @@ test("stale backgrounded-only poll does not clear newer known foreground run", (
     }),
   };
 
-  expect(state.running).toBe(true);
-  expect(state.currentRunId).toBe("run-new");
-  expect(state.activeRunSessionIds.has("session-1")).toBe(true);
+  expect(state.running).toBe(false);
+  expect(state.currentRunId).toBeNull();
+  expect(state.activeRunSessionIds.has("session-1")).toBe(false);
   expect(state.backgroundedRunSessionIds.has("session-1")).toBe(true);
 });
 

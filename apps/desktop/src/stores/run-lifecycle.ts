@@ -22,13 +22,10 @@ type RunLifecyclePatch = Partial<
     | "pendingResume"
     | "stoppingRunId"
     | "terminalRunIds"
-    | "runStatusMiss"
     | "activeActivityId"
     | "messages"
   >
 >;
-
-export const RUN_STATUS_MISS_GRACE_MS = 2_500;
 
 export interface RunStatusSnapshot {
   runId?: string | null;
@@ -70,7 +67,6 @@ export function reduceRunStarted(
     pendingApprovals,
     pendingConnections,
     reviewingApprovalToolId,
-    runStatusMiss: appliesToCurrentSession ? null : state.runStatusMiss,
     pendingResume: null,
     stoppingRunId: input.runId && state.stoppingRunId === input.runId ? null : state.stoppingRunId,
   };
@@ -95,34 +91,20 @@ export function reduceRunThinking(
     activeRunSessionIds,
     thinkingRunId: input.runId,
     thinkingStatus: input.status,
-    runStatusMiss: null,
   };
 }
 
 export function reduceRunOutputObserved(state: State): RunLifecyclePatch {
-  if (!state.thinkingRunId && !state.runStatusMiss) return {};
+  if (!state.thinkingRunId) return {};
   return {
     thinkingRunId: null,
     thinkingStatus: null,
-    runStatusMiss: null,
   };
-}
-
-export function reduceRunProgressObserved(
-  state: State,
-  input: { runId?: string | null; sessionId?: string | null },
-): RunLifecyclePatch {
-  if (!state.runStatusMiss) return {};
-  if (input.sessionId && state.currentSessionId && input.sessionId !== state.currentSessionId) {
-    return {};
-  }
-  if (input.runId && state.currentRunId && input.runId !== state.currentRunId) return {};
-  return { runStatusMiss: null };
 }
 
 export function reduceRunStatus(
   state: State,
-  input: { activeRuns: RunStatusSnapshot[]; observedAt?: number },
+  input: { activeRuns: RunStatusSnapshot[] },
 ): RunLifecyclePatch {
   let terminalRunIds = state.terminalRunIds;
   const activeRuns: RunStatusSnapshot[] = [];
@@ -146,40 +128,13 @@ export function reduceRunStatus(
 
   const activeRunSessionIds = new Set(activeRuns.map((run) => run.sessionId));
   const backgroundedRunSessionIds = new Set(backgroundedRuns.map((run) => run.sessionId));
-  let current = state.currentSessionId
+  const current = state.currentSessionId
     ? activeRuns.find((run) => run.sessionId === state.currentSessionId)
     : undefined;
   const terminalCurrentRun = current ? null : terminalRuns.find((run) => matchesCurrentRun(state, run)) ?? null;
   const backgroundedCurrentRun = current
     ? null
     : backgroundedRuns.find((run) => matchesCurrentRun(state, run)) ?? null;
-  let runStatusMiss = state.runStatusMiss;
-  let preservingMissingCurrent = false;
-  if (
-    !current &&
-    !terminalCurrentRun &&
-    !backgroundedCurrentRun &&
-    state.currentSessionId &&
-    state.running &&
-    state.currentRunId
-  ) {
-    const observedAt = input.observedAt ?? Date.now();
-    const missingSince = runStatusMiss?.runId === state.currentRunId
-      ? runStatusMiss.since
-      : observedAt;
-    if (observedAt - missingSince < RUN_STATUS_MISS_GRACE_MS) {
-      preservingMissingCurrent = true;
-      runStatusMiss = { runId: state.currentRunId, since: missingSince };
-      activeRunSessionIds.add(state.currentSessionId);
-      current = {
-        runId: state.currentRunId,
-        sessionId: state.currentSessionId,
-        status: "running",
-      };
-    }
-  } else if (current) {
-    runStatusMiss = null;
-  }
   if (
     !current &&
     !terminalCurrentRun &&
@@ -205,7 +160,6 @@ export function reduceRunStatus(
       currentRunId: null,
       thinkingRunId: null,
       thinkingStatus: null,
-      runStatusMiss: null,
       pendingResume: null,
       ...clearWaitsForRun(state, terminalCurrentRun),
       stoppingRunId:
@@ -225,7 +179,6 @@ export function reduceRunStatus(
       currentRunId: null,
       thinkingRunId: null,
       thinkingStatus: null,
-      runStatusMiss: null,
       pendingResume: null,
       stoppingRunId:
         backgroundedCurrentRun.runId && state.stoppingRunId === backgroundedCurrentRun.runId
@@ -253,7 +206,6 @@ export function reduceRunStatus(
       currentRunId: null,
       thinkingRunId: null,
       thinkingStatus: null,
-      runStatusMiss: null,
       pendingResume: null,
       stoppingRunId:
         state.stoppingRunId === state.currentRunId ? null : state.stoppingRunId,
@@ -269,7 +221,6 @@ export function reduceRunStatus(
       ? {
           running: true,
           currentRunId: current.runId ?? state.currentRunId,
-          runStatusMiss: preservingMissingCurrent ? runStatusMiss : null,
         }
       : {}),
     ...(terminalRunIds !== state.terminalRunIds ? { terminalRunIds } : {}),
@@ -511,7 +462,6 @@ function reduceForegroundInactiveRun(
     currentRunId: null,
     thinkingRunId: null,
     thinkingStatus: null,
-    runStatusMiss: null,
     activeRunSessionIds,
     backgroundedRunSessionIds,
     unreadDoneSessionIds,

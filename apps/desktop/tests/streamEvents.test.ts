@@ -1537,7 +1537,6 @@ test("foreground phase stays live across tool and approval events, then settles 
   });
   expect(foregroundRunLabel({}).verb).toBe("Thinking");
 
-  setState({ runStatusMiss: { runId: "phase-run", since: 1_000 } });
   handleServerEvent({
     type: "TOOL_CALL_START",
     tool_call_id: "phase-tool",
@@ -1557,7 +1556,6 @@ test("foreground phase stays live across tool and approval events, then settles 
   let activityMessage = state.activeActivityId
     ? state.messages.get(state.activeActivityId)
     : null;
-  expect(state.runStatusMiss).toBeNull();
   expect(foregroundRunLabel({ activityMessage })).toEqual({
     verb: "Searching",
     target: "run status",
