@@ -12,6 +12,7 @@ from arden.automation.service import AutomationService
 from arden.automation.store import AutomationStore
 from arden.automation.triggers import TimeTrigger
 from arden.context.models import SessionState
+from arden.integrations.slack.models import SlackChannel, SlackUser
 from arden.tools.automation import (
     AutomationCreateInput,
     AutomationDeleteInput,
@@ -424,11 +425,11 @@ async def test_update_automation_changes_tool_scope(store_and_svc):
 
 
 class _FakeSlack:
-    async def resolve_channel(self, name: str) -> tuple[str, str]:
-        return f"C-{name}", name
+    async def resolve_channel(self, name: str) -> SlackChannel:
+        return SlackChannel(ref=f"C-{name}", name=name)
 
-    async def resolve_user(self, name: str) -> dict[str, str]:
-        return {"id": f"U-{name}", "name": name}
+    async def resolve_user(self, name: str) -> SlackUser:
+        return SlackUser(ref=f"U-{name}", name=name, username=name, email=None, title=None)
 
 
 @pytest.mark.asyncio

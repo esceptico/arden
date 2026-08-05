@@ -1,9 +1,11 @@
 import asyncio
 from datetime import UTC, datetime
+from typing import cast
 
 from arden.automation.store import AutomationStore
 from arden.constants import SLACK_MONITOR_POLL_INTERVAL
 from arden.events.triggers import MessageReceived
+from arden.integrations.base import IntegrationOperationError
 from arden.integrations.slack.client import SlackClient
 from arden.logging import get_logger
 from arden.monitor.service import MonitorEventSink
@@ -63,13 +65,16 @@ class SlackMonitor:
             return
 
         try:
-            self_id = (await self._slack.whoami())["user_id"]
+            self_id = (await self._slack.whoami()).user_ref
         except Exception:
             _logger.exception("Failed to resolve Slack identity")
             return
 
         for channel_id in channels:
-            await self._poll_channel(channel_id, self_id)
+            try:
+                await self._poll_channel(channel_id, self_id)
+            except IntegrationOperationError:
+                _logger.exception("Failed to poll Slack channel %s; cursor retained", channel_id)
 
     async def _poll_channel(self, channel_id: str, self_id: str) -> None:
         ns = f"slack:{channel_id}"
@@ -80,31 +85,27 @@ class SlackMonitor:
             await self._state_store.set_state(ns, {"last_ts": _now_ts()})
             return
 
-        try:
-            messages = await self._slack.history_since(channel_id, oldest=last_ts)
-        except Exception:
-            _logger.exception("Failed to fetch Slack history for %s", channel_id)
-            return
+        messages = await self._slack.history_since(channel_id, oldest=last_ts)
 
-        _, channel_name = await self._slack.resolve_channel(channel_id)
+        channel = await self._slack.resolve_channel(channel_id)
 
         for message in messages:
-            if message.get("subtype") or message.get("bot_id"):
+            if message.subtype or message.bot_ref:
                 continue
-            user_id = message.get("user", "")
+            user_id = message.user_ref
             if user_id == self_id:
                 continue
 
-            ts = message.get("ts", "")
+            user_id = cast("str", user_id)
             event = MessageReceived(
                 source="slack",
                 channel_id=channel_id,
-                channel_name=channel_name,
+                channel_name=channel.name,
                 user_id=user_id,
                 user_name=await self._slack.resolve_user_name(user_id),
-                text=message.get("text", ""),
-                ts=ts,
-                thread_ts=message.get("thread_ts"),
+                text=message.text,
+                ts=message.timestamp,
+                thread_ts=message.thread_timestamp,
                 permalink=None,
             )
             try:
@@ -112,4 +113,4 @@ class SlackMonitor:
             except Exception:
                 _logger.exception("Failed to emit Slack message event for %s", channel_id)
                 return
-            await self._state_store.set_state(ns, {"last_ts": ts})
+            await self._state_store.set_state(ns, {"last_ts": message.timestamp})

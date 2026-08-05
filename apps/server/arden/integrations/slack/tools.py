@@ -1,11 +1,20 @@
 import json
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
+from arden.integrations.base import IntegrationOperationError
 from arden.integrations.mutations import execute_idempotent, mutation_result
+from arden.integrations.slack.block_kit import SlackBlockEnvelope
 from arden.integrations.slack.client import SlackClient
+from arden.integrations.slack.models import (
+    SlackChannel,
+    SlackDirectMessage,
+    SlackMessage,
+    SlackPostReceipt,
+    SlackUser,
+)
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
@@ -24,14 +33,14 @@ def _bounded_content(content: str, *, count: int, limit: int, noun: str) -> tupl
     return content, may_have_more
 
 
-def _message_source_refs(items: list) -> tuple[ToolSourceRef, ...]:
+def _message_source_refs(items: list[SlackMessage]) -> tuple[ToolSourceRef, ...]:
     return normalize_source_refs(
         ToolSourceRef(
             provider="slack",
             kind="message",
-            ref=item.source_id,
-            title=(item.title or "").strip() or f"Slack message {item.source_id}",
-            url=item.metadata.get("permalink"),
+            ref=item.ref,
+            title=f"#{item.channel_name} — {item.author_name}" if item.channel_name else item.author_name,
+            url=item.permalink,
         )
         for item in items
     )
@@ -50,34 +59,47 @@ def _message_source_ref(message_id: str, *, title: str) -> tuple[ToolSourceRef, 
     )
 
 
-def _entity_source_refs(items: list[dict], *, kind: str, id_key: str, title_key: str) -> tuple[ToolSourceRef, ...]:
+def _entity_source_refs(
+    items: list[SlackChannel | SlackUser | SlackDirectMessage], *, kind: str
+) -> tuple[ToolSourceRef, ...]:
     return normalize_source_refs(
         ToolSourceRef(
             provider="slack",
             kind=kind,
-            ref=str(item[id_key]),
-            title=str(item.get(title_key) or item[id_key]),
+            ref=_entity_ref(item),
+            title=_entity_title(item),
         )
         for item in items
-        if item.get(id_key)
     )
 
 
-def _format_messages(items: list, *, show_thread_hint: bool = True) -> str:
+def _entity_ref(item: SlackChannel | SlackUser | SlackDirectMessage) -> str:
+    if isinstance(item, SlackDirectMessage):
+        return item.channel_ref
+    return item.ref
+
+
+def _entity_title(item: SlackChannel | SlackUser | SlackDirectMessage) -> str:
+    if isinstance(item, SlackChannel):
+        return item.name
+    if isinstance(item, SlackDirectMessage):
+        return item.peer_name
+    return item.name
+
+
+def _format_messages(items: list[SlackMessage], *, show_thread_hint: bool = True) -> str:
     lines = []
     for item in items:
-        meta = item.metadata
         when = format_timestamp(item.created_at)
-        cname = meta.get("channel_name", "")
-        user = meta.get("user_name", "unknown")
-        text = truncate(item.content or "(empty)", _TEXT_TRUNCATE)
-        header = f"• [{when}] #{cname} — {user}"
+        channel = f"#{item.channel_name}" if item.channel_name else "direct message"
+        text = truncate(item.text or "(empty)", _TEXT_TRUNCATE)
+        header = f"• [{when}] {channel} — {item.author_name}"
         lines.append(header)
         lines.append(f"    {text}")
         suffix = []
-        if show_thread_hint and meta.get("reply_count"):
-            suffix.append(f"thread: {meta['reply_count']} replies")
-        suffix.append(f"id: {item.source_id}")
+        if show_thread_hint and item.reply_count:
+            suffix.append(f"thread: {item.reply_count} replies")
+        suffix.append(f"id: {item.ref}")
         lines.append(f"    ({', '.join(suffix)})")
     return "\n".join(lines)
 
@@ -177,9 +199,9 @@ async def slack_channels(execution: ToolExecution, args: SlackChannelsInput) -> 
     results = await source.search_channels(args.query, limit=args.limit)
     if not results:
         return ToolResult(content="No matching channels", preview="0 channels")
-    results.sort(key=lambda channel: (channel["name"].casefold(), channel["id"]))
+    results.sort(key=lambda channel: (channel.name.casefold(), channel.ref))
     content, may_have_more = _bounded_content(
-        "\n".join(f"• #{c['name']}  ({c['id']})" for c in results),
+        "\n".join(f"• #{channel.name}  ({channel.ref})" for channel in results),
         count=len(results),
         limit=args.limit,
         noun="channels",
@@ -187,8 +209,12 @@ async def slack_channels(execution: ToolExecution, args: SlackChannelsInput) -> 
     return ToolResult(
         content=content,
         preview=f"{len(results)} channels" + (" (possibly capped)" if may_have_more else ""),
-        data={"items": results, "count": len(results), "may_have_more": may_have_more},
-        source_refs=_entity_source_refs(results, kind="channel", id_key="id", title_key="name"),
+        data={
+            "items": [{"ref": channel.ref, "name": channel.name} for channel in results],
+            "count": len(results),
+            "may_have_more": may_have_more,
+        },
+        source_refs=_entity_source_refs(results, kind="channel"),
     )
 
 
@@ -202,24 +228,35 @@ async def slack_users(execution: ToolExecution, args: SlackUsersInput) -> ToolRe
     results = await source.search_users(args.query, limit=args.limit)
     if not results:
         return ToolResult(content="No matching users", preview="0 users")
-    results.sort(key=lambda user: (user["name"].casefold(), user["id"]))
+    results.sort(key=lambda user: (user.name.casefold(), user.ref))
     lines = []
     for user in results:
-        line = f"• {user['name']}"
-        if user.get("username"):
-            line += f" (@{user['username']})"
-        if user.get("title"):
-            line += f" — {user['title']}"
-        line += f"  id: {user['id']}"
-        if user.get("email"):
-            line += f"  {user['email']}"
+        line = f"• {user.name} (@{user.username})"
+        if user.title:
+            line += f" — {user.title}"
+        line += f"  id: {user.ref}"
+        if user.email:
+            line += f"  {user.email}"
         lines.append(line)
     content, may_have_more = _bounded_content("\n".join(lines), count=len(results), limit=args.limit, noun="users")
     return ToolResult(
         content=content,
         preview=f"{len(results)} users" + (" (possibly capped)" if may_have_more else ""),
-        data={"items": results, "count": len(results), "may_have_more": may_have_more},
-        source_refs=_entity_source_refs(results, kind="user", id_key="id", title_key="name"),
+        data={
+            "items": [
+                {
+                    "ref": user.ref,
+                    "name": user.name,
+                    "username": user.username,
+                    "email": user.email,
+                    "title": user.title,
+                }
+                for user in results
+            ],
+            "count": len(results),
+            "may_have_more": may_have_more,
+        },
+        source_refs=_entity_source_refs(results, kind="user"),
     )
 
 
@@ -230,18 +267,24 @@ class SlackUserInput(BaseModel):
 async def slack_user(execution: ToolExecution, args: SlackUserInput) -> ToolResult:
     source = execution.ctx.get_client("slack", SlackClient)
     profile = await source.read_user(args.user_id)
-    if not profile:
-        return not_found_result("user", args.user_id, call_first="slack_users")
-    lines = [f"{key}: {value}" for key, value in profile.items() if value]
+    lines = [
+        f"name: {profile.name}",
+        f"username: {profile.username}",
+        *([f"email: {profile.email}"] if profile.email else []),
+        *([f"title: {profile.title}"] if profile.title else []),
+        *([f"status_text: {profile.status_text}"] if profile.status_text else []),
+        *([f"status_emoji: {profile.status_emoji}"] if profile.status_emoji else []),
+        *([f"timezone: {profile.timezone}"] if profile.timezone else []),
+    ]
     return ToolResult(
         content="\n".join(lines),
-        preview=profile.get("name", args.user_id),
+        preview=profile.name,
         source_refs=(
             ToolSourceRef(
                 provider="slack",
                 kind="user",
-                ref=args.user_id,
-                title=profile.get("name") or args.user_id,
+                ref=profile.ref,
+                title=profile.name,
             ),
         ),
     )
@@ -287,12 +330,10 @@ class SlackPostBlocksInput(BaseModel):
             "Required fallback text for Slack notifications and accessibility. Keep concise; Slack may show this in previews/search."
         )
     )
-    blocks: list[dict[str, Any]] = Field(
-        min_length=1,
-        max_length=50,
+    blocks: SlackBlockEnvelope = Field(
         description=(
             "Required Slack Block Kit blocks array for rich message layout. Use native JSON objects, not a JSON string. "
-            "Common blocks: header, section, context, divider, actions. "
+            "Supported blocks: header, section, context, divider, image, and actions containing buttons. "
             "Text objects are {'type':'mrkdwn','text':'...'} or {'type':'plain_text','text':'...'}. "
             "Use section.fields for compact key/value cards, max 10 fields. "
             "Use real newline characters in mrkdwn text, not literal \\n. "
@@ -338,28 +379,26 @@ async def approve_slack_post_message(execution: ToolExecution, args: SlackPostMe
 
 async def approve_slack_post_blocks(execution: ToolExecution, args: SlackPostBlocksInput) -> ApprovalInfo | None:
     location = f"{args.channel} thread {args.thread_ts}" if args.thread_ts else args.channel
-    blocks = json.dumps(args.blocks, ensure_ascii=False, separators=(",", ":"))
+    blocks = json.dumps(args.blocks.provider_payload(), ensure_ascii=False, separators=(",", ":"))
     preview = truncate(f"Fallback text:\n{args.text}\n\nBlocks:\n{blocks}", 1_500)
     return ApprovalInfo(description=f"Post Slack Block Kit message to {location}", preview=preview, diff=None)
 
 
-def _posted_message_result(args: SlackPostMessageInput | SlackPostBlocksInput, result: dict[str, str]) -> ToolResult:
-    channel_label = result.get("channel_name") or result.get("channel") or args.channel
-    ts = result.get("ts", "")
-    thread_ts = result.get("thread_ts", ts)
-    content = (
-        f"Posted to #{channel_label} at {ts}\nchannel: {result.get('channel', args.channel)}\nthread_ts: {thread_ts}"
-    )
-    message_ref = f"{result.get('channel', args.channel)}:{ts}" if ts else None
+def _posted_message_result(args: SlackPostMessageInput | SlackPostBlocksInput, result: SlackPostReceipt) -> ToolResult:
+    channel_label = result.channel_name
+    ts = result.message_ts
+    thread_ts = result.thread_ts
+    content = f"Posted to #{channel_label} at {ts}\nchannel: {result.channel_ref}\nthread_ts: {thread_ts}"
+    message_ref = f"{result.channel_ref}:{ts}"
     return mutation_result(
         content=content,
-        preview=f"Posted to #{channel_label}" if message_ref else "Post unverified",
+        preview=f"Posted to #{channel_label}",
         operation="post",
         target=args.channel,
-        receipt=ts or args.idempotency_key,
+        receipt=ts,
         after_ref=message_ref,
-        observed=(f"Slack returned message {message_ref}" if message_ref else None),
-        data={"message_ref": message_ref, "thread_ts": thread_ts} if message_ref else None,
+        observed=f"Slack returned message {message_ref}",
+        data={"message_ref": message_ref, "thread_ts": thread_ts},
     )
 
 
@@ -403,9 +442,9 @@ async def slack_dms(execution: ToolExecution, args: SlackDmsInput) -> ToolResult
     dms = await source.list_dms(args.query, limit=args.limit)
     if not dms:
         return ToolResult(content="No open DMs", preview="0 DMs")
-    dms.sort(key=lambda dm: (dm["peer"].casefold(), dm["channel_id"]))
+    dms.sort(key=lambda dm: (dm.peer_name.casefold(), dm.channel_ref))
     content, may_have_more = _bounded_content(
-        "\n".join(f"• {dm['peer']}  (dm: {dm['channel_id']}, user: {dm['user_id']})" for dm in dms),
+        "\n".join(f"• {dm.peer_name}  (dm: {dm.channel_ref}, user: {dm.user_ref})" for dm in dms),
         count=len(dms),
         limit=args.limit,
         noun="DMs",
@@ -413,8 +452,14 @@ async def slack_dms(execution: ToolExecution, args: SlackDmsInput) -> ToolResult
     return ToolResult(
         content=content,
         preview=f"{len(dms)} DMs" + (" (possibly capped)" if may_have_more else ""),
-        data={"items": dms, "count": len(dms), "may_have_more": may_have_more},
-        source_refs=_entity_source_refs(dms, kind="channel", id_key="channel_id", title_key="peer"),
+        data={
+            "items": [
+                {"channel_ref": dm.channel_ref, "user_ref": dm.user_ref, "peer_name": dm.peer_name} for dm in dms
+            ],
+            "count": len(dms),
+            "may_have_more": may_have_more,
+        },
+        source_refs=_entity_source_refs(dms, kind="channel"),
     )
 
 
@@ -433,7 +478,9 @@ async def slack_dm(execution: ToolExecution, args: SlackDmInput) -> ToolResult:
     source = execution.ctx.get_client("slack", SlackClient)
     try:
         channel_id = await source.resolve_dm_target(args.target)
-    except RuntimeError:
+    except IntegrationOperationError as exc:
+        if exc.code not in {"not_found", "ambiguous_ref"}:
+            raise
         return invalid_ref_result("Slack DM", args.target, call_first="slack_dms or slack_users")
     results = await source.read_channel(channel_id, limit=args.limit)
     if not results:

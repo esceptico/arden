@@ -227,8 +227,8 @@ async def setup_slack_verify(req: SlackVerifyRequest):
     return {
         "ok": True,
         "token_kind": token_kind,
-        "team": data.get("team"),
-        "team_id": data.get("team_id"),
-        "user": data.get("user_id") or data.get("user"),
-        "bot_id": data.get("bot_id"),
+        "team": data.team_name,
+        "team_id": data.team_ref,
+        "user": data.user_ref,
+        "bot_id": data.bot_ref,
     }

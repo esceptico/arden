@@ -16,6 +16,8 @@ import pytest_asyncio
 
 import arden.database as database
 from arden.events.triggers import MessageReceived
+from arden.integrations.base import IntegrationOperationError
+from arden.integrations.slack.models import SlackChannel, SlackHistoryMessage, SlackIdentity
 from arden.monitor.slack import SlackMonitor
 from arden.monitor.store import MonitorStateStore
 
@@ -29,25 +31,27 @@ class FakeSlackClient:
     history_since(channel, oldest=..., limit=...) returning oldest -> newest,
     and the resolve_channel/resolve_user_name display lookups."""
 
-    def __init__(self, self_id: str = SELF_ID, history: dict[str, list[dict]] | None = None):
+    def __init__(self, self_id: str = SELF_ID, history: dict[str, list[SlackHistoryMessage]] | None = None):
         self._self_id = self_id
         self._history = history or {}
         self.history_calls: list[tuple[str, str | None]] = []
         self.whoami_calls = 0
 
-    async def whoami(self) -> dict[str, str]:
+    async def whoami(self) -> SlackIdentity:
         self.whoami_calls += 1
-        return {"user_id": self._self_id, "user": "selfbot"}
+        return SlackIdentity(user_ref=self._self_id, user_name="selfbot")
 
-    async def history_since(self, channel: str, oldest: str | None = None, limit: int = 200) -> list[dict]:
+    async def history_since(
+        self, channel: str, oldest: str | None = None, limit: int = 200
+    ) -> list[SlackHistoryMessage]:
         self.history_calls.append((channel, oldest))
         msgs = self._history.get(channel, [])
         if oldest is None:
             return list(msgs)
-        return [m for m in msgs if m["ts"] > oldest]
+        return [message for message in msgs if message.timestamp > oldest]
 
-    async def resolve_channel(self, name: str) -> tuple[str, str]:
-        return name, f"#{name}"
+    async def resolve_channel(self, name: str) -> SlackChannel:
+        return SlackChannel(ref=name, name=f"#{name}")
 
     async def resolve_user_name(self, user_id: str) -> str:
         return f"name-{user_id}"
@@ -78,8 +82,22 @@ class RecordingSink:
         self.events.append(event)
 
 
-def _msg(ts: str, *, text: str = "hi", user: str = "U_PERSON", **extra) -> dict:
-    return {"ts": ts, "text": text, "user": user, **extra}
+def _msg(
+    ts: str,
+    *,
+    text: str = "hi",
+    user: str = "U_PERSON",
+    subtype: str | None = None,
+    bot_id: str | None = None,
+) -> SlackHistoryMessage:
+    return SlackHistoryMessage(
+        timestamp=ts,
+        text=text,
+        user_ref=user or None,
+        thread_timestamp=None,
+        subtype=subtype,
+        bot_ref=bot_id,
+    )
 
 
 @pytest_asyncio.fixture
@@ -212,3 +230,38 @@ async def test_cursor_does_not_advance_past_failed_emit_and_re_emits_next_tick(s
     assert (await state_store.get_state(NS))["last_ts"] == "350.0"
     # Verify the second fetch used the cursor left after the failed batch.
     assert slack.history_calls == [(CHANNEL, "100.0"), (CHANNEL, "150.0")]
+
+
+@pytest.mark.asyncio
+async def test_provider_error_retains_channel_cursor_for_retry(state_store: MonitorStateStore):
+    await state_store.set_state(NS, {"last_ts": "100.0"})
+    slack = FakeSlackClient()
+
+    async def fail_history(_channel: str, oldest: str | None = None, limit: int = 200):
+        raise IntegrationOperationError(code="provider_error", safe_message="Slack failed", retryable=True)
+
+    slack.history_since = fail_history
+    sink = RecordingSink()
+    monitor = _make_monitor(slack, state_store, channels=[CHANNEL])
+    monitor._emit_event = sink
+
+    await monitor._poll()
+
+    assert sink.events == []
+    assert (await state_store.get_state(NS))["last_ts"] == "100.0"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_channel_bug_is_not_swallowed(state_store: MonitorStateStore):
+    await state_store.set_state(NS, {"last_ts": "100.0"})
+    slack = FakeSlackClient()
+
+    async def fail_history(_channel: str, oldest: str | None = None, limit: int = 200):
+        raise RuntimeError("programming bug")
+
+    slack.history_since = fail_history
+    monitor = _make_monitor(slack, state_store, channels=[CHANNEL])
+    monitor._emit_event = RecordingSink()
+
+    with pytest.raises(RuntimeError, match="programming bug"):
+        await monitor._poll()

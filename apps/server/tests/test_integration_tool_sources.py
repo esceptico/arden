@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from arden.agent import ToolOutcomeStatus
 from arden.context.models import SessionState
@@ -28,12 +29,15 @@ from arden.integrations.gmail.tools import (
     email_send,
 )
 from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE, IdempotencyLedger
-from arden.integrations.slack.client import SlackClient, SlackThreadResult
+from arden.integrations.slack.client import SlackClient
+from arden.integrations.slack.models import SlackChannel, SlackMessage, SlackThreadResult
 from arden.integrations.slack.tools import (
+    SlackChannelsInput,
     SlackPostBlocksInput,
     SlackSearchInput,
     SlackThreadInput,
     approve_slack_post_blocks,
+    slack_channels,
     slack_search,
     slack_thread,
 )
@@ -76,10 +80,10 @@ def _execution(service_name: str, service: object, tool_name: str) -> ToolExecut
 
 
 class FakeSlackSource(SlackClient):
-    def __init__(self, messages: list[RawItem]):
+    def __init__(self, messages: list[SlackMessage]):
         self.messages = messages
 
-    async def search_messages(self, *args, **kwargs) -> list[RawItem]:
+    async def search_messages(self, *args, **kwargs) -> list[SlackMessage]:
         return self.messages
 
     async def read_thread(self, source_id: str) -> SlackThreadResult | None:
@@ -382,11 +386,15 @@ async def test_calendar_delete_uses_typed_qualified_receipt(tmp_path):
 async def test_slack_search_uses_message_id_title_and_existing_permalink():
     source = FakeSlackSource(
         [
-            _item(
-                "slack",
-                "C123:1710000000.000100",
-                "#product — Ada",
-                metadata={"permalink": "https://workspace.slack.com/archives/C123/p1710000000000100"},
+            SlackMessage(
+                ref="C123:1710000000.000100",
+                channel_ref="C123",
+                channel_name="product",
+                author_ref="U123",
+                author_name="Ada",
+                text="result content",
+                created_at=datetime(2026, 7, 10, tzinfo=UTC),
+                permalink="https://workspace.slack.com/archives/C123/p1710000000000100",
             )
         ]
     )
@@ -420,6 +428,22 @@ async def test_slack_thread_uses_input_message_id_without_permalink_lookup():
             "ref": "C123:1710000000.000100",
             "title": "Slack message C123:1710000000.000100",
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_slack_channels_consumes_typed_channel_records():
+    source = FakeSlackSource([])
+
+    async def channels(_query: str | None, *, limit: int):
+        return [SlackChannel(ref="C123", name="product")]
+
+    source.search_channels = channels  # type: ignore[method-assign]
+    result = await slack_channels(_execution("slack", source, "slack_channels"), SlackChannelsInput())
+
+    assert result.content == "• #product  (C123)"
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {"provider": "slack", "kind": "channel", "ref": "C123", "title": "product"}
     ]
 
 
@@ -580,6 +604,76 @@ async def test_slack_blocks_approval_includes_the_actual_blocks():
 
     assert info is not None
     assert '"text":"*Release is green*"' in (info.preview or "")
+
+
+def test_slack_blocks_reject_unknown_or_malformed_blocks():
+    with pytest.raises(ValidationError):
+        SlackPostBlocksInput(
+            channel="#releases",
+            text="Release status",
+            blocks=[{"type": "unknown", "text": "surprise"}],
+            idempotency_key="slack-release-1",
+        )
+
+    with pytest.raises(ValidationError):
+        SlackPostBlocksInput(
+            channel="#releases",
+            text="Release status",
+            blocks=[{"type": "section", "provider_extension": True}],
+            idempotency_key="slack-release-1",
+        )
+
+
+def test_slack_blocks_preserve_text_and_serialize_exact_payload():
+    args = SlackPostBlocksInput(
+        channel="#releases",
+        text="Release status",
+        blocks=[
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "first\\nsecond"},
+            }
+        ],
+        idempotency_key="slack-release-1",
+    )
+
+    assert args.blocks.provider_payload() == [{"type": "section", "text": {"type": "mrkdwn", "text": "first\\nsecond"}}]
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "header", "text": {"type": "plain_text", "text": "h" * 151}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "b" * 76},
+                    "action_id": "approve",
+                }
+            ],
+        },
+        {
+            "type": "section",
+            "fields": [{"type": "mrkdwn", "text": "f" * 2_001}],
+        },
+        {
+            "type": "image",
+            "image_url": "https://example.test/image.png",
+            "alt_text": "example",
+            "title": {"type": "plain_text", "text": "i" * 2_001},
+        },
+    ],
+)
+def test_slack_blocks_enforce_context_specific_text_limits(block):
+    with pytest.raises(ValidationError):
+        SlackPostBlocksInput(
+            channel="#releases",
+            text="Release status",
+            blocks=[block],
+            idempotency_key="slack-release-1",
+        )
 
 
 @pytest.mark.asyncio

@@ -133,8 +133,8 @@ class AutomationService:
             raw_channels = [raw_channels]
         channels: list[dict] = []
         for channel_name in raw_channels or []:
-            cid, cname = await slack.resolve_channel(channel_name)
-            channels.append({"id": cid, "name": cname})
+            channel = await slack.resolve_channel(channel_name)
+            channels.append({"id": channel.ref, "name": channel.name})
         if not channels:
             raise ValueError("a Slack message trigger needs at least one channel")
 
@@ -142,11 +142,8 @@ class AutomationService:
         from_user_name: str | None = None
         if from_user := payload.get("from_user"):
             resolved = await slack.resolve_user(from_user)
-            if not isinstance(resolved, dict):
-                names = ", ".join(f"{c['name']} (@{c['username']})" for c in resolved) or "none"
-                raise ValueError(f"Ambiguous Slack user {from_user!r}; candidates: {names}")
-            from_user_id = resolved["id"]
-            from_user_name = resolved["name"]
+            from_user_id = resolved.ref
+            from_user_name = resolved.name
 
         return MessageTrigger(
             source=source,

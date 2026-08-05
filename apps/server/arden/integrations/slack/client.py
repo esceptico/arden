@@ -1,34 +1,113 @@
 import base64
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 import aiohttp
 
 from arden.core.content import ImageContent
-from arden.integrations.base import IntegrationConnectionError
-from arden.logging import get_logger
-from arden.search.types import RawItem
+from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
+from arden.integrations.slack.block_kit import SlackBlockEnvelope
+from arden.integrations.slack.models import (
+    SlackAuthResult,
+    SlackChannel,
+    SlackDirectMessage,
+    SlackHistoryMessage,
+    SlackIdentity,
+    SlackImageFile,
+    SlackMessage,
+    SlackPostReceipt,
+    SlackThreadMessage,
+    SlackThreadResult,
+    SlackUser,
+    SlackUserProfile,
+)
 
-_logger = get_logger(__name__)
 _API = "https://slack.com/api"
 _SLACK_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"})
 _MODEL_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
 _MAX_THREAD_IMAGES = 4
 _MAX_SLACK_IMAGE_BYTES = 5 * 1024 * 1024
+_MAX_THREAD_PAGES = 100
+_THREAD_PAGE_SIZE = 200
 
 
-@dataclass(frozen=True)
-class SlackThreadResult:
-    text: str
-    model_content: tuple[ImageContent, ...] = ()
+class SlackPayloadError(IntegrationOperationError):
+    """Slack returned a successful response with an unusable payload."""
+
+    def __init__(self, *, context: str, detail: str):
+        super().__init__(
+            code="invalid_provider_response",
+            safe_message=f"Slack returned invalid data for {context}: {detail}",
+            retryable=False,
+        )
+
+
+def _payload_error(context: str, detail: str) -> SlackPayloadError:
+    return SlackPayloadError(context=context, detail=detail)
+
+
+def _mapping(value: Any, *, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise _payload_error(context, "expected object")
+    return value
+
+
+def _required_string(payload: dict[str, Any], key: str, *, context: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise _payload_error(context, f"expected non-empty string {key!r}")
+    return value
+
+
+def _required_string_allow_empty(payload: dict[str, Any], key: str, *, context: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise _payload_error(context, f"expected string {key!r}")
+    return value
+
+
+def _optional_string(payload: dict[str, Any], key: str, *, context: str) -> str | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str):
+        raise _payload_error(context, f"expected string {key!r}")
+    return value or None
+
+
+def _optional_int(payload: dict[str, Any], key: str, *, context: str) -> int | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if type(value) is not int:
+        raise _payload_error(context, f"expected integer {key!r}")
+    return value
+
+
+def _required_bool(payload: dict[str, Any], key: str, *, context: str) -> bool:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise _payload_error(context, f"expected boolean {key!r}")
+    return value
+
+
+def _required_list(payload: dict[str, Any], key: str, *, context: str) -> list[Any]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        raise _payload_error(context, f"expected array {key!r}")
+    return value
+
+
+def _next_cursor(payload: dict[str, Any], *, context: str) -> str:
+    metadata = _mapping(payload.get("response_metadata"), context=f"{context}.response_metadata")
+    return _required_string_allow_empty(metadata, "next_cursor", context=f"{context}.response_metadata")
 
 
 def _ts_to_datetime(ts: str) -> datetime:
     try:
         return datetime.fromtimestamp(float(ts), tz=UTC)
-    except (ValueError, TypeError):
-        return datetime.now(UTC)
+    except (ValueError, OverflowError, OSError) as exc:
+        raise _payload_error("message timestamp", f"invalid timestamp {ts!r}") from exc
 
 
 def _format_message(user_name: str, text: str, ts: str, channel_name: str | None = None) -> str:
@@ -42,33 +121,17 @@ def _format_message(user_name: str, text: str, ts: str, channel_name: str | None
 _USER_TOKEN_METHODS = frozenset({"assistant.search.context", "chat.postMessage"})
 
 
-def _normalize_block_kit(value: Any) -> Any:
-    """Normalize Block Kit payloads before sending to Slack.
-
-    Tool-call arguments can arrive with escaped newlines (`\\n`) inside nested
-    block text fields. Slack then renders the literal characters and mrkdwn gets
-    ugly. Convert those back to real newlines recursively without touching the
-    rest of the payload shape.
-    """
-    if isinstance(value, str):
-        return value.replace("\\n", "\n")
-    if isinstance(value, list):
-        return [_normalize_block_kit(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _normalize_block_kit(item) for key, item in value.items()}
-    return value
-
-
 class SlackClient:
     name = "slack"
 
     def __init__(self, bot_token: str | None = None, user_token: str | None = None):
-        if not bot_token and not user_token:
+        read_token = user_token or bot_token
+        if not read_token:
             raise ValueError("SlackClient requires at least one of bot_token or user_token")
         self._bot_token = bot_token
         self._user_token = user_token
         # User token sees more (all the user's channels, search) — prefer it for reads.
-        self._read_token = user_token or bot_token
+        self._read_token: str = read_token
         self._user_cache: dict[str, str] = {}
         self._channel_name_cache: dict[str, str] = {}
         self._channel_id_by_name: dict[str, str] = {}
@@ -88,10 +151,10 @@ class SlackClient:
                     retry_safe=True,
                 )
             return self._user_token
-        return self._read_token  # type: ignore[return-value]
+        return self._read_token
 
     def _raise_for_error(self, method: str, data: dict, headers: dict) -> None:
-        error = data.get("error", "unknown")
+        error = _required_string(data, "error", context=method)
         # Slack returns `needed` (scope) and `provided` on missing_scope errors,
         # both in JSON body and X-OAuth-Scopes / X-Accepted-OAuth-Scopes headers.
         needed = data.get("needed") or headers.get("X-Accepted-OAuth-Scopes")
@@ -119,13 +182,13 @@ class SlackClient:
                 required_scopes=required_scopes,
                 retry_safe=True,
             )
-        raise RuntimeError(msg)
+        raise IntegrationOperationError(code=error, safe_message=msg, retryable=False)
 
     async def _get(self, session: aiohttp.ClientSession, method: str, **params: Any) -> dict:
         headers = {"Authorization": f"Bearer {self._token_for(method)}"}
         async with session.get(f"{_API}/{method}", headers=headers, params=params) as resp:
-            data = await resp.json()
-            if not data.get("ok"):
+            data = _mapping(await resp.json(), context=method)
+            if not _required_bool(data, "ok", context=method):
                 self._raise_for_error(method, data, dict(resp.headers))
             return data
 
@@ -135,12 +198,12 @@ class SlackClient:
             "Content-Type": "application/json; charset=utf-8",
         }
         async with session.post(f"{_API}/{method}", headers=headers, json=payload) as resp:
-            data = await resp.json()
-            if not data.get("ok"):
+            data = _mapping(await resp.json(), context=method)
+            if not _required_bool(data, "ok", context=method):
                 self._raise_for_error(method, data, dict(resp.headers))
             return data
 
-    async def auth_test(self, token_kind: Literal["bot", "user", "read"] = "read") -> dict[str, Any]:
+    async def auth_test(self, token_kind: Literal["bot", "user", "read"] = "read") -> SlackAuthResult:
         method = "auth.test"
         if token_kind == "bot":
             if not self._bot_token:
@@ -154,50 +217,144 @@ class SlackClient:
             token = self._read_token
         headers = {"Authorization": f"Bearer {token}"}
         async with aiohttp.ClientSession() as session, session.get(f"{_API}/{method}", headers=headers) as resp:
-            data = await resp.json()
-            if not data.get("ok"):
+            data = _mapping(await resp.json(), context=method)
+            if not _required_bool(data, "ok", context=method):
                 self._raise_for_error(method, data, dict(resp.headers))
-            return data
+            return self._decode_auth_result(data)
 
     async def verify_connection(self) -> None:
         await self.auth_test()
 
+    @staticmethod
+    def _decode_auth_result(data: dict[str, Any]) -> SlackAuthResult:
+        context = "auth.test"
+        return SlackAuthResult(
+            team_name=_optional_string(data, "team", context=context),
+            team_ref=_optional_string(data, "team_id", context=context),
+            user_ref=_required_string(data, "user_id", context=context),
+            user_name=_required_string(data, "user", context=context),
+            bot_ref=_optional_string(data, "bot_id", context=context),
+        )
+
     async def _resolve_user(self, session: aiohttp.ClientSession, user_id: str) -> str:
-        if not user_id:
-            return "unknown"
         if user_id in self._user_cache:
             return self._user_cache[user_id]
-        try:
-            data = await self._get(session, "users.info", user=user_id)
-            user = data["user"]
-            name = user.get("real_name") or user.get("name") or user_id
-        except Exception:
-            name = user_id
+        data = await self._get(session, "users.info", user=user_id)
+        user = _mapping(data.get("user"), context="users.info")
+        name = _optional_string(user, "real_name", context="users.info.user") or _required_string(
+            user, "name", context="users.info.user"
+        )
         self._user_cache[user_id] = name
         return name
 
-    async def _resolve_channel_id(self, session: aiohttp.ClientSession, channel: str) -> tuple[str, str]:
-        """Return (channel_id, channel_name). Accepts id, '#name', or 'name'."""
+    async def _decode_search_message(self, session: aiohttp.ClientSession, payload: dict[str, Any]) -> SlackMessage:
+        context = "assistant.search.context message"
+        channel = payload.get("channel")
+        channel_payload = _mapping(channel, context=f"{context}.channel") if channel is not None else None
+        channel_ref = _optional_string(payload, "channel_id", context=context)
+        if channel_ref is None and channel_payload is not None:
+            channel_ref = _required_string(channel_payload, "id", context=f"{context}.channel")
+        if channel_ref is None:
+            raise _payload_error(context, "expected channel_id or channel.id")
+        channel_name = _optional_string(payload, "channel_name", context=context)
+        if channel_name is None and channel_payload is not None:
+            channel_name = _optional_string(channel_payload, "name", context=f"{context}.channel")
+        timestamp = _required_string(payload, "ts", context=context)
+        author_ref = _optional_string(payload, "user_id", context=context)
+        if author_ref is None:
+            author_ref = _optional_string(payload, "user", context=context)
+        author_name = _optional_string(payload, "author_user_name", context=context)
+        if author_name is None:
+            if author_ref is None:
+                raise _payload_error(context, "expected author_user_name or user_id")
+            author_name = await self._resolve_user(session, author_ref)
+        text_key = "content" if "content" in payload else "text"
+        return SlackMessage(
+            ref=f"{channel_ref}:{timestamp}",
+            channel_ref=channel_ref,
+            channel_name=channel_name,
+            author_ref=author_ref,
+            author_name=author_name,
+            text=_required_string_allow_empty(payload, text_key, context=context),
+            created_at=_ts_to_datetime(timestamp),
+            permalink=_optional_string(payload, "permalink", context=context),
+        )
+
+    async def _decode_history_message(
+        self,
+        session: aiohttp.ClientSession,
+        payload: dict[str, Any],
+        channel_ref: str,
+        channel_name: str,
+    ) -> SlackMessage:
+        context = "conversations.history message"
+        timestamp = _required_string(payload, "ts", context=context)
+        author_ref = _optional_string(payload, "user", context=context)
+        author_name = _optional_string(payload, "username", context=context)
+        if author_ref is not None:
+            author_name = await self._resolve_user(session, author_ref)
+        if author_name is None:
+            raise _payload_error(context, "expected user or username")
+        thread_ts = _optional_string(payload, "thread_ts", context=context)
+        return SlackMessage(
+            ref=f"{channel_ref}:{timestamp}",
+            channel_ref=channel_ref,
+            channel_name=channel_name,
+            author_ref=author_ref,
+            author_name=author_name,
+            text=_required_string_allow_empty(payload, "text", context=context),
+            created_at=_ts_to_datetime(timestamp),
+            thread_ref=f"{channel_ref}:{thread_ts}" if thread_ts is not None else None,
+            reply_count=_optional_int(payload, "reply_count", context=context),
+        )
+
+    @staticmethod
+    def _decode_monitor_message(payload: dict[str, Any]) -> SlackHistoryMessage:
+        context = "conversations.history message"
+        subtype = _optional_string(payload, "subtype", context=context)
+        bot_ref = _optional_string(payload, "bot_id", context=context)
+        user_ref = _optional_string(payload, "user", context=context)
+        if subtype is None and bot_ref is None and user_ref is None:
+            raise _payload_error(context, "regular message has no user")
+        return SlackHistoryMessage(
+            timestamp=_required_string(payload, "ts", context=context),
+            text=_required_string_allow_empty(payload, "text", context=context),
+            user_ref=user_ref,
+            thread_timestamp=_optional_string(payload, "thread_ts", context=context),
+            subtype=subtype,
+            bot_ref=bot_ref,
+        )
+
+    async def _resolve_channel_id(self, session: aiohttp.ClientSession, channel: str) -> SlackChannel:
+        """Resolve an id or name to one exact Slack channel."""
         if channel.startswith("#"):
             channel = channel[1:]
-        # Already a slack ID
         if channel and channel[0] in ("C", "G", "D") and channel.isalnum() and channel.isupper():
             cname = self._channel_name_cache.get(channel)
             if cname is None:
-                try:
-                    data = await self._get(session, "conversations.info", channel=channel)
-                    cname = data["channel"].get("name", channel)
-                except Exception:
-                    cname = channel
+                data = await self._get(session, "conversations.info", channel=channel)
+                record = _mapping(data.get("channel"), context="conversations.info.channel")
+                returned_ref = _required_string(record, "id", context="conversations.info.channel")
+                if returned_ref != channel:
+                    raise _payload_error("conversations.info.channel", "returned a different channel id")
+                cname = _optional_string(record, "name", context="conversations.info.channel")
+                if cname is None:
+                    if not _required_bool(record, "is_im", context="conversations.info.channel"):
+                        raise _payload_error("conversations.info.channel", "non-DM channel has no name")
+                    peer_ref = _required_string(record, "user", context="conversations.info.channel")
+                    cname = await self._resolve_user(session, peer_ref)
                 self._channel_name_cache[channel] = cname
-            return channel, cname
-        # Treat as name
+            return SlackChannel(ref=channel, name=cname)
         if cid := self._channel_id_by_name.get(channel):
-            return cid, channel
+            return SlackChannel(ref=cid, name=channel)
         await self._refresh_channel_index(session)
         if cid := self._channel_id_by_name.get(channel):
-            return cid, channel
-        raise RuntimeError(f"Slack channel not found: {channel}")
+            return SlackChannel(ref=cid, name=channel)
+        raise IntegrationOperationError(
+            code="not_found",
+            safe_message=f"Slack channel {channel!r} was not found.",
+            retryable=False,
+        )
 
     async def _refresh_channel_index(
         self,
@@ -205,6 +362,10 @@ class SlackClient:
         *,
         types: str = "public_channel,private_channel",
     ) -> None:
+        channel_names: dict[str, str] = {}
+        channel_refs: dict[str, str] = {}
+        dm_peers: dict[str, str] = {}
+        dm_channels: dict[str, str] = {}
         cursor = ""
         while True:
             params: dict[str, Any] = {
@@ -215,20 +376,24 @@ class SlackClient:
             if cursor:
                 params["cursor"] = cursor
             data = await self._get(session, "conversations.list", **params)
-            for ch in data.get("channels", []):
-                cid = ch["id"]
-                cname = ch.get("name", "")
-                # Regular (public/private) channels have a name
-                if cname:
-                    self._channel_name_cache[cid] = cname
-                    self._channel_id_by_name[cname] = cid
-                # Direct messages (1-on-1): `is_im` + `user` field = peer user id
-                if ch.get("is_im") and (peer := ch.get("user")):
-                    self._dm_peer_by_channel[cid] = peer
-                    self._dm_channel_by_user[peer] = cid
-            cursor = data.get("response_metadata", {}).get("next_cursor", "")
+            for raw_channel in _required_list(data, "channels", context="conversations.list"):
+                ch = _mapping(raw_channel, context="conversations.list channel")
+                cid = _required_string(ch, "id", context="conversations.list channel")
+                if _required_bool(ch, "is_im", context="conversations.list channel"):
+                    peer = _required_string(ch, "user", context="conversations.list channel")
+                    dm_peers[cid] = peer
+                    dm_channels[peer] = cid
+                else:
+                    cname = _required_string(ch, "name", context="conversations.list channel")
+                    channel_names[cid] = cname
+                    channel_refs[cname] = cid
+            cursor = _next_cursor(data, context="conversations.list")
             if not cursor:
                 break
+        self._channel_name_cache.update(channel_names)
+        self._channel_id_by_name.update(channel_refs)
+        self._dm_peer_by_channel.update(dm_peers)
+        self._dm_channel_by_user.update(dm_channels)
         if "im" in types:
             self._dm_index_loaded = True
 
@@ -239,24 +404,27 @@ class SlackClient:
         channel: str,
         text: str,
         thread_ts: str | None = None,
-        blocks: list[dict[str, Any]] | None = None,
-    ) -> dict[str, str]:
+        blocks: SlackBlockEnvelope | None = None,
+    ) -> SlackPostReceipt:
         """Post a Slack message with the configured user token. Returns Slack channel/ts metadata."""
         async with aiohttp.ClientSession() as session:
-            channel_id, channel_name = await self._resolve_channel_id(session, channel)
-            payload: dict[str, Any] = {"channel": channel_id, "text": text}
-            if blocks:
-                payload["blocks"] = _normalize_block_kit(blocks[:50])
+            resolved_channel = await self._resolve_channel_id(session, channel)
+            payload: dict[str, Any] = {"channel": resolved_channel.ref, "text": text}
+            if blocks is not None:
+                payload["blocks"] = blocks.provider_payload()
             if thread_ts:
                 payload["thread_ts"] = thread_ts
             data = await self._post(session, "chat.postMessage", **payload)
-            ts = data.get("ts", "")
-            return {
-                "channel": data.get("channel", channel_id),
-                "channel_name": channel_name,
-                "ts": ts,
-                "thread_ts": thread_ts or ts,
-            }
+            ts = _required_string(data, "ts", context="chat.postMessage")
+            returned_channel = _required_string(data, "channel", context="chat.postMessage")
+            if returned_channel != resolved_channel.ref:
+                raise _payload_error("chat.postMessage", "returned a different channel id")
+            return SlackPostReceipt(
+                channel_ref=returned_channel,
+                channel_name=resolved_channel.name,
+                message_ts=ts,
+                thread_ts=thread_ts or ts,
+            )
 
     # -- public read methods --
 
@@ -267,7 +435,7 @@ class SlackClient:
         *,
         channel_types: list[str] | None = None,
         include_context_messages: bool = False,
-    ) -> list[RawItem]:
+    ) -> list[SlackMessage]:
         """Search via the Real-time Search API (assistant.search.context).
 
         Requires user token with granular `search:read.*` scopes. The legacy
@@ -284,50 +452,29 @@ class SlackClient:
             if include_context_messages:
                 payload["include_context_messages"] = True
             data = await self._post(session, "assistant.search.context", **payload)
-            messages = data.get("results", {}).get("messages", [])
-            items: list[RawItem] = []
-            for m in messages:
-                cid = m.get("channel_id") or m.get("channel", {}).get("id", "")
-                cname = m.get("channel_name") or m.get("channel", {}).get("name", "")
-                ts = m.get("ts", "")
-                user_id = m.get("user_id") or m.get("user", "")
-                user_name = m.get("author_user_name") or await self._resolve_user(session, user_id)
-                created = _ts_to_datetime(ts)
-                items.append(
-                    RawItem(
-                        source=self.name,
-                        source_id=f"{cid}:{ts}",
-                        title=f"#{cname} — {user_name}",
-                        content=m.get("content") or m.get("text", ""),
-                        created_at=created,
-                        updated_at=created,
-                        metadata={
-                            "channel_id": cid,
-                            "channel_name": cname,
-                            "user_id": user_id,
-                            "user_name": user_name,
-                            "ts": ts,
-                            "permalink": m.get("permalink", ""),
-                            "score": m.get("score"),
-                        },
-                    )
-                )
-            return items
+            results = _mapping(data.get("results"), context="assistant.search.context.results")
+            messages = results.get("messages")
+            if not isinstance(messages, list):
+                raise _payload_error("assistant.search.context.results", "expected messages array")
+            return [
+                await self._decode_search_message(session, _mapping(message, context="search message"))
+                for message in messages
+            ]
 
-    async def search_channels(self, query: str | None = None, limit: int = 50) -> list[dict[str, str]]:
+    async def search_channels(self, query: str | None = None, limit: int = 50) -> list[SlackChannel]:
         async with aiohttp.ClientSession() as session:
             await self._refresh_channel_index(session)
-            results = []
+            results: list[SlackChannel] = []
             q = query.lower() if query else None
             for cid, cname in self._channel_name_cache.items():
                 if q and q not in cname.lower():
                     continue
-                results.append({"id": cid, "name": cname})
+                results.append(SlackChannel(ref=cid, name=cname))
                 if len(results) >= limit:
                     break
             return results
 
-    async def list_dms(self, query: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    async def list_dms(self, query: str | None = None, limit: int = 50) -> list[SlackDirectMessage]:
         """List open DMs (1-on-1) with resolved peer names.
 
         Requires `im:read` scope on the read token. Does NOT include group DMs (mpim).
@@ -335,13 +482,13 @@ class SlackClient:
         async with aiohttp.ClientSession() as session:
             if not self._dm_index_loaded:
                 await self._refresh_channel_index(session, types="im")
-            results: list[dict[str, Any]] = []
+            results: list[SlackDirectMessage] = []
             q = query.lower() if query else None
             for cid, peer_id in self._dm_peer_by_channel.items():
                 peer_name = await self._resolve_user(session, peer_id)
                 if q and q not in peer_name.lower() and q not in peer_id.lower():
                     continue
-                results.append({"channel_id": cid, "user_id": peer_id, "peer": peer_name})
+                results.append(SlackDirectMessage(channel_ref=cid, user_ref=peer_id, peer_name=peer_name))
                 if len(results) >= limit:
                     break
             return results
@@ -353,10 +500,10 @@ class SlackClient:
             if cid := self._dm_channel_by_user.get(user_id):
                 return cid
             data = await self._post(session, "conversations.open", users=user_id)
-            cid = data.get("channel", {}).get("id", "")
-            if cid:
-                self._dm_peer_by_channel[cid] = user_id
-                self._dm_channel_by_user[user_id] = cid
+            channel = _mapping(data.get("channel"), context="conversations.open.channel")
+            cid = _required_string(channel, "id", context="conversations.open.channel")
+            self._dm_peer_by_channel[cid] = user_id
+            self._dm_channel_by_user[user_id] = cid
             return cid
 
     async def resolve_dm_target(self, target: str) -> str:
@@ -377,286 +524,382 @@ class SlackClient:
         # Name -> resolve across the complete matching user set.
         users = await self.search_users(stripped, limit=200)
         if not users:
-            raise RuntimeError(f"No Slack user found matching {target!r}")
+            raise IntegrationOperationError(
+                code="not_found",
+                safe_message=f"No Slack user matched {target!r}.",
+                retryable=False,
+            )
         normalized = stripped.casefold()
         exact = [
             user
             for user in users
-            if normalized
-            in {user.get("name", "").casefold(), user.get("username", "").casefold(), user.get("email", "").casefold()}
+            if normalized in {user.name.casefold(), user.username.casefold(), (user.email or "").casefold()}
         ]
         candidates = exact or users
         if len(candidates) != 1:
-            refs = ", ".join(f"{user['name']} ({user['id']})" for user in candidates[:10])
-            raise RuntimeError(f"Ambiguous Slack user {target!r}; choose an exact user id: {refs}")
-        user_id = candidates[0]["id"]
-        return await self.open_dm(user_id)
+            refs = ", ".join(f"{user.name} ({user.ref})" for user in candidates[:10])
+            raise IntegrationOperationError(
+                code="ambiguous_ref",
+                safe_message=f"Ambiguous Slack user {target!r}; choose an exact user id: {refs}",
+                retryable=False,
+            )
+        return await self.open_dm(candidates[0].ref)
 
-    async def search_users(self, query: str | None = None, limit: int = 50) -> list[dict[str, str]]:
+    async def search_users(self, query: str | None = None, limit: int = 50) -> list[SlackUser]:
         async with aiohttp.ClientSession() as session:
-            results = []
+            results: list[SlackUser] = []
             q = query.lower() if query else None
             cursor = ""
             while len(results) < limit:
                 data = await self._get(session, "users.list", limit="200", cursor=cursor)
-                for m in data.get("members", []):
-                    if m.get("deleted") or m.get("is_bot"):
+                members = data.get("members")
+                if not isinstance(members, list):
+                    raise _payload_error("users.list", "expected members array")
+                for member in members:
+                    m = _mapping(member, context="users.list member")
+                    deleted = _required_bool(m, "deleted", context="users.list member")
+                    is_bot = _required_bool(m, "is_bot", context="users.list member")
+                    if deleted or is_bot:
                         continue
-                    profile = m.get("profile", {})
-                    name = m.get("real_name") or m.get("name", "")
-                    email = profile.get("email", "")
-                    username = m.get("name", "")
-                    if q and q not in name.lower() and q not in email.lower() and q not in username.lower():
+                    profile = _mapping(m.get("profile"), context="users.list member.profile")
+                    username = _required_string(m, "name", context="users.list member")
+                    name = _optional_string(m, "real_name", context="users.list member") or username
+                    email = _optional_string(profile, "email", context="users.list member.profile")
+                    if q and q not in name.lower() and q not in (email or "").lower() and q not in username.lower():
                         continue
                     results.append(
-                        {
-                            "id": m.get("id", ""),
-                            "name": name,
-                            "username": username,
-                            "email": email,
-                            "title": profile.get("title", ""),
-                        }
+                        SlackUser(
+                            ref=_required_string(m, "id", context="users.list member"),
+                            name=name,
+                            username=username,
+                            email=email,
+                            title=_optional_string(profile, "title", context="users.list member.profile"),
+                        )
                     )
                     if len(results) >= limit:
                         break
-                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                cursor = _next_cursor(data, context="users.list")
                 if not cursor:
                     break
             return results
 
-    async def read_channel(self, channel: str, limit: int = 50) -> list[RawItem]:
+    async def read_channel(self, channel: str, limit: int = 50) -> list[SlackMessage]:
         async with aiohttp.ClientSession() as session:
-            cid, cname = await self._resolve_channel_id(session, channel)
-            data = await self._get(session, "conversations.history", channel=cid, limit=str(limit))
-            items: list[RawItem] = []
-            for m in data.get("messages", []):
-                ts = m.get("ts", "")
-                user_id = m.get("user", "")
-                user_name = await self._resolve_user(session, user_id) if user_id else (m.get("username") or "bot")
-                created = _ts_to_datetime(ts)
-                items.append(
-                    RawItem(
-                        source=self.name,
-                        source_id=f"{cid}:{ts}",
-                        title=f"#{cname} — {user_name}",
-                        content=m.get("text", ""),
-                        created_at=created,
-                        updated_at=created,
-                        metadata={
-                            "channel_id": cid,
-                            "channel_name": cname,
-                            "user_id": user_id,
-                            "user_name": user_name,
-                            "ts": ts,
-                            "thread_ts": m.get("thread_ts"),
-                            "reply_count": m.get("reply_count", 0),
-                        },
-                    )
+            resolved_channel = await self._resolve_channel_id(session, channel)
+            data = await self._get(
+                session,
+                "conversations.history",
+                channel=resolved_channel.ref,
+                limit=str(limit),
+            )
+            messages = data.get("messages")
+            if not isinstance(messages, list):
+                raise _payload_error("conversations.history", "expected messages array")
+            return [
+                await self._decode_history_message(
+                    session,
+                    _mapping(message, context="channel message"),
+                    resolved_channel.ref,
+                    resolved_channel.name,
                 )
-            return items
+                for message in messages
+            ]
 
     async def history_since(
         self,
         channel: str,
         oldest: str | None = None,
         limit: int = 200,
-    ) -> list[dict[str, Any]]:
+    ) -> list[SlackHistoryMessage]:
         """Fetch channel messages since `oldest`, ordered oldest -> newest.
 
         conversations.history returns newest-first per page; we page via
         response_metadata.next_cursor and reverse to chronological order.
         """
         async with aiohttp.ClientSession() as session:
-            cid, _ = await self._resolve_channel_id(session, channel)
-            messages: list[dict[str, Any]] = []
+            resolved_channel = await self._resolve_channel_id(session, channel)
+            messages: list[SlackHistoryMessage] = []
             cursor = ""
             while True:
-                params: dict[str, Any] = {"channel": cid, "limit": str(limit)}
+                params: dict[str, Any] = {"channel": resolved_channel.ref, "limit": str(limit)}
                 if oldest:
                     params["oldest"] = oldest
                 if cursor:
                     params["cursor"] = cursor
                 data = await self._get(session, "conversations.history", **params)
-                messages.extend(data.get("messages", []))
-                cursor = data.get("response_metadata", {}).get("next_cursor", "")
+                messages.extend(
+                    self._decode_monitor_message(_mapping(message, context="history message"))
+                    for message in _required_list(data, "messages", context="conversations.history")
+                )
+                cursor = _next_cursor(data, context="conversations.history")
                 if not cursor:
                     break
             messages.reverse()
             return messages
 
-    async def resolve_channel(self, name: str) -> tuple[str, str]:
-        """Public wrapper over _resolve_channel_id. Returns (channel_id, channel_name); raises on miss."""
+    async def resolve_channel(self, name: str) -> SlackChannel:
         async with aiohttp.ClientSession() as session:
             return await self._resolve_channel_id(session, name)
 
-    async def resolve_user(self, name: str) -> dict[str, str] | list[dict[str, str]]:
-        """Resolve a user name to a single {id, name} or, on 0/>1 matches, the candidate list."""
+    async def resolve_user(self, name: str) -> SlackUser:
         candidates = await self.search_users(name)
-        q = name.lower()
-        exact = [c for c in candidates if c["username"].lower() == q or c["name"].lower() == q]
+        q = name.casefold()
+        exact = [c for c in candidates if c.username.casefold() == q or c.name.casefold() == q]
         if len(exact) == 1:
-            return {"id": exact[0]["id"], "name": exact[0]["name"]}
-        return candidates
+            return exact[0]
+        if not candidates:
+            raise IntegrationOperationError(
+                code="not_found",
+                safe_message=f"No Slack user matched {name!r}.",
+                retryable=False,
+            )
+        choices = ", ".join(f"{candidate.name} (@{candidate.username})" for candidate in candidates)
+        raise IntegrationOperationError(
+            code="ambiguous_ref",
+            safe_message=f"Ambiguous Slack user {name!r}; candidates: {choices}",
+            retryable=False,
+        )
 
     async def resolve_user_name(self, user_id: str) -> str:
-        """Public wrapper over _resolve_user. Returns a display name (cached); falls back to the id."""
+        """Return the cached or provider-resolved display name; raise when resolution fails."""
         async with aiohttp.ClientSession() as session:
             return await self._resolve_user(session, user_id)
 
-    async def whoami(self) -> dict[str, str]:
-        """auth.test -> the authed identity used for self-message filtering."""
-        async with aiohttp.ClientSession() as session:
-            data = await self._get(session, "auth.test")
-            return {"user_id": data.get("user_id", ""), "user": data.get("user", "")}
+    async def whoami(self) -> SlackIdentity:
+        identity = await self.auth_test()
+        return SlackIdentity(user_ref=identity.user_ref, user_name=identity.user_name)
 
     async def read_thread(self, source_id: str) -> SlackThreadResult | None:
-        """Read a message + thread replies. source_id is 'channel_id:ts'."""
+        """Read every page of a Slack thread or fail on cursor cycles/page overflow."""
         if ":" not in source_id:
-            return None
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="Slack message references must be channel:timestamp.",
+                retryable=False,
+            )
         cid, ts = source_id.split(":", 1)
+        if not cid or not ts:
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="Slack message references must be channel:timestamp.",
+                retryable=False,
+            )
         async with aiohttp.ClientSession() as session:
-            try:
-                data = await self._get(session, "conversations.replies", channel=cid, ts=ts)
-            except RuntimeError as e:
-                _logger.warning("Slack read_thread failed: %s", e)
+            raw_messages = await self._read_all_thread_messages(session, channel_ref=cid, timestamp=ts)
+            if not raw_messages:
                 return None
-            messages = data.get("messages", [])
-            if not messages:
-                return None
-            _, cname = await self._resolve_channel_id(session, cid)
+            channel = await self._resolve_channel_id(session, cid)
+            messages = [await self._decode_thread_message(session, message) for message in raw_messages]
             lines: list[str] = []
             model_content: list[ImageContent] = []
-            for m in messages:
-                user_id = m.get("user", "")
-                user_name = await self._resolve_user(session, user_id) if user_id else (m.get("username") or "bot")
-                text = m.get("text", "")
+            for message in messages:
+                text = message.text
                 remaining = _MAX_THREAD_IMAGES - len(model_content)
-                file_notes, image_blocks = await self._extract_thread_images(session, m.get("files"), remaining)
+                file_notes, image_blocks = await self._extract_thread_images(session, message.images, remaining)
                 if file_notes:
                     text = "\n".join(part for part in [text, *file_notes] if part)
                 model_content.extend(image_blocks)
-                lines.append(_format_message(user_name, text, m.get("ts", ""), cname))
+                lines.append(_format_message(message.author_name, text, message.timestamp, channel.name))
             return SlackThreadResult(text="\n\n".join(lines), model_content=tuple(model_content))
+
+    async def _read_all_thread_messages(
+        self,
+        session: aiohttp.ClientSession,
+        *,
+        channel_ref: str,
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        cursor = ""
+        seen_cursors: set[str] = set()
+        for _page in range(_MAX_THREAD_PAGES):
+            params: dict[str, Any] = {
+                "channel": channel_ref,
+                "ts": timestamp,
+                "limit": str(_THREAD_PAGE_SIZE),
+            }
+            if cursor:
+                params["cursor"] = cursor
+            data = await self._get(session, "conversations.replies", **params)
+            messages.extend(
+                _mapping(message, context="conversations.replies message")
+                for message in _required_list(data, "messages", context="conversations.replies")
+            )
+            next_cursor = _next_cursor(data, context="conversations.replies")
+            if not next_cursor:
+                return messages
+            if next_cursor in seen_cursors:
+                raise SlackPayloadError(
+                    context="conversations.replies pagination",
+                    detail=f"cursor {next_cursor!r} repeated",
+                )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        raise IntegrationOperationError(
+            code="pagination_limit",
+            safe_message=f"Slack thread exceeded the {_MAX_THREAD_PAGES}-page safety limit.",
+            retryable=False,
+        )
+
+    async def _decode_thread_message(
+        self,
+        session: aiohttp.ClientSession,
+        payload: dict[str, Any],
+    ) -> SlackThreadMessage:
+        context = "conversations.replies message"
+        author_ref = _optional_string(payload, "user", context=context)
+        author_name = _optional_string(payload, "username", context=context)
+        if author_ref is not None:
+            author_name = await self._resolve_user(session, author_ref)
+        if author_name is None:
+            raise _payload_error(context, "expected user or username")
+        raw_files = [] if "files" not in payload or payload["files"] is None else payload["files"]
+        if not isinstance(raw_files, list):
+            raise _payload_error(context, "expected files array when present")
+        images = tuple(
+            image
+            for raw_file in raw_files
+            if (image := self._decode_image_file(_mapping(raw_file, context="Slack file"))) is not None
+        )
+        return SlackThreadMessage(
+            timestamp=_required_string(payload, "ts", context=context),
+            text=_required_string_allow_empty(payload, "text", context=context),
+            author_ref=author_ref,
+            author_name=author_name,
+            images=images,
+        )
 
     async def read_file_image(self, file_id: str) -> SlackThreadResult | None:
         async with aiohttp.ClientSession() as session:
             data = await self._get(session, "files.info", file=file_id)
-            file_obj = data.get("file")
-            if not isinstance(file_obj, dict) or not self._is_image_file(file_obj):
+            file_obj = self._decode_image_file(_mapping(data.get("file"), context="files.info.file"))
+            if file_obj is None:
                 return None
             block = await self._download_slack_image(session, file_obj)
-            if not block:
-                return None
-            title = file_obj.get("title") or file_obj.get("name") or file_obj.get("id") or file_id
             return SlackThreadResult(
-                text=f"Slack image: {title}\n{self._format_image_note(file_obj)}",
+                text=f"Slack image: {file_obj.title}\n{self._format_image_note(file_obj)}",
                 model_content=(block,),
             )
 
     async def _extract_thread_images(
         self,
         session: aiohttp.ClientSession,
-        files: Any,
+        files: tuple[SlackImageFile, ...],
         remaining: int,
     ) -> tuple[list[str], list[ImageContent]]:
-        if not isinstance(files, list):
-            return [], []
-
         notes: list[str] = []
         image_blocks: list[ImageContent] = []
         for file_obj in files:
-            if not isinstance(file_obj, dict) or not self._is_image_file(file_obj):
-                continue
             notes.append(self._format_image_note(file_obj))
             if len(image_blocks) >= remaining:
                 continue
-            block = await self._download_slack_image(session, file_obj)
-            if block:
-                image_blocks.append(block)
+            image_blocks.append(await self._download_slack_image(session, file_obj))
         return notes, image_blocks
 
-    def _is_image_file(self, file_obj: dict[str, Any]) -> bool:
-        return self._normalized_image_mime(file_obj) is not None
-
-    def _normalized_image_mime(self, file_obj: dict[str, Any]) -> str | None:
-        mime = str(file_obj.get("mimetype") or "").lower()
+    @staticmethod
+    def _normalized_image_mime(mime: str) -> str | None:
+        mime = mime.lower()
         if mime == "image/jpg":
             return "image/jpeg"
         if mime in _SLACK_IMAGE_MIME_TYPES:
             return mime
         return None
 
-    def _format_image_note(self, file_obj: dict[str, Any]) -> str:
-        title = file_obj.get("title") or file_obj.get("name") or file_obj.get("id") or "image"
-        details = [self._normalized_image_mime(file_obj) or "image"]
-        if size := file_obj.get("size"):
-            details.append(f"{size} bytes")
-        if file_id := file_obj.get("id"):
-            details.append(f"id: {file_id}")
-        return f"Attached image: {title} ({', '.join(details)})"
+    def _decode_image_file(self, payload: dict[str, Any]) -> SlackImageFile | None:
+        context = "Slack file"
+        raw_mime = _required_string(payload, "mimetype", context=context)
+        mime = self._normalized_image_mime(raw_mime)
+        if mime is None:
+            return None
+        title = _optional_string(payload, "title", context=context) or _optional_string(
+            payload, "name", context=context
+        )
+        if title is None:
+            raise _payload_error(context, "image has no title or name")
+        download_url = _optional_string(payload, "url_private_download", context=context) or _optional_string(
+            payload, "url_private", context=context
+        )
+        if download_url is None:
+            raise _payload_error(context, "image has no private download URL")
+        return SlackImageFile(
+            ref=_required_string(payload, "id", context=context),
+            title=title,
+            mime_type=mime,
+            size_bytes=_optional_int(payload, "size", context=context),
+            download_url=download_url,
+        )
+
+    @staticmethod
+    def _format_image_note(file_obj: SlackImageFile) -> str:
+        details = [file_obj.mime_type]
+        if file_obj.size_bytes is not None:
+            details.append(f"{file_obj.size_bytes} bytes")
+        details.append(f"id: {file_obj.ref}")
+        return f"Attached image: {file_obj.title} ({', '.join(details)})"
 
     async def _download_slack_image(
         self,
         session: aiohttp.ClientSession,
-        file_obj: dict[str, Any],
-    ) -> ImageContent | None:
-        mime = self._normalized_image_mime(file_obj)
-        if not mime:
-            return None
-        if mime not in _MODEL_IMAGE_MIME_TYPES:
-            return None
-        size = _int_or_none(file_obj.get("size"))
-        if size and size > _MAX_SLACK_IMAGE_BYTES:
-            return None
-        url = file_obj.get("url_private_download") or file_obj.get("url_private")
-        if not isinstance(url, str) or not url:
-            return None
+        file_obj: SlackImageFile,
+    ) -> ImageContent:
+        if file_obj.mime_type not in _MODEL_IMAGE_MIME_TYPES:
+            raise IntegrationOperationError(
+                code="unsupported_media",
+                safe_message=f"Slack image {file_obj.ref} uses unsupported media type {file_obj.mime_type}.",
+                retryable=False,
+            )
+        if file_obj.size_bytes is not None and file_obj.size_bytes > _MAX_SLACK_IMAGE_BYTES:
+            raise IntegrationOperationError(
+                code="payload_too_large",
+                safe_message=f"Slack image {file_obj.ref} exceeds the 5 MiB model limit.",
+                retryable=False,
+            )
         headers = {"Authorization": f"Bearer {self._token_for('files.info')}"}
         try:
-            async with session.get(url, headers=headers) as resp:
+            async with session.get(file_obj.download_url, headers=headers) as resp:
                 if resp.status >= 400:
-                    _logger.warning("Slack image download failed with status %s", resp.status)
-                    return None
+                    raise IntegrationOperationError(
+                        code="provider_error",
+                        safe_message=f"Slack image download failed with HTTP {resp.status}.",
+                        retryable=resp.status in {408, 429, 500, 502, 503, 504},
+                    )
                 body = await resp.read()
-        except Exception:
-            _logger.warning("Slack image download failed", exc_info=True)
-            return None
+        except aiohttp.ClientError as exc:
+            raise IntegrationOperationError(
+                code="provider_error",
+                safe_message="Slack image download failed.",
+                retryable=True,
+            ) from exc
         if len(body) > _MAX_SLACK_IMAGE_BYTES:
-            return None
+            raise IntegrationOperationError(
+                code="payload_too_large",
+                safe_message=f"Slack image {file_obj.ref} exceeds the 5 MiB model limit.",
+                retryable=False,
+            )
         detected_mime = _detect_supported_image_mime(body)
         if not detected_mime:
-            _logger.warning("Slack image download did not contain supported image bytes")
-            return None
+            raise SlackPayloadError(
+                context="image download",
+                detail=f"file {file_obj.ref} did not contain supported image bytes",
+            )
         return ImageContent(media_type=detected_mime, data=base64.b64encode(body).decode("ascii"))
 
-    async def read_user(self, user_id: str) -> dict[str, Any] | None:
+    async def read_user(self, user_id: str) -> SlackUserProfile:
         async with aiohttp.ClientSession() as session:
-            try:
-                data = await self._get(session, "users.info", user=user_id)
-            except RuntimeError as e:
-                _logger.warning("Slack read_user failed: %s", e)
-                return None
-            user = data.get("user")
-            if not user:
-                return None
-            profile = user.get("profile", {})
-            return {
-                "id": user.get("id", ""),
-                "name": user.get("real_name") or user.get("name", ""),
-                "username": user.get("name", ""),
-                "email": profile.get("email", ""),
-                "title": profile.get("title", ""),
-                "status_text": profile.get("status_text", ""),
-                "status_emoji": profile.get("status_emoji", ""),
-                "tz": user.get("tz", ""),
-            }
-
-
-def _int_or_none(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+            data = await self._get(session, "users.info", user=user_id)
+            user = _mapping(data.get("user"), context="users.info")
+            profile = _mapping(user.get("profile"), context="users.info.profile")
+            return SlackUserProfile(
+                ref=_required_string(user, "id", context="users.info.user"),
+                name=_optional_string(user, "real_name", context="users.info.user")
+                or _required_string(user, "name", context="users.info.user"),
+                username=_required_string(user, "name", context="users.info.user"),
+                email=_optional_string(profile, "email", context="users.info.profile"),
+                title=_optional_string(profile, "title", context="users.info.profile"),
+                status_text=_optional_string(profile, "status_text", context="users.info.profile"),
+                status_emoji=_optional_string(profile, "status_emoji", context="users.info.profile"),
+                timezone=_optional_string(user, "tz", context="users.info.user"),
+            )
 
 
 def _detect_supported_image_mime(body: bytes) -> str | None:
