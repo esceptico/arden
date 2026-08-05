@@ -7,6 +7,7 @@ import { clearDrafts, draftKey, getDraft, setDraft } from "@/features/memory/lib
 import { splitFrontmatter } from "@/features/memory/lib/format";
 import { useStore } from "@/stores";
 import {
+  error,
   installCanonicalMemoryBridge,
   type HistoryCommitFixture,
   type WikiPageFixture,
@@ -229,6 +230,243 @@ test("vault changes refresh clean pages and protect dirty drafts", async () => {
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back to draft"]')?.click());
   await settle(220);
   expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+});
+
+test("retained changes are covered by the initial Memory load", async () => {
+  useStore.setState({
+    memoryVaultVersion: 1,
+    memoryVaultChanges: [{
+      paths: ["topics/preexisting.md"],
+      revision: "note-preexisting-r1",
+      seq: 99,
+    }],
+  });
+  const bridge = installCanonicalMemoryBridge({ pages: [page()] });
+  await renderView();
+
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(1);
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a")).toHaveLength(1);
+});
+
+test("sequenced non-selected create rename and archive refresh the rail once", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const selected = page();
+  const renamed = page({
+    pageId: "page-b",
+    path: "topics/b.md",
+    title: "B",
+    content: "# B\n",
+    version: "note-b-r1",
+  });
+  const archived = page({
+    pageId: "page-archived",
+    path: "topics/archived.md",
+    title: "Archived",
+    content: "# Archived\n",
+    version: "note-archived-r1",
+  });
+  const bridge = installCanonicalMemoryBridge({ pages: [selected, renamed, archived] });
+  const { host } = await renderView();
+  const summaryReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  const detailReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a").length;
+  const readsBefore = summaryReads();
+  const detailReadsBefore = detailReads();
+
+  bridge.state.pages.delete("page-b");
+  bridge.state.pages.delete("page-archived");
+  bridge.updatePage({
+    ...renamed,
+    path: "topics/renamed.md",
+    title: "Renamed",
+    version: "note-b-r2",
+  });
+  bridge.updatePage(page({
+    pageId: "page-created",
+    path: "topics/created.md",
+    title: "Created",
+    content: "# Created\n",
+    version: "note-created-r1",
+  }));
+  await act(async () => {
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/b.md", "topics/renamed.md"],
+      revision: "note-b-r2",
+      seq: 100,
+    });
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/created.md"],
+      revision: "note-created-r1",
+      seq: 101,
+    });
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/archived.md"],
+      revision: "note-archived-r2",
+      seq: 102,
+    });
+  });
+  await settle(320);
+
+  expect(summaryReads()).toBe(readsBefore + 1);
+  expect(detailReads()).toBe(detailReadsBefore);
+  expect(host.querySelector('[data-memory-entry="topics/renamed.md"]')).not.toBeNull();
+  expect(host.querySelector('[data-memory-entry="topics/created.md"]')).not.toBeNull();
+  expect(host.querySelector('[data-memory-entry="topics/b.md"]')).toBeNull();
+  expect(host.querySelector('[data-memory-entry="topics/archived.md"]')).toBeNull();
+});
+
+test("a selected sequenced burst refreshes summaries and detail once", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const bridge = installCanonicalMemoryBridge({ pages: [page()] });
+  const { host } = await renderView();
+  const summaryReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  const detailReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a").length;
+  const summariesBefore = summaryReads();
+  const detailsBefore = detailReads();
+
+  bridge.updatePage(page({
+    content: "---\ntitle: A\n---\n# A\n\nFinal external update.\n",
+    version: "note-r3",
+    repositoryHead: "wiki-head-3",
+  }));
+  await act(async () => {
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/a.md"],
+      revision: "note-r2",
+      seq: 110,
+    });
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/a.md"],
+      revision: "note-r3",
+      seq: 111,
+    });
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/a.md"],
+      revision: "note-r3",
+      seq: 112,
+    });
+  });
+  await settle(360);
+
+  expect(summaryReads()).toBe(summariesBefore + 1);
+  expect(detailReads()).toBe(detailsBefore + 1);
+  expect(host.textContent).toContain("Final external update.");
+});
+
+test("coarse and sequenced changes in one render reconcile once", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const bridge = installCanonicalMemoryBridge({ pages: [page()] });
+  const { host } = await renderView();
+  const summaryReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  const detailReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a").length;
+  const summariesBefore = summaryReads();
+  const detailsBefore = detailReads();
+
+  bridge.updatePage(page({
+    content: "---\ntitle: A\n---\n# A\n\nCoarse external update.\n",
+    version: "note-r2",
+    repositoryHead: "wiki-head-2",
+  }));
+  await act(async () => {
+    useStore.getState().memoryVaultChanged();
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/other.md"],
+      revision: "note-other-r1",
+      seq: 115,
+    });
+  });
+  await settle(340);
+
+  expect(summaryReads()).toBe(summariesBefore + 1);
+  expect(detailReads()).toBe(detailsBefore + 1);
+  expect(host.textContent).toContain("Coarse external update.");
+});
+
+test("changes received during reconciliation form one trailing batch", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  const summaryGate = deferred();
+  let holdNextSummary = false;
+  const bridge = installCanonicalMemoryBridge({
+    pages: [page()],
+    onRequest: async ({ path }) => {
+      if (path !== "/admin/wiki/pages" || !holdNextSummary) return undefined;
+      holdNextSummary = false;
+      await summaryGate.promise;
+      return undefined;
+    },
+  });
+  await renderView();
+  const summaryReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  const readsBefore = summaryReads();
+
+  holdNextSummary = true;
+  await act(async () => useStore.getState().memoryVaultChanged({
+    paths: ["topics/first.md"],
+    revision: "note-first-r1",
+    seq: 120,
+  }));
+  await settle(20);
+  expect(summaryReads()).toBe(readsBefore + 1);
+
+  await act(async () => {
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/second.md"],
+      revision: "note-second-r1",
+      seq: 121,
+    });
+    useStore.getState().memoryVaultChanged({
+      paths: ["topics/third.md"],
+      revision: "note-third-r1",
+      seq: 122,
+    });
+  });
+  summaryGate.resolve();
+  await settle(320);
+
+  expect(summaryReads()).toBe(readsBefore + 2);
+});
+
+test("a failed reconciliation remains dirty until the next change", async () => {
+  useStore.setState({ memoryVaultVersion: 0, memoryVaultChanges: [] });
+  let failNextSummary = false;
+  const bridge = installCanonicalMemoryBridge({
+    pages: [page()],
+    onRequest: ({ path }) => {
+      if (path !== "/admin/wiki/pages" || !failNextSummary) return undefined;
+      failNextSummary = false;
+      return error(503, "temporary list failure");
+    },
+  });
+  const { host } = await renderView();
+  const summaryReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  const detailReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages/page-a").length;
+  const readsBefore = summaryReads();
+  const detailsBefore = detailReads();
+
+  bridge.updatePage(page({
+    content: "---\ntitle: A\n---\n# A\n\nUpdate retained across failure.\n",
+    version: "note-r2",
+    repositoryHead: "wiki-head-2",
+  }));
+  failNextSummary = true;
+  await act(async () => useStore.getState().memoryVaultChanged({
+    paths: ["topics/a.md"],
+    revision: "note-r2",
+    seq: 130,
+  }));
+  await settle(240);
+  expect(summaryReads()).toBe(readsBefore + 1);
+  expect(detailReads()).toBe(detailsBefore);
+
+  await act(async () => useStore.getState().memoryVaultChanged({
+    paths: ["topics/second.md"],
+    revision: "note-second-r1",
+    seq: 131,
+  }));
+  await settle(300);
+
+  expect(summaryReads()).toBe(readsBefore + 2);
+  expect(detailReads()).toBe(detailsBefore + 1);
+  expect(host.textContent).toContain("Update retained across failure.");
 });
 
 test("a pending canonical write locks navigation and commits once", async () => {

@@ -49,6 +49,7 @@ import {
   WikiRenameApprovalSheet,
   WikiRenameApprovalStatusSheet,
 } from "@/features/memory/components/WikiRenameApprovalSheet";
+import { useMemoryVaultReconciliation } from "@/features/memory/hooks/useMemoryVaultReconciliation";
 import { useWikiRenameApprovals } from "@/features/memory/hooks/useWikiRenameApprovals";
 import { ArtifactCache } from "@/features/memory/lib/artifactCache";
 import { NavigationHistory, type NavigationLocation } from "@/features/memory/lib/navigationHistory";
@@ -337,11 +338,6 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
   const diffRestoreGeneration = useRef(0);
   const restoreHydration = useRef<{ path: string; revision: string } | null>(null);
   const mutationPendingRef = useRef(false);
-  const memoryVaultChangesRef = useRef(useStore.getState().memoryVaultChanges);
-  const processedMemoryChangeSeqs = useRef(new Set<number>());
-  const memoryChangeDrainRunning = useRef(false);
-  const memoryChangeDrainRequested = useRef(false);
-  const memoryChangeDrainRef = useRef<(() => Promise<void>) | null>(null);
   const diffReturnFocus = useRef<HTMLElement | null>(null);
   const restoreNoteFocus = useRef(false);
   const mountedRef = useRef(true);
@@ -509,7 +505,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     if (nextDirectories) setDirectories(nextDirectories);
   }, []);
 
-  const load = useCallback(async (): Promise<boolean> => {
+  const load = useCallback(async (onAccepted?: () => void): Promise<boolean> => {
     if (!mountedRef.current) return false;
     const request = beginSummaryRequest();
     setLoading(true);
@@ -518,6 +514,7 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
       const response = await listMemoryArtifactSummaries(config, {}, { signal: request.controller.signal });
       if (!isCurrentSummaryRequest(request)) return false;
       acceptSummaries(response.artifacts, response.directories);
+      onAccepted?.();
       return true;
     } catch (reason) {
       if (!isCurrentSummaryRequest(request)) return false;
@@ -882,67 +879,23 @@ export function ArtifactMemoryView({ config }: { config: AppConfig }) {
     return () => window.clearTimeout(timer);
   }, [activeDetail, historyVersion]);
 
-  const memoryVaultVersion = useStore((state) => state.memoryVaultVersion);
-  const memoryVaultChanges = useStore((state) => state.memoryVaultChanges);
-  const observedVaultVersion = useRef(memoryVaultVersion);
-  const observedVaultChanges = useRef(memoryVaultChanges);
-
-  const drainMemoryChanges = useCallback(async () => {
-    if (memoryChangeDrainRunning.current) {
-      memoryChangeDrainRequested.current = true;
-      return;
-    }
-    memoryChangeDrainRunning.current = true;
-    try {
-      while (true) {
-        const next = memoryVaultChangesRef.current.find((change) => !processedMemoryChangeSeqs.current.has(change.seq));
-        if (!next) break;
-        const current = selectedMetaRef.current;
-        if (current && next.paths.includes(current.path)) {
-          detailCache.current.invalidatePath(current.path);
-          if (mountedRef.current) setContentRefreshKey((key) => key + 1);
-          await load();
-          if (mountedRef.current && railMode === "facts") setRecordsRefreshKey((key) => key + 1);
-        }
-        processedMemoryChangeSeqs.current.add(next.seq);
-      }
-    } finally {
-      memoryChangeDrainRunning.current = false;
-      if (memoryChangeDrainRequested.current) {
-        memoryChangeDrainRequested.current = false;
-        queueMicrotask(() => void memoryChangeDrainRef.current?.());
-      }
-    }
-  }, [load, railMode]);
-  memoryChangeDrainRef.current = drainMemoryChanges;
-
-  useEffect(() => {
-    memoryVaultChangesRef.current = memoryVaultChanges;
-    const retained = new Set(memoryVaultChanges.map((change) => change.seq));
-    processedMemoryChangeSeqs.current = new Set(
-      [...processedMemoryChangeSeqs.current].filter((sequence) => retained.has(sequence)),
-    );
-    void drainMemoryChanges();
-  }, [drainMemoryChanges, memoryVaultChanges]);
-
-  useEffect(() => {
-    void drainMemoryChanges();
-  }, [drainMemoryChanges, selectedMeta?.path]);
-
-  useEffect(() => {
-    if (memoryVaultVersion === observedVaultVersion.current) return;
-    observedVaultVersion.current = memoryVaultVersion;
-    const queueChanged = memoryVaultChanges !== observedVaultChanges.current;
-    observedVaultChanges.current = memoryVaultChanges;
-    if (queueChanged) return;
-    const current = selectedMetaRef.current;
-    if (current) {
-      detailCache.current.invalidatePath(current.path);
-      setContentRefreshKey((key) => key + 1);
-    }
-    void load();
-    if (railMode === "facts") setRecordsRefreshKey((key) => key + 1);
-  }, [load, memoryVaultChanges, memoryVaultVersion, railMode]);
+  const invalidateVaultDetail = useCallback((path: string) => {
+    detailCache.current.invalidatePath(path);
+  }, []);
+  const refreshSelectedVaultDetail = useCallback(() => {
+    setContentRefreshKey((key) => key + 1);
+  }, []);
+  const refreshVisibleFacts = useCallback(() => {
+    setRecordsRefreshKey((key) => key + 1);
+  }, []);
+  useMemoryVaultReconciliation({
+    selectedPath: selectedMeta?.path ?? null,
+    factsActive: railMode === "facts",
+    invalidateDetail: invalidateVaultDetail,
+    refreshSelectedDetail: refreshSelectedVaultDetail,
+    refreshSummaries: load,
+    refreshFacts: refreshVisibleFacts,
+  });
 
   const selectedHasWikilinks = activeDetail != null
     && selectedMeta != null
