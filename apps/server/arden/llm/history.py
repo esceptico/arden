@@ -1,4 +1,5 @@
 import base64
+import binascii
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -28,6 +29,10 @@ _CONTENT_BLOCK_TYPES = (TextContent, ImageContent, AudioContent, ContextContent)
 
 class HistoryDecodeError(ValueError):
     """A persisted model-history entry does not match the canonical contract."""
+
+
+class HistoryProjectionError(ValueError):
+    """Canonical history cannot be represented by the selected provider."""
 
 
 class _HistoryFieldError(ValueError):
@@ -116,7 +121,21 @@ class ModelHistory:
                 raise HistoryDecodeError(f"Invalid model-history message at index {index} ({exc.code})") from None
             except (KeyError, TypeError, ValueError, ValidationError):
                 raise HistoryDecodeError(f"Invalid model-history message at index {index} (invalid_shape)") from None
-        return cls(tuple(messages))
+        history = cls(tuple(messages))
+        history._validate_sequence()
+        return history
+
+    def _validate_sequence(self) -> None:
+        known_call_ids: set[str] = set()
+        for index, message in enumerate(self.messages):
+            if isinstance(message, SystemHistoryMessage) and index != 0:
+                raise HistoryDecodeError(f"Invalid model-history message at index {index} (system.not_first)") from None
+            if isinstance(message, AssistantHistoryMessage):
+                known_call_ids.update(tool_call.id for tool_call in message.tool_calls)
+            elif isinstance(message, ToolHistoryMessage) and message.tool_call_id not in known_call_ids:
+                raise HistoryDecodeError(
+                    f"Invalid model-history message at index {index} (tool.orphan_result)"
+                ) from None
 
     def tool_names_by_call_id(self) -> dict[str, str]:
         return {
@@ -128,7 +147,16 @@ class ModelHistory:
 
 
 def history_content_to_text(content: HistoryContent) -> str:
-    return content if isinstance(content, str) else blocks_to_text(list(content))
+    if isinstance(content, str):
+        return content
+    for block in content:
+        if isinstance(block, (ImageContent, AudioContent)):
+            raise unsupported_content_block("text history", block)
+    return blocks_to_text(list(content))
+
+
+def unsupported_content_block(provider: str, block: ContentBlock) -> HistoryProjectionError:
+    return HistoryProjectionError(f"{provider} does not support history content block type {block.type!r}")
 
 
 def _decode_message(raw: Mapping[str, object], *, index: int) -> HistoryMessage:
@@ -217,19 +245,19 @@ def _decode_tool_calls(value: object) -> tuple[ToolCall, ...]:
                 id=tool_id,
                 type="function",
                 function=FunctionCall(name=name, arguments=arguments),
-                thought_signature=_decode_signature(raw.get("thought_signature")),
+                thought_signature=(_decode_signature(raw["thought_signature"]) if "thought_signature" in raw else None),
             )
         )
     return tuple(calls)
 
 
 def _decode_signature(value: object) -> bytes | None:
-    if not isinstance(value, str):
-        return None
+    if not isinstance(value, str) or not value:
+        raise _HistoryFieldError("tool_call.thought_signature_invalid")
     try:
         return base64.b64decode(value, validate=True)
-    except ValueError:
-        return None
+    except (ValueError, binascii.Error):
+        raise _HistoryFieldError("tool_call.thought_signature_invalid") from None
 
 
 def _decode_replays(raw: Mapping[str, object], *, message_index: int) -> tuple[OpaqueReplay, ...]:

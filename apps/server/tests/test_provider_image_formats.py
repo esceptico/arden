@@ -1,10 +1,13 @@
+import pytest
+
 from arden.agent import Role
 from arden.integrations import ALL_INTEGRATIONS
 from arden.llm.anthropic import AnthropicClient
 from arden.llm.gemini import GeminiClient
-from arden.llm.history import ModelHistory
+from arden.llm.history import HistoryProjectionError, ModelHistory
 from arden.llm.openai import OpenAIClient
 from arden.llm.openai_codex import OpenAICodexClient
+from arden.llm.openai_responses import _convert_messages as convert_openai_responses_messages
 from arden.llm.openai_responses import prepare_responses_request
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
 from arden.tools.app_control import app_open_tool
@@ -81,13 +84,35 @@ def test_gemini_formats_supported_tool_media_as_inline_data():
     assert image_part.inline_data.data == b"\x89PNG\r\n\x1a\n"
 
 
-def test_gemini_skips_unsupported_gif_tool_media():
-    _, contents = GeminiClient(api_key="test")._convert_messages(
-        ModelHistory.from_raw(_tool_media_messages("image/gif"))
+def test_gemini_rejects_unsupported_gif_tool_media():
+    with pytest.raises(HistoryProjectionError, match=r"Gemini.*'image'"):
+        GeminiClient(api_key="test")._convert_messages(ModelHistory.from_raw(_tool_media_messages("image/gif")))
+
+
+def _audio_history() -> ModelHistory:
+    return ModelHistory.from_raw(
+        [
+            {
+                "role": Role.USER,
+                "content": [{"type": "audio", "media_type": "audio/wav", "data": "UklGRg=="}],
+            }
+        ]
     )
 
-    assert len(contents[2].parts) == 1
-    assert contents[2].parts[0].text == "<tool_result_media>\nMedia returned.\n</tool_result_media>"
+
+@pytest.mark.parametrize(
+    "convert",
+    [
+        lambda history: OpenAIClient(api_key="test")._preprocess_messages(history),
+        convert_openai_responses_messages,
+        lambda history: AnthropicClient(api_key="test")._convert_messages(history),
+        lambda history: GeminiClient(api_key="test")._convert_messages(history),
+    ],
+    ids=["openai-chat", "openai-responses", "anthropic", "gemini"],
+)
+def test_provider_adapters_reject_audio_history_instead_of_emitting_empty_content(convert):
+    with pytest.raises(HistoryProjectionError, match="'audio'"):
+        convert(_audio_history())
 
 
 def test_deferred_loader_schema_formats_for_openai_chat_and_openrouter():

@@ -22,11 +22,13 @@ from arden.core.content import ContextContent, ImageContent, TextContent, render
 from arden.llm.base import CompletionClient, EmbeddingClient
 from arden.llm.history import (
     AssistantHistoryMessage,
+    HistoryDecodeError,
     ModelHistory,
     SystemHistoryMessage,
     ToolHistoryMessage,
     UserHistoryMessage,
     history_content_to_text,
+    unsupported_content_block,
 )
 from arden.llm.utils import parse_args
 from arden.observability.judgment import trace_client
@@ -139,7 +141,7 @@ class GeminiClient(CompletionClient, EmbeddingClient):
                     parts.append(types.Part(text=block.text))
                 case ImageContent():
                     if block.media_type not in _SUPPORTED_IMAGE_MIME_TYPES:
-                        continue
+                        raise unsupported_content_block("Gemini", block)
                     parts.append(
                         types.Part.from_bytes(
                             data=base64.b64decode(block.data),
@@ -148,6 +150,8 @@ class GeminiClient(CompletionClient, EmbeddingClient):
                     )
                 case ContextContent():
                     parts.append(types.Part(text=render_context(block)))
+                case _:
+                    raise unsupported_content_block("Gemini", block)
         return types.Content(role="user", parts=parts or [types.Part(text="")])
 
     def _convert_assistant(self, message: AssistantHistoryMessage) -> types.Content | None:
@@ -167,7 +171,9 @@ class GeminiClient(CompletionClient, EmbeddingClient):
         return types.Content(role="model", parts=parts) if parts else None
 
     def _convert_tool_result(self, message: ToolHistoryMessage, tool_name_map: dict[str, str]) -> types.Part:
-        tool_name = tool_name_map.get(message.tool_call_id, "unknown")
+        tool_name = tool_name_map.get(message.tool_call_id)
+        if tool_name is None:
+            raise HistoryDecodeError("Invalid model-history tool result (tool.orphan_result)")
         content_str = message.content_text
         try:
             result_dict = json.loads(content_str)

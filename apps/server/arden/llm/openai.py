@@ -26,6 +26,7 @@ from arden.llm.history import (
     ToolHistoryMessage,
     UserHistoryMessage,
     history_content_to_text,
+    unsupported_content_block,
 )
 from arden.llm.models import Provider, get_model, supports_native_deferred_tools
 from arden.llm.openai_responses import (
@@ -418,6 +419,8 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
                     )
                 case ContextContent():
                     result.append({"type": "text", "text": render_context(block)})
+                case _:
+                    raise unsupported_content_block("OpenAI Chat Completions", block)
         return result
 
     def _parse_response(self, response, model: str) -> CompletionResponse:

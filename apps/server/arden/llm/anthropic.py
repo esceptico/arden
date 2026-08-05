@@ -29,6 +29,7 @@ from arden.llm.history import (
     ToolHistoryMessage,
     UserHistoryMessage,
     history_content_to_text,
+    unsupported_content_block,
 )
 from arden.llm.models import get_model
 from arden.llm.utils import parse_args
@@ -331,7 +332,7 @@ class AnthropicClient(CompletionClient):
                 case ContextContent():
                     item = {"type": "text", "text": render_context(block)}
                 case _:
-                    continue
+                    raise unsupported_content_block("Anthropic system messages", block)
             if index in message.cache_breakpoints:
                 item["cache_control"] = {"type": "ephemeral"}
             result.append(item)
@@ -366,6 +367,8 @@ class AnthropicClient(CompletionClient):
                     )
                 case ContextContent():
                     result.append({"type": "text", "text": render_context(block)})
+                case _:
+                    raise unsupported_content_block("Anthropic", block)
         return result
 
     def _convert_assistant(self, message: AssistantHistoryMessage) -> dict:

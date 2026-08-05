@@ -5,7 +5,7 @@ import pytest
 
 from arden.llm.anthropic import AnthropicClient
 from arden.llm.gemini import GeminiClient
-from arden.llm.history import AssistantHistoryMessage, HistoryDecodeError, ModelHistory, ReplayProvider
+from arden.llm.history import HistoryDecodeError, ModelHistory
 from arden.llm.openai import OpenAIClient
 from arden.llm.openai_responses import _convert_messages as convert_openai_responses_messages
 
@@ -66,30 +66,39 @@ def test_provider_replay_state_stays_with_its_owner_without_mutating_history():
     assert messages == original
 
 
-def test_model_history_decodes_replay_affinity_and_invalid_signature_safely():
-    history = ModelHistory.from_raw(
-        [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "thought_signature": "not base64!",
-                        "function": {"name": "Read", "arguments": "{}"},
-                    }
-                ],
-                "anthropic_content": [{"type": "text", "text": "native"}],
-                "openai_response_items": [{"type": "message", "content": []}],
-            }
-        ]
-    )
+@pytest.mark.parametrize("signature", ["", "not base64!", None, 42])
+def test_model_history_rejects_present_invalid_thought_signatures(signature: object):
+    with pytest.raises(HistoryDecodeError, match=r"tool_call\.thought_signature_invalid"):
+        ModelHistory.from_raw(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "thought_signature": signature,
+                            "function": {"name": "Read", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ]
+        )
 
-    message = history.messages[0]
-    assert isinstance(message, AssistantHistoryMessage)
-    assert message.tool_calls[0].thought_signature is None
-    assert message.replay_for(ReplayProvider.ANTHROPIC) is not None
-    assert message.replay_for(ReplayProvider.OPENAI_RESPONSES) is not None
+
+def test_model_history_rejects_orphan_tool_results():
+    with pytest.raises(HistoryDecodeError, match=r"tool\.orphan_result"):
+        ModelHistory.from_raw([{"role": "tool", "tool_call_id": "missing", "content": "unmatched"}])
+
+
+def test_model_history_rejects_system_messages_after_conversation_content():
+    with pytest.raises(HistoryDecodeError, match=r"system\.not_first"):
+        ModelHistory.from_raw(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "system", "content": "late policy"},
+            ]
+        )
 
 
 def test_foreign_replay_is_lazy_and_materialized_once_by_its_owner():

@@ -33,6 +33,7 @@ from arden.llm.history import (
     ToolHistoryMessage,
     UserHistoryMessage,
     history_content_to_text,
+    unsupported_content_block,
 )
 
 REASONING_INCLUDE = ["reasoning.encrypted_content"]
@@ -584,6 +585,8 @@ def _convert_user_content(content: HistoryContent) -> str | list[dict[str, Any]]
                 )
             case ContextContent():
                 result.append({"type": "input_text", "text": render_context(block)})
+            case _:
+                raise unsupported_content_block("OpenAI Responses", block)
     return result
 
 

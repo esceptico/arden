@@ -223,6 +223,11 @@ def test_anthropic_tool_error_exposes_structured_recovery_to_model():
         ModelHistory.from_raw(
             [
                 {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "toolu_1", "function": {"name": "wiki_edit_page", "arguments": "{}"}}],
+                },
+                {
                     "role": "tool",
                     "tool_call_id": "toolu_1",
                     "content": "Read required.",
@@ -234,12 +239,12 @@ def test_anthropic_tool_error_exposes_structured_recovery_to_model():
                             "recovery_action": "Read the page again.",
                         },
                     },
-                }
+                },
             ]
         )
     )
 
-    content = messages[0]["content"][0]["content"]
+    content = messages[1]["content"][0]["content"]
     assert "<tool_outcome>" in content
     assert "fresh_read_required" in content
 

@@ -1,3 +1,4 @@
+import base64
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -56,6 +57,11 @@ def test_openai_tool_error_exposes_structured_recovery_to_model():
     request = client._prepare(
         messages=[
             {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "function": {"name": "wiki_read_page", "arguments": "{}"}}],
+            },
+            {
                 "role": "tool",
                 "tool_call_id": "call_1",
                 "content": "Read this wiki page before changing it.",
@@ -67,7 +73,7 @@ def test_openai_tool_error_exposes_structured_recovery_to_model():
                         "recovery_action": "Read the page again, then retry the change.",
                     },
                 },
-            }
+            },
         ],
         model="custom-model",
         tools=None,
@@ -78,7 +84,7 @@ def test_openai_tool_error_exposes_structured_recovery_to_model():
         response_format=None,
     )
 
-    content = request["messages"][0]["content"]
+    content = request["messages"][1]["content"]
     assert "<tool_outcome>" in content
     assert "fresh_read_required" in content
     assert "recovery_action" in content
@@ -119,11 +125,16 @@ def test_chat_completions_request_strips_internal_tool_result_data():
     request = client._prepare(
         messages=[
             {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "call_1", "function": {"name": "research", "arguments": "{}"}}],
+            },
+            {
                 "role": "tool",
                 "tool_call_id": "call_1",
                 "content": "Started background agent.",
                 "data": {"child_agent": {"child_run_id": "child-run-1"}},
-            }
+            },
         ],
         model="gpt-5.2",
         tools=None,
@@ -134,7 +145,11 @@ def test_chat_completions_request_strips_internal_tool_result_data():
         response_format=None,
     )
 
-    assert request["messages"] == [{"role": "tool", "tool_call_id": "call_1", "content": "Started background agent."}]
+    assert request["messages"][1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "Started background agent.",
+    }
 
 
 def test_chat_completions_request_strips_openai_response_items():
@@ -177,7 +192,7 @@ def test_chat_completions_projects_foreign_provider_history_without_mutation():
                 {
                     "id": "call_1",
                     "type": "function",
-                    "thought_signature": "gemini-state",
+                    "thought_signature": base64.b64encode(b"gemini-state").decode(),
                     "function": {
                         "name": "Search",
                         "arguments": '{"q":"arden"}',
