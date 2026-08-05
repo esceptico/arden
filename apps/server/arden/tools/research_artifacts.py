@@ -135,18 +135,17 @@ def _stat_row(scope_id: str, rel_path: str, content: str | None = None) -> dict:
 
 def _read_manifest(scope_id: str) -> dict:
     path = _manifest_path(scope_id)
-    if not path.exists():
-        return {"scope_id": scope_id, "artifact_dir": str(artifact_scope_dir(scope_id)), "files": []}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError
-        data.setdefault("scope_id", scope_id)
-        data.setdefault("artifact_dir", str(artifact_scope_dir(scope_id)))
-        data.setdefault("files", [])
-        return data
-    except (OSError, json.JSONDecodeError, ValueError):
+        path.lstat()
+    except FileNotFoundError:
         return {"scope_id": scope_id, "artifact_dir": str(artifact_scope_dir(scope_id)), "files": []}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Research artifact manifest must be a JSON object: {path}")
+    data.setdefault("scope_id", scope_id)
+    data.setdefault("artifact_dir", str(artifact_scope_dir(scope_id)))
+    data.setdefault("files", [])
+    return data
 
 
 def _write_manifest(scope_id: str) -> None:

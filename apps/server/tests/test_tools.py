@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 import arden.database as database
 import arden.tools.executor as tool_executor_module
+import arden.tools.research_artifacts as research_artifacts_module
 from arden.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
 from arden.agent.types.tool_call import FunctionCall, PendingToolCall
 from arden.agent.types.tool_call import ToolCall as AgentToolCall
@@ -2017,6 +2018,49 @@ async def test_research_artifact_write_then_read(session_store: SessionStore):
     artifact_file = artifact_scope_dir("run-1") / "sources" / "inv.md"
     assert artifact_file.read_text() == "hello world"
     assert (artifact_scope_dir("run-1") / "manifest.json").exists()
+
+
+def test_research_artifact_manifest_defaults_only_when_missing(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(research_artifacts_module, "ARDEN_DIR", tmp_path / ".arden")
+    scope_id = "run-1"
+    path = research_artifacts_module._manifest_path(scope_id)
+
+    assert research_artifacts_module._read_manifest(scope_id) == {
+        "scope_id": scope_id,
+        "artifact_dir": str(research_artifacts_module.artifact_scope_dir(scope_id)),
+        "files": [],
+    }
+
+    path.parent.mkdir(parents=True)
+    malformed = b"{not json}\n"
+    path.write_bytes(malformed)
+
+    with pytest.raises(json.JSONDecodeError):
+        research_artifacts_module._read_manifest(scope_id)
+
+    assert path.read_bytes() == malformed
+
+
+def test_research_artifact_manifest_read_error_is_not_replaced(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(research_artifacts_module, "ARDEN_DIR", tmp_path / ".arden")
+    scope_id = "run-1"
+    path = research_artifacts_module._manifest_path(scope_id)
+    path.parent.mkdir(parents=True)
+    contents = b'{"files": []}\n'
+    path.write_bytes(contents)
+    original_read_text = Path.read_text
+
+    def unreadable(self: Path, *args, **kwargs):
+        if self == path:
+            raise OSError("permission denied")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+
+    with pytest.raises(OSError, match="permission denied"):
+        research_artifacts_module._read_manifest(scope_id)
+
+    assert path.read_bytes() == contents
 
 
 @pytest.mark.asyncio
