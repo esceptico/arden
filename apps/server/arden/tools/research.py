@@ -313,7 +313,6 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
 
     data: dict = spawn.child_agent_data()
     data["research_scope_id"] = research_scope_id
-    data["research_tool_call_id"] = execution.tool_id
     data["artifact_dir"] = str(artifact_scope_dir(research_scope_id))
     # Spawn-time provenance only. The agent has not run yet, so there is no
     # usage/cost, no workspace, no artifacts, and no child tool_call_ids — the
@@ -326,7 +325,6 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
             "max_depth": ctx.run.max_depth,
         },
         "derivation": {
-            "research_tool_call_id": execution.tool_id,
             "agent_ref": spawn.agent_ref,
         },
     }

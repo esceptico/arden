@@ -111,16 +111,16 @@ async def test_research_offers_scratchpad_and_writes_spawn_provenance(session_st
     assert set(captured["extra_tools"]) >= SCRATCHPAD_TOOL_NAMES
     assert result.data is not None
     assert result.data["research_scope_id"] == "research-fun-panda"
-    assert result.data["research_tool_call_id"] == "research-1"
+    assert "research_tool_call_id" not in result.data
     assert "research-fun-panda" in result.data["artifact_dir"]
     # Spawn-time provenance only — no usage, workspace, artifacts, or child
     # tool_call_ids: the agent has not run yet.
     assert result.data["provenance"]["query"] == "x"
     assert result.data["provenance"]["derivation"] == {
-        "research_tool_call_id": "research-1",
         "agent_ref": _agent_ref("x", "child-1"),
     }
     assert result.data["provenance"]["workspace_ref"] == "research-fun-panda:_provenance.json"
+    assert "tool_call_id" not in json.dumps(result.data["provenance"])
     assert "usage" not in result.data
     assert "artifacts" not in result.data
     assert "research_workspace" not in result.data
@@ -218,7 +218,7 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     )
     assert captured["research_scope_id"] == "research-fun-panda"
     assert result.data["research_scope_id"] == "research-fun-panda"
-    assert result.data["research_tool_call_id"] == "research-1"
+    assert "research_tool_call_id" not in result.data
 
 
 @pytest.mark.asyncio

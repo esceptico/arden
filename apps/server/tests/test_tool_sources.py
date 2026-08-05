@@ -435,6 +435,27 @@ class _SourceRunner:
         )
 
 
+class _ResearchProvenanceRunner:
+    async def execute_all(self, _calls):
+        yield ToolCompleted(
+            tool_id="call-1",
+            name="research",
+            result="Research started",
+            preview="Research started",
+            duration_ms=1,
+            is_error=False,
+            data={
+                "research_scope_id": "research-fun-panda",
+                "provenance": {
+                    "query": "audit tool history",
+                    "derivation": {"agent_ref": "audit~abc123"},
+                    "workspace_ref": "research-fun-panda:_provenance.json",
+                },
+            },
+            display_name="Research",
+        )
+
+
 @pytest.mark.asyncio
 async def test_dispatch_persists_source_refs_outside_tool_result_content():
     pending, raw = _pending_call()
@@ -451,6 +472,31 @@ async def test_dispatch_persists_source_refs_outside_tool_result_content():
             "data": {"source_refs": [_source().to_dict(), _page_source().to_dict()]},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_research_provenance_without_internal_tool_call_id():
+    pending, raw = _pending_call()
+    messages: list[dict] = []
+
+    async for _ in dispatch_tools(_ResearchProvenanceRunner(), messages, [pending], [raw]):
+        pass
+
+    assert messages == [
+        {
+            "role": Role.TOOL,
+            "tool_call_id": "call-1",
+            "content": "Research started",
+            "data": {
+                "provenance": {
+                    "query": "audit tool history",
+                    "derivation": {"agent_ref": "audit~abc123"},
+                    "workspace_ref": "research-fun-panda:_provenance.json",
+                }
+            },
+        }
+    ]
+    assert "tool_call_id" not in json.dumps(messages[0]["data"])
 
 
 @pytest.mark.asyncio
