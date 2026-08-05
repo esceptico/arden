@@ -18,10 +18,20 @@ from arden.agent import (
     Usage,
 )
 from arden.agent.types.tools import tool_result_content_for_model
-from arden.core.content import render_context
+from arden.core.content import ContextContent, ImageContent, TextContent, render_context
 from arden.llm.base import CompletionClient
+from arden.llm.history import (
+    AssistantHistoryMessage,
+    HistoryContent,
+    ModelHistory,
+    ReplayProvider,
+    SystemHistoryMessage,
+    ToolHistoryMessage,
+    UserHistoryMessage,
+    history_content_to_text,
+)
 from arden.llm.models import get_model
-from arden.llm.utils import blocks_to_text, parse_args
+from arden.llm.utils import parse_args
 from arden.observability.judgment import trace_client
 
 _FINISH_REASONS: dict[str, FinishReason] = {
@@ -106,7 +116,8 @@ class AnthropicClient(CompletionClient):
         if max_tokens is None:
             max_tokens = get_model(model).max_output_tokens
 
-        system, api_messages = self._split_system(messages)
+        history = ModelHistory.from_raw(messages)
+        system, api_messages = self._split_system(history)
         api_messages = self._convert_messages(api_messages)
         api_tools = self._convert_tools(tools, deferred_tools) if tools or deferred_tools else None
         api_tool_choice = self._resolve_tool_choice(api_tools, tool_choice, response_format)
@@ -298,48 +309,67 @@ class AnthropicClient(CompletionClient):
 
     # --- Message conversion ---
 
-    def _split_system(self, messages: list[dict]) -> tuple[list[dict] | None, list[dict]]:
-        if not messages or messages[0].get("role") != Role.SYSTEM:
-            return None, messages
+    def _split_system(self, history: ModelHistory) -> tuple[list[dict] | None, ModelHistory]:
+        if not history.messages or history.messages[0].role != Role.SYSTEM:
+            return None, history
 
-        content = messages[0]["content"]
-        system = content if isinstance(content, list) else [{"type": "text", "text": blocks_to_text(content)}]
+        system_message = history.messages[0]
+        if not isinstance(system_message, SystemHistoryMessage):
+            return None, history
+        system = self._convert_system_content(system_message)
+        return system, ModelHistory(history.messages[1:])
 
-        return system, messages[1:]
+    def _convert_system_content(self, message: SystemHistoryMessage) -> list[dict]:
+        if isinstance(message.content, str):
+            return [{"type": "text", "text": message.content}]
 
-    def _convert_messages(self, messages: list[dict]) -> list[dict]:
         result: list[dict] = []
-        for msg in messages:
-            match msg["role"]:
-                case Role.ASSISTANT:
-                    result.append(self._convert_assistant(msg))
-                case Role.TOOL:
-                    self._append_tool_result(result, msg)
-                case Role.USER:
-                    result.append({"role": Role.USER, "content": self._convert_user_content(msg["content"])})
+        for index, block in enumerate(message.content):
+            match block:
+                case TextContent():
+                    item = {"type": "text", "text": block.text}
+                case ContextContent():
+                    item = {"type": "text", "text": render_context(block)}
+                case _:
+                    continue
+            if index in message.cache_breakpoints:
+                item["cache_control"] = {"type": "ephemeral"}
+            result.append(item)
         return result
 
-    def _convert_user_content(self, content: str | list) -> str | list[dict]:
+    def _convert_messages(self, history: ModelHistory) -> list[dict]:
+        result: list[dict] = []
+        for message in history.messages:
+            match message:
+                case AssistantHistoryMessage():
+                    result.append(self._convert_assistant(message))
+                case ToolHistoryMessage():
+                    self._append_tool_result(result, message)
+                case UserHistoryMessage():
+                    result.append({"role": Role.USER, "content": self._convert_user_content(message.content)})
+        return result
+
+    def _convert_user_content(self, content: HistoryContent) -> str | list[dict]:
         if isinstance(content, str):
             return content
         result = []
         for block in content:
-            match block.get("type"):
-                case "text":
-                    result.append({"type": "text", "text": block["text"]})
-                case "image":
+            match block:
+                case TextContent():
+                    result.append({"type": "text", "text": block.text})
+                case ImageContent():
                     result.append(
                         {
                             "type": "image",
-                            "source": {"type": "base64", "media_type": block["media_type"], "data": block["data"]},
+                            "source": {"type": "base64", "media_type": block.media_type, "data": block.data},
                         }
                     )
-                case "context":
+                case ContextContent():
                     result.append({"type": "text", "text": render_context(block)})
         return result
 
-    def _convert_assistant(self, msg: dict) -> dict:
-        if content := msg.get("anthropic_content"):
+    def _convert_assistant(self, message: AssistantHistoryMessage) -> dict:
+        if replay := message.replay_for(ReplayProvider.ANTHROPIC):
             # Replay COPIES with any stale cache_control stripped: anchors are
             # per-request (the API allows 4 total), and mutating the stored
             # blocks would persist an anchor into session history forever.
@@ -347,32 +377,31 @@ class AnthropicClient(CompletionClient):
                 "role": Role.ASSISTANT,
                 "content": [
                     {k: v for k, v in block.items() if k != "cache_control"} if isinstance(block, dict) else block
-                    for block in content
+                    for block in replay.materialize()
                 ],
             }
 
         content_blocks: list[dict] = []
-        if text := msg["content"]:
+        if text := history_content_to_text(message.content):
             content_blocks.append({"type": "text", "text": text})
 
-        for tc in msg.get("tool_calls", []):
-            fn = tc["function"]
+        for tool_call in message.tool_calls:
             content_blocks.append(
                 {
                     "type": "tool_use",
-                    "id": tc["id"],
-                    "name": fn["name"],
-                    "input": parse_args(fn.get("arguments", "{}")),
+                    "id": tool_call.id,
+                    "name": tool_call.function.name,
+                    "input": parse_args(tool_call.function.arguments),
                 }
             )
 
         return {"role": Role.ASSISTANT, "content": content_blocks or ""}
 
-    def _append_tool_result(self, result: list[dict], msg: dict) -> None:
+    def _append_tool_result(self, result: list[dict], message: ToolHistoryMessage) -> None:
         block = {
             "type": "tool_result",
-            "tool_use_id": msg["tool_call_id"],
-            "content": tool_result_content_for_model(msg["content"], msg.get("outcome")),
+            "tool_use_id": message.tool_call_id,
+            "content": tool_result_content_for_model(message.content_text, message.outcome_dict()),
         }
         # Merge consecutive tool results into one user message
         if result and result[-1]["role"] == Role.USER and isinstance(result[-1]["content"], list):

@@ -2,6 +2,7 @@ from arden.agent import Role
 from arden.integrations import ALL_INTEGRATIONS
 from arden.llm.anthropic import AnthropicClient
 from arden.llm.gemini import GeminiClient
+from arden.llm.history import ModelHistory
 from arden.llm.openai import OpenAIClient
 from arden.llm.openai_codex import OpenAICodexClient
 from arden.llm.openai_responses import prepare_responses_request
@@ -38,7 +39,9 @@ def _tool_media_messages(media_type: str = "image/png") -> list[dict]:
 
 
 def test_claude_formats_tool_media_as_base64_image_block():
-    messages = AnthropicClient(api_key="test")._convert_messages(_tool_media_messages("image/png"))
+    messages = AnthropicClient(api_key="test")._convert_messages(
+        ModelHistory.from_raw(_tool_media_messages("image/png"))
+    )
 
     assert messages[1] == {
         "role": Role.USER,
@@ -69,7 +72,9 @@ def test_openrouter_formats_tool_media_as_chat_completion_data_url():
 
 
 def test_gemini_formats_supported_tool_media_as_inline_data():
-    _, contents = GeminiClient(api_key="test")._convert_messages(_tool_media_messages("image/png"))
+    _, contents = GeminiClient(api_key="test")._convert_messages(
+        ModelHistory.from_raw(_tool_media_messages("image/png"))
+    )
 
     image_part = contents[2].parts[1]
     assert image_part.inline_data.mime_type == "image/png"
@@ -77,7 +82,9 @@ def test_gemini_formats_supported_tool_media_as_inline_data():
 
 
 def test_gemini_skips_unsupported_gif_tool_media():
-    _, contents = GeminiClient(api_key="test")._convert_messages(_tool_media_messages("image/gif"))
+    _, contents = GeminiClient(api_key="test")._convert_messages(
+        ModelHistory.from_raw(_tool_media_messages("image/gif"))
+    )
 
     assert len(contents[2].parts) == 1
     assert contents[2].parts[0].text == "<tool_result_media>\nMedia returned.\n</tool_result_media>"

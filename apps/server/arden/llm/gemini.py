@@ -18,9 +18,17 @@ from arden.agent import (
     Usage,
 )
 from arden.agent.types.tools import ToolOutcomeStatus
-from arden.core.content import render_context
+from arden.core.content import ContextContent, ImageContent, TextContent, render_context
 from arden.llm.base import CompletionClient, EmbeddingClient
-from arden.llm.utils import blocks_to_text, parse_args
+from arden.llm.history import (
+    AssistantHistoryMessage,
+    ModelHistory,
+    SystemHistoryMessage,
+    ToolHistoryMessage,
+    UserHistoryMessage,
+    history_content_to_text,
+)
+from arden.llm.utils import parse_args
 from arden.observability.judgment import trace_client
 
 _THINKING_LEVELS = {
@@ -48,7 +56,8 @@ class GeminiClient(CompletionClient, EmbeddingClient):
         response_format: type[BaseModel] | None = None,
         **kwargs,
     ) -> CompletionResponse:
-        system_instruction, contents = self._convert_messages(messages)
+        history = ModelHistory.from_raw(messages)
+        system_instruction, contents = self._convert_messages(history)
 
         config_kwargs: dict = {}
         if temperature is not None:
@@ -96,84 +105,76 @@ class GeminiClient(CompletionClient, EmbeddingClient):
 
     # --- Message conversion ---
 
-    def _build_tool_name_map(self, messages: list[dict]) -> dict[str, str]:
-        name_map: dict[str, str] = {}
-        for msg in messages:
-            if msg["role"] == Role.ASSISTANT:
-                for tc in msg.get("tool_calls", []):
-                    name_map[tc["id"]] = tc["function"]["name"]
-        return name_map
+    def _build_tool_name_map(self, history: ModelHistory) -> dict[str, str]:
+        return history.tool_names_by_call_id()
 
-    def _convert_messages(self, messages: list[dict]) -> tuple[str | None, list[types.Content]]:
+    def _convert_messages(self, history: ModelHistory) -> tuple[str | None, list[types.Content]]:
         system_instruction = None
         contents: list[types.Content] = []
-        tool_name_map = self._build_tool_name_map(messages)
+        tool_name_map = self._build_tool_name_map(history)
 
-        for msg in messages:
-            match msg["role"]:
-                case Role.SYSTEM:
-                    system_instruction = blocks_to_text(msg["content"])
-                case Role.USER:
-                    contents.append(self._convert_user(msg))
-                case Role.ASSISTANT:
-                    if content := self._convert_assistant(msg):
+        for message in history.messages:
+            match message:
+                case UserHistoryMessage():
+                    contents.append(self._convert_user(message))
+                case AssistantHistoryMessage():
+                    if content := self._convert_assistant(message):
                         contents.append(content)
-                case Role.TOOL:
-                    part = self._convert_tool_result(msg, tool_name_map)
+                case ToolHistoryMessage():
+                    part = self._convert_tool_result(message, tool_name_map)
                     self._append_tool_part(contents, part)
+                case SystemHistoryMessage():
+                    system_instruction = history_content_to_text(message.content)
 
         return system_instruction, contents
 
-    def _convert_user(self, msg: dict) -> types.Content:
-        content = msg["content"]
+    def _convert_user(self, message: UserHistoryMessage) -> types.Content:
+        content = message.content
         if isinstance(content, str):
             return types.Content(role="user", parts=[types.Part(text=content)])
         parts: list[types.Part] = []
         for block in content:
-            match block.get("type"):
-                case "text":
-                    parts.append(types.Part(text=block["text"]))
-                case "image":
-                    if block["media_type"] not in _SUPPORTED_IMAGE_MIME_TYPES:
+            match block:
+                case TextContent():
+                    parts.append(types.Part(text=block.text))
+                case ImageContent():
+                    if block.media_type not in _SUPPORTED_IMAGE_MIME_TYPES:
                         continue
                     parts.append(
                         types.Part.from_bytes(
-                            data=base64.b64decode(block["data"]),
-                            mime_type=block["media_type"],
+                            data=base64.b64decode(block.data),
+                            mime_type=block.media_type,
                         )
                     )
-                case "context":
+                case ContextContent():
                     parts.append(types.Part(text=render_context(block)))
         return types.Content(role="user", parts=parts or [types.Part(text="")])
 
-    def _convert_assistant(self, msg: dict) -> types.Content | None:
+    def _convert_assistant(self, message: AssistantHistoryMessage) -> types.Content | None:
         parts: list[types.Part] = []
-        if text := msg["content"]:
+        if text := history_content_to_text(message.content):
             parts.append(types.Part(text=text))
-        for tc in msg.get("tool_calls", []):
-            fn = tc["function"]
+        for tool_call in message.tool_calls:
             part_kwargs: dict = {
                 "function_call": types.FunctionCall(
-                    name=fn["name"],
-                    args=parse_args(fn.get("arguments", "{}")),
+                    name=tool_call.function.name,
+                    args=parse_args(tool_call.function.arguments),
                 ),
             }
-            if sig := tc.get("thought_signature"):
-                part_kwargs["thought_signature"] = base64.b64decode(sig)
+            if tool_call.thought_signature:
+                part_kwargs["thought_signature"] = tool_call.thought_signature
             parts.append(types.Part(**part_kwargs))
         return types.Content(role="model", parts=parts) if parts else None
 
-    def _convert_tool_result(self, msg: dict, tool_name_map: dict[str, str]) -> types.Part:
-        tool_call_id = msg["tool_call_id"]
-        tool_name = tool_name_map.get(tool_call_id, "unknown")
-        content_str = msg["content"]
+    def _convert_tool_result(self, message: ToolHistoryMessage, tool_name_map: dict[str, str]) -> types.Part:
+        tool_name = tool_name_map.get(message.tool_call_id, "unknown")
+        content_str = message.content_text
         try:
             result_dict = json.loads(content_str)
         except (json.JSONDecodeError, TypeError):
             result_dict = {"result": content_str}
-        outcome = msg.get("outcome")
-        if isinstance(outcome, dict) and outcome.get("status") != ToolOutcomeStatus.SUCCEEDED:
-            result_dict["outcome"] = outcome
+        if message.outcome and message.outcome.status != ToolOutcomeStatus.SUCCEEDED:
+            result_dict["outcome"] = message.outcome.to_dict()
 
         return types.Part(
             function_response=types.FunctionResponse(

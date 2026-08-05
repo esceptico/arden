@@ -2,6 +2,7 @@ from copy import deepcopy
 
 from arden.llm.anthropic import AnthropicClient
 from arden.llm.gemini import GeminiClient
+from arden.llm.history import ModelHistory
 from arden.llm.openai import OpenAIClient
 from arden.llm.openai_responses import _convert_messages as convert_openai_messages
 
@@ -34,8 +35,8 @@ def test_openai_and_anthropic_project_bounded_tool_result_without_mutating_histo
     ]
     original = deepcopy(messages)
 
-    anthropic = AnthropicClient(api_key="test")._convert_messages(messages[1:])
-    _instructions, openai = convert_openai_messages(messages)
+    anthropic = AnthropicClient(api_key="test")._convert_messages(ModelHistory.from_raw(messages[1:]))
+    _instructions, openai = convert_openai_messages(ModelHistory.from_raw(messages))
 
     anthropic_result = next(
         block
@@ -55,10 +56,11 @@ def test_openai_and_anthropic_project_bounded_tool_result_without_mutating_histo
 def test_provider_projections_do_not_leak_background_result_ref():
     messages = [{"role": "user", "content": "completion", "background_result_ref": "bg-1"}]
 
-    chat = OpenAIClient(api_key="test")._preprocess_messages(messages)
-    anthropic = AnthropicClient(api_key="test")._convert_messages(messages)
-    _instructions, responses = convert_openai_messages(messages)
-    _system, gemini = GeminiClient(api_key="test")._convert_messages(messages)
+    history = ModelHistory.from_raw(messages)
+    chat = OpenAIClient(api_key="test")._preprocess_messages(history)
+    anthropic = AnthropicClient(api_key="test")._convert_messages(history)
+    _instructions, responses = convert_openai_messages(history)
+    _system, gemini = GeminiClient(api_key="test")._convert_messages(history)
 
     assert "background_result_ref" not in str(chat)
     assert "background_result_ref" not in str(anthropic)

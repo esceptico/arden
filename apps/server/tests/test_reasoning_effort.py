@@ -7,6 +7,7 @@ from arden.agent import ProviderToolCall
 from arden.agent.llm.parsing import normalize_assistant_message
 from arden.config import Config
 from arden.llm.anthropic import AnthropicClient
+from arden.llm.history import ModelHistory
 from arden.llm.models import get_model
 from arden.server.routers.settings import _validate_reasoning_patch
 
@@ -212,28 +213,30 @@ def test_anthropic_preserves_tool_search_blocks_for_next_request():
     assert assistant["provider_tool_calls"][0]["name"] == "tool_search"
     assert assistant["provider_tool_calls"][0]["arguments"] == '{"tools": ["slack_search"]}'
     assert assistant["provider_tool_calls"][0]["result"] == "Matched tools: slack_search"
-    assert client._convert_assistant(assistant)["content"] == anthropic_content
+    assert client._convert_messages(ModelHistory.from_raw([assistant]))[0]["content"] == anthropic_content
 
 
 def test_anthropic_tool_error_exposes_structured_recovery_to_model():
     client = AnthropicClient(api_key="test")
 
     messages = client._convert_messages(
-        [
-            {
-                "role": "tool",
-                "tool_call_id": "toolu_1",
-                "content": "Read required.",
-                "outcome": {
-                    "status": "failed",
-                    "error": {
-                        "code": "fresh_read_required",
-                        "retryable": False,
-                        "recovery_action": "Read the page again.",
+        ModelHistory.from_raw(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "toolu_1",
+                    "content": "Read required.",
+                    "outcome": {
+                        "status": "failed",
+                        "error": {
+                            "code": "fresh_read_required",
+                            "retryable": False,
+                            "recovery_action": "Read the page again.",
+                        },
                     },
-                },
-            }
-        ]
+                }
+            ]
+        )
     )
 
     content = messages[0]["content"][0]["content"]

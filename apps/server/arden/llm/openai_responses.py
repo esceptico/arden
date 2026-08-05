@@ -23,8 +23,17 @@ from arden.agent import (
     Usage,
 )
 from arden.agent.types.tools import tool_result_content_for_model
-from arden.core.content import render_context
-from arden.llm.utils import blocks_to_text
+from arden.core.content import ContextContent, ImageContent, TextContent, render_context
+from arden.llm.history import (
+    AssistantHistoryMessage,
+    HistoryContent,
+    ModelHistory,
+    ReplayProvider,
+    SystemHistoryMessage,
+    ToolHistoryMessage,
+    UserHistoryMessage,
+    history_content_to_text,
+)
 
 REASONING_INCLUDE = ["reasoning.encrypted_content"]
 
@@ -66,7 +75,8 @@ def prepare_responses_request(
     store: bool | None = False,
     **kwargs,
 ) -> dict[str, Any]:
-    instructions, input_items = _convert_messages(messages)
+    history = ModelHistory.from_raw(messages)
+    instructions, input_items = _convert_messages(history)
     request: dict[str, Any] = {
         "model": model,
         "input": input_items,
@@ -532,82 +542,67 @@ def _tool_names(value: Any) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def _convert_messages(messages: list[dict]) -> tuple[str | None, list[dict[str, Any]]]:
+def _convert_messages(history: ModelHistory) -> tuple[str | None, list[dict[str, Any]]]:
     instructions: list[str] = []
     input_items: list[dict[str, Any]] = []
 
-    for msg in messages:
-        role = msg["role"]
-        content = msg.get("content") or ""
-
-        if role == Role.SYSTEM or role == "system":
-            instructions.append(_content_to_text(content))
-            continue
-
-        if role == Role.USER or role == "user":
-            input_items.append({"role": "user", "content": _convert_user_content(content)})
-            continue
-
-        if role == Role.ASSISTANT or role == "assistant":
-            input_items.extend(_convert_assistant_message(msg))
-            continue
-
-        if role == Role.TOOL or role == "tool":
-            input_items.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": msg["tool_call_id"],
-                    "output": tool_result_content_for_model(_content_to_text(content), msg.get("outcome")),
-                }
-            )
+    for message in history.messages:
+        match message:
+            case SystemHistoryMessage():
+                instructions.append(history_content_to_text(message.content))
+            case UserHistoryMessage():
+                input_items.append({"role": "user", "content": _convert_user_content(message.content)})
+            case AssistantHistoryMessage():
+                input_items.extend(_convert_assistant_message(message))
+            case ToolHistoryMessage():
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": message.tool_call_id,
+                        "output": tool_result_content_for_model(message.content_text, message.outcome_dict()),
+                    }
+                )
 
     return ("\n\n".join(part for part in instructions if part) or None), input_items
 
 
-def _content_to_text(content: str | list) -> str:
-    if isinstance(content, str):
-        return content
-    return blocks_to_text(content)
-
-
-def _convert_user_content(content: str | list) -> str | list[dict[str, Any]]:
+def _convert_user_content(content: HistoryContent) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
     result: list[dict[str, Any]] = []
     for block in content:
-        match block.get("type"):
-            case "text":
-                result.append({"type": "input_text", "text": block["text"]})
-            case "image":
+        match block:
+            case TextContent():
+                result.append({"type": "input_text", "text": block.text})
+            case ImageContent():
                 result.append(
                     {
                         "type": "input_image",
                         "detail": "auto",
-                        "image_url": f"data:{block['media_type']};base64,{block['data']}",
+                        "image_url": f"data:{block.media_type};base64,{block.data}",
                     }
                 )
-            case "context":
+            case ContextContent():
                 result.append({"type": "input_text", "text": render_context(block)})
     return result
 
 
-def _convert_assistant_message(msg: dict) -> list[dict[str, Any]]:
-    if response_items := msg.get("openai_response_items"):
-        return deepcopy(response_items)
+def _convert_assistant_message(message: AssistantHistoryMessage) -> list[dict[str, Any]]:
+    if replay := message.replay_for(ReplayProvider.OPENAI_RESPONSES):
+        return replay.materialize()
 
     items: list[dict[str, Any]] = []
-    if encrypted := msg.get("reasoning_encrypted_content"):
+    if encrypted := message.reasoning_encrypted_content:
         items.append({"type": "reasoning", "encrypted_content": encrypted, "summary": []})
-    if content := msg.get("content"):
-        items.append({"role": "assistant", "content": _content_to_text(content)})
-    for tc in msg.get("tool_calls", []):
-        fn = tc["function"]
+    if content := history_content_to_text(message.content):
+        items.append({"role": "assistant", "content": content})
+    for tool_call in message.tool_calls:
         items.append(
             {
                 "type": "function_call",
-                "call_id": tc["id"],
-                "name": fn["name"],
-                "arguments": fn.get("arguments", "{}"),
+                "call_id": tool_call.id,
+                "name": tool_call.function.name,
+                "arguments": tool_call.function.arguments,
                 "status": "completed",
             }
         )

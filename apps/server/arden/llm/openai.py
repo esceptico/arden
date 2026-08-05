@@ -17,15 +17,22 @@ from arden.agent import (
     Usage,
 )
 from arden.agent.types.tools import tool_result_content_for_model
-from arden.core.content import render_context
+from arden.core.content import ContextContent, ImageContent, TextContent, render_context
 from arden.llm.base import CompletionClient, EmbeddingClient
+from arden.llm.history import (
+    AssistantHistoryMessage,
+    HistoryMessage,
+    ModelHistory,
+    ToolHistoryMessage,
+    UserHistoryMessage,
+    history_content_to_text,
+)
 from arden.llm.models import Provider, get_model, supports_native_deferred_tools
 from arden.llm.openai_responses import (
     complete_responses_completion,
     parse_responses_response,
     prepare_responses_request,
 )
-from arden.llm.utils import blocks_to_text
 from arden.observability.judgment import trace_client
 
 
@@ -61,7 +68,8 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
         response_format: type[BaseModel] | None,
         **kwargs,
     ) -> dict:
-        messages = self._preprocess_messages(messages)
+        history = ModelHistory.from_raw(messages)
+        messages = self._preprocess_messages(history)
         request: dict = {"model": model, "messages": messages}
 
         if not self._supports_temperature(model):
@@ -360,56 +368,55 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
     async def close(self) -> None:
         await self._client.close()
 
-    def _preprocess_messages(self, messages: list[dict]) -> list[dict]:
-        return [self._project_chat_message(message) for message in messages]
+    def _preprocess_messages(self, history: ModelHistory) -> list[dict]:
+        return [self._project_chat_message(message) for message in history.messages]
 
-    def _project_chat_message(self, message: dict) -> dict:
+    def _project_chat_message(self, message: HistoryMessage) -> dict:
         """Build the Chat Completions shape from provider-neutral history."""
-        role = message["role"]
-        content = message.get("content")
+        role = message.role
+        content = message.content
         projected: dict = {"role": role, "content": content}
 
-        if role == Role.ASSISTANT and message.get("tool_calls"):
-            projected["tool_calls"] = [self._project_chat_tool_call(call) for call in message["tool_calls"]]
-        elif role == Role.TOOL:
-            tool_content = blocks_to_text(content) if isinstance(content, list) else content or ""
-            projected["content"] = tool_result_content_for_model(tool_content, message.get("outcome"))
-            projected["tool_call_id"] = message["tool_call_id"]
+        if isinstance(message, AssistantHistoryMessage) and message.tool_calls:
+            projected["tool_calls"] = [self._project_chat_tool_call(call) for call in message.tool_calls]
+        elif isinstance(message, ToolHistoryMessage):
+            projected["content"] = tool_result_content_for_model(message.content_text, message.outcome_dict())
+            projected["tool_call_id"] = message.tool_call_id
 
-        if isinstance(projected["content"], list):
+        if not isinstance(projected["content"], str):
             projected["content"] = (
-                self._convert_user_content(projected["content"])
-                if role == Role.USER
-                else blocks_to_text(projected["content"])
+                self._convert_user_content(message.content)
+                if isinstance(message, UserHistoryMessage)
+                else history_content_to_text(message.content)
             )
         return projected
 
     @staticmethod
-    def _project_chat_tool_call(tool_call: dict) -> dict:
-        function = tool_call["function"]
+    def _project_chat_tool_call(tool_call: ToolCall) -> dict:
+        function = tool_call.function
         return {
-            "id": tool_call["id"],
+            "id": tool_call.id,
             "type": "function",
             "function": {
-                "name": function["name"],
-                "arguments": function.get("arguments", "{}"),
+                "name": function.name,
+                "arguments": function.arguments,
             },
         }
 
-    def _convert_user_content(self, content: list) -> list[dict]:
+    def _convert_user_content(self, content: tuple) -> list[dict]:
         result = []
         for block in content:
-            match block.get("type"):
-                case "text":
-                    result.append({"type": "text", "text": block["text"]})
-                case "image":
+            match block:
+                case TextContent():
+                    result.append({"type": "text", "text": block.text})
+                case ImageContent():
                     result.append(
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:{block['media_type']};base64,{block['data']}"},
+                            "image_url": {"url": f"data:{block.media_type};base64,{block.data}"},
                         }
                     )
-                case "context":
+                case ContextContent():
                     result.append({"type": "text", "text": render_context(block)})
         return result
 
