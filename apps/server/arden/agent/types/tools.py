@@ -1,10 +1,47 @@
 import json
+import math
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from urllib.parse import urlsplit
 
-from arden.core.content import ContentBlock, parse_block
+from arden.agent.types.tool_outcomes import (
+    ToolEffect,
+    ToolError,
+    ToolOutcome,
+    ToolOutcomePayloadError,
+    ToolOutcomeStatus,
+    ToolVerification,
+    tool_result_content_for_model,
+)
+from arden.core.content import (
+    AudioContent,
+    ContentBlock,
+    ContentBlockError,
+    ContextContent,
+    ImageContent,
+    TextContent,
+    parse_block,
+)
+
+__all__ = [
+    "ToolEffect",
+    "ToolError",
+    "ToolMeta",
+    "ToolOutcome",
+    "ToolOutcomePayloadError",
+    "ToolOutcomeStatus",
+    "ToolResult",
+    "ToolResultPayloadError",
+    "ToolSourceRef",
+    "ToolSourceRefError",
+    "ToolVerification",
+    "canonical_source_title",
+    "decode_source_refs",
+    "normalize_source_refs",
+    "tool_result_content_for_model",
+    "validate_source_provider",
+]
 
 _PROVIDER_MAX_CHARS = 64
 _KIND_MAX_CHARS = 64
@@ -14,136 +51,17 @@ _REF_MAX_CHARS = 2048
 _TITLE_MAX_CHARS = 256
 _URL_MAX_CHARS = 4096
 _SOURCE_REFS_MAX = 50
+_JSON_MAX_DEPTH = 64
+_HTTP_URL_TOKEN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_CONTENT_BLOCK_TYPES = (TextContent, ImageContent, AudioContent, ContextContent)
 
 
-class ToolOutcomeStatus(StrEnum):
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    DENIED = "denied"
-    UNCERTAIN = "uncertain"
+class ToolResultPayloadError(ValueError):
+    """A marked durable ToolResult envelope was malformed."""
 
 
-def tool_result_content_for_model(content: str, outcome: Mapping[str, object] | None) -> str:
-    """Attach machine-readable recovery metadata without changing the UI result."""
-    if not outcome or outcome.get("status") == ToolOutcomeStatus.SUCCEEDED:
-        return content
-    error = outcome.get("error")
-    payload: dict[str, object] = {"status": outcome.get("status")}
-    if isinstance(error, Mapping):
-        payload["error"] = dict(error)
-    return f"{content}\n\n<tool_outcome>{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}</tool_outcome>"
-
-
-@dataclass(frozen=True, slots=True)
-class ToolError:
-    code: str
-    retryable: bool = False
-    recovery_action: str | None = None
-    diagnostic_ref: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        data: dict[str, object] = {"code": self.code, "retryable": self.retryable}
-        if self.recovery_action:
-            data["recovery_action"] = self.recovery_action
-        if self.diagnostic_ref:
-            data["diagnostic_ref"] = self.diagnostic_ref
-        return data
-
-
-@dataclass(frozen=True, slots=True)
-class ToolEffect:
-    operation: str
-    target: str
-    before_ref: str | None = None
-    after_ref: str | None = None
-
-    def to_dict(self) -> dict[str, str]:
-        data = {"operation": self.operation, "target": self.target}
-        if self.before_ref:
-            data["before_ref"] = self.before_ref
-        if self.after_ref:
-            data["after_ref"] = self.after_ref
-        return data
-
-
-@dataclass(frozen=True, slots=True)
-class ToolVerification:
-    postcondition: str
-    observed: str
-    confidence: float | None = None
-
-    def to_dict(self) -> dict[str, str | float]:
-        data: dict[str, str | float] = {
-            "postcondition": self.postcondition,
-            "observed": self.observed,
-        }
-        if self.confidence is not None:
-            data["confidence"] = self.confidence
-        return data
-
-
-@dataclass(frozen=True, slots=True)
-class ToolOutcome:
-    status: ToolOutcomeStatus
-    error: ToolError | None = None
-    effect: ToolEffect | None = None
-    verification: ToolVerification | None = None
-    receipt: str | None = None
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, object]) -> "ToolOutcome":
-        error_value = value.get("error")
-        effect_value = value.get("effect")
-        verification_value = value.get("verification")
-        return cls(
-            status=ToolOutcomeStatus(str(value["status"])),
-            error=(
-                ToolError(
-                    code=str(error_value["code"]),
-                    retryable=bool(error_value.get("retryable", False)),
-                    recovery_action=_trimmed_string(error_value.get("recovery_action")),
-                    diagnostic_ref=_trimmed_string(error_value.get("diagnostic_ref")),
-                )
-                if isinstance(error_value, Mapping)
-                else None
-            ),
-            effect=(
-                ToolEffect(
-                    operation=str(effect_value["operation"]),
-                    target=str(effect_value["target"]),
-                    before_ref=_trimmed_string(effect_value.get("before_ref")),
-                    after_ref=_trimmed_string(effect_value.get("after_ref")),
-                )
-                if isinstance(effect_value, Mapping)
-                else None
-            ),
-            verification=(
-                ToolVerification(
-                    postcondition=str(verification_value["postcondition"]),
-                    observed=str(verification_value["observed"]),
-                    confidence=(
-                        float(verification_value["confidence"])
-                        if isinstance(verification_value.get("confidence"), int | float)
-                        else None
-                    ),
-                )
-                if isinstance(verification_value, Mapping)
-                else None
-            ),
-            receipt=_trimmed_string(value.get("receipt")),
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        data: dict[str, object] = {"status": self.status.value}
-        if self.error:
-            data["error"] = self.error.to_dict()
-        if self.effect:
-            data["effect"] = self.effect.to_dict()
-        if self.verification:
-            data["verification"] = self.verification.to_dict()
-        if self.receipt:
-            data["receipt"] = self.receipt
-        return data
+class ToolSourceRefError(ValueError):
+    """A source reference violated the provider-neutral wire contract."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +71,46 @@ class ToolSourceRef:
     ref: str
     title: str
     url: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_source_ref_text("provider", self.provider, _PROVIDER_MAX_CHARS)
+        _validate_source_ref_text("kind", self.kind, _KIND_MAX_CHARS)
+        _validate_source_ref_text("ref", self.ref, _REF_MAX_CHARS)
+        _validate_source_ref_text("title", self.title, _TITLE_MAX_CHARS)
+        if _contains_http_credentials(self.ref):
+            raise ToolSourceRefError("ref must not contain HTTP credentials")
+        if _contains_http_credentials(self.title):
+            raise ToolSourceRefError("title must not contain HTTP credentials")
+        if self.url is not None:
+            _validate_source_ref_text("url", self.url, _URL_MAX_CHARS)
+            _validate_source_ref_url(self.url)
+
+    @classmethod
+    def decode(cls, value: object) -> "ToolSourceRef":
+        """Decode one untrusted wire/persistence mapping without coercion."""
+        if not isinstance(value, Mapping):
+            raise ToolSourceRefError("source reference must be an object")
+        if not all(isinstance(key, str) for key in value):
+            raise ToolSourceRefError("source reference field names must be strings")
+        keys = {key for key in value if isinstance(key, str)}
+        required = {"provider", "kind", "ref", "title"}
+        allowed = required | {"url"}
+        missing = required - keys
+        extra = keys - allowed
+        if missing:
+            raise ToolSourceRefError(f"source reference is missing: {', '.join(sorted(missing))}")
+        if extra:
+            raise ToolSourceRefError(f"source reference has unknown fields: {', '.join(sorted(extra))}")
+        url = value.get("url")
+        if url is not None and not isinstance(url, str):
+            raise ToolSourceRefError("url must be a string")
+        return cls(
+            provider=_source_ref_string(value, "provider"),
+            kind=_source_ref_string(value, "kind"),
+            ref=_source_ref_string(value, "ref"),
+            title=_source_ref_string(value, "title"),
+            url=url,
+        )
 
     def to_dict(self) -> dict[str, str]:
         data = {
@@ -166,84 +124,101 @@ class ToolSourceRef:
         return data
 
 
-def normalize_source_refs(
-    refs: Iterable[ToolSourceRef | Mapping[str, object]] | None,
-) -> tuple[ToolSourceRef, ...]:
-    if refs is None or isinstance(refs, (str, bytes, Mapping)):
-        return ()
-
+def normalize_source_refs(refs: Iterable[ToolSourceRef]) -> tuple[ToolSourceRef, ...]:
+    """Deduplicate a typed source stream while preserving first-seen order."""
+    if not isinstance(refs, Iterable) or isinstance(refs, (str, bytes, Mapping)):
+        raise ToolSourceRefError("source references must be an iterable of ToolSourceRef values")
     normalized: list[ToolSourceRef] = []
     seen: set[tuple[str, str]] = set()
-    for raw in refs:
-        if isinstance(raw, ToolSourceRef):
-            values: Mapping[str, object] = raw.to_dict()
-        elif isinstance(raw, Mapping):
-            values = raw
-        else:
-            continue
-
-        provider = _trimmed_string(values.get("provider"))
-        kind = _trimmed_string(values.get("kind"))
-        ref = _trimmed_string(values.get("ref"))
-        title = _trimmed_string(values.get("title"))
-        if (
-            not provider
-            or len(provider) > _PROVIDER_MAX_CHARS
-            or not kind
-            or len(kind) > _KIND_MAX_CHARS
-            or not ref
-            or len(ref) > _REF_MAX_CHARS
-            or not title
-        ):
-            continue
-        if _has_http_credentials(ref):
-            continue
-        if _has_http_credentials(title):
-            title = ref
-
-        identity = (provider, ref)
+    for index, source in enumerate(refs):
+        if index >= _SOURCE_REFS_MAX:
+            raise ToolSourceRefError(f"source references exceed {_SOURCE_REFS_MAX} items")
+        if not isinstance(source, ToolSourceRef):
+            raise ToolSourceRefError("source references must contain only ToolSourceRef values")
+        identity = (source.provider, source.ref)
         if identity in seen:
             continue
-
-        url = _safe_url(values.get("url"))
-        normalized.append(
-            ToolSourceRef(
-                provider=provider,
-                kind=kind,
-                ref=ref,
-                title=title[:_TITLE_MAX_CHARS],
-                url=url,
-            )
-        )
         seen.add(identity)
-        if len(normalized) == _SOURCE_REFS_MAX:
-            break
+        normalized.append(source)
     return tuple(normalized)
 
 
-def _trimmed_string(value: object) -> str | None:
-    return value.strip() if isinstance(value, str) else None
+def decode_source_refs(value: object, *, max_items: int | None = _SOURCE_REFS_MAX) -> tuple[ToolSourceRef, ...]:
+    """Strictly decode a JSON source-reference array, bounded per tool by default."""
+    if not isinstance(value, list):
+        raise ToolSourceRefError("source references must be a JSON array")
+    if max_items is not None and len(value) > max_items:
+        raise ToolSourceRefError(f"source references exceed {max_items} items")
+    decoded = tuple(ToolSourceRef.decode(item) for item in value)
+    if max_items is None:
+        return decoded
+    return normalize_source_refs(decoded)
 
 
-def _safe_url(value: object) -> str | None:
-    url = _trimmed_string(value)
-    if not url or len(url) > _URL_MAX_CHARS:
-        return None
+def canonical_source_title(value: str | None, *, fallback: str) -> str:
+    """Project an unbounded display label into the source-reference contract."""
+    if value is not None and not isinstance(value, str):
+        raise ToolSourceRefError("source title must be a string")
+    if not isinstance(fallback, str):
+        raise ToolSourceRefError("source title fallback must be a string")
+
+    def project(candidate: str) -> str:
+        single_line = " ".join(candidate.split())
+        redacted = _HTTP_URL_TOKEN.sub(
+            lambda match: "[redacted URL]" if _url_has_credentials(match.group(0)) else match.group(0),
+            single_line,
+        )
+        return redacted[:_TITLE_MAX_CHARS].rstrip()
+
+    return project(value or "") or project(fallback) or "source"
+
+
+def validate_source_provider(value: str) -> str:
+    _validate_source_ref_text("provider", value, _PROVIDER_MAX_CHARS)
+    return value
+
+
+def _source_ref_string(value: Mapping[str, object], field: str) -> str:
+    field_value = value[field]
+    if not isinstance(field_value, str):
+        raise ToolSourceRefError(f"{field} must be a string")
+    return field_value
+
+
+def _validate_source_ref_text(field: str, value: object, max_chars: int) -> None:
+    if not isinstance(value, str):
+        raise ToolSourceRefError(f"{field} must be a string")
+    if not value:
+        raise ToolSourceRefError(f"{field} must not be empty")
+    if value != value.strip():
+        raise ToolSourceRefError(f"{field} must not have surrounding whitespace")
+    if any(
+        (character.isspace() and character != " ") or ord(character) < 32 or ord(character) == 127
+        for character in value
+    ):
+        raise ToolSourceRefError(f"{field} must be one line without control whitespace")
+    if len(value) > max_chars:
+        raise ToolSourceRefError(f"{field} exceeds {max_chars} characters")
+
+
+def _validate_source_ref_url(url: str) -> None:
+    if any(character.isspace() for character in url) or "\\" in url:
+        raise ToolSourceRefError("url must be a valid HTTP(S) URL")
     try:
         parsed = urlsplit(url)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
-            return None
-    except ValueError:
-        return None
-    return url
+        _port = parsed.port
+    except ValueError as exc:
+        raise ToolSourceRefError("url must be a valid HTTP(S) URL") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ToolSourceRefError("url must be an HTTP(S) URL without credentials")
 
 
-def _has_http_credentials(value: str) -> bool:
+def _url_has_credentials(value: str) -> bool:
     try:
         parsed = urlsplit(value)
         return parsed.scheme.lower() in {"http", "https"} and (
@@ -253,19 +228,39 @@ def _has_http_credentials(value: str) -> bool:
         return False
 
 
+def _contains_http_credentials(value: str) -> bool:
+    return any(_url_has_credentials(match.group(0)) for match in _HTTP_URL_TOKEN.finditer(value))
+
+
 @dataclass(frozen=True)
 class ToolResult:
     content: str
     preview: str
     is_error: bool = False
-    data: dict | None = None
+    data: dict[str, object] | None = None
     model_content: tuple[ContentBlock, ...] = ()
     source_refs: tuple[ToolSourceRef, ...] = ()
     outcome: ToolOutcome | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.content, str):
+            raise TypeError("tool result content must be a string")
+        if not isinstance(self.preview, str):
+            raise TypeError("tool result preview must be a string")
+        if not isinstance(self.is_error, bool):
+            raise TypeError("tool result is_error must be a boolean")
+        if self.data is not None:
+            if not isinstance(self.data, dict):
+                raise TypeError("tool result data must be an object")
+            _validate_json_value(self.data, path="data")
+        for block in self.model_content:
+            if not isinstance(block, _CONTENT_BLOCK_TYPES):
+                raise TypeError("tool result model_content must contain typed content blocks")
+        object.__setattr__(self, "source_refs", normalize_source_refs(self.source_refs))
         if self.outcome is None:
             return
+        if not isinstance(self.outcome, ToolOutcome):
+            raise TypeError("tool result outcome must be a ToolOutcome")
         succeeded = self.outcome.status == ToolOutcomeStatus.SUCCEEDED
         if succeeded and self.is_error:
             raise ValueError("ToolResult cannot pair is_error=True with a successful outcome")
@@ -291,14 +286,20 @@ class ToolResult:
             "preview": self.preview,
             "is_error": self.is_error,
             "data": self.data,
-            "model_content": [
-                block.model_dump(mode="json") if hasattr(block, "model_dump") else dict(block)
-                for block in self.model_content
-            ],
+            "model_content": [block.model_dump(mode="json") for block in self.model_content],
             "source_refs": [ref.to_dict() for ref in self.source_refs],
             "outcome": self.outcome.to_dict() if self.outcome else None,
         }
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        try:
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ToolResultPayloadError(f"tool result is not JSON-safe: {exc}") from exc
 
     @classmethod
     def from_serialized_payload(cls, value: str) -> "ToolResult | None":
@@ -307,41 +308,66 @@ class ToolResult:
         Ordinary result text, including envelope-shaped JSON, deliberately
         returns ``None`` unless it carries Arden's explicit version marker.
         """
+        if not isinstance(value, str):
+            return None
         try:
             payload = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
+        except json.JSONDecodeError:
             return None
-        required = {"content", "preview", "is_error", "data", "model_content", "source_refs", "outcome"}
-        if (
-            not isinstance(payload, dict)
-            or payload.get(_TOOL_RESULT_ENVELOPE_KEY) != _TOOL_RESULT_ENVELOPE_VERSION
-            or not required.issubset(payload)
-        ):
+        except RecursionError as exc:
+            raise ToolResultPayloadError("tool result envelope exceeds maximum nesting depth") from exc
+        if not isinstance(payload, dict) or _TOOL_RESULT_ENVELOPE_KEY not in payload:
             return None
-        if not isinstance(payload["content"], str) or not isinstance(payload["preview"], str):
-            return None
+        if payload[_TOOL_RESULT_ENVELOPE_KEY] != _TOOL_RESULT_ENVELOPE_VERSION:
+            raise ToolResultPayloadError("unsupported tool result envelope version")
+        required = {
+            _TOOL_RESULT_ENVELOPE_KEY,
+            "content",
+            "preview",
+            "is_error",
+            "data",
+            "model_content",
+            "source_refs",
+            "outcome",
+        }
+        missing = required - set(payload)
+        unknown = set(payload) - required
+        if missing:
+            raise ToolResultPayloadError(f"tool result envelope is missing: {', '.join(sorted(missing))}")
+        if unknown:
+            raise ToolResultPayloadError(f"tool result envelope has unknown fields: {', '.join(sorted(unknown))}")
+        if not isinstance(payload["content"], str):
+            raise ToolResultPayloadError("tool result content must be a string")
+        if not isinstance(payload["preview"], str):
+            raise ToolResultPayloadError("tool result preview must be a string")
         if not isinstance(payload["is_error"], bool):
-            return None
+            raise ToolResultPayloadError("tool result is_error must be a boolean")
+        raw_data = payload["data"]
+        if raw_data is not None and not isinstance(raw_data, dict):
+            raise ToolResultPayloadError("tool result data must be an object or null")
         raw_model_content = payload["model_content"]
         raw_source_refs = payload["source_refs"]
         raw_outcome = payload["outcome"]
-        if not isinstance(raw_model_content, list) or not isinstance(raw_source_refs, list):
-            return None
+        if not isinstance(raw_model_content, list):
+            raise ToolResultPayloadError("tool result model_content must be an array")
+        if not isinstance(raw_source_refs, list):
+            raise ToolResultPayloadError("tool result source_refs must be an array")
+        if raw_outcome is not None and not isinstance(raw_outcome, dict):
+            raise ToolResultPayloadError("tool result outcome must be an object or null")
         try:
-            model_content = tuple(parse_block(block) for block in raw_model_content if isinstance(block, dict))
-            outcome = ToolOutcome.from_dict(raw_outcome) if isinstance(raw_outcome, Mapping) else None
-            data = payload["data"] if isinstance(payload["data"], dict) else None
+            model_content = tuple(parse_block(block) for block in raw_model_content)
+            outcome = ToolOutcome.decode(raw_outcome) if raw_outcome is not None else None
             return cls(
                 content=payload["content"],
                 preview=payload["preview"],
                 is_error=payload["is_error"],
-                data=data,
+                data=raw_data,
                 model_content=model_content,
-                source_refs=normalize_source_refs(raw_source_refs),
+                source_refs=decode_source_refs(raw_source_refs),
                 outcome=outcome,
             )
-        except (KeyError, TypeError, ValueError):
-            return None
+        except (ContentBlockError, ToolOutcomePayloadError, ToolSourceRefError, TypeError, ValueError) as exc:
+            raise ToolResultPayloadError(f"invalid tool result envelope: {exc}") from exc
 
     @staticmethod
     def failure(
@@ -353,7 +379,7 @@ class ToolResult:
         retryable: bool = False,
         recovery_action: str | None = None,
         diagnostic_ref: str | None = None,
-        data: dict | None = None,
+        data: dict[str, object] | None = None,
     ) -> "ToolResult":
         return ToolResult(
             content=message,
@@ -370,6 +396,60 @@ class ToolResult:
                 ),
             ),
         )
+
+
+def _validate_json_value(
+    value: object,
+    *,
+    path: str,
+    depth: int = 0,
+    active_containers: set[int] | None = None,
+) -> None:
+    if depth > _JSON_MAX_DEPTH:
+        raise ValueError(f"{path} exceeds maximum nesting depth")
+    if value is None or type(value) in {str, bool, int}:
+        return
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError(f"{path} contains a non-finite number")
+        return
+    if type(value) is list:
+        active_containers = active_containers if active_containers is not None else set()
+        container_id = id(value)
+        if container_id in active_containers:
+            raise ValueError(f"{path} contains a cycle")
+        active_containers.add(container_id)
+        try:
+            for index, item in enumerate(value):
+                _validate_json_value(
+                    item,
+                    path=f"{path}[{index}]",
+                    depth=depth + 1,
+                    active_containers=active_containers,
+                )
+        finally:
+            active_containers.remove(container_id)
+        return
+    if type(value) is dict:
+        active_containers = active_containers if active_containers is not None else set()
+        container_id = id(value)
+        if container_id in active_containers:
+            raise ValueError(f"{path} contains a cycle")
+        active_containers.add(container_id)
+        try:
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"{path} contains a non-string key")
+                _validate_json_value(
+                    item,
+                    path=f"{path}.{key}",
+                    depth=depth + 1,
+                    active_containers=active_containers,
+                )
+        finally:
+            active_containers.remove(container_id)
+        return
+    raise TypeError(f"{path} contains unsupported {type(value).__name__}")
 
 
 @dataclass(frozen=True)

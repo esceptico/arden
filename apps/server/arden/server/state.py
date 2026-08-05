@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from arden.agent import Usage
-from arden.agent.types.tools import normalize_source_refs
+from arden.agent.types.tools import ToolSourceRef
 from arden.context.models import SessionState
 from arden.core.ids import generate_run_id
 from arden.integrations.base import IntegrationConnectionDescriptor
@@ -101,7 +101,7 @@ class RunState:
     # External resources the agent's tools fetched this run (file paths, URLs,
     # etc.). Folded into the episode's source_refs when the run completes so
     # memory records what the turn actually touched, not just the chat text.
-    source_refs: list[dict] = field(default_factory=list)
+    source_refs: list[ToolSourceRef] = field(default_factory=list)
     context_manifest: list[dict] = field(default_factory=list)
     _source_ref_identities: set[tuple[str, str]] = field(default_factory=set, init=False, repr=False)
 
@@ -111,16 +111,16 @@ class RunState:
         for ref in supplied:
             self.add_source_ref(ref)
 
-    def add_source_ref(self, ref: dict | None) -> None:
-        refs = normalize_source_refs((ref,)) if ref is not None else ()
-        if not refs:
+    def add_source_ref(self, ref: ToolSourceRef | None) -> None:
+        if ref is None:
             return
-        source_ref = refs[0].to_dict()
-        identity = (source_ref["provider"], source_ref["ref"])
+        if not isinstance(ref, ToolSourceRef):
+            raise TypeError("run source references must be ToolSourceRef values")
+        identity = (ref.provider, ref.ref)
         if identity in self._source_ref_identities:
             return
         self._source_ref_identities.add(identity)
-        self.source_refs.append(source_ref)
+        self.source_refs.append(ref)
 
     @property
     def pending_injection_count(self) -> int:

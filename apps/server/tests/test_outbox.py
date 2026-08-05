@@ -8,17 +8,24 @@ import pytest_asyncio
 
 import arden.database as database
 from arden.agent import Usage
+from arden.agent.types.tools import ToolSourceRef, ToolSourceRefError
 from arden.events.internal import RunCompleted, RunFailed
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
     OUTBOX_RUN_COMPLETED,
     OUTBOX_RUN_FAILED,
     OUTBOX_WIKI_PROJECTION_REQUESTED,
+    AgentRunRequested,
     AutomationSettled,
+    OutboxPayloadError,
     OutboxStore,
     OutboxWorker,
+    agent_run_requested_from_payload,
+    agent_run_requested_payload,
     automation_settled_from_payload,
+    automation_settled_payload,
     run_completed_from_payload,
+    run_completed_payload,
     run_failed_from_payload,
 )
 
@@ -33,9 +40,73 @@ def _run_completed(run_id: str = "run-1") -> RunCompleted:
         ),
         usage=Usage(prompt_tokens=3, completion_tokens=5, cache_read_tokens=7, cache_write_tokens=11),
         result="done",
-        source_refs=({"kind": "tool", "ref": "memory:1"},),
+        source_refs=(ToolSourceRef(provider="memory", kind="tool", ref="memory:1", title="Memory 1"),),
         automation_task_id="loop-1",
     )
+
+
+def test_run_completed_outbox_round_trip_keeps_typed_refs_beyond_per_tool_limit():
+    sources = tuple(
+        ToolSourceRef(provider="memory", kind="fact", ref=f"fact-{index}", title=f"Fact {index}") for index in range(60)
+    )
+    event = RunCompleted(
+        run_id="run-many",
+        session_id="session-1",
+        messages=(),
+        usage=Usage(),
+        result="done",
+        source_refs=sources,
+    )
+
+    assert run_completed_from_payload(run_completed_payload(event)) == event
+
+
+def test_run_completed_outbox_rejects_malformed_source_ref():
+    payload = run_completed_payload(_run_completed())
+    payload["source_refs"][0].pop("title")
+
+    with pytest.raises(ToolSourceRefError, match="missing: title"):
+        run_completed_from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload.pop("result"),
+        lambda payload: payload.update({"unexpected": True}),
+        lambda payload: payload["usage"].pop("cache_write_tokens"),
+        lambda payload: payload["usage"].update({"prompt_tokens": True}),
+        lambda payload: payload.update({"messages": ()}),
+    ],
+)
+def test_run_completed_outbox_rejects_incomplete_or_coerced_payloads(mutate):
+    payload = run_completed_payload(_run_completed())
+    mutate(payload)
+
+    with pytest.raises(OutboxPayloadError, match=r"invalid run\.completed outbox payload"):
+        run_completed_from_payload(payload)
+
+
+def test_other_outbox_events_use_strict_complete_envelopes():
+    failed = {
+        "run_id": "run-1",
+        "session_id": "session-1",
+        "error": "failed",
+        "automation_task_id": None,
+    }
+    failed.pop("automation_task_id")
+    with pytest.raises(OutboxPayloadError, match=r"invalid run\.failed outbox payload"):
+        run_failed_from_payload(failed)
+
+    settled = automation_settled_payload(AutomationSettled(automation_run_id=1, task_id="task-1", success=True))
+    settled["success"] = 1
+    with pytest.raises(OutboxPayloadError, match=r"invalid automation\.settled outbox payload"):
+        automation_settled_from_payload(settled)
+
+    requested = agent_run_requested_payload(AgentRunRequested(session_id="session-1", task_id="task-1"))
+    requested["unexpected"] = "field"
+    with pytest.raises(OutboxPayloadError, match=r"invalid agent\.run\.requested outbox payload"):
+        agent_run_requested_from_payload(requested)
 
 
 @pytest_asyncio.fixture

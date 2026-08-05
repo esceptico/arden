@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title, normalize_source_refs
 from arden.integrations.slack.models import (
     SlackChannel,
     SlackDirectMessage,
@@ -32,7 +32,10 @@ def message_source_refs(items: Sequence[SlackMessage]) -> tuple[ToolSourceRef, .
             provider="slack",
             kind="message",
             ref=item.ref,
-            title=f"#{item.channel_name} — {item.author_name}" if item.channel_name else item.author_name,
+            title=canonical_source_title(
+                f"#{item.channel_name} — {item.author_name}" if item.channel_name else item.author_name,
+                fallback=item.ref,
+            ),
             url=item.permalink,
         )
         for item in items
@@ -46,7 +49,7 @@ def message_source_ref(message_ref: str, *, title: str) -> tuple[ToolSourceRef, 
                 provider="slack",
                 kind="message",
                 ref=message_ref,
-                title=title,
+                title=canonical_source_title(title, fallback=message_ref),
             ),
         )
     )
@@ -60,7 +63,7 @@ def entity_source_refs(
             provider="slack",
             kind=kind,
             ref=entity_ref(item),
-            title=entity_title(item),
+            title=canonical_source_title(entity_title(item), fallback=entity_ref(item)),
         )
         for item in items
     )

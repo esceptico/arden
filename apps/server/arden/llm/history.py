@@ -14,6 +14,7 @@ from arden.agent.types.tools import ToolOutcome
 from arden.core.content import (
     AudioContent,
     ContentBlock,
+    ContentBlockError,
     ContextContent,
     ImageContent,
     TextContent,
@@ -103,9 +104,6 @@ class ToolHistoryMessage:
     def content_text(self) -> str:
         return history_content_to_text(self.content)
 
-    def outcome_dict(self) -> dict[str, object] | None:
-        return self.outcome.to_dict() if self.outcome else None
-
 
 @dataclass(frozen=True, slots=True)
 class ModelHistory:
@@ -164,13 +162,14 @@ def _decode_message(raw: Mapping[str, object], *, index: int) -> HistoryMessage:
         role = Role(str(raw["role"]))
     except (KeyError, ValueError):
         raise _HistoryFieldError("role.invalid") from None
-    content = _decode_content(raw.get("content"))
+    cache_breakpoints = _decode_cache_breakpoints(raw.get("content")) if role == Role.SYSTEM else frozenset()
+    content = _decode_content(raw.get("content"), allow_cache_control=role == Role.SYSTEM)
 
     match role:
         case Role.SYSTEM:
             return SystemHistoryMessage(
                 content=content,
-                cache_breakpoints=_decode_cache_breakpoints(raw.get("content")),
+                cache_breakpoints=cache_breakpoints,
             )
         case Role.USER:
             return UserHistoryMessage(content=content)
@@ -192,7 +191,7 @@ def _decode_message(raw: Mapping[str, object], *, index: int) -> HistoryMessage:
             )
 
 
-def _decode_content(value: object) -> HistoryContent:
+def _decode_content(value: object, *, allow_cache_control: bool = False) -> HistoryContent:
     if value is None:
         return ""
     if isinstance(value, str):
@@ -208,8 +207,11 @@ def _decode_content(value: object) -> HistoryContent:
             if block.get("type") not in {"text", "image", "audio", "context"}:
                 raise _HistoryFieldError("content.unsupported_block")
             try:
-                blocks.append(parse_block(dict(block)))
-            except ValidationError:
+                block_payload = dict(block)
+                if allow_cache_control:
+                    block_payload.pop("cache_control", None)
+                blocks.append(parse_block(block_payload))
+            except (ContentBlockError, ValidationError):
                 raise _HistoryFieldError("content.invalid_block") from None
         else:
             raise _HistoryFieldError("content.block_not_object")
@@ -296,8 +298,8 @@ def _decode_outcome(value: object) -> ToolOutcome | None:
     if not isinstance(value, Mapping):
         raise _HistoryFieldError("tool.outcome_invalid")
     try:
-        return ToolOutcome.from_dict(value)
-    except (KeyError, TypeError, ValueError):
+        return ToolOutcome.decode(value)
+    except (TypeError, ValueError):
         raise _HistoryFieldError("tool.outcome_invalid") from None
 
 

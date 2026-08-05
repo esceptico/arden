@@ -1,34 +1,43 @@
 import hashlib
+from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class TextContent(BaseModel):
+class ContentBlockError(ValueError):
+    """A persisted or provider content block violated the shared contract."""
+
+
+class _ContentModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+
+class TextContent(_ContentModel):
     type: Literal["text"] = "text"
     text: str
 
 
-class ImageContent(BaseModel):
+class ImageContent(_ContentModel):
     type: Literal["image"] = "image"
     media_type: str
     data: str
 
 
-class AudioContent(BaseModel):
+class AudioContent(_ContentModel):
     type: Literal["audio"] = "audio"
     media_type: str
     data: str
 
 
-class ContextContent(BaseModel):
+class ContextContent(_ContentModel):
     type: Literal["context"] = "context"
     content_type: str
     content: str | None = None
     metadata: dict[str, str] | None = None
 
 
-class ContextManifestEntry(BaseModel):
+class ContextManifestEntry(_ContentModel):
     context_id: str
     content_type: str
     source: str
@@ -72,11 +81,16 @@ _BLOCK_MAP: dict[str, type[BaseModel]] = {
 }
 
 
-def parse_block(raw: dict) -> ContentBlock:
-    cls = _BLOCK_MAP.get(raw.get("type", ""))
-    if cls:
-        return cls.model_validate(raw)
-    return TextContent(text=str(raw))
+def parse_block(raw: Mapping[str, object]) -> ContentBlock:
+    if not isinstance(raw, Mapping):
+        raise ContentBlockError("content block must be an object")
+    block_type = raw.get("type")
+    if not isinstance(block_type, str):
+        raise ContentBlockError("content block type must be a string")
+    model = _BLOCK_MAP.get(block_type)
+    if model is None:
+        raise ContentBlockError(f"unsupported content block type: {block_type}")
+    return model.model_validate(dict(raw))
 
 
 def render_context(ctx: ContextContent | dict) -> str:

@@ -373,7 +373,7 @@ async def test_run_agent_loop_collects_each_tool_source_ref_for_episode_provenan
 
     await run_agent_loop(_stream_context(run), _Agent(), SessionBus(session_id="session-1"))
 
-    assert run.source_refs == [source.to_dict(), second.to_dict()]
+    assert run.source_refs == [source, second]
 
 
 @pytest.mark.asyncio
@@ -411,22 +411,22 @@ async def test_run_source_refs_keep_more_than_50_unique_refs_across_tool_complet
     await run_agent_loop(_stream_context(run), _Agent(), SessionBus(session_id="session-1"))
 
     assert len(run.source_refs) == 60
-    assert [ref["ref"] for ref in run.source_refs] == [f"C1:{index}" for index in range(60)]
-    assert run.source_refs[0]["title"] == "Message 0"
+    assert [ref.ref for ref in run.source_refs] == [f"C1:{index}" for index in range(60)]
+    assert run.source_refs[0].title == "Message 0"
 
 
 def test_run_source_refs_use_constant_time_dedupe_and_initialize_supplied_refs():
     initial = [
-        {
-            "provider": "demo",
-            "kind": "document",
-            "ref": f"doc-{index}",
-            "title": f"Document {index}",
-        }
+        ToolSourceRef(
+            provider="demo",
+            kind="document",
+            ref=f"doc-{index}",
+            title=f"Document {index}",
+        )
         for index in range(75)
     ]
     initial.append(
-        {"provider": "demo", "kind": "document", "ref": "doc-0", "title": "Duplicate"},
+        ToolSourceRef(provider="demo", kind="document", ref="doc-0", title="Duplicate"),
     )
     run = RunState(run_id="run-1", session_id="session-1", source_refs=initial)
 
@@ -436,21 +436,21 @@ def test_run_source_refs_use_constant_time_dedupe_and_initialize_supplied_refs()
 
     assert len(run.source_refs) == 75
     assert run.source_refs[0] == initial[0]
-    assert run.source_refs[-1]["ref"] == "doc-74"
+    assert run.source_refs[-1].ref == "doc-74"
     run.source_refs = NoScanList(run.source_refs)
     for index in range(75, 2075):
         run.add_source_ref(
-            {
-                "provider": "demo",
-                "kind": "document",
-                "ref": f"doc-{index}",
-                "title": f"Document {index}",
-            }
+            ToolSourceRef(
+                provider="demo",
+                kind="document",
+                ref=f"doc-{index}",
+                title=f"Document {index}",
+            )
         )
-    run.add_source_ref({"provider": "demo", "kind": "document", "ref": "doc-2074", "title": "Replay"})
+    run.add_source_ref(ToolSourceRef(provider="demo", kind="document", ref="doc-2074", title="Replay"))
 
     assert len(run.source_refs) == 2075
-    assert run.source_refs[-1]["ref"] == "doc-2074"
+    assert run.source_refs[-1].ref == "doc-2074"
 
 
 def test_reasoning_sse_preserves_nested_scope():
@@ -1661,7 +1661,7 @@ async def test_run_agent_loop_collects_current_tool_sources_before_background_ha
 
     assert result is None
     assert bg_gen is not None
-    assert run.source_refs == [source.to_dict()]
+    assert run.source_refs == [source]
     assert [record.event.type.value for record in bus._recent] == []
     assert isinstance(await anext(bg_gen), Result)
 
@@ -3364,7 +3364,7 @@ async def test_backgrounded_drain_persists_budget_stop_reason():
     )
 
     assert service.statuses[-1] == (RunStatus.COMPLETED.value, StopReason.MAX_COST.value)
-    assert run.source_refs == [source.to_dict()]
+    assert run.source_refs == [source]
 
 
 @pytest.mark.asyncio

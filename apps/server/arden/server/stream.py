@@ -78,7 +78,7 @@ async def run_agent_loop(ctx: ChatContext, agent: Agent, bus: SessionBus) -> tup
         async for item in gen:
             if isinstance(item, ToolCompleted):
                 for source_ref in item.source_refs:
-                    ctx.run.add_source_ref(source_ref.to_dict())
+                    ctx.run.add_source_ref(source_ref)
             if ctx.run.backgrounded:
                 await close_open_text()
                 return None, gen

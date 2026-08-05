@@ -1,17 +1,20 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 
 import mcp_types
 
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
+from arden.agent.types.tools import ToolSourceRef, ToolSourceRefError, canonical_source_title
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
 from arden.core.content import AudioContent, ContentBlock, ImageContent
 from arden.core.raw_tool_results import persist_raw_tool_result, preview_text
 from arden.tools.core.base import ToolResult
 
 MCP_RESULT_PREVIEW_CHARS = 12_000
+MCP_STRUCTURED_SUMMARY_MAX_KEYS = 50
+MCP_STRUCTURED_SUMMARY_KEY_MAX_CHARS = 256
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,16 @@ def mcp_exception_result(error: Exception, *, provider: str, tool_name: str) -> 
     )
 
 
+def mcp_source_envelope_error(error: ToolSourceRefError) -> ToolResult:
+    return ToolResult.failure(
+        code="invalid_response",
+        message="MCP provider returned invalid source metadata.",
+        preview="Invalid MCP response",
+        recovery_action="Fix the MCP server result schema before retrying.",
+        data={"detail": str(error)},
+    )
+
+
 def extract_mcp_source_refs(
     result: mcp_types.CallToolResult,
     *,
@@ -65,91 +78,95 @@ def extract_mcp_source_refs(
     refs: list[ToolSourceRef] = []
     seen: set[tuple[str, str]] = set()
 
-    def add(candidate: ToolSourceRef) -> bool:
-        normalized = normalize_source_refs((candidate,))
-        if not normalized:
-            return False
-        source = normalized[0]
-        identity = (source.provider, source.ref)
+    def add(candidate: ToolSourceRef) -> None:
+        identity = (candidate.provider, candidate.ref)
         if identity in seen:
-            return False
+            return
+        if len(refs) >= 50:
+            raise ToolSourceRefError("MCP source references exceed 50 items")
         seen.add(identity)
-        refs.append(source)
-        return len(refs) == 50
+        refs.append(candidate)
 
     for block in result.content:
         match block:
             case mcp_types.ResourceLink():
                 uri = str(block.uri)
-                if add(
+                add(
                     ToolSourceRef(
                         provider=provider,
                         kind="resource",
                         ref=uri,
-                        title=_first_nonempty(block.title, block.name, uri),
-                        url=uri,
+                        title=canonical_source_title(block.title or block.name, fallback=uri),
+                        url=_resource_http_url(uri),
                     )
-                ):
-                    return tuple(refs)
+                )
             case mcp_types.EmbeddedResource():
                 uri = str(block.resource.uri)
-                if add(
+                add(
                     ToolSourceRef(
                         provider=provider,
                         kind="resource",
                         ref=uri,
-                        title=uri,
-                        url=uri,
+                        title=canonical_source_title(uri, fallback="MCP resource"),
+                        url=_resource_http_url(uri),
                     )
-                ):
-                    return tuple(refs)
+                )
 
     structured = result.structured_content
     if tool_name == "search" and isinstance(structured, Mapping):
         results = structured.get("results")
-        if isinstance(results, list):
-            for item in results:
-                if not isinstance(item, Mapping):
-                    continue
-                source_id = item.get("id")
-                title = item.get("title")
-                if not isinstance(source_id, str) or not isinstance(title, str):
-                    continue
-                url = item.get("url")
-                if add(
-                    ToolSourceRef(
-                        provider=provider,
-                        kind="search_result",
-                        ref=source_id,
-                        title=_first_nonempty(title, source_id),
-                        url=url if isinstance(url, str) else None,
-                    )
-                ):
-                    return tuple(refs)
-    elif tool_name == "fetch" and isinstance(structured, Mapping):
-        source_id = structured.get("id")
-        title = structured.get("title")
-        text = structured.get("text")
-        if isinstance(source_id, str) and isinstance(title, str) and isinstance(text, str) and text.strip():
-            url = structured.get("url")
+        if not isinstance(results, list):
+            raise ToolSourceRefError("MCP search results must be an array")
+        for item in results:
+            if not isinstance(item, Mapping):
+                raise ToolSourceRefError("MCP search results must be objects")
+            source_id = _required_mcp_source_text(item, "id")
+            title = canonical_source_title(_required_mcp_source_text(item, "title"), fallback=source_id)
+            url = item.get("url")
+            if url is not None and not isinstance(url, str):
+                raise ToolSourceRefError("MCP source url must be a string")
             add(
                 ToolSourceRef(
                     provider=provider,
-                    kind="document",
+                    kind="search_result",
                     ref=source_id,
-                    title=_first_nonempty(title, source_id),
-                    url=url if isinstance(url, str) else None,
+                    title=title,
+                    url=url,
                 )
             )
+    elif tool_name == "fetch" and isinstance(structured, Mapping):
+        text = structured.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ToolSourceRefError("MCP fetch text must be a non-blank string")
+        source_id = _required_mcp_source_text(structured, "id")
+        title = canonical_source_title(_required_mcp_source_text(structured, "title"), fallback=source_id)
+        url = structured.get("url")
+        if url is not None and not isinstance(url, str):
+            raise ToolSourceRefError("MCP source url must be a string")
+        add(
+            ToolSourceRef(
+                provider=provider,
+                kind="document",
+                ref=source_id,
+                title=title,
+                url=url,
+            )
+        )
 
     return tuple(refs)
 
 
-def _first_nonempty(*values: str | None) -> str:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value
-    return "resource"
+def _required_mcp_source_text(value: Mapping[str, object], field: str) -> str:
+    field_value = value.get(field)
+    if not isinstance(field_value, str):
+        raise ToolSourceRefError(f"MCP source {field} must be a string")
+    if not field_value.strip():
+        raise ToolSourceRefError(f"MCP source {field} must be non-blank")
+    return field_value
+
+
+def _resource_http_url(uri: str) -> str | None:
+    return uri if uri.startswith(("http://", "https://")) else None
 
 
 def _model_content(result: mcp_types.CallToolResult, projection: ContentProjection) -> str:
@@ -214,10 +231,13 @@ def _bounded_metadata(
     }
     structured = result.structured_content
     if isinstance(structured, Mapping):
+        summary_items = tuple(islice(structured.items(), MCP_STRUCTURED_SUMMARY_MAX_KEYS))
         data["structured_summary"] = {
-            "keys": sorted(str(key) for key in structured)[:50],
+            "keys": sorted(str(key)[:MCP_STRUCTURED_SUMMARY_KEY_MAX_CHARS] for key, _ in summary_items),
             "counts": {
-                str(key): len(value) for key, value in structured.items() if isinstance(value, (list, dict, tuple))
+                str(key)[:MCP_STRUCTURED_SUMMARY_KEY_MAX_CHARS]: len(value)
+                for key, value in summary_items
+                if isinstance(value, (list, dict, tuple))
             },
         }
         next_cursor = structured.get("next_cursor")

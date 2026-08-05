@@ -3,17 +3,16 @@ import json
 import sqlite3
 import threading
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from arden.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
-from arden.agent.types.tools import normalize_source_refs
-from arden.integrations.base import IntegrationConnectionError
-from arden.settings import ARDEN_DIR
+from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
+from arden.integrations.tool_errors import operation_error_result
 from arden.tools.core.context import ToolExecution
 
 IDEMPOTENCY_LEDGER_SERVICE = "idempotency_ledger"
-DEFAULT_LEDGER_PATH = ARDEN_DIR / "idempotency.sqlite3"
 _PROVEN_NO_EFFECT_CODES = frozenset({"invalid_ref", "not_found", "rate_limited"})
 
 
@@ -22,7 +21,7 @@ class IdempotencyConflict(ValueError):
 
 
 class IdempotencyLedger:
-    def __init__(self, path: Path = DEFAULT_LEDGER_PATH):
+    def __init__(self, path: Path):
         self.path = path
         self._lock = threading.Lock()
 
@@ -89,34 +88,16 @@ class IdempotencyLedger:
 
 
 def _result_json(result: ToolResult) -> str:
-    return json.dumps(
-        {
-            "content": result.content,
-            "preview": result.preview,
-            "is_error": result.is_error,
-            "data": result.data,
-            "source_refs": [ref.to_dict() for ref in result.source_refs],
-            "outcome": result.outcome.to_dict() if result.outcome else None,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return result.serialized_payload()
 
 
 def _result_from_json(raw: str) -> ToolResult:
-    value = json.loads(raw)
-    outcome = ToolOutcome.from_dict(value["outcome"]) if value.get("outcome") else None
-    data = dict(value.get("data") or {})
+    result = ToolResult.from_serialized_payload(raw)
+    if result is None:
+        raise ValueError("persisted mutation result is not a ToolResult envelope")
+    data = dict(result.data or {})
     data["idempotent_replay"] = True
-    return ToolResult(
-        content=value["content"],
-        preview=value["preview"],
-        is_error=bool(value["is_error"]),
-        data=data,
-        source_refs=normalize_source_refs(value.get("source_refs")),
-        outcome=outcome,
-    )
+    return replace(result, data=data)
 
 
 def mutation_result(
@@ -141,9 +122,7 @@ def mutation_result(
             status=status,
             effect=ToolEffect(operation=operation, target=target, before_ref=before_ref, after_ref=after_ref),
             verification=(
-                ToolVerification(
-                    postcondition="Provider mutation is readable by its returned reference", observed=observed
-                )
+                ToolVerification(postcondition="Provider returned a mutation reference", observed=observed)
                 if observed
                 else None
             ),
@@ -159,10 +138,11 @@ async def execute_idempotent(
     idempotency_key: str,
     payload: dict[str, Any],
     invoke: Callable[[], Awaitable[ToolResult]],
+    before_mutation: Callable[[], Awaitable[None]] | None = None,
 ) -> ToolResult:
     ledger = execution.ctx.services.get(IDEMPOTENCY_LEDGER_SERVICE)
     if not isinstance(ledger, IdempotencyLedger):
-        ledger = IdempotencyLedger()
+        raise RuntimeError("Idempotency ledger service is not configured")
     try:
         replay = ledger.begin(namespace, idempotency_key, payload)
     except IdempotencyConflict as error:
@@ -174,11 +154,19 @@ async def execute_idempotent(
         )
     if replay is not None:
         return replay
+    if before_mutation is not None:
+        try:
+            await before_mutation()
+        except BaseException:
+            ledger.abort(namespace, idempotency_key)
+            raise
     try:
         result = await invoke()
     except IntegrationConnectionError:
         ledger.abort(namespace, idempotency_key)
         raise
+    except IntegrationOperationError as error:
+        return _mutation_uncertain(operation_error_result(error, preview="Mutation failed"))
     outcome = result.outcome
     if outcome and outcome.status is ToolOutcomeStatus.SUCCEEDED:
         ledger.complete(namespace, idempotency_key, result)

@@ -624,7 +624,7 @@ def _convert_messages(history: ModelHistory) -> tuple[str | None, list[dict[str,
                     {
                         "type": "function_call_output",
                         "call_id": message.tool_call_id,
-                        "output": tool_result_content_for_model(message.content_text, message.outcome_dict()),
+                        "output": tool_result_content_for_model(message.content_text, message.outcome),
                     }
                 )
 

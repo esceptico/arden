@@ -407,7 +407,7 @@ class AnthropicClient(CompletionClient):
         block = {
             "type": "tool_result",
             "tool_use_id": message.tool_call_id,
-            "content": tool_result_content_for_model(message.content_text, message.outcome_dict()),
+            "content": tool_result_content_for_model(message.content_text, message.outcome),
         }
         # Merge consecutive tool results into one user message
         if result and result[-1]["role"] == Role.USER and isinstance(result[-1]["content"], list):

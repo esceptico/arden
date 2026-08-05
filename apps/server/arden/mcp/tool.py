@@ -3,8 +3,9 @@ from typing import Any, Protocol
 from mcp_types import CallToolResult, ToolAnnotations
 from mcp_types import Tool as McpTool
 
+from arden.agent.types.tools import ToolSourceRefError
 from arden.mcp.models import validate_mcp_mutation_policy
-from arden.mcp.results import call_tool_result_to_tool_result, mcp_exception_result
+from arden.mcp.results import call_tool_result_to_tool_result, mcp_exception_result, mcp_source_envelope_error
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.schema import tool_parameters
@@ -68,6 +69,8 @@ class MCPTool(Tool):
                 provider=self._server_name,
                 tool_name=self._mcp_tool.name,
             )
+        except ToolSourceRefError as error:
+            return mcp_source_envelope_error(error)
         except Exception as error:
             return mcp_exception_result(error, provider=self._server_name, tool_name=self._mcp_tool.name)
 

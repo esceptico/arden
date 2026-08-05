@@ -1,3 +1,4 @@
+import pytest
 from mcp_types import (
     AudioContent,
     CallToolResult,
@@ -8,6 +9,7 @@ from mcp_types import (
     TextResourceContents,
 )
 
+from arden.agent.types.tools import ToolSourceRefError
 from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, read_raw_tool_result
 from arden.mcp import results as mcp_results
 
@@ -107,6 +109,19 @@ def test_large_structured_payload_is_bounded_and_durably_retrievable():
     raw = read_raw_tool_result(blob["blob_path"], compression=blob["compression"])
     assert '"next_cursor":"page-2"' in raw
     assert "x" * 1_000 in raw
+
+
+def test_large_structured_payload_bounds_every_summary_collection():
+    result = _adapt(
+        CallToolResult(
+            content=[],
+            structured_content={f"row-{index}": ["x" * 1_000] for index in range(100)},
+        )
+    )
+
+    summary = result.data["structured_summary"]
+    assert len(summary["keys"]) == 50
+    assert len(summary["counts"]) == 50
 
 
 def test_large_media_payload_is_bounded_and_not_inlined_to_model():
@@ -233,7 +248,6 @@ def test_canonical_mcp_search_extracts_only_top_level_results():
                 {"id": "doc-1", "title": "First", "url": "https://example.test/first"},
                 {"id": "doc-2", "title": "Second"},
                 {"id": "doc-1", "title": "Duplicate", "url": "https://example.test/duplicate"},
-                {"id": "missing-title", "url": "https://example.test/invalid"},
             ]
         },
     )
@@ -281,7 +295,7 @@ def test_canonical_mcp_fetch_extracts_document_with_optional_url():
     ]
 
 
-def test_canonical_mcp_sources_use_ids_when_titles_are_blank():
+def test_canonical_mcp_sources_reject_blank_titles():
     search = CallToolResult(
         content=[],
         structured_content={"results": [{"id": "search-1", "title": "   "}]},
@@ -291,14 +305,23 @@ def test_canonical_mcp_sources_use_ids_when_titles_are_blank():
         structured_content={"id": "document-1", "title": "   ", "text": "Document body"},
     )
 
-    search_refs = mcp_results.extract_mcp_source_refs(search, provider="demo", tool_name="search")
-    fetch_refs = mcp_results.extract_mcp_source_refs(fetch, provider="demo", tool_name="fetch")
+    with pytest.raises(ToolSourceRefError, match="title must be non-blank"):
+        mcp_results.extract_mcp_source_refs(search, provider="demo", tool_name="search")
+    with pytest.raises(ToolSourceRefError, match="title must be non-blank"):
+        mcp_results.extract_mcp_source_refs(fetch, provider="demo", tool_name="fetch")
 
-    assert [ref.title for ref in search_refs] == ["search-1"]
-    assert [ref.title for ref in fetch_refs] == ["document-1"]
+
+def test_canonical_mcp_search_rejects_partial_sources():
+    result = CallToolResult(
+        content=[],
+        structured_content={"results": [{"id": "missing-title", "url": "https://example.test/invalid"}]},
+    )
+
+    with pytest.raises(ToolSourceRefError, match="title must be a string"):
+        mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="search")
 
 
-def test_mcp_extraction_ignores_nested_or_inexact_contracts():
+def test_mcp_extraction_rejects_malformed_canonical_contracts():
     nested = CallToolResult(
         content=[],
         structured_content={"wrapper": {"results": [{"id": "x", "title": "Hidden", "url": "https://ignored.test"}]}},
@@ -316,13 +339,16 @@ def test_mcp_extraction_ignores_nested_or_inexact_contracts():
         structured_content={"id": "x", "title": "Hidden", "text": "   ", "url": "https://ignored.test"},
     )
 
-    assert mcp_results.extract_mcp_source_refs(nested, provider="demo", tool_name="search") == ()
+    with pytest.raises(ToolSourceRefError, match="search results must be an array"):
+        mcp_results.extract_mcp_source_refs(nested, provider="demo", tool_name="search")
     assert mcp_results.extract_mcp_source_refs(inexact_name, provider="demo", tool_name="search_notes") == ()
-    assert mcp_results.extract_mcp_source_refs(incomplete_fetch, provider="demo", tool_name="fetch") == ()
-    assert mcp_results.extract_mcp_source_refs(empty_fetch, provider="demo", tool_name="fetch") == ()
+    with pytest.raises(ToolSourceRefError, match="fetch text must be a non-blank string"):
+        mcp_results.extract_mcp_source_refs(incomplete_fetch, provider="demo", tool_name="fetch")
+    with pytest.raises(ToolSourceRefError, match="fetch text must be a non-blank string"):
+        mcp_results.extract_mcp_source_refs(empty_fetch, provider="demo", tool_name="fetch")
 
 
-def test_mcp_resource_uri_with_credentials_is_not_a_source():
+def test_mcp_resource_uri_with_credentials_is_rejected():
     result = CallToolResult(
         content=[
             ResourceLink(
@@ -334,17 +360,11 @@ def test_mcp_resource_uri_with_credentials_is_not_a_source():
         ]
     )
 
-    assert mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="read") == ()
+    with pytest.raises(ToolSourceRefError, match="ref must not contain HTTP credentials"):
+        mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="read")
 
 
-def test_mcp_search_stops_iterating_after_50_normalized_unique_refs():
-    class BoundedResults(list):
-        def __iter__(self):
-            for index, item in enumerate(super().__iter__()):
-                if index >= 50:
-                    raise AssertionError("extractor iterated past the per-call source bound")
-                yield item
-
+def test_mcp_search_validates_every_result_before_capping_sources():
     resource_refs = [
         ResourceLink(
             type="resource_link",
@@ -354,17 +374,29 @@ def test_mcp_search_stops_iterating_after_50_normalized_unique_refs():
         )
         for index in range(2)
     ]
-    results = BoundedResults(
-        [
-            {"id": "", "title": "Invalid"},
-            {"id": "https://example.test/resource-0", "title": "Duplicate"},
-            *({"id": f"doc-{index}", "title": f"Document {index}"} for index in range(48)),
-            {"id": "overflow", "title": "Must not be read"},
-        ]
-    )
+    results = [
+        {"id": "https://example.test/resource-0", "title": "Duplicate"},
+        *({"id": f"doc-{index}", "title": f"Document {index}"} for index in range(48)),
+    ]
     result = CallToolResult(content=resource_refs, structured_content={"results": results})
 
     refs = mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="search")
 
     assert len(refs) == 50
     assert refs[-1].ref == "doc-47"
+
+    result.structured_content["results"].append({"id": "broken"})
+    with pytest.raises(ToolSourceRefError, match="source title must be a string"):
+        mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="search")
+
+
+def test_mcp_source_extraction_rejects_more_than_50_unique_refs():
+    result = CallToolResult(
+        content=[],
+        structured_content={
+            "results": [{"id": f"doc-{index}", "title": f"Document {index}"} for index in range(51)]
+        },
+    )
+
+    with pytest.raises(ToolSourceRefError, match="exceed 50 items"):
+        mcp_results.extract_mcp_source_refs(result, provider="demo", tool_name="search")

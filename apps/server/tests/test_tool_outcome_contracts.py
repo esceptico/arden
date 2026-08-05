@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from arden.agent import ToolOutcome, ToolOutcomeStatus, ToolResult
+from arden.agent import ToolError, ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.context.models import SessionState
 from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
@@ -35,7 +35,10 @@ def test_tool_result_rejects_contradictory_error_and_outcome_status():
         ToolResult(
             content="bad",
             preview="bad",
-            outcome=ToolOutcome(status=ToolOutcomeStatus.FAILED),
+            outcome=ToolOutcome(
+                status=ToolOutcomeStatus.FAILED,
+                error=ToolError(code="failed"),
+            ),
         )
     with pytest.raises(ValueError, match="successful outcome"):
         ToolResult(
@@ -44,6 +47,11 @@ def test_tool_result_rejects_contradictory_error_and_outcome_status():
             is_error=True,
             outcome=ToolOutcome(status=ToolOutcomeStatus.SUCCEEDED),
         )
+
+
+def test_non_successful_outcome_requires_a_typed_error():
+    with pytest.raises(ValueError, match="must contain an error"):
+        ToolOutcome(status=ToolOutcomeStatus.FAILED)
 
 
 def test_agent_facing_tool_failures_always_include_recovery_guidance():

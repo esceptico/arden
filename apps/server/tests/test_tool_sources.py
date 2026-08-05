@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +14,11 @@ from arden.agent.types.tools import (
     ToolOutcome,
     ToolOutcomeStatus,
     ToolResult,
+    ToolResultPayloadError,
     ToolSourceRef,
+    ToolSourceRefError,
+    canonical_source_title,
+    decode_source_refs,
     normalize_source_refs,
 )
 from arden.constants import OFFLOAD_THRESHOLD
@@ -45,22 +50,13 @@ def _page_source() -> ToolSourceRef:
     )
 
 
-def test_source_refs_trim_fields_and_round_trip_through_dicts():
-    (normalized,) = normalize_source_refs(
-        [
-            {
-                "provider": " slack ",
-                "kind": " message ",
-                "ref": " C1:1.0 ",
-                "title": " Decision ",
-                "url": " https://example.slack.com/archives/C1/p1 ",
-            }
-        ]
-    )
+def test_source_refs_round_trip_through_strict_decode():
+    source = _source()
 
-    assert normalized == _source()
-    assert normalize_source_refs([normalized.to_dict()]) == (normalized,)
-    assert normalized.to_dict() == {
+    assert ToolSourceRef.decode(source.to_dict()) == source
+    assert decode_source_refs([source.to_dict()]) == (source,)
+    assert normalize_source_refs([source]) == (source,)
+    assert source.to_dict() == {
         "provider": "slack",
         "kind": "message",
         "ref": "C1:1.0",
@@ -76,34 +72,44 @@ def test_source_refs_trim_fields_and_round_trip_through_dicts():
 
 
 @pytest.mark.parametrize("field", ["provider", "kind", "ref", "title"])
-def test_source_refs_discard_missing_or_empty_required_fields(field: str):
+def test_source_refs_reject_missing_or_empty_required_fields(field: str):
     raw = _source().to_dict()
     raw[field] = "   "
 
-    assert normalize_source_refs([raw]) == ()
+    with pytest.raises(ToolSourceRefError, match=field):
+        ToolSourceRef.decode(raw)
 
     raw.pop(field)
-    assert normalize_source_refs([raw]) == ()
+    with pytest.raises(ToolSourceRefError, match=field):
+        ToolSourceRef.decode(raw)
 
 
 @pytest.mark.parametrize(
     ("field", "limit"),
     [("provider", 64), ("kind", 64), ("ref", 2048)],
 )
-def test_source_refs_discard_identity_fields_over_their_limits(field: str, limit: int):
-    at_limit = _source().to_dict()
-    at_limit[field] = "x" * limit
-    over_limit = _source().to_dict()
-    over_limit[field] = "x" * (limit + 1)
+def test_source_refs_reject_identity_fields_over_their_limits(field: str, limit: int):
+    values = _source().to_dict()
+    values[field] = "x" * limit
+    assert ToolSourceRef.decode(values)
 
-    assert len(normalize_source_refs([at_limit])) == 1
-    assert normalize_source_refs([over_limit]) == ()
+    values[field] = "x" * (limit + 1)
+    with pytest.raises(ToolSourceRefError, match=f"{field} exceeds"):
+        ToolSourceRef.decode(values)
 
 
-def test_source_refs_truncate_titles_to_256_characters():
-    (normalized,) = normalize_source_refs([_source(title=f" {'x' * 300} ")])
+def test_source_refs_reject_oversized_titles():
+    with pytest.raises(ToolSourceRefError, match="title exceeds 256"):
+        _source(title="x" * 257)
 
-    assert normalized.title == "x" * 256
+
+@pytest.mark.parametrize(("field", "value"), [("provider", "web\ttool"), ("ref", "doc\u00a01"), ("title", "Title\x00")])
+def test_source_refs_reject_control_whitespace(field: str, value: str):
+    raw = _source().to_dict()
+    raw[field] = value
+
+    with pytest.raises(ToolSourceRefError, match="control whitespace"):
+        ToolSourceRef.decode(raw)
 
 
 @pytest.mark.parametrize(
@@ -119,19 +125,16 @@ def test_source_refs_truncate_titles_to_256_characters():
         "not a url",
     ],
 )
-def test_source_refs_omit_unsafe_or_oversized_urls_without_discarding_the_ref(url: str):
-    (normalized,) = normalize_source_refs([_source(url=url)])
-
-    assert normalized == _source(url=None)
+def test_source_refs_reject_unsafe_or_oversized_urls(url: str):
+    with pytest.raises(ToolSourceRefError, match="url"):
+        _source(url=url)
 
 
 def test_source_refs_keep_safe_urls_at_the_length_limit():
     prefix = "https://example.com/"
     url = prefix + "x" * (4096 - len(prefix))
 
-    (normalized,) = normalize_source_refs([_source(url=f" {url} ")])
-
-    assert normalized.url == url
+    assert _source(url=url).url == url
 
 
 @pytest.mark.parametrize(
@@ -142,35 +145,62 @@ def test_source_refs_keep_safe_urls_at_the_length_limit():
     ],
 )
 def test_source_refs_reject_http_identities_with_credentials(ref: str):
-    assert normalize_source_refs([_source(ref=ref, title=ref, url=ref)]) == ()
+    with pytest.raises(ToolSourceRefError, match="ref must not contain HTTP credentials"):
+        _source(ref=ref, title=ref, url=ref)
 
 
-def test_source_refs_replace_credential_bearing_titles_for_opaque_ids():
-    (normalized,) = normalize_source_refs(
-        [_source(ref="opaque-123", title="https://user:secret@example.com/private", url=None)]
-    )
-
-    assert normalized.title == "opaque-123"
-    assert "user" not in normalized.title
-    assert "secret" not in normalized.title
+def test_source_refs_reject_credential_bearing_titles():
+    with pytest.raises(ToolSourceRefError, match="title must not contain HTTP credentials"):
+        _source(ref="opaque-123", title="https://user:secret@example.com/private", url=None)
 
 
-def test_source_refs_deduplicate_normalized_provider_and_ref_then_cap_at_50():
+def test_source_refs_deduplicate_provider_and_ref_then_reject_overflow():
     refs = [
         _source(title="First"),
-        _source(provider=" slack ", ref=" C1:1.0 ", title="Duplicate"),
+        _source(title="Duplicate"),
         *[_source(ref=f"C1:{index}", title=f"Message {index}") for index in range(1, 55)],
     ]
 
-    normalized = normalize_source_refs(refs)
-
-    assert len(normalized) == 50
-    assert normalized[0].title == "First"
-    assert [ref.ref for ref in normalized[:3]] == ["C1:1.0", "C1:1", "C1:2"]
-    assert normalized[-1].ref == "C1:49"
+    with pytest.raises(ToolSourceRefError, match="exceed 50 items"):
+        normalize_source_refs(refs)
 
 
-def test_persistable_tool_result_data_keeps_only_provenance_and_normalized_source_refs():
+def test_source_refs_reject_overflow_even_when_later_items_are_duplicates():
+    source = _source()
+
+    with pytest.raises(ToolSourceRefError, match="exceed 50 items"):
+        normalize_source_refs([source] * 51)
+
+
+def test_source_ref_decoder_rejects_arrays_over_50_before_ignoring_malformed_tail():
+    raw = [_source(ref=f"C1:{index}").to_dict() for index in range(50)]
+    raw.append({"bad": "tail"})
+
+    with pytest.raises(ToolSourceRefError, match="exceed 50 items"):
+        decode_source_refs(raw)
+
+
+def test_canonical_source_title_is_single_line_bounded_and_credential_safe():
+    projected = canonical_source_title(
+        "  Review\nhttps://user:secret@example.test/private  " + "x" * 300,
+        fallback="doc-1",
+    )
+
+    assert projected.startswith("Review [redacted URL]")
+    assert "secret" not in projected
+    assert "\n" not in projected
+    assert len(projected) == 256
+    assert canonical_source_title("   ", fallback="doc-1") == "doc-1"
+
+
+def test_source_ref_rejects_embedded_credentials_and_invalid_ports():
+    with pytest.raises(ToolSourceRefError, match="title must not contain HTTP credentials"):
+        _source(title="See https://user:secret@example.test/private", url=None)
+    with pytest.raises(ToolSourceRefError, match="valid HTTP"):
+        _source(url="https://example.test:notaport")
+
+
+def test_persistable_tool_result_data_keeps_only_provenance_and_typed_source_refs():
     data = {
         "child_agent": {"child_run_id": "child-1", "wait": False},
         "provenance": {
@@ -181,8 +211,7 @@ def test_persistable_tool_result_data_keeps_only_provenance_and_normalized_sourc
         },
         "source_refs": [
             _source().to_dict(),
-            {**_source(title="Duplicate").to_dict(), "url": "javascript:alert(1)"},
-            {"provider": "", "kind": "message", "ref": "bad", "title": "Bad"},
+            _source(title="Duplicate").to_dict(),
         ],
         "matches": [{"text": "large arbitrary result data"}],
     }
@@ -193,6 +222,36 @@ def test_persistable_tool_result_data_keeps_only_provenance_and_normalized_sourc
         "source_refs": [_source().to_dict()],
     }
     assert persistable_tool_result_data(None, (_source(url=None),)) == {"source_refs": [_source(url=None).to_dict()]}
+
+
+def test_persisted_source_refs_raise_instead_of_disappearing() -> None:
+    data = {"source_refs": [{"provider": "web", "kind": "page", "ref": "doc-1"}]}
+
+    with pytest.raises(ToolSourceRefError, match="missing: title"):
+        persistable_tool_result_data(data)
+
+
+def test_source_ref_decode_rejects_unknown_fields() -> None:
+    raw = {**_source().to_dict(), "internal_id": "secret"}
+
+    with pytest.raises(ToolSourceRefError, match="unknown fields: internal_id"):
+        ToolSourceRef.decode(raw)
+
+
+def test_normalization_rejects_raw_mappings() -> None:
+    with pytest.raises(ToolSourceRefError, match="only ToolSourceRef"):
+        normalize_source_refs([_source().to_dict()])
+
+    with pytest.raises(ToolSourceRefError, match="only ToolSourceRef"):
+        ToolResult(content="result", preview="result", source_refs=(_source().to_dict(),))
+
+
+def test_tool_result_decoder_raises_for_malformed_persisted_source_refs() -> None:
+    payload = json.loads(ToolResult(content="result", preview="result", source_refs=(_source(),)).serialized_payload())
+    payload["source_refs"][0].pop("title")
+
+    with pytest.raises(ToolResultPayloadError, match="missing: title"):
+        ToolResult.from_serialized_payload(json.dumps(payload))
 
 
 class _SourceExecutor:
@@ -229,8 +288,11 @@ def test_tool_executor_truncation_preserves_source_refs():
 
 
 def test_tool_executor_offload_preserves_source_refs(monkeypatch, tmp_path: Path):
+    import arden.core.tool_result_files as tool_result_files
+
     executor = object.__new__(ArdenToolExecutor)
     executor._ctx = SimpleNamespace(session_id="session-1")
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
     monkeypatch.setattr("arden.core.tool_executor.persist_result", lambda *_args: tmp_path / "call-1.txt")
     result = ToolResult(
         content="x" * (OFFLOAD_THRESHOLD + 1),

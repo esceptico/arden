@@ -7,7 +7,13 @@ from hashlib import sha256
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from arden.agent.types.tools import ToolOutcome, ToolOutcomeStatus, ToolSourceRef, ToolVerification
+from arden.agent.types.tools import (
+    ToolOutcome,
+    ToolOutcomeStatus,
+    ToolSourceRef,
+    ToolVerification,
+    canonical_source_title,
+)
 from arden.constants import DAILY_NOTES_AUTOMATION_ID, OFFLOAD_THRESHOLD
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceState, ResourceVersion
@@ -182,7 +188,7 @@ def _page_ref(record: WikiPageRecord) -> ToolSourceRef:
         provider="memory",
         kind="wiki_page",
         ref=record.resource.path,
-        title=record.page.title,
+        title=canonical_source_title(record.page.title, fallback=record.resource.path),
     )
 
 

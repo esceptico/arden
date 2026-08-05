@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from arden.agent.types.tools import validate_source_provider
 from arden.tools.core.types import ToolAction, ToolPolicy
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
@@ -65,6 +66,7 @@ def _normalize_http_url(name: str, raw_url: object) -> str:
 
 
 def parse_server_config(name: str, raw: dict) -> MCPServerConfig:
+    validate_source_provider(name)
     transport_type = raw.get("transport")
     if transport_type == "stdio":
         command = raw.get("command")

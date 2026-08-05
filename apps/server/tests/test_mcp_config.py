@@ -285,3 +285,8 @@ def test_trust_tool_annotations_defaults_to_false():
     config = parse_server_config("obsidian", {"transport": "http", "url": "127.0.0.1:8008/mcp"})
 
     assert config.trust_tool_annotations is False
+
+
+def test_mcp_server_name_must_fit_source_provider_contract():
+    with pytest.raises(ValueError, match="provider exceeds 64"):
+        parse_server_config("x" * 65, {"transport": "stdio", "command": "true"})

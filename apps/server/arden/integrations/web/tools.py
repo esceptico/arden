@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title, normalize_source_refs
 from arden.constants import WEB_SEARCH_MAX_RESULTS
 from arden.integrations.tool_errors import operation_error_result
 from arden.integrations.web.exceptions import WebFetchProviderException, WebSearchProviderException
@@ -67,13 +67,12 @@ def _web_page_source(
     title: str | None,
 ) -> ToolSourceRef:
     raw_url = str(url)
-    display_title = _single_line_bytes(title, _SEARCH_TITLE_MAX_BYTES)
     digest = hashlib.sha256(raw_url.encode()).hexdigest()
     return ToolSourceRef(
         provider="web",
         kind="page",
         ref=raw_url if len(raw_url) <= _SOURCE_REF_MAX_CHARS else f"url-sha256:{digest}",
-        title=display_title or raw_url,
+        title=canonical_source_title(title, fallback=raw_url),
         url=raw_url,
     )
 
@@ -152,6 +151,7 @@ async def web_search(execution: ToolExecution, args: WebSearchInput) -> ToolResu
             code="provider_error",
             message=f"Web provider returned an invalid result URL: {error}",
             preview="Search failed",
+            recovery_action="Retry the search once; report the provider contract error if it persists.",
         )
 
     may_have_more = len(results) >= args.limit
@@ -199,6 +199,7 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
             code="provider_error",
             message=f"Web provider returned an invalid page URL: {error}",
             preview="Fetch failed",
+            recovery_action="Run web_search again and use a different current result URL.",
         )
     text = result.text
     if not text or not text.strip():
@@ -206,6 +207,7 @@ async def web_fetch(execution: ToolExecution, args: WebFetchInput) -> ToolResult
             code="provider_error",
             message="Web provider returned a page without readable content.",
             preview="Fetch failed",
+            recovery_action="Run web_search again and choose another result.",
         )
     lines = text.count("\n") + 1
     output = []

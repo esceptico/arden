@@ -276,3 +276,29 @@ async def test_mcp_tool_exception_returns_sanitized_typed_failure():
     assert result.is_error
     assert result.outcome.error.code == "mcp_provider_error"
     assert "provider secret" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_maps_malformed_source_envelope_to_invalid_response():
+    tool = MCPTool(
+        "notes",
+        McpTool(name="search", description="Search", input_schema={"type": "object"}),
+        FakeMCPSession(CallToolResult(content=[], structured_content={"results": {"id": "doc-1"}})),
+    )
+
+    result = await tool.execute(
+        ToolExecution(
+            tool_id="call-1",
+            tool_name=tool.name,
+            ctx=ToolContext(
+                session_state=SessionState(session_id="session-1", started_at=datetime(2026, 4, 30, tzinfo=UTC)),
+                registry=ToolRegistry(),
+                run=RunContext(run_id="run-1"),
+                io=IOBridge(),
+            ),
+        )
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "invalid_response"
+    assert result.content == "MCP provider returned invalid source metadata."

@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from arden.agent.types.tools import ToolSourceRef
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title
 from arden.integrations.base import IntegrationOperationError
 from arden.integrations.slack.client import SlackClient
 from arden.integrations.slack.tool_formatting import (
@@ -278,7 +278,7 @@ async def slack_user(execution: ToolExecution, args: SlackUserInput) -> ToolResu
                 provider="slack",
                 kind="user",
                 ref=profile.ref,
-                title=profile.name,
+                title=canonical_source_title(profile.name, fallback=profile.ref),
             ),
         ),
     )

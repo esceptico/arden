@@ -19,7 +19,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title, normalize_source_refs
 from arden.context.store import AREA_FILTER_UNSET
 from arden.core.public_refs import PublicRef, is_public_ref
 from arden.tools.core import ToolResult, tool
@@ -286,13 +286,24 @@ def _format_when(raw) -> str:
 
 
 def session_ref(public_ref: str, title: str) -> ToolSourceRef:
-    return ToolSourceRef(provider="arden", kind="session", ref=public_ref, title=title or public_ref)
+    return ToolSourceRef(
+        provider="arden",
+        kind="session",
+        ref=public_ref,
+        title=canonical_source_title(title, fallback=public_ref),
+    )
 
 
 def _message_ref(public_ref: str, seq: object, title: str) -> ToolSourceRef | None:
     if not isinstance(seq, int):
         return None
-    return ToolSourceRef(provider="arden", kind="message", ref=f"{public_ref}:{seq}", title=title)
+    message_ref = f"{public_ref}:{seq}"
+    return ToolSourceRef(
+        provider="arden",
+        kind="message",
+        ref=message_ref,
+        title=canonical_source_title(title, fallback=message_ref),
+    )
 
 
 def _session_unavailable() -> ToolResult:

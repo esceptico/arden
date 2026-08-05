@@ -381,7 +381,7 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
         if isinstance(message, AssistantHistoryMessage) and message.tool_calls:
             projected["tool_calls"] = [self._project_chat_tool_call(call) for call in message.tool_calls]
         elif isinstance(message, ToolHistoryMessage):
-            projected["content"] = tool_result_content_for_model(message.content_text, message.outcome_dict())
+            projected["content"] = tool_result_content_for_model(message.content_text, message.outcome)
             projected["tool_call_id"] = message.tool_call_id
 
         if not isinstance(projected["content"], str):

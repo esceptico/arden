@@ -16,7 +16,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title, normalize_source_refs
 from arden.settings import ARDEN_DIR
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
@@ -225,11 +225,12 @@ def _invalid(err: str) -> ToolResult:
 
 
 def _artifact_ref(scope: str, path: str) -> ToolSourceRef:
+    artifact_ref = f"{scope}:{path}"
     return ToolSourceRef(
         provider="research",
         kind="artifact",
-        ref=f"{scope}:{path}",
-        title=f"Research artifact {path}",
+        ref=artifact_ref,
+        title=canonical_source_title(f"Research artifact {path}", fallback=artifact_ref),
     )
 
 

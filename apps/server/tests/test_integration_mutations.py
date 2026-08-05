@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from arden.agent import ToolOutcomeStatus, ToolResult
-from arden.integrations.base import IntegrationConnectionError
+from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
 from arden.integrations.calendar.tools import CalendarCreateEventInput, CalendarDeleteEventInput, CalendarEditEventInput
-from arden.integrations.gmail.tools import EmailReplyInput, EmailSendInput
+from arden.integrations.gmail.write_tools import EmailReplyInput, EmailSendInput
 from arden.integrations.google_drive.tools import (
     DriveCreateDocInput,
     DriveCreateSheetInput,
@@ -87,8 +87,30 @@ async def test_idempotency_ledger_replays_completed_receipt_without_duplicate_ca
 
     assert calls == 1
     assert first.outcome.receipt == "provider-1"
+    assert first.outcome.verification.postcondition == "Provider returned a mutation reference"
     assert second.outcome.receipt == "provider-1"
     assert second.data["idempotent_replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_idempotent_mutation_requires_injected_ledger():
+    execution = ToolExecution(
+        tool_id="call-1",
+        tool_name="send",
+        ctx=SimpleNamespace(services={}),
+    )
+
+    async def invoke():
+        raise AssertionError("mutation must not run without its ledger")
+
+    with pytest.raises(RuntimeError, match="ledger service is not configured"):
+        await execute_idempotent(
+            execution,
+            namespace="gmail:send:acct",
+            idempotency_key="send-key-1",
+            payload={"body": "hello"},
+            invoke=invoke,
+        )
 
 
 @pytest.mark.asyncio
@@ -305,6 +327,92 @@ async def test_connection_error_releases_claim_and_uses_normal_recovery(tmp_path
 
     assert retry.outcome.status is ToolOutcomeStatus.SUCCEEDED
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_preflight_operation_error_releases_claim_before_mutation(tmp_path):
+    ledger = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
+    execution = ToolExecution(
+        tool_id="call-1",
+        tool_name="send",
+        ctx=SimpleNamespace(services={IDEMPOTENCY_LEDGER_SERVICE: ledger}),
+    )
+    preflight_calls = 0
+    mutation_calls = 0
+
+    async def before_mutation():
+        nonlocal preflight_calls
+        preflight_calls += 1
+        if preflight_calls == 1:
+            raise IntegrationOperationError(
+                code="provider_error",
+                safe_message="Preflight failed.",
+                retryable=True,
+            )
+
+    async def invoke():
+        nonlocal mutation_calls
+        mutation_calls += 1
+        return mutation_result(
+            content="sent",
+            preview="Sent",
+            operation="send",
+            target="user@example.test",
+            receipt="provider-1",
+            after_ref="acct:message-1",
+            observed="Provider returned acct:message-1",
+        )
+
+    with pytest.raises(IntegrationOperationError, match="Preflight failed"):
+        await execute_idempotent(
+            execution,
+            namespace="gmail:send:acct",
+            idempotency_key="send-key-1",
+            payload={"body": "hello"},
+            before_mutation=before_mutation,
+            invoke=invoke,
+        )
+    retry = await execute_idempotent(
+        execution,
+        namespace="gmail:send:acct",
+        idempotency_key="send-key-1",
+        payload={"body": "hello"},
+        before_mutation=before_mutation,
+        invoke=invoke,
+    )
+
+    assert retry.outcome.status is ToolOutcomeStatus.SUCCEEDED
+    assert preflight_calls == 2
+    assert mutation_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_untyped_preflight_failure_releases_claim_before_mutation(tmp_path):
+    ledger = IdempotencyLedger(tmp_path / "idempotency.sqlite3")
+    execution = ToolExecution(
+        tool_id="call-1",
+        tool_name="send",
+        ctx=SimpleNamespace(services={IDEMPOTENCY_LEDGER_SERVICE: ledger}),
+    )
+
+    async def fail_preflight():
+        raise RuntimeError("compose bug")
+
+    async def invoke():
+        raise AssertionError("mutation must not run")
+
+    with pytest.raises(RuntimeError, match="compose bug"):
+        await execute_idempotent(
+            execution,
+            namespace="gmail:send:acct",
+            idempotency_key="send-key-1",
+            payload={"body": "hello"},
+            before_mutation=fail_preflight,
+            invoke=invoke,
+        )
+
+    assert ledger.begin("gmail:send:acct", "send-key-1", {"body": "hello"}) is None
+    ledger.abort("gmail:send:acct", "send-key-1")
 
 
 @pytest.mark.asyncio
