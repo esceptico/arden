@@ -644,7 +644,13 @@ session_create_tool = tool(
     description=CREATE_SESSION_DESCRIPTION,
     input_model=SessionCreateInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"session"}),
+        deferred=True,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
     ),
     execute=session_create,
 )

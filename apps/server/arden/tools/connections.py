@@ -142,9 +142,13 @@ connection_request_tool = tool(
     ),
     input_model=ConnectionRequestInput,
     policy=ToolPolicy(
-        action=ToolAction.READ,
+        action=ToolAction.EXECUTE,
         scope=ToolScope.EXTERNAL,
+        requires_user_interaction=True,
         permissions=frozenset({"connections"}),
+        destructive=False,
+        open_world=True,
+        idempotent=False,
     ),
     execute=connection_request,
 )

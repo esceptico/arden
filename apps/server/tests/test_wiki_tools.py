@@ -1280,4 +1280,4 @@ def test_wiki_read_boundary_has_its_own_core_integration() -> None:
     assert wiki_patch_page_tool.policy.idempotent is True
     assert wiki_archive_page_tool.policy.idempotent is True
     assert wiki_move_page_tool.policy.idempotent is True
-    assert wiki_publish_generated_tool.policy.idempotent is False
+    assert wiki_publish_generated_tool.policy.idempotent is True

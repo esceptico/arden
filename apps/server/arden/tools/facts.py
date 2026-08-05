@@ -1033,7 +1033,13 @@ fact_plan_changes_tool = tool(
     description="Prepare creates, reviews, metadata amendments, supersessions, expiries, or retractions. Returns a durable exact preview; it does not publish facts.",
     input_model=FactPlanChangesInput,
     policy=ToolPolicy(
-        action=ToolAction.DRAFT, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
+        action=ToolAction.DRAFT,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({FACT_SERVICE}),
+        deferred=True,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
     ),
     execute=fact_plan_changes,
 )
@@ -1044,7 +1050,13 @@ fact_commit_changes_tool = tool(
     description="Commit an exact plan_id only if its affected facts remain unchanged since planning.",
     input_model=FactCommitChangesInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE}), deferred=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({FACT_SERVICE}),
+        deferred=True,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
     ),
     execute=fact_commit_changes,
 )

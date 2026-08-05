@@ -186,7 +186,12 @@ def create_mcp_server(
         name="arden_research",
         title="Research with arden",
         description="Run a blocking arden research task and return answer, evidence, gaps, and contradictions.",
-        annotations=ToolAnnotations(read_only_hint=True),
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            open_world_hint=True,
+            idempotent_hint=False,
+        ),
         structured_output=True,
     )
     async def arden_research(

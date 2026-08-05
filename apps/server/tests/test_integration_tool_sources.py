@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from arden.agent import ToolOutcomeStatus
 from arden.context.models import SessionState
 from arden.integrations.base import IntegrationOperationError
 from arden.integrations.calendar.client import GoogleCalendar, MultiCalendarSource
@@ -188,8 +189,9 @@ async def test_send_email_maps_provider_failure_to_typed_result(tmp_path):
 
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "provider_error"
-    assert result.outcome.error.retryable
+    assert result.outcome.status is ToolOutcomeStatus.UNCERTAIN
+    assert result.outcome.error.code == "mutation_uncertain"
+    assert result.data["original_error"] == {"code": "provider_error", "retryable": True}
 
 
 @pytest.mark.asyncio

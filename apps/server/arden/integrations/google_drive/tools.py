@@ -279,13 +279,22 @@ async def approve_sheet_write(_execution: ToolExecution, args: SheetWriteInput) 
     )
 
 
-def _policy(action: ToolAction, *, approval: bool = False) -> ToolPolicy:
+def _policy(
+    action: ToolAction,
+    *,
+    approval: bool = False,
+    destructive: bool | None = None,
+    idempotent: bool | None = None,
+) -> ToolPolicy:
     return ToolPolicy(
         action=action,
         scope=ToolScope.EXTERNAL,
         requires_approval=approval,
         permissions=frozenset({"google_drive"}),
         deferred=True,
+        destructive=destructive,
+        open_world=True,
+        idempotent=idempotent,
     )
 
 
@@ -315,7 +324,7 @@ drive_create_doc_tool = tool(
     display_description="Create an empty Google Doc.",
     description="Create an empty Google Doc. Use drive_edit_doc in a separate operation to add content.",
     input_model=DriveCreateDocInput,
-    policy=_policy(ToolAction.WRITE, approval=True),
+    policy=_policy(ToolAction.WRITE, approval=True, destructive=False, idempotent=True),
     approval=approve_drive_create_doc,
     execute=drive_create_doc,
 )
@@ -323,7 +332,7 @@ drive_edit_doc_tool = tool(
     display_name="Edit Google Doc",
     description="Append to or replace exact text in a Google Doc.",
     input_model=DriveEditDocInput,
-    policy=_policy(ToolAction.WRITE, approval=True),
+    policy=_policy(ToolAction.WRITE, approval=True, destructive=True, idempotent=True),
     approval=approve_drive_edit_doc,
     execute=drive_edit_doc,
 )
@@ -332,7 +341,7 @@ drive_create_sheet_tool = tool(
     display_description="Create an empty Google Sheet.",
     description="Create an empty Google Sheet. Use drive_update_sheet in a separate operation to add values.",
     input_model=DriveCreateSheetInput,
-    policy=_policy(ToolAction.WRITE, approval=True),
+    policy=_policy(ToolAction.WRITE, approval=True, destructive=False, idempotent=True),
     approval=approve_drive_create_sheet,
     execute=drive_create_sheet,
 )
@@ -340,7 +349,7 @@ drive_update_sheet_tool = tool(
     display_name="Update Google Sheet",
     description="Replace values in one exact A1 range.",
     input_model=SheetWriteInput,
-    policy=_policy(ToolAction.WRITE, approval=True),
+    policy=_policy(ToolAction.WRITE, approval=True, destructive=True, idempotent=True),
     approval=approve_sheet_write,
     execute=drive_update_sheet,
 )
@@ -348,7 +357,7 @@ drive_append_sheet_rows_tool = tool(
     display_name="Append Google Sheet Rows",
     description="Append rows to a Google Sheet range.",
     input_model=SheetWriteInput,
-    policy=_policy(ToolAction.WRITE, approval=True),
+    policy=_policy(ToolAction.WRITE, approval=True, destructive=False, idempotent=True),
     approval=approve_sheet_write,
     execute=drive_append_sheet_rows,
 )

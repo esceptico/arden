@@ -137,7 +137,15 @@ directives_set_tool = tool(
     display_description="Replace persistent behavior directives.",
     description=DESCRIPTION,
     input_model=DirectivesSetInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        deferred=True,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
+    ),
     approval=approve_directives_set,
     execute=directives_set,
 )

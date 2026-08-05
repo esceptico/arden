@@ -132,6 +132,9 @@ wiki_maintenance_review_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({WIKI_MAINTENANCE_SERVICE}),
+        destructive=True,
+        open_world=False,
+        idempotent=False,
     ),
     execute=wiki_maintenance_review,
 )

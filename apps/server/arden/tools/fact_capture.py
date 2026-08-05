@@ -112,6 +112,9 @@ fact_capture_review_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({FACT_CAPTURE_SERVICE}),
+        destructive=True,
+        open_world=False,
+        idempotent=False,
     ),
     execute=fact_capture_review,
 )

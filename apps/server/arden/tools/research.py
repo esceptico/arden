@@ -483,7 +483,14 @@ research_tool = tool(
     display_description="Run a focused research agent.",
     description=RESEARCH_DESCRIPTION,
     input_model=ResearchInput,
-    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, concurrency_group="research_agents"),
+    policy=ToolPolicy(
+        action=ToolAction.EXECUTE,
+        scope=ToolScope.INTERNAL,
+        concurrency_group="research_agents",
+        destructive=False,
+        open_world=True,
+        idempotent=False,
+    ),
     execute=research,
     kind="agent",
 )
@@ -492,7 +499,14 @@ research_outline_tool = tool(
     display_name="Research Outline",
     description="Set the required coverage sections for a broad or deep research task.",
     input_model=ResearchOutlineInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
+    ),
     execute=research_outline,
 )
 
@@ -500,7 +514,14 @@ research_cover_tool = tool(
     display_name="Research Cover",
     description="Mark an outline section as covered by a specific source.",
     input_model=ResearchCoverInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=False,
+        open_world=False,
+        idempotent=True,
+    ),
     execute=research_cover,
 )
 
@@ -508,7 +529,14 @@ research_track_source_tool = tool(
     display_name="Research Track Source",
     description="Track a candidate/read/rejected source in the structured research harness workspace.",
     input_model=ResearchSourceInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
+    ),
     execute=research_track_source,
 )
 
@@ -516,7 +544,14 @@ research_curate_tool = tool(
     display_name="Research Curate Evidence",
     description="Promote an important source-backed finding into the research harness with importance/confidence metadata.",
     input_model=ResearchCurateInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
+    ),
     execute=research_curate,
 )
 
@@ -524,7 +559,14 @@ research_verify_claim_tool = tool(
     display_name="Research Verify Claim",
     description="Record whether a claim is supported, contradicted, or uncertain based on inspected sources.",
     input_model=ResearchVerifyClaimInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
+    ),
     execute=research_verify_claim,
 )
 
@@ -532,7 +574,14 @@ research_question_tool = tool(
     display_name="Research Question",
     description="Track an open, answered, or dead-end research question in the structured harness workspace.",
     input_model=ResearchQuestionInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
+    ),
     execute=research_question,
 )
 
@@ -540,7 +589,14 @@ research_track_search_tool = tool(
     display_name="Research Track Search",
     description="Record a meaningful query or exploration path tried during research.",
     input_model=ResearchSearchInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        offload=False,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
+    ),
     execute=research_track_search,
 )
 

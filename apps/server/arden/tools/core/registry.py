@@ -127,6 +127,8 @@ class ToolRegistry:
             policy = tool.policy.model_copy(update={"requires_approval": False, "approval_mode": ApprovalMode.NEVER})
             return _PolicyOverrideTool(tool, policy)
         if override == ToolOverrideDecision.ASK:
+            if tool.policy.requires_user_interaction:
+                return tool
             policy = tool.policy.model_copy(update={"requires_approval": True, "approval_mode": ApprovalMode.ALWAYS})
             return _PolicyOverrideTool(tool, policy)
         return tool

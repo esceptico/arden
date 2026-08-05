@@ -87,6 +87,10 @@ export interface ToolPolicyMetadata {
   action: "read" | "draft" | "write" | "execute";
   scope: "internal" | "external";
   requires_approval: boolean;
+  requires_user_interaction: boolean;
+  destructive: boolean | null;
+  open_world: boolean | null;
+  idempotent: boolean | null;
   approval_mode: "never" | "always";
   permissions: string[];
   timeout_seconds: number | null;

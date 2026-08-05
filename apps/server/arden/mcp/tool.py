@@ -20,6 +20,9 @@ class MCPTool(Tool):
         scope=ToolScope.EXTERNAL,
         requires_approval=True,
         permissions=frozenset({"mcp"}),
+        destructive=True,
+        open_world=True,
+        idempotent=False,
     )
     input_model = None
 
@@ -35,7 +38,8 @@ class MCPTool(Tool):
         self._server_name = server_name
         self._mcp_tool = mcp_tool
         self._session = session
-        self.policy = policy or _policy_from_annotations(mcp_tool.annotations, trust_annotations) or self.policy
+        selected_policy = policy or _policy_from_annotations(mcp_tool.annotations, trust_annotations) or self.policy
+        self.policy = _complete_mutation_risk(selected_policy)
 
     @property
     def name(self) -> str:
@@ -89,7 +93,26 @@ def _policy_from_annotations(annotations: ToolAnnotations | None, trusted: bool)
         scope=ToolScope.EXTERNAL,
         requires_approval=requires_approval,
         permissions=frozenset({"mcp"}),
-        destructive=annotations.destructive_hint,
-        open_world=annotations.open_world_hint,
-        idempotent=annotations.idempotent_hint,
+        destructive=(
+            annotations.destructive_hint
+            if annotations.destructive_hint is not None or action is ToolAction.READ
+            else True
+        ),
+        open_world=annotations.open_world_hint if annotations.open_world_hint is not None else True,
+        idempotent=(
+            annotations.idempotent_hint
+            if annotations.idempotent_hint is not None or action is ToolAction.READ
+            else False
+        ),
     )
+
+
+def _complete_mutation_risk(policy: ToolPolicy) -> ToolPolicy:
+    if policy.action is ToolAction.READ:
+        return policy
+    updates = {
+        "destructive": True if policy.destructive is None else policy.destructive,
+        "open_world": True if policy.open_world is None else policy.open_world,
+        "idempotent": False if policy.idempotent is None else policy.idempotent,
+    }
+    return policy.model_copy(update=updates)

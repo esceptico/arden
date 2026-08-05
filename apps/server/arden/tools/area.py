@@ -381,6 +381,9 @@ area_page_patch_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE}),
+        destructive=True,
+        open_world=False,
+        idempotent=True,
     ),
     execute=area_page_patch,
 )
@@ -394,6 +397,9 @@ area_page_write_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({WIKI_SERVICE, WIKI_POST_COMMIT_SERVICE}),
+        destructive=True,
+        open_world=False,
+        idempotent=True,
     ),
     execute=area_page_write,
 )
@@ -403,7 +409,14 @@ area_run_automation_tool = tool(
     display_description="Run an automation for this Area.",
     description="Run a child automation owned by the current Area.",
     input_model=AreaAutomationRunInput,
-    policy=ToolPolicy(action=ToolAction.EXECUTE, scope=ToolScope.INTERNAL, permissions=frozenset({"automation"})),
+    policy=ToolPolicy(
+        action=ToolAction.EXECUTE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"automation"}),
+        destructive=True,
+        open_world=True,
+        idempotent=False,
+    ),
     execute=area_run_automation,
 )
 
@@ -419,6 +432,8 @@ area_submit_report_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({AREA_WORK_SERVICE}),
+        destructive=True,
+        open_world=False,
         idempotent=True,
     ),
     execute=area_submit_report,

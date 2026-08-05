@@ -4,15 +4,18 @@ from datetime import UTC, datetime
 import pytest
 
 from arden.context.models import SessionState
+from arden.events.sse import ConnectionNeededEvent
 from arden.integrations.base import IntegrationConnectionDescriptor
 from arden.tools.connections import (
     ConnectionRequestInput,
     ConnectionService,
     connection_request,
+    connection_request_tool,
     render_connection_catalog,
 )
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
+from arden.tools.core.types import ToolOverrideDecision
 
 
 def _descriptor(
@@ -69,6 +72,56 @@ class _Context:
         if id == "connections" and isinstance(self._service, client_type):
             return self._service
         return None
+
+
+@pytest.mark.parametrize("override", [None, ToolOverrideDecision.ASK])
+@pytest.mark.asyncio
+async def test_request_connection_routes_one_connection_consent_without_generic_approval(override):
+    emitted = []
+    pending_approvals: dict[str, asyncio.Future] = {}
+    pending_connections: dict[str, asyncio.Future] = {}
+
+    async def emit(event):
+        emitted.append(event)
+
+    service = ConnectionService(_Registry([_descriptor()]))  # type: ignore[arg-type]
+    registry = ToolRegistry(tool_overrides={"connection_request": override} if override else None)
+    registry.register("connection_request", connection_request_tool, source="_system")
+    ctx = ToolContext(
+        session_state=SessionState(session_id="session-1", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=RunContext(run_id="run-1"),
+        io=IOBridge(
+            emit=emit,
+            pending_approvals=pending_approvals,
+            pending_connections=pending_connections,
+        ),
+        services={"connections": service},
+        background_tasks=BackgroundTaskRegistry(session_id="session-1"),
+    )
+    execution = ToolExecution(tool_id="call-1", tool_name="connection_request", ctx=ctx)
+    task = asyncio.create_task(
+        registry.execute(
+            "connection_request",
+            execution,
+            {"integration_id": "gmail", "reason": "Need email"},
+        )
+    )
+    for _ in range(20):
+        if pending_connections:
+            break
+        await asyncio.sleep(0)
+
+    assert connection_request_tool.policy.requires_approval is False
+    assert connection_request_tool.policy.requires_user_interaction is True
+    assert pending_approvals == {}
+    assert list(pending_connections) == ["call-1"]
+    assert len([event for event in emitted if isinstance(event, ConnectionNeededEvent)]) == 1
+
+    pending_connections["call-1"].set_result({"approved": True, "result": "connected"})
+    result = await task
+
+    assert not result.is_error
 
 
 @pytest.mark.asyncio

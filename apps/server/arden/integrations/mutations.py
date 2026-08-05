@@ -8,11 +8,15 @@ from typing import Any
 
 from arden.agent import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolVerification
 from arden.agent.types.tools import normalize_source_refs
+from arden.integrations.base import IntegrationConnectionError
+from arden.logging import get_logger
 from arden.settings import ARDEN_DIR
 from arden.tools.core.context import ToolExecution
 
 IDEMPOTENCY_LEDGER_SERVICE = "idempotency_ledger"
 DEFAULT_LEDGER_PATH = ARDEN_DIR / "idempotency.sqlite3"
+_PROVEN_NO_EFFECT_CODES = frozenset({"invalid_ref", "not_found", "rate_limited"})
+_logger = get_logger(__name__)
 
 
 class IdempotencyConflict(ValueError):
@@ -60,7 +64,10 @@ class IdempotencyLedger:
                     message="A prior attempt with this idempotency key has no confirmed terminal receipt.",
                     preview="Verify prior attempt",
                     status=ToolOutcomeStatus.UNCERTAIN,
-                    recovery_action="Verify provider state before retrying with the same idempotency key.",
+                    recovery_action=(
+                        "Verify provider state. If the effect is absent, retry with a new idempotency key; "
+                        "do not rotate the key before verification."
+                    ),
                 )
             connection.execute(
                 "INSERT INTO mutation_idempotency VALUES (?, ?, ?, 'started', NULL)",
@@ -169,9 +176,44 @@ async def execute_idempotent(
         )
     if replay is not None:
         return replay
-    result = await invoke()
-    if result.outcome and result.outcome.status is ToolOutcomeStatus.SUCCEEDED:
-        ledger.complete(namespace, idempotency_key, result)
-    elif result.outcome and result.outcome.status is ToolOutcomeStatus.FAILED:
+    try:
+        result = await invoke()
+    except IntegrationConnectionError:
         ledger.abort(namespace, idempotency_key)
-    return result
+        raise
+    except Exception:
+        _logger.exception("External mutation raised after its idempotency claim")
+        return _mutation_uncertain()
+    outcome = result.outcome
+    if outcome and outcome.status is ToolOutcomeStatus.SUCCEEDED:
+        ledger.complete(namespace, idempotency_key, result)
+        return result
+    if outcome and outcome.status is ToolOutcomeStatus.DENIED:
+        ledger.abort(namespace, idempotency_key)
+        return result
+    if outcome and outcome.status is ToolOutcomeStatus.FAILED:
+        error = outcome.error
+        if error is not None and error.code in _PROVEN_NO_EFFECT_CODES:
+            ledger.abort(namespace, idempotency_key)
+            return result
+    if outcome and outcome.status is ToolOutcomeStatus.UNCERTAIN:
+        return result
+    return _mutation_uncertain(result)
+
+
+def _mutation_uncertain(result: ToolResult | None = None) -> ToolResult:
+    original_error = result.outcome.error if result and result.outcome else None
+    data = dict(result.data or {}) if result else {}
+    if original_error is not None:
+        data["original_error"] = {"code": original_error.code, "retryable": original_error.retryable}
+    return ToolResult.failure(
+        code="mutation_uncertain",
+        message="The provider did not confirm whether the mutation was applied.",
+        preview="Verify provider state",
+        status=ToolOutcomeStatus.UNCERTAIN,
+        recovery_action=(
+            "Verify provider state. If the effect is absent, retry with a new idempotency key; "
+            "do not rotate the key before verification."
+        ),
+        data=data or None,
+    )

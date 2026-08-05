@@ -50,6 +50,12 @@ async def test_mcp_server_exposes_structured_arden_research_tool():
     content = result.content
     structured = result.structured_content
     assert [tool.name for tool in tools] == ["arden_research"]
+    annotations = tools[0].annotations
+    assert annotations is not None
+    assert annotations.read_only_hint is False
+    assert annotations.destructive_hint is False
+    assert annotations.open_world_hint is True
+    assert annotations.idempotent_hint is False
     assert runner.calls == [{"task": "research Dex integration", "depth": "normal"}]
     assert content[0].text.startswith("{")
     assert structured == output.model_dump(mode="json")

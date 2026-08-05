@@ -67,13 +67,13 @@ def test_stateful_spawns_do_not_leak_into_read_only_schema():
     assert "research" not in read_names
 
 
-def test_all_external_state_changes_require_approval():
+def test_all_external_state_changes_require_user_consent():
     unsafe = [
         name
         for name, registered in ToolExecutor().registry.tools.items()
         if registered.policy.scope is ToolScope.EXTERNAL
         and registered.policy.action is not ToolAction.READ
-        and not registered.policy.requires_approval
+        and not (registered.policy.requires_approval or registered.policy.requires_user_interaction)
     ]
 
     assert unsafe == []

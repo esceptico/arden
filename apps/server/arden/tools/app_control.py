@@ -589,6 +589,9 @@ session_send_message_tool = tool(
         allow_approval_bypass=False,
         permissions=frozenset({"session", "app_control"}),
         deferred=True,
+        destructive=True,
+        open_world=True,
+        idempotent=False,
     ),
     approval=approve_session_send_message,
     execute=session_send_message,
@@ -606,6 +609,9 @@ app_followup_task_tool = tool(
         allow_approval_bypass=False,
         permissions=frozenset({"session", "app_control"}),
         deferred=True,
+        destructive=True,
+        open_world=True,
+        idempotent=False,
     ),
     approval=approve_app_followup_task,
     execute=app_followup_task,
@@ -617,7 +623,13 @@ session_rename_tool = tool(
     description=RENAME_SESSION_DESCRIPTION,
     input_model=SessionRenameInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"session"}),
+        deferred=True,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
     ),
     execute=session_rename,
 )
@@ -628,7 +640,13 @@ session_archive_tool = tool(
     description=ARCHIVE_SESSION_DESCRIPTION,
     input_model=SessionArchiveInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"}), deferred=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"session"}),
+        deferred=True,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
     ),
     execute=session_archive,
 )
@@ -639,7 +657,13 @@ app_request_attention_tool = tool(
     description=REQUEST_ATTENTION_DESCRIPTION,
     input_model=AppRequestAttentionInput,
     policy=ToolPolicy(
-        action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"app_control"}), deferred=True
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"app_control"}),
+        deferred=True,
+        destructive=True,
+        open_world=False,
+        idempotent=False,
     ),
     execute=app_request_attention,
 )
@@ -654,6 +678,9 @@ app_open_tool = tool(
         scope=ToolScope.INTERNAL,
         permissions=frozenset({"app_control", "session"}),
         deferred=True,
+        destructive=False,
+        open_world=False,
+        idempotent=False,
     ),
     execute=app_open,
 )

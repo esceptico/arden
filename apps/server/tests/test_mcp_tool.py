@@ -125,6 +125,45 @@ def test_mcp_tool_ignores_untrusted_annotations():
 
     assert tool.policy.action is ToolAction.EXECUTE
     assert tool.policy.requires_approval is True
+    assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (True, True, False)
+
+
+def test_mcp_tool_applies_standard_defaults_to_partial_mutation_annotations():
+    mcp_tool = McpTool(
+        name="publish",
+        description="Publish a note",
+        input_schema={"type": "object"},
+        annotations=ToolAnnotations(read_only_hint=False),
+    )
+
+    tool = MCPTool(
+        "notes",
+        mcp_tool,
+        FakeMCPSession(CallToolResult(content=[])),
+        trust_annotations=True,
+    )
+
+    assert tool.policy.action is ToolAction.EXECUTE
+    assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (True, True, False)
+
+
+def test_mcp_tool_completes_partial_explicit_mutation_policy_conservatively():
+    mcp_tool = McpTool(name="publish", description="Publish a note", input_schema={"type": "object"})
+    partial = ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.EXTERNAL,
+        requires_approval=True,
+        destructive=False,
+    )
+
+    tool = MCPTool(
+        "notes",
+        mcp_tool,
+        FakeMCPSession(CallToolResult(content=[])),
+        policy=partial,
+    )
+
+    assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (False, True, False)
 
 
 def test_mcp_tool_preserves_complete_nested_schema():

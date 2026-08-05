@@ -333,13 +333,28 @@ async def list_research_artifacts(execution: ToolExecution, args: ListResearchAr
 
 
 _READ_POLICY = ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, offload=False)
-_WRITE_POLICY = ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, offload=False)
+_OVERWRITE_POLICY = ToolPolicy(
+    action=ToolAction.WRITE,
+    scope=ToolScope.INTERNAL,
+    offload=False,
+    destructive=True,
+    open_world=False,
+    idempotent=True,
+)
+_APPEND_POLICY = ToolPolicy(
+    action=ToolAction.WRITE,
+    scope=ToolScope.INTERNAL,
+    offload=False,
+    destructive=False,
+    open_world=False,
+    idempotent=False,
+)
 
 write_research_artifact_tool = tool(
     display_name="WriteResearchArtifact",
     description="Write (overwrite) a filesystem-backed scratchpad artifact for this research run. Use to offload long source inventories, tables, or draft reports out of context; return a compact manifest instead. Stored under ~/.arden/artifacts/research/<scope>/ with safe relative paths.",
     input_model=WriteResearchArtifactInput,
-    policy=_WRITE_POLICY,
+    policy=_OVERWRITE_POLICY,
     execute=write_research_artifact,
 )
 
@@ -347,7 +362,7 @@ append_research_artifact_tool = tool(
     display_name="AppendResearchArtifact",
     description="Append text to a filesystem-backed scratchpad artifact for this research run (created if absent). Good for incrementally building a source inventory.",
     input_model=AppendResearchArtifactInput,
-    policy=_WRITE_POLICY,
+    policy=_APPEND_POLICY,
     execute=append_research_artifact,
 )
 

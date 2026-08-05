@@ -118,6 +118,7 @@ def test_tool_policy_model_defaults():
     assert policy.action == ToolAction.READ
     assert policy.scope == ToolScope.INTERNAL
     assert policy.requires_approval is False
+    assert policy.requires_user_interaction is False
     assert policy.permissions == frozenset()
     assert policy.timeout_seconds is None
     assert policy.audit is True
@@ -146,6 +147,7 @@ def test_function_tool_metadata_exposes_policy():
         "scope": "internal",
         "placement": "server",
         "requires_approval": False,
+        "requires_user_interaction": False,
         "approval_mode": "never",
         "deferred": False,
         "permissions": [],
@@ -243,6 +245,9 @@ def test_tool_overrides_hide_deny_and_patch_approval_policy():
                     action=ToolAction.WRITE,
                     scope=ToolScope.INTERNAL,
                     requires_approval=True,
+                    destructive=False,
+                    open_world=False,
+                    idempotent=True,
                 ),
                 approval=approval,
             ),
@@ -262,6 +267,9 @@ def test_tool_overrides_hide_deny_and_patch_approval_policy():
     assert metadata["read_state"]["policy"]["requires_approval"] is True
     assert metadata["read_state"]["override"] == "ask"
     assert metadata["write_state"]["policy"]["requires_approval"] is False
+    assert metadata["write_state"]["policy"]["destructive"] is False
+    assert metadata["write_state"]["policy"]["open_world"] is False
+    assert metadata["write_state"]["policy"]["idempotent"] is True
     assert metadata["write_state"]["override"] == "approve"
     assert metadata["blocked"]["override"] == "deny"
 

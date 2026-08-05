@@ -115,6 +115,9 @@ fact_maintenance_review_tool = tool(
         action=ToolAction.WRITE,
         scope=ToolScope.INTERNAL,
         permissions=frozenset({FACT_MAINTENANCE_SERVICE}),
+        destructive=True,
+        open_world=False,
+        idempotent=False,
     ),
     execute=fact_maintenance_review,
 )

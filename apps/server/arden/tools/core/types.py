@@ -39,6 +39,9 @@ class ToolPolicy(BaseModel):
     scope: ToolScope
     placement: ToolPlacement = ToolPlacement.SERVER
     requires_approval: StrictBool = False
+    # Dedicated in-tool UI suspension, such as OAuth connection consent. The
+    # generic approval middleware must not add a second prompt.
+    requires_user_interaction: StrictBool = False
     # Deferred tools are hidden from the model's schema list until loaded via
     # load_tools / tool_search. Declared here, at the tool definition, so
     # deferral is a property of the tool — not a hand-maintained registry map.

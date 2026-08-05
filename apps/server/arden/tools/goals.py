@@ -149,7 +149,14 @@ goal_complete_tool = tool(
         "Mark the current session goal complete after the completion audit passes. "
         "This tool takes no input. Put evidence and verification in the visible assistant report after the tool succeeds."
     ),
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"session"}),
+        destructive=True,
+        open_world=False,
+        idempotent=True,
+    ),
     execute=goal_complete,
 )
 
@@ -163,6 +170,13 @@ goal_block_tool = tool(
         "concise blocked report with the reason and next required input."
     ),
     input_model=BlockGoalInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, permissions=frozenset({"session"})),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"session"}),
+        destructive=True,
+        open_world=False,
+        idempotent=False,
+    ),
     execute=goal_block,
 )

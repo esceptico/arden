@@ -187,7 +187,15 @@ agent_cancel_tool = tool(
         "and session_read shows its work."
     ),
     input_model=AgentCancelInput,
-    policy=ToolPolicy(action=ToolAction.WRITE, scope=ToolScope.INTERNAL, requires_approval=True, deferred=True),
+    policy=ToolPolicy(
+        action=ToolAction.WRITE,
+        scope=ToolScope.INTERNAL,
+        requires_approval=True,
+        deferred=True,
+        destructive=True,
+        open_world=False,
+        idempotent=True,
+    ),
     approval=approve_agent_cancel,
     execute=agent_cancel,
 )
