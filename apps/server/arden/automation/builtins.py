@@ -8,7 +8,6 @@ from arden.automation.triggers import CountTrigger, IdleTrigger, TimeTrigger, Tr
 from arden.constants import (
     BUILTIN_MEMORY_CAPTURE_ID,
     BUILTIN_MEMORY_CONSOLIDATE_ID,
-    BUILTIN_MEMORY_DREAM_ID,
     BUILTIN_MEMORY_RETENTION_ID,
     BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,
     BUILTIN_MEMORY_SYNTHESIZE_ID,
@@ -17,7 +16,6 @@ from arden.constants import (
     MEMORY_CAPTURE_EVERY_N_RUNS,
     MEMORY_CAPTURE_IDLE_MINUTES,
     MEMORY_CONSOLIDATE_AT,
-    MEMORY_DREAM_AT,
     MEMORY_RETENTION_AT,
     RETIRED_BUILTIN_AUTOMATION_IDS,
 )
@@ -152,19 +150,6 @@ BUILTINS = [
         handler="wiki_maintenance",
         auto_approve=True,
         tool_scope="wiki_maintenance",
-    ),
-    BuiltinSpec(
-        task_id=BUILTIN_MEMORY_DREAM_ID,
-        name="Memory Dream",
-        description="Publish provisional, cited cross-domain insights from canonical facts.",
-        prompt=(
-            "Publish a small number of provisional cross-domain insights from direct canonical facts. "
-            "Keep each insight grounded in exact cited evidence and never treat it as a canonical fact."
-        ),
-        triggers=[TimeTrigger(at=MEMORY_DREAM_AT, days="daily")],
-        handler="memory_dream",
-        enabled=False,
-        auto_approve=True,
     ),
     BuiltinSpec(
         task_id=BUILTIN_MEMORY_STORAGE_MAINTENANCE_ID,

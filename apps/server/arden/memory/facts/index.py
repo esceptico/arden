@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from arden.logging import get_logger
+from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import Fact
-from arden.memory.facts.service import FactService
 from arden.search.types import RawItem
 
 FACT_SEARCH_SOURCE = "fact"
@@ -25,8 +25,8 @@ class FactIndexState:
 class FactIndexProjection:
     """Keep one replaceable search partition aligned with a fact revision."""
 
-    def __init__(self, service: FactService, get_search_index: Callable[[], object | None]) -> None:
-        self._service = service
+    def __init__(self, ledger: FactLedger, get_search_index: Callable[[], object | None]) -> None:
+        self._ledger = ledger
         self._get_search_index = get_search_index
         self._lock = asyncio.Lock()
         self._last_state = FactIndexState(None, "not_ready")
@@ -53,8 +53,8 @@ class FactIndexProjection:
                     )
                     return None
                 try:
-                    revision = await self._service.revision()
-                    facts = await asyncio.to_thread(self._service.ledger.facts_at, revision)
+                    revision = await asyncio.to_thread(lambda: self._ledger.revision)
+                    facts = await asyncio.to_thread(self._ledger.facts_at, revision)
                     active = tuple(fact for fact in facts.values() if fact.status == "active")
                     now = datetime.now(UTC)
                     items = [
@@ -86,7 +86,7 @@ class FactIndexProjection:
                         if attempt == 0:
                             continue
                         break
-                    if await self._service.revision() != revision:
+                    if await asyncio.to_thread(lambda: self._ledger.revision) != revision:
                         if attempt == 0:
                             continue
                         self._last_state = FactIndexState(None, "not_ready", "fact revision changed during index sync")
@@ -103,6 +103,19 @@ class FactIndexProjection:
                     return None
             self._last_state = FactIndexState(None, "not_ready", "search index changed during fact sync")
             return None
+
+    async def ranked_fact_ids(self, query: str, *, limit: int) -> tuple[str, ...] | None:
+        """Relevance-ordered fact IDs for a user query, or None when the
+        search index cannot serve. Callers revalidate every hit against the
+        current ledger state."""
+
+        index = await self.sync()
+        if index is None:
+            return None
+        results = await index.search(query, sources=[FACT_SEARCH_SOURCE], limit=limit)
+        if self._get_search_index() is not index:
+            return None
+        return tuple(result.source_id for result in results)
 
     async def semantic_candidates(self, fact: Fact, *, limit: int) -> Sequence[str]:
         """Return opaque fact IDs; the maintenance worker revalidates every hit."""

@@ -1,11 +1,9 @@
 """Deterministic, backend-owned projection of wiki maintenance health."""
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from arden.constants import BUILTIN_MEMORY_DREAM_ID
 from arden.revisions.models import Commit
 from arden.wiki.constants import WIKI_HEALTH_ORIGIN, WIKI_MAINTENANCE_ACTOR
 from arden.wiki.models import WikiChangesReport
@@ -24,7 +22,6 @@ class WikiHealthIssueCode(StrEnum):
 
 class WikiHealthIssueOwner(StrEnum):
     BACKEND = "Backend"
-    DREAM = "Memory Dream"
     SYNTHESIS = "Synthesis"
     RETENTION = "Memory Retention"
     MEMORY_MAINTENANCE = "Memory Maintenance"
@@ -161,16 +158,10 @@ def _mechanical_issues(
                 WikiHealthIssueCode.STALE_PAGE,
                 record.resource.path,
                 "Generated fact content is behind the current ledger.",
-                fact_page_owner(record.page.metadata),
+                WikiHealthIssueOwner.SYNTHESIS,
             )
         )
     return tuple(issues)
-
-
-def fact_page_owner(metadata: Mapping[str, object]) -> WikiHealthIssueOwner:
-    if metadata.get("producer_automation_id") == BUILTIN_MEMORY_DREAM_ID:
-        return WikiHealthIssueOwner.DREAM
-    return WikiHealthIssueOwner.SYNTHESIS
 
 
 def _index_issues(index: WikiHealthIndex, observed_wiki_revision: str | None) -> tuple[WikiHealthIssue, ...]:

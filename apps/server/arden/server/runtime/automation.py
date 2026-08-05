@@ -68,7 +68,6 @@ class AutomationRuntime:
         resolve_auxiliary_completion: Callable[[], tuple[CompletionClient, str, str | None]],
         project_wiki_state: Callable[[], Awaitable[None]],
         get_fact_capture: Callable[[], FactCapture | None] = lambda: None,
-        get_fact_dream: Callable[[], object | None] = lambda: None,
         get_fact_maintenance: Callable[[FactMaintenanceReviewer], FactMaintenance | None] = lambda _reviewer: None,
         get_fact_synthesis: Callable[[], object | None] = lambda: None,
         get_wiki_maintenance: Callable[[WikiMaintenanceReviewer], WikiMaintenance | None] = lambda _reviewer: None,
@@ -84,7 +83,6 @@ class AutomationRuntime:
         self.get_slack_client = get_slack_client
         self.get_fact_capture = get_fact_capture
         self.fact_capture_review: FactCapture | None = None
-        self.get_fact_dream = get_fact_dream
         self.get_fact_maintenance = get_fact_maintenance
         self.fact_maintenance_review: FactMaintenanceReviewService | None = None
         self.get_fact_synthesis = get_fact_synthesis
@@ -395,7 +393,6 @@ class AutomationRuntime:
         self.scheduler.register_handler("memory_capture", self._run_memory_capture)
         self.scheduler.register_handler("memory_maintenance", self._run_fact_maintenance)
         self.scheduler.register_handler("memory_synthesize", self._run_memory_synthesis)
-        self.scheduler.register_handler("memory_dream", self._run_memory_dream)
         self.scheduler.register_handler("wiki_maintenance", self._run_wiki_maintenance)
         self.scheduler.register_handler("managed_history_collection", self._run_managed_history_collection)
         memory_model = self.config.memory_model
@@ -493,16 +490,6 @@ class AutomationRuntime:
             f"fact synthesis: {result.published_pages} page(s) published"
             f"; archived {result.skipped_archived}; under threshold {result.skipped_under_threshold}"
         )
-
-    async def _run_memory_dream(self, context: dict | None) -> str:
-        dream = self.get_fact_dream()
-        if dream is None:
-            return "memory dream unavailable (no memory model configured)"
-        result = await dream.run()
-        if result.empty:
-            return "memory dream idle"
-        state = "published" if result.published else "unchanged"
-        return f"memory dream: {result.insight_count} insight(s); {state}"
 
     async def _run_managed_history_collection(self, context: dict | None) -> str:
         if self.collect_managed_history is None:

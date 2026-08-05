@@ -4,7 +4,7 @@ from arden.memory.facts.ledger import FactLedger
 from arden.wiki.health import (
     WikiHealthIssue,
     WikiHealthIssueCode,
-    fact_page_owner,
+    WikiHealthIssueOwner,
 )
 from arden.wiki.models import WikiChangesReport
 from arden.wiki.provenance import parse_fact_provenance
@@ -26,7 +26,7 @@ def dangling_fact_citation_issues(
                         WikiHealthIssueCode.DANGLING_CITATION,
                         record.resource.path,
                         f"cited fact revision is unavailable for {citation.fact_id}",
-                        fact_page_owner(record.page.metadata),
+                        WikiHealthIssueOwner.SYNTHESIS,
                     )
                 )
     return tuple(issues)

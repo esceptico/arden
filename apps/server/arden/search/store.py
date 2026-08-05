@@ -396,7 +396,7 @@ class SearchStore:
             if sources:
                 placeholders = ",".join("?" * len(sources))
                 # Filter by the `source` partition key INSIDE the KNN so a small
-                # partition (memory_line) isn't starved by a large one (transcript).
+                # partition isn't starved by a large one.
                 rows = await self.conn.execute_fetchall(
                     f"""
                     SELECT item_id, distance

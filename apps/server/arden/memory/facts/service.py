@@ -6,7 +6,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from arden.logging import get_logger
 from arden.memory.facts.ledger import FactLedger
@@ -24,6 +24,16 @@ _SCOPE_KINDS = frozenset({"user", "area", "global", "project", "integration"})
 DEFAULT_RESULT_LIMIT = 100
 BATCH_FACT_LIMIT = 100
 _logger = get_logger(__name__)
+
+
+class RankedFactSearch(Protocol):
+    """Relevance-ordered fact IDs for a query; None when the index cannot serve."""
+
+    def __call__(self, query: str, *, limit: int) -> Awaitable[tuple[str, ...] | None]: ...
+
+
+class FactSearchUnavailableError(RuntimeError):
+    """The ranked fact search index cannot serve queries right now."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +113,9 @@ class FactService:
     ledger: FactLedger
     plans: FactPlanStore
     post_commit: Callable[[], Awaitable[None]] | None = None
+    # None = no search index configured; queries then use the ledger's
+    # exhaustive substring scan, as `include_inactive` archaeology always does.
+    ranked_search: RankedFactSearch | None = None
 
     async def search(
         self,
@@ -137,6 +150,9 @@ class FactService:
     ) -> FactPage[Fact]:
         limit = _limit(limit)
         after = _after(after)
+        ranked_search = self.ranked_search
+        if query is not None and not include_inactive and ranked_search is not None:
+            return await self._ranked_page(ranked_search, principal, query, subject=subject, limit=limit)
         facts = await asyncio.to_thread(
             self.ledger.search,
             query,
@@ -146,6 +162,34 @@ class FactService:
         visible = tuple(fact for fact in facts if principal.can_read(_scope(fact)))
         remaining = tuple(fact for fact in visible if after is None or (fact.created_at, fact.fact_id) > after)
         return FactPage(remaining[:limit], len(visible), len(remaining) > limit)
+
+    async def _ranked_page(
+        self,
+        ranked_search: RankedFactSearch,
+        principal: FactPrincipal,
+        query: str,
+        *,
+        subject: str | None,
+        limit: int,
+    ) -> FactPage[Fact]:
+        """Relevance order has no stable cursor: one top-N page, never `has_more`.
+        Every hit is revalidated against current ledger state, so the page may
+        run short of `limit` when the index leads the ledger or scopes hide hits."""
+        ranked = await ranked_search(query, limit=limit)
+        if ranked is None:
+            raise FactSearchUnavailableError("fact search index is unavailable")
+        active = {fact.fact_id: fact for fact in await asyncio.to_thread(self.ledger.search)}
+        visible: list[Fact] = []
+        for fact_id in ranked:
+            if len(visible) == limit:
+                break
+            fact = active.get(fact_id)
+            if fact is None or not principal.can_read(_scope(fact)):
+                continue
+            if subject is not None and subject not in fact.subjects:
+                continue
+            visible.append(fact)
+        return FactPage(tuple(visible), len(visible), False)
 
     async def revision(self) -> str | None:
         return await asyncio.to_thread(lambda: self.ledger.revision)

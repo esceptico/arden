@@ -1,7 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from arden.constants import BUILTIN_MEMORY_DREAM_ID
 from arden.memory.facts.ledger import FactLedger
 from arden.revisions import ManagedFileRepository
 from arden.server.wiki_health import dangling_fact_citation_issues
@@ -90,25 +89,6 @@ def test_historical_retracted_fact_version_remains_valid_provenance(tmp_path: Pa
     )
 
     assert dangling_fact_citation_issues(ledger, wiki.changes_since(None)) == ()
-
-
-def test_dream_page_assigns_dangling_citation_to_dream(tmp_path: Path) -> None:
-    ledger = _ledger(tmp_path)
-    wiki = _wiki(tmp_path)
-    wiki.create_page(
-        page_id="dream",
-        path="insights/2026-07.md",
-        title="Dream",
-        metadata={
-            "producer_automation_id": BUILTIN_MEMORY_DREAM_ID,
-            "generated_from_revision": "a" * 64,
-            "fact_citations": [{"fact_id": "missing-fact", "version": "b" * 64}],
-        },
-    )
-
-    issues = dangling_fact_citation_issues(ledger, wiki.changes_since(None))
-
-    assert issues[0].owner is WikiHealthIssueOwner.DREAM
 
 
 def test_mixed_valid_and_invalid_citations_keep_valid_dangling_evidence(tmp_path: Path) -> None:

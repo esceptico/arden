@@ -82,7 +82,7 @@ def _service(tmp_path) -> FactService:
 async def test_fact_index_tracks_active_revision_and_supplies_semantic_candidates(tmp_path) -> None:
     service = _service(tmp_path)
     index = _Index()
-    projection = FactIndexProjection(service, lambda: index)
+    projection = FactIndexProjection(service.ledger, lambda: index)
 
     assert await projection.sync() is index
     assert set(index.store.items) == {"first", "second"}
@@ -106,8 +106,21 @@ async def test_fact_index_tracks_active_revision_and_supplies_semantic_candidate
 @pytest.mark.asyncio
 async def test_fact_index_is_truthful_when_search_is_unavailable(tmp_path) -> None:
     service = _service(tmp_path)
-    projection = FactIndexProjection(service, lambda: None)
+    projection = FactIndexProjection(service.ledger, lambda: None)
 
     assert await projection.sync() is None
     assert projection.last_state.status == "not_ready"
     assert await projection.semantic_candidates(service.ledger.get("first"), limit=3) == ()
+
+
+@pytest.mark.asyncio
+async def test_ranked_fact_ids_serve_queries_and_report_unavailability(tmp_path) -> None:
+    service = _service(tmp_path)
+    index = _Index()
+    projection = FactIndexProjection(service.ledger, lambda: index)
+
+    ranked = await projection.ranked_fact_ids("tea preference", limit=5)
+    assert ranked == ("first", "second")
+
+    unavailable = FactIndexProjection(service.ledger, lambda: None)
+    assert await unavailable.ranked_fact_ids("tea preference", limit=5) is None

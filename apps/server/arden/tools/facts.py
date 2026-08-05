@@ -36,6 +36,7 @@ from arden.memory.facts.service import (
     FactPostCommitError,
     FactPrincipal,
     FactScopeError,
+    FactSearchUnavailableError,
     FactService,
 )
 from arden.tools.core import ToolResult, tool
@@ -66,7 +67,15 @@ FactId = Annotated[str, Field(min_length=1, max_length=500)]
 
 
 class FactSearchInput(_Input):
-    query: str | None = Field(default=None, min_length=1, max_length=20_000)
+    query: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20_000,
+        description=(
+            "Natural-language query, relevance-ranked (semantic + lexical). Ranked results are the "
+            "top matches in one page; omit the query to list facts chronologically with pagination."
+        ),
+    )
     subject: str | None = Field(default=None, min_length=1, max_length=500)
     status: Literal["active", "all"] = Field(
         default="active", description="active returns normal recall facts; all includes terminal history."
@@ -663,6 +672,14 @@ def _fact_refs(facts: tuple[Fact, ...] | list[Fact]) -> tuple[ToolSourceRef, ...
 
 
 def _failure(exc: Exception) -> ToolResult:
+    if isinstance(exc, FactSearchUnavailableError):
+        return ToolResult.failure(
+            code="search_unavailable",
+            message="The fact search index is not ready to serve queries.",
+            preview="Fact search unavailable",
+            retryable=True,
+            recovery_action="Retry shortly, or call fact_search without a query to list facts.",
+        )
     if isinstance(exc, FactPostCommitError):
         return ToolResult.failure(
             code="post_commit_failed",
@@ -969,7 +986,11 @@ async def fact_commit_changes(execution: ToolExecution, args: FactCommitChangesI
 fact_search_tool = tool(
     display_name="Search Facts",
     display_description="Search canonical facts.",
-    description="Search visible canonical facts. Returns active facts by default and stable fact_id values for follow-up calls.",
+    description=(
+        "Search visible canonical facts. Queries are relevance-ranked (semantic + lexical) over active "
+        "facts; status='all' switches to an exact-substring scan that includes terminal history. "
+        "Returns stable fact_id values for follow-up calls."
+    ),
     input_model=FactSearchInput,
     policy=ToolPolicy(action=ToolAction.READ, scope=ToolScope.INTERNAL, permissions=frozenset({FACT_SERVICE})),
     execute=fact_search,

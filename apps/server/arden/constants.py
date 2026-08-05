@@ -161,8 +161,6 @@ MEMORY_CAPTURE_AT = "02:30"
 MEMORY_CAPTURE_IDLE_MINUTES = 10
 MEMORY_CAPTURE_EVERY_N_RUNS = 10
 MEMORY_CONSOLIDATE_AT = "03:00"
-BUILTIN_MEMORY_DREAM_ID = "builtin-memory-dream"
-MEMORY_DREAM_AT = "04:00"
 BUILTIN_MEMORY_SYNTHESIZE_ID = "builtin-memory-synthesize"
 BUILTIN_WIKI_MAINTENANCE_ID = "builtin-wiki-maintenance"
 BUILTIN_MEMORY_RETENTION_ID = "builtin-memory-retention"
@@ -173,6 +171,7 @@ DAILY_NOTES_AUTOMATION_ID = "daily-notes"
 RETIRED_BUILTIN_AUTOMATION_IDS = (
     "builtin-area-suggester",
     "builtin-automation-suggester-daily",
+    "builtin-memory-dream",
 )
 # --- Monitor ---
 

@@ -92,7 +92,7 @@ _DIRECTORY_README_CONTRACTS = {
     ),
     "insights": (
         "Provisional connections and hypotheses, not canonical facts.",
-        "Dream and authorized agents separate supporting evidence, inference, and open questions when writing these pages.",
+        "Authorized agents separate supporting evidence, inference, and open questions when writing these pages.",
         "Use insights as leads only. Verify their evidence before acting on them or promoting a claim into durable knowledge.",
         "Keep uncertainty explicit and mark superseded reasoning; never present an insight as a verified fact.",
         "Keep insights until they are promoted, superseded, or explicitly archived.",

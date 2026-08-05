@@ -31,10 +31,8 @@ from arden.logging import get_logger
 from arden.mcp.manager import MCPManager
 from arden.memory.facts.capture.runner import CaptureTurn, FactCapture
 from arden.memory.facts.capture.store import SessionConsumerWatermarkStore
-from arden.memory.facts.completion_dream import CompletionFactDreamRenderer
 from arden.memory.facts.completion_renderer import CompletionFactSynthesisRenderer
 from arden.memory.facts.consumer_store import FactConsumerStore
-from arden.memory.facts.dream import FactDream
 from arden.memory.facts.index import FACT_SEARCH_SOURCE, FactIndexProjection
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.runner import (
@@ -1187,21 +1185,6 @@ class Runtime:
             ),
         )
 
-    def _get_fact_dream(self) -> FactDream | None:
-        model = self.config.memory_model
-        if self._fact_ledger is None or self.wiki_service is None or not model:
-            return None
-        return FactDream(
-            self._fact_ledger,
-            self.wiki_service,
-            CompletionFactDreamRenderer(
-                get_completion_client(model),
-                model,
-                reasoning_effort=self.knowledge._memory_reasoning_effort(model),
-            ),
-            timezone_name=self.config.memory_timezone,
-        )
-
     def _create_fact_capture(self) -> FactCapture | None:
         if (
             self.fact_service is None
@@ -1562,7 +1545,6 @@ class Runtime:
             resolve_auxiliary_completion=self.auxiliary_completion,
             project_wiki_state=self.project_wiki_state,
             get_fact_capture=self._create_fact_capture,
-            get_fact_dream=self._get_fact_dream,
             get_fact_maintenance=self._create_fact_maintenance,
             get_fact_synthesis=self._get_fact_synthesis,
             get_wiki_maintenance=self._create_wiki_maintenance,

@@ -475,3 +475,84 @@ async def test_ledger_calls_are_off_the_event_loop(tmp_path: Path, monkeypatch) 
         await task
     finally:
         await conn.close()
+
+
+async def test_ranked_search_orders_by_relevance_and_filters_visibility(tmp_path: Path) -> None:
+    service, _plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    try:
+        preview = await _plan(service, principal, "a", "OpenAI application submitted")
+        await service.commit(principal, preview.plan_id)
+        preview = await _plan(service, principal, "b", "Dentist appointment in Yerevan", request_key="request:2")
+        await service.commit(principal, preview.plan_id)
+        hidden = _principal(scopes=frozenset({OTHER_AREA}))
+        preview = await _plan(
+            service,
+            hidden,
+            "c",
+            "Hidden other-area fact",
+            request_key="request:3",
+            scope=OTHER_AREA,
+        )
+        await service.commit(hidden, preview.plan_id)
+
+        calls: list[tuple[str, int]] = []
+
+        async def ranked(query: str, *, limit: int) -> tuple[str, ...]:
+            calls.append((query, limit))
+            return ("c", "b", "missing", "a")
+
+        service.ranked_search = ranked
+        page = await service.search_page(principal, "applications to openai")
+
+        assert [fact.fact_id for fact in page.items] == ["b", "a"]
+        assert page.has_more is False
+        assert calls == [("applications to openai", 100)]
+    finally:
+        await conn.close()
+
+
+async def test_ranked_search_respects_subject_filter_and_limit(tmp_path: Path) -> None:
+    service, _plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    try:
+        preview = await _plan(service, principal, "a", "First fact")
+        await service.commit(principal, preview.plan_id)
+        preview = await _plan(service, principal, "b", "Second fact", request_key="request:2", subjects=["beta"])
+        await service.commit(principal, preview.plan_id)
+
+        async def ranked(query: str, *, limit: int) -> tuple[str, ...]:
+            return ("a", "b")
+
+        service.ranked_search = ranked
+        page = await service.search_page(principal, "fact", subject="beta")
+        assert [fact.fact_id for fact in page.items] == ["b"]
+
+        page = await service.search_page(principal, "fact", limit=1)
+        assert [fact.fact_id for fact in page.items] == ["a"]
+        assert page.has_more is False
+    finally:
+        await conn.close()
+
+
+async def test_ranked_search_unavailable_raises_and_inactive_scan_bypasses_ranking(tmp_path: Path) -> None:
+    from arden.memory.facts.service import FactSearchUnavailableError
+
+    service, _plans, conn, _ = await _service(tmp_path)
+    principal = _principal()
+    try:
+        preview = await _plan(service, principal, "a", "Durable fact")
+        await service.commit(principal, preview.plan_id)
+
+        async def unavailable(query: str, *, limit: int) -> None:
+            return None
+
+        service.ranked_search = unavailable
+        with pytest.raises(FactSearchUnavailableError):
+            await service.search_page(principal, "durable")
+
+        # status='all' archaeology stays on the exhaustive substring scan.
+        page = await service.search_page(principal, "durable", include_inactive=True)
+        assert [fact.fact_id for fact in page.items] == ["a"]
+    finally:
+        await conn.close()

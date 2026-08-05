@@ -17,7 +17,6 @@ from arden.constants import (
 )
 from arden.events.internal import RunCompleted
 from arden.memory.facts.consumer_store import FactConsumerStore
-from arden.memory.facts.dream import FactDreamResult
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.runner import (
     FactMaintenance,
@@ -932,29 +931,6 @@ async def test_fact_synthesis_leaves_health_projection_to_completion_callback(tm
 
         assert result == "fact synthesis: 1 page(s) published; archived 0; under threshold 0"
         assert calls == ["synthesis"]
-    finally:
-        await runtime.close()
-
-
-@pytest.mark.asyncio
-async def test_memory_dream_leaves_wiki_projection_to_completion_callback(tmp_path, monkeypatch) -> None:
-    runtime = Runtime(_config(tmp_path))
-    await runtime.connect()
-    try:
-        assert runtime.automation is not None
-        calls: list[str] = []
-
-        class _Dream:
-            async def run(self) -> FactDreamResult:
-                calls.append("dream")
-                return FactDreamResult("a" * 64, insight_count=2, published=True)
-
-        monkeypatch.setattr(runtime.automation, "get_fact_dream", lambda: _Dream())
-
-        result = await runtime.automation._run_memory_dream(None)
-
-        assert result == "memory dream: 2 insight(s); published"
-        assert calls == ["dream"]
     finally:
         await runtime.close()
 

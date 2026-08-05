@@ -8,7 +8,6 @@ from arden.core.agent_types import resolve_agent_type
 from arden.core.naming import AGENT_NAMING_PROMPT, SESSION_NAMING_PROMPT
 from arden.core.prompts import BASE_SYSTEM_PROMPT, RESEARCH_PROMPTS, UNTRUSTED_DATA_RULE
 from arden.events.triggers import EventApproaching, MessageReceived
-from arden.memory.facts.completion_dream import _DREAM_SYSTEM_PROMPT
 from arden.memory.facts.completion_renderer import _SYNTHESIS_SYSTEM_PROMPT
 from arden.orchestra.engine import _FORMATTER_PROMPT, WORKFLOW_AGENT_PROMPT
 from arden.server.routers.session import GOAL_PROPOSAL_SYSTEM_PROMPT
@@ -30,7 +29,6 @@ def test_prompts_that_consume_runtime_data_share_the_untrusted_data_rule():
         SESSION_NAMING_PROMPT,
         AGENT_NAMING_PROMPT,
         GOAL_PROPOSAL_SYSTEM_PROMPT,
-        _DREAM_SYSTEM_PROMPT,
         _SYNTHESIS_SYSTEM_PROMPT,
         WIKI_CURATION_SYSTEM,
         *(resolve_agent_type(name).prompt for name in ("reviewer", "explorer", "planner", "verifier", "builder")),
