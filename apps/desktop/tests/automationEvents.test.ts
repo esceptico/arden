@@ -3,11 +3,21 @@ import {
   automationEventsUrl,
   handleAutomationEvent,
   memoryVaultChangeFromEvent,
+  parseAutomationEvent,
 } from "@/features/automations/hooks/useAutomationEvents";
 import { useStore } from "@/stores";
 import { MEMORY_VAULT_CHANGE_CAP } from "@/stores/memory-vault-domain";
 
 describe("automation event stream helpers", () => {
+  test("parses a valid event and rejects malformed or unknown events", () => {
+    expect(parseAutomationEvent('{"type":"automation_progress","task_id":"task-1","status":"running","seq":4}'))
+      .toEqual({ type: "automation_progress", task_id: "task-1", status: "running", seq: 4 });
+    expect(() => parseAutomationEvent('{"type":"automation_progress","task_id":"task-1"}'))
+      .toThrow("status must be a string");
+    expect(() => parseAutomationEvent('{"type":"mystery"}'))
+      .toThrow("unsupported automation event type: mystery");
+  });
+
   test("automationEventsUrl resumes from the last seen seq", () => {
     expect(automationEventsUrl("http://127.0.0.1:8000", undefined)).toBe(
       "http://127.0.0.1:8000/automations/events",

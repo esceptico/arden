@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifySseOpen, sseReconnectDelayMs } from "@/lib/sseTransport";
+import { classifySseOpen, parseSseFrame, sseReconnectDelayMs } from "@/lib/sseTransport";
 
 describe("sseReconnectDelayMs", () => {
   const fixed = { jitterRatio: 0, random: () => 0.5 };
@@ -32,5 +32,13 @@ describe("classifySseOpen", () => {
   test("429 and 5xx are transient → retry", () => {
     expect(classifySseOpen(429, false, "")).toBe("retry");
     expect(classifySseOpen(503, false, "")).toBe("retry");
+  });
+});
+
+describe("parseSseFrame", () => {
+  test("marks malformed event data as fatal", () => {
+    expect(() => parseSseFrame("bad", () => {
+      throw new Error("broken payload");
+    })).toThrow("invalid stream event: broken payload");
   });
 });

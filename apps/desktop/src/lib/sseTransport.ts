@@ -30,6 +30,15 @@ export function classifySseOpen(status: number, ok: boolean, contentType: string
 
 class FatalSseError extends Error {}
 
+export function parseSseFrame<T>(data: string, parse: (data: string) => T): T {
+  try {
+    return parse(data);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new FatalSseError(`invalid stream event: ${message}`);
+  }
+}
+
 export interface SseStreamOptions<T> {
   url: string;
   signal: AbortSignal;
@@ -37,9 +46,9 @@ export interface SseStreamOptions<T> {
   /** Keep the connection open when the document is hidden (background window).
    *  Default false → fetch-event-source closes + reopens on visibility change. */
   openWhenHidden?: boolean;
-  /** Parse one frame's `data` payload into a typed event, or null to skip
-   *  (keepalive comment, blank frame, malformed JSON). */
-  parse: (data: string) => T | null;
+  /** Parse one non-blank frame's `data` payload into a typed event.
+   *  Invalid payloads are fatal because skipping one corrupts projections. */
+  parse: (data: string) => T;
   onEvent: (event: T) => void;
   onConnect?: () => void;
   /** Called on every drop with a reason. `fatal` streams stop; non-fatal ones
@@ -77,8 +86,7 @@ export function openSseStream<T>(opts: SseStreamOptions<T>): Promise<void> {
     },
     onmessage(msg) {
       if (!msg.data) return; // keepalive comment / blank frame
-      const parsed = opts.parse(msg.data);
-      if (parsed !== null) opts.onEvent(parsed);
+      opts.onEvent(parseSseFrame(msg.data, opts.parse));
     },
     onclose() {
       // The server closed the stream unexpectedly; treat as a retriable drop.

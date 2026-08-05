@@ -37,6 +37,73 @@ export type AutomationEvent =
   | { type: "stream_keepalive"; latest_seq: number; seq?: number }
   | { type: "stream_reset"; reason: string; seq?: number };
 
+type JsonObject = Record<string, unknown>;
+
+function requireObject(value: unknown, label: string): JsonObject {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as JsonObject;
+}
+
+function requireString(value: JsonObject, field: string): void {
+  if (typeof value[field] !== "string") throw new Error(`${field} must be a string`);
+}
+
+function requireOptionalSequence(value: JsonObject): void {
+  if (value.seq !== undefined && !Number.isInteger(value.seq)) {
+    throw new Error("seq must be an integer");
+  }
+}
+
+export function parseAutomationEvent(data: string): AutomationEvent {
+  const event = requireObject(JSON.parse(data), "automation event");
+  requireString(event, "type");
+  requireOptionalSequence(event);
+
+  switch (event.type) {
+    case "automation_progress":
+      requireString(event, "task_id");
+      requireString(event, "status");
+      break;
+    case "automation_finished":
+      requireString(event, "task_id");
+      if (event.result !== null && typeof event.result !== "string") {
+        throw new Error("result must be a string or null");
+      }
+      break;
+    case "session_created":
+    case "session_activity":
+      requireString(requireObject(event.session, "session"), "session_id");
+      break;
+    case "memory_changed":
+      if (!Array.isArray(event.paths) || !event.paths.every((path) => typeof path === "string")) {
+        throw new Error("paths must be an array of strings");
+      }
+      break;
+    case "areas_changed":
+      if (!Array.isArray(event.keys) || !event.keys.every((key) => typeof key === "string")) {
+        throw new Error("keys must be an array of strings");
+      }
+      break;
+    case "navigation_requested":
+      requireString(event, "origin_session_id");
+      requireString(event, "label");
+      requireString(requireObject(event.destination, "destination"), "kind");
+      break;
+    case "stream_keepalive":
+      if (!Number.isInteger(event.latest_seq)) throw new Error("latest_seq must be an integer");
+      break;
+    case "stream_reset":
+      requireString(event, "reason");
+      break;
+    default:
+      throw new Error(`unsupported automation event type: ${event.type}`);
+  }
+
+  return event as AutomationEvent;
+}
+
 function headersFor(config: AppConfig): Record<string, string> {
   return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
 }
@@ -194,13 +261,7 @@ export function useAutomationEvents(): void {
       // Keep receiving automation/notification updates while the window is
       // backgrounded (matches the prior always-open loop).
       openWhenHidden: true,
-      parse: (data) => {
-        try {
-          return JSON.parse(data) as AutomationEvent;
-        } catch {
-          return null;
-        }
-      },
+      parse: parseAutomationEvent,
       onConnect: () => {
         if (!disposed) store().automationStreamConnected();
       },
