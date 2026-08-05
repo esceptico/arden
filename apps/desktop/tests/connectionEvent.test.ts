@@ -95,7 +95,6 @@ test("runtime snapshot restores a pending connection after restart", () => {
     checkpoint_seq: 4,
     active_run: null,
     pending_approvals: [],
-    queued_messages: [],
     pending_connections: [{
       tool_id: "call-1",
       run_id: "run-1",

@@ -218,6 +218,24 @@ async def _downgrade_to_v5(conn: aiosqlite.Connection) -> None:
             created_at TEXT NOT NULL
         );
         INSERT INTO tool_results_legacy VALUES ('legacy-hash', 'retired', 7, '2026-01-01T00:00:00+00:00');
+
+        CREATE TABLE chat_queued_messages (
+            client_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            message_json TEXT NOT NULL,
+            enqueued_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            ingested_at TEXT,
+            enqueued_seq INTEGER,
+            ingested_seq INTEGER
+        );
+        CREATE INDEX idx_chat_queued_messages_session_status
+            ON chat_queued_messages(session_id, status);
+        CREATE INDEX idx_chat_queued_messages_run_status
+            ON chat_queued_messages(run_id, status);
+
         UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version';
         """
     )

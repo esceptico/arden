@@ -23,7 +23,7 @@ from arden.context.areas_store import AREA_PATCH_UNSET, AreaStore
 from arden.context.background_cancellation_store import BackgroundCancellationStore
 from arden.context.background_start_store import BackgroundStartStore
 from arden.context.background_store import BackgroundAgentStore
-from arden.context.chat_queue_store import ChatQueueStore
+from arden.context.chat_idempotency_store import ChatIdempotencyStore
 from arden.context.chat_run_store import ChatRunStore
 from arden.context.errors import SessionDataCorruptionError
 from arden.context.goals_store import GoalStore
@@ -237,7 +237,7 @@ class SessionStore:
         self.background_starts = BackgroundStartStore(conn, self._background_event_lock)
         self.background_cancellations = BackgroundCancellationStore(conn, self._background_event_lock)
         self.chat_runs = ChatRunStore(conn, self.read_conn, chat_completion_conn)
-        self.chat_queue = ChatQueueStore(conn, self.read_conn)
+        self.chat_idempotency = ChatIdempotencyStore(conn, self.read_conn)
 
     async def _session_write_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
@@ -299,9 +299,6 @@ class SessionStore:
             CREATE INDEX IF NOT EXISTS idx_chat_runs_recovery_status
                 ON chat_runs(status)
                 WHERE status IN ('pending', 'running', 'backgrounded', 'interrupted');
-            CREATE INDEX IF NOT EXISTS idx_chat_queued_messages_recovery_status_run
-                ON chat_queued_messages(status, run_id)
-                WHERE status IN ('queued', 'failed_retryable');
             CREATE INDEX IF NOT EXISTS idx_background_agent_runs_recovery_status
                 ON background_agent_runs(status, updated_at)
                 WHERE status IN ('running', 'activity', 'cancel_requested', 'interrupted');
@@ -940,7 +937,7 @@ class SessionStore:
         await self.chat_runs.record_chat_run_started(run_id, session_id, metadata=metadata)
 
     async def prune_expired_chat_idempotency_keys(self, now: datetime | None = None) -> int:
-        return await self.chat_queue.prune_expired_chat_idempotency_keys(now)
+        return await self.chat_idempotency.prune_expired_chat_idempotency_keys(now)
 
     async def claim_chat_idempotency_key(
         self,
@@ -951,7 +948,7 @@ class SessionStore:
         status: str = "accepted",
         expires_at: str | None = None,
     ) -> tuple[bool, dict]:
-        return await self.chat_queue.claim_chat_idempotency_key(
+        return await self.chat_idempotency.claim_chat_idempotency_key(
             session_id=session_id,
             client_id=client_id,
             request_hash=request_hash,
@@ -960,7 +957,7 @@ class SessionStore:
         )
 
     async def get_chat_idempotency_key(self, session_id: str, client_id: str) -> dict | None:
-        return await self.chat_queue.get_chat_idempotency_key(session_id, client_id)
+        return await self.chat_idempotency.get_chat_idempotency_key(session_id, client_id)
 
     async def update_chat_idempotency_key(
         self,
@@ -971,7 +968,7 @@ class SessionStore:
         run_id: str | None = None,
         message_id: str | None = None,
     ) -> dict | None:
-        return await self.chat_queue.update_chat_idempotency_key(
+        return await self.chat_idempotency.update_chat_idempotency_key(
             session_id=session_id,
             client_id=client_id,
             status=status,
@@ -979,18 +976,21 @@ class SessionStore:
             message_id=message_id,
         )
 
-    async def cancel_chat_queued_message(
+    async def cancel_chat_idempotency_key(
         self,
         *,
         session_id: str,
         client_id: str,
         run_id: str | None = None,
     ) -> str:
-        return await self.chat_queue.cancel_chat_queued_message(
+        return await self.chat_idempotency.cancel_chat_idempotency_key(
             session_id=session_id,
             client_id=client_id,
             run_id=run_id,
         )
+
+    async def release_interrupted_queued_receipts(self) -> int:
+        return await self.chat_idempotency.release_interrupted_queued_receipts()
 
     async def record_chat_run_status(
         self,
@@ -1377,16 +1377,6 @@ class SessionStore:
         )
         if rows:
             return rows[0]["run_id"]
-
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT run_id FROM chat_queued_messages
-            WHERE session_id = ? AND client_id = ? AND status = 'ingested'
-            LIMIT 1
-            """,
-            (session_id, turn_id),
-        )
-        return rows[0]["run_id"] if rows else None
 
     async def get_tool_result(self, tool_result_id: str) -> dict | None:
         now = datetime.now(UTC).isoformat()
@@ -2020,40 +2010,6 @@ class SessionStore:
 
     async def mark_interrupted_agent_sessions(self) -> int:
         return await self.background_cancellations.mark_interrupted_agent_sessions()
-
-    async def mark_interrupted_chat_queued_messages_retryable(self) -> int:
-        return await self.chat_queue.mark_interrupted_chat_queued_messages_retryable()
-
-    async def record_chat_queued_message(
-        self,
-        *,
-        client_id: str,
-        session_id: str,
-        run_id: str,
-        message: dict,
-        enqueued_seq: int | None = None,
-    ) -> str:
-        return await self.chat_queue.record_chat_queued_message(
-            client_id=client_id,
-            session_id=session_id,
-            run_id=run_id,
-            message=message,
-            enqueued_seq=enqueued_seq,
-        )
-
-    async def mark_chat_queued_message_ingested(
-        self,
-        client_id: str,
-        *,
-        ingested_seq: int | None = None,
-    ) -> None:
-        await self.chat_queue.mark_chat_queued_message_ingested(client_id, ingested_seq=ingested_seq)
-
-    async def mark_chat_queued_message_cancelled(self, client_id: str) -> None:
-        await self.chat_queue.mark_chat_queued_message_cancelled(client_id)
-
-    async def list_chat_queued_messages(self, session_id: str, *, status: str | None = None) -> list[dict]:
-        return await self.chat_queue.list_chat_queued_messages(session_id, status=status)
 
     @staticmethod
     def _tool_result_id(*, session_id: str, tool_call_id: str, content_sha256: str) -> str:

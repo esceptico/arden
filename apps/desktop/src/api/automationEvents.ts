@@ -136,7 +136,6 @@ function sessionListItem(value: unknown): SessionListItem {
     latest_event_seq: optionalInteger(session, "latest_event_seq"),
     is_active: optionalBoolean(session, "is_active"),
     pending_approvals_count: optionalInteger(session, "pending_approvals_count"),
-    queued_messages_count: optionalInteger(session, "queued_messages_count"),
     run_error_code: optionalNullableString(session, "run_error_code"),
     run_stop_reason: optionalNullableString(session, "run_stop_reason"),
   };

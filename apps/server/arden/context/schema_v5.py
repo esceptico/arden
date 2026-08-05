@@ -426,6 +426,7 @@ async def migrate_v5_to_v9(
             mirror_session_messages=mirror_session_messages,
         )
         await _rebuild_canonical_tables(conn)
+        await conn.execute("DROP TABLE chat_queued_messages")
         await conn.execute("DROP TABLE tool_results_legacy")
 
         cursor = await conn.execute(

@@ -116,29 +116,6 @@ def _connection_snapshot(row: dict) -> dict:
     }
 
 
-def _queued_message_snapshot(row: dict) -> dict:
-    message = row.get("message") or {}
-    raw_content = message.get("content", "") or ""
-    text = blocks_to_text(raw_content) if not isinstance(raw_content, str) else raw_content
-    images = []
-    if isinstance(raw_content, list):
-        images = [
-            {"media_type": b["media_type"], "data": b["data"]}
-            for b in raw_content
-            if isinstance(b, dict) and b.get("type") == "image" and b.get("media_type") and b.get("data")
-        ]
-    status = "failed" if row.get("status") == "failed_retryable" else "pending"
-    return {
-        "client_id": row["client_id"],
-        "text": text,
-        "images": images,
-        "status": status,
-        "server_status": row.get("status"),
-        "enqueued_at": row.get("enqueued_at"),
-        "run_id": row.get("run_id"),
-    }
-
-
 async def _session_runtime_snapshot(
     svc: SessionService,
     runtime: Runtime,
@@ -172,11 +149,8 @@ async def _session_runtime_snapshot(
         if surfaced_run
         else []
     )
-    queued_rows = []
-
     pending_approvals = [_approval_snapshot(row) for row in approval_rows]
     pending_connections = [_connection_snapshot(row) for row in connection_rows]
-    queued_messages = [_queued_message_snapshot(row) for row in queued_rows]
 
     active_run = None
     if surfaced_run is not None:
@@ -193,7 +167,6 @@ async def _session_runtime_snapshot(
             "error_message": surfaced_run.get("error_message"),
             "pending_approvals": pending_approvals,
             "pending_connections": pending_connections,
-            "queued_messages": queued_messages,
         }
 
     return {
@@ -203,7 +176,6 @@ async def _session_runtime_snapshot(
         "active_run": active_run,
         "pending_approvals": pending_approvals,
         "pending_connections": pending_connections,
-        "queued_messages": queued_messages,
     }
 
 
@@ -217,7 +189,6 @@ def _session_list_runtime_fields(snapshot: dict) -> dict:
         "is_active": bool(active_run and active_run.get("status") in ACTIVE_RUN_STATUSES),
         "pending_approvals_count": len(snapshot["pending_approvals"]),
         "pending_connections_count": len(snapshot["pending_connections"]),
-        "queued_messages_count": len(snapshot["queued_messages"]),
         "run_error_code": active_run.get("error_code") if active_run else None,
         "run_stop_reason": active_run.get("stop_reason") if active_run else None,
     }
@@ -405,7 +376,6 @@ async def get_session_history(
                 "active_run": None,
                 "pending_approvals": [],
                 "pending_connections": [],
-                "queued_messages": [],
             },
             "page": {"has_more_before": False, "has_more_after": False},
             "context_budget": _context_budget_snapshot(

@@ -21,21 +21,6 @@ def chat_run_payload(row: aiosqlite.Row) -> dict:
     }
 
 
-def chat_queued_message_payload(row: aiosqlite.Row) -> dict:
-    return {
-        "client_id": row["client_id"],
-        "session_id": row["session_id"],
-        "run_id": row["run_id"],
-        "status": row["status"],
-        "message": json.loads(row["message_json"]),
-        "enqueued_at": row["enqueued_at"],
-        "updated_at": row["updated_at"],
-        "ingested_at": row["ingested_at"],
-        "enqueued_seq": row["enqueued_seq"],
-        "ingested_seq": row["ingested_seq"],
-    }
-
-
 def chat_idempotency_payload(row: aiosqlite.Row) -> dict:
     return {
         "session_id": row["session_id"],

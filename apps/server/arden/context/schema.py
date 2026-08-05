@@ -51,10 +51,6 @@ _V9_COLUMN_NAMES: dict[str, set[str]] = {
         "session_id", "client_id", "request_hash", "run_id", "message_id",
         "status", "created_at", "updated_at", "expires_at",
     },
-    "chat_queued_messages": {
-        "client_id", "session_id", "run_id", "status", "message_json",
-        "enqueued_at", "updated_at", "ingested_at", "enqueued_seq", "ingested_seq",
-    },
     "chat_runs": {
         "run_id", "session_id", "status", "stop_reason", "started_at",
         "updated_at", "ended_at", "last_seq", "metadata_json", "error_code",
@@ -110,6 +106,18 @@ _V9_COLUMN_NAMES: dict[str, set[str]] = {
         "content_bytes", "stored_bytes", "compression", "blob_ref", "blob_path", "preview",
         "retention_class", "expires_at", "source_event_seq", "created_at",
     },
+}
+
+_V5_ONLY_COLUMN_NAMES = {
+    "chat_queued_messages": {
+        "client_id", "session_id", "run_id", "status", "message_json",
+        "enqueued_at", "updated_at", "ingested_at", "enqueued_seq", "ingested_seq",
+    },
+}
+
+_V5_ONLY_INDEX_NAMES = {
+    "idx_chat_queued_messages_session_status",
+    "idx_chat_queued_messages_run_status",
 }
 
 
@@ -192,6 +200,7 @@ async def _schema_version(conn: aiosqlite.Connection) -> int:
 
 async def _assert_v5_shape(conn: aiosqlite.Connection) -> None:
     expected = {name: set(columns) for name, columns in _V9_COLUMN_NAMES.items()}
+    expected.update(_V5_ONLY_COLUMN_NAMES)
     expected["sessions"] -= {"active_message_count", "public_ref"}
     expected["sessions"].add("slice_key")
     expected["background_agent_runs"].remove("agent_ref")
@@ -230,7 +239,7 @@ async def _assert_v5_shape(conn: aiosqlite.Connection) -> None:
         for item in CANONICAL_SQL_OBJECTS
         if item.kind == "index" and item.name != "idx_background_agent_runs_session_agent_ref"
     }
-    missing_indexes = required_indexes - actual_indexes
+    missing_indexes = (required_indexes | _V5_ONLY_INDEX_NAMES) - actual_indexes
     if missing_indexes:
         raise SessionSchemaError(f"context schema v5 is missing indexes: {sorted(missing_indexes)}")
 

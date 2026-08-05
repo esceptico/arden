@@ -34,13 +34,7 @@ class _FailingStore:
     async def record_chat_run_status(self, run_id, status, **kwargs):
         raise RuntimeError("store down")
 
-    async def record_chat_queued_message(self, **kwargs):
-        raise RuntimeError("store down")
-
-    async def mark_chat_queued_message_ingested(self, client_id, *, ingested_seq=None):
-        raise RuntimeError("store down")
-
-    async def mark_chat_queued_message_cancelled(self, client_id):
+    async def cancel_chat_idempotency_key(self, **kwargs):
         raise RuntimeError("store down")
 
     async def record_chat_compaction(self, **kwargs):
@@ -126,32 +120,15 @@ async def test_session_service_chat_run_status_propagates_store_failures():
 
 
 @pytest.mark.asyncio
-async def test_session_service_queued_chat_message_propagates_store_failures():
+async def test_session_service_chat_idempotency_cancellation_propagates_store_failures():
     service = SessionService(_FailingStore())
 
     with pytest.raises(RuntimeError, match="store down"):
-        await service.record_chat_queued_message(
+        await service.cancel_chat_idempotency_key(
             client_id="cid-1",
             session_id="sess-1",
             run_id="run-1",
-            message={"role": "user", "content": "queued"},
         )
-
-
-@pytest.mark.asyncio
-async def test_session_service_queued_message_ingested_propagates_store_failures():
-    service = SessionService(_FailingStore())
-
-    with pytest.raises(RuntimeError, match="store down"):
-        await service.mark_chat_queued_message_ingested("cid-1", ingested_seq=10)
-
-
-@pytest.mark.asyncio
-async def test_session_service_queued_message_cancelled_propagates_store_failures():
-    service = SessionService(_FailingStore())
-
-    with pytest.raises(RuntimeError, match="store down"):
-        await service.mark_chat_queued_message_cancelled("cid-1")
 
 
 @pytest.mark.asyncio

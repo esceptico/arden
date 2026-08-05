@@ -1,4 +1,3 @@
-import type { HistoryImage } from "@/api/chat";
 import type { SessionGoal, TodoListItem } from "@/api/types";
 
 export type ToolOutcomeStatus = "succeeded" | "failed" | "denied" | "uncertain";
@@ -72,16 +71,6 @@ export interface RuntimeConnectionSnapshot {
 export type ConnectionState = "not_configured" | "disabled" | "auth_required" | "scope_required" | "degraded";
 export type ConnectionAction = "oauth" | "credentials" | "enable" | "settings";
 
-export interface RuntimeQueuedMessageSnapshot {
-  client_id: string;
-  text: string;
-  images?: HistoryImage[];
-  status: "pending" | "failed";
-  server_status?: string | null;
-  enqueued_at?: string | null;
-  run_id?: string | null;
-}
-
 export interface ActiveRunSnapshot {
   run_id: string;
   status: RuntimeRunStatus;
@@ -95,7 +84,6 @@ export interface ActiveRunSnapshot {
   error_message?: string | null;
   pending_approvals: RuntimeApprovalSnapshot[];
   pending_connections: RuntimeConnectionSnapshot[];
-  queued_messages: RuntimeQueuedMessageSnapshot[];
 }
 
 export interface SessionRuntimeSnapshot {
@@ -105,7 +93,6 @@ export interface SessionRuntimeSnapshot {
   active_run: ActiveRunSnapshot | null;
   pending_approvals: RuntimeApprovalSnapshot[];
   pending_connections: RuntimeConnectionSnapshot[];
-  queued_messages: RuntimeQueuedMessageSnapshot[];
 }
 
 /** AG-UI-shaped event protocol. Every event carries a `timestamp` (Unix ms). */

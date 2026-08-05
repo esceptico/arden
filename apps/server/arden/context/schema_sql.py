@@ -133,24 +133,6 @@ CREATE TABLE IF NOT EXISTS chat_runs (
 CREATE INDEX IF NOT EXISTS idx_chat_runs_session_status
     ON chat_runs(session_id, status);
 
-CREATE TABLE IF NOT EXISTS chat_queued_messages (
-    client_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    message_json TEXT NOT NULL,
-    enqueued_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    ingested_at TEXT,
-    enqueued_seq INTEGER,
-    ingested_seq INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_queued_messages_session_status
-    ON chat_queued_messages(session_id, status);
-CREATE INDEX IF NOT EXISTS idx_chat_queued_messages_run_status
-    ON chat_queued_messages(run_id, status);
-
 CREATE TABLE IF NOT EXISTS chat_idempotency_keys (
     session_id TEXT NOT NULL,
     client_id TEXT NOT NULL,

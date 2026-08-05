@@ -816,9 +816,35 @@ class _Runtime:
     def __init__(self):
         self.run_registry = RunRegistry()
         self.config = _Config()
+        self.session_service = _ChatIdempotencyService()
 
     async def resolve_session_chat_model(self, session_id):
         return None
+
+
+class _ChatIdempotencyService:
+    def __init__(self):
+        self.receipts = {}
+
+    async def load(self, _session_id):
+        return {}
+
+    async def claim_chat_idempotency_key(self, **kwargs):
+        key = (kwargs["session_id"], kwargs["client_id"])
+        existing = self.receipts.get(key)
+        if existing is not None:
+            return False, existing
+        receipt = {"status": "accepted", "run_id": None, **kwargs}
+        self.receipts[key] = receipt
+        return True, receipt
+
+    async def update_chat_idempotency_key(self, **kwargs):
+        receipt = self.receipts[(kwargs["session_id"], kwargs["client_id"])]
+        receipt.update(status=kwargs["status"], run_id=kwargs.get("run_id") or receipt["run_id"])
+        return receipt
+
+    async def cancel_chat_idempotency_key(self, **kwargs):
+        return "cancelled"
 
 
 @pytest.fixture
@@ -880,7 +906,7 @@ def test_duplicate_post_returns_existing_run_without_requeueing(client_with_acti
     assert second.status_code == 200
     assert first.json()["run_id"] == second.json()["run_id"] == run.run_id
     assert first.json()["status"] == "queued"
-    assert second.json()["status"] == "accepted"
+    assert second.json()["status"] == "queued"
     # Only the first POST queued the message; the second was deduped.
     assert len(run.inject_queue) == 1
 
@@ -1298,21 +1324,22 @@ def test_delete_inject_returns_200_when_entry_present(client_with_active_run):
 
 def test_delete_inject_returns_409_when_already_drained(client_with_active_run):
     c, run = client_with_active_run
-    # Active run, but the client_id was already drained → not in queue
-    assert run.pending_injection_count == 0
+    run.queue_injection({"role": "user", "content": "x", "client_id": "cid-missing"})
+    run.drain_injections()
 
     resp = c.delete("/chat/inject/cid-missing?session_id=sess-1")
 
     assert resp.status_code == 409
 
 
-def test_delete_inject_returns_404_when_no_active_run(client_no_active_run):
+def test_delete_inject_tombstones_message_when_no_active_run(client_no_active_run):
     resp = client_no_active_run.delete("/chat/inject/cid-x?session_id=sess-none")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "cancelled", "client_id": "cid-x"}
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_enqueue_tombstone_prevents_later_queue(tmp_path):
+async def test_cancel_before_enqueue_tombstone_prevents_later_injection(tmp_path):
     import arden.database as database
     from arden.services import chat as chat_service
 
@@ -1348,7 +1375,6 @@ async def test_cancel_before_enqueue_tombstone_prevents_later_queue(tmp_path):
         assert cancelled == {"status": "cancelled", "client_id": "cid-before-enqueue"}
         assert result == {"run_id": run.run_id, "session_id": "sess-1", "status": "cancelled"}
         assert run.inject_queue == []
-        assert await store.list_chat_queued_messages("sess-1", status="queued") == []
     finally:
         await read_conn.close()
         await conn.close()
@@ -1707,42 +1733,6 @@ async def test_active_run_keeps_steer_transient_in_memory():
     )
 
     assert result["run_id"] == run.run_id
-    assert run.pending_injection_count == 1
-    assert session_service.queued == []
-
-
-@pytest.mark.asyncio
-async def test_active_run_does_not_write_steer_to_queue_ledger():
-    from arden.services import chat as chat_service
-
-    class FakeSessionService:
-        async def load(self, _session_id):
-            return {}
-
-        async def claim_chat_idempotency_key(self, **kwargs):
-            return True, {"status": "accepted", "run_id": None, **kwargs}
-
-        async def update_chat_idempotency_key(self, **kwargs):
-            return {"status": kwargs.get("status"), "run_id": kwargs.get("run_id")}
-
-        async def record_chat_queued_message(self, **kwargs):
-            raise RuntimeError("ledger down")
-
-    registry = RunRegistry()
-    run = registry.create_run("sess-1")
-    run.status = RunStatus.RUNNING
-
-    result = await chat_service.submit_chat_message(
-        registry,
-        lambda: None,
-        BusRegistry(),
-        message="follow-up",
-        session_id="sess-1",
-        client_id="cid-ledger",
-        session_service=FakeSessionService(),
-    )
-
-    assert result["status"] == "queued"
     assert run.pending_injection_count == 1
 
 

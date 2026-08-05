@@ -82,10 +82,6 @@ _OPTIONAL_INDEX_SQL = {
         "CREATE INDEX idx_chat_runs_recovery_status ON chat_runs(status) "
         "WHERE status IN ('pending','running','backgrounded','interrupted')"
     ),
-    "idx_chat_queued_messages_recovery_status_run": (
-        "CREATE INDEX idx_chat_queued_messages_recovery_status_run ON chat_queued_messages(status,run_id) "
-        "WHERE status IN ('queued','failed_retryable')"
-    ),
     "idx_background_agent_runs_recovery_status": (
         "CREATE INDEX idx_background_agent_runs_recovery_status ON background_agent_runs(status,updated_at) "
         "WHERE status IN ('running','activity','cancel_requested','interrupted')"
@@ -107,7 +103,6 @@ _EXPECTED_AUTO_INDEX_COLUMNS = {
     ("background_agent_runs", "sqlite_autoindex_background_agent_runs_1", "pk", ("session_id", "task_id")),
     ("chat_compactions", "sqlite_autoindex_chat_compactions_1", "pk", ("compaction_id",)),
     ("chat_idempotency_keys", "sqlite_autoindex_chat_idempotency_keys_1", "pk", ("session_id", "client_id")),
-    ("chat_queued_messages", "sqlite_autoindex_chat_queued_messages_1", "pk", ("client_id",)),
     ("chat_runs", "sqlite_autoindex_chat_runs_1", "pk", ("run_id",)),
     ("execution_cancellation_scopes", "sqlite_autoindex_execution_cancellation_scopes_1", "pk", ("session_id",)),
     ("run_sidecars", "sqlite_autoindex_run_sidecars_1", "pk", ("run_id",)),

@@ -291,21 +291,8 @@ async def test_save_and_load_round_trip(store: SessionStore):
 
 
 @pytest.mark.asyncio
-async def test_chat_run_and_queued_message_ledger(store: SessionStore):
+async def test_chat_run_ledger(store: SessionStore):
     await store.record_chat_run_started("run-1", "sess-1")
-    await store.record_chat_queued_message(
-        client_id="cid-1",
-        session_id="sess-1",
-        run_id="run-1",
-        message={"role": "user", "content": "follow-up", "client_id": "cid-1"},
-    )
-
-    queued = await store.list_chat_queued_messages("sess-1")
-    assert [row["client_id"] for row in queued] == ["cid-1"]
-    assert queued[0]["status"] == "queued"
-    assert queued[0]["message"]["content"] == "follow-up"
-
-    await store.mark_chat_queued_message_ingested("cid-1", ingested_seq=42)
     await store.record_chat_run_status("run-1", "completed", last_seq=99)
 
     completed = await store.get_chat_run("run-1")
@@ -313,11 +300,6 @@ async def test_chat_run_and_queued_message_ledger(store: SessionStore):
     assert completed["status"] == "completed"
     assert completed["last_seq"] == 99
     assert completed["ended_at"] is not None
-
-    queued = await store.list_chat_queued_messages("sess-1")
-    assert queued[0]["status"] == "ingested"
-    assert queued[0]["ingested_seq"] == 42
-    assert queued[0]["ingested_at"] is not None
 
 
 @pytest.mark.asyncio
@@ -437,7 +419,7 @@ async def test_failed_chat_run_rolls_back_when_outbox_insert_fails(store: Sessio
 
 
 @pytest.mark.asyncio
-async def test_ingesting_queued_message_advances_its_idempotency_receipt(store: SessionStore):
+async def test_ingested_idempotency_receipt_is_terminal(store: SessionStore):
     await store.claim_chat_idempotency_key(
         session_id="sess-1",
         client_id="cid-ingested",
@@ -449,14 +431,12 @@ async def test_ingesting_queued_message_advances_its_idempotency_receipt(store: 
         status="queued",
         run_id="run-1",
     )
-    await store.record_chat_queued_message(
-        client_id="cid-ingested",
+    await store.update_chat_idempotency_key(
         session_id="sess-1",
+        client_id="cid-ingested",
+        status="ingested",
         run_id="run-1",
-        message={"role": "user", "content": "follow-up", "client_id": "cid-ingested"},
     )
-
-    await store.mark_chat_queued_message_ingested("cid-ingested", ingested_seq=9)
 
     receipt = await store.get_chat_idempotency_key("sess-1", "cid-ingested")
     assert receipt is not None
@@ -466,55 +446,33 @@ async def test_ingesting_queued_message_advances_its_idempotency_receipt(store: 
 
 
 @pytest.mark.asyncio
-async def test_cancelled_queue_message_cannot_be_reopened_by_late_enqueue(store: SessionStore):
+async def test_cancelled_idempotency_key_cannot_be_reopened(store: SessionStore):
     await store.claim_chat_idempotency_key(
         session_id="sess-1",
         client_id="cid-cancelled",
         request_hash="hash-cancelled",
     )
-    await store.update_chat_idempotency_key(
-        session_id="sess-1",
-        client_id="cid-cancelled",
-        status="queued",
-        run_id="run-1",
-    )
-    await store.record_chat_queued_message(
-        client_id="cid-cancelled",
-        session_id="sess-1",
-        run_id="run-1",
-        message={"role": "user", "content": "first", "client_id": "cid-cancelled"},
-    )
-
     assert (
-        await store.cancel_chat_queued_message(
+        await store.cancel_chat_idempotency_key(
             session_id="sess-1",
             client_id="cid-cancelled",
             run_id="run-1",
         )
         == "cancelled"
     )
-    assert (
-        await store.record_chat_queued_message(
-            client_id="cid-cancelled",
-            session_id="sess-1",
-            run_id="run-1",
-            message={"role": "user", "content": "late", "client_id": "cid-cancelled"},
-        )
-        == "cancelled"
+    claimed, receipt = await store.claim_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-cancelled",
+        request_hash="different-request",
     )
-
-    queued = await store.list_chat_queued_messages("sess-1")
-    receipt = await store.get_chat_idempotency_key("sess-1", "cid-cancelled")
-    assert queued[0]["status"] == "cancelled"
-    assert queued[0]["message"]["content"] == "first"
-    assert receipt is not None
+    assert claimed is False
     assert receipt["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
-async def test_cancelling_absent_queue_message_creates_terminal_tombstone(store: SessionStore):
+async def test_cancelling_absent_message_creates_terminal_tombstone(store: SessionStore):
     assert (
-        await store.cancel_chat_queued_message(
+        await store.cancel_chat_idempotency_key(
             session_id="sess-1",
             client_id="cid-before-post",
         )
@@ -529,16 +487,26 @@ async def test_cancelling_absent_queue_message_creates_terminal_tombstone(store:
     assert claimed is False
     assert receipt["status"] == "cancelled"
     assert receipt["run_id"] is None
-    assert (
-        await store.record_chat_queued_message(
-            client_id="cid-before-post",
-            session_id="sess-1",
-            run_id="run-late",
-            message={"role": "user", "content": "late", "client_id": "cid-before-post"},
-        )
-        == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_interrupted_run_releases_unconsumed_queued_receipt(store: SessionStore):
+    await store.record_chat_run_started("run-1", "sess-1")
+    await store.claim_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-queued",
+        request_hash="hash-queued",
     )
-    assert await store.list_chat_queued_messages("sess-1", status="queued") == []
+    await store.update_chat_idempotency_key(
+        session_id="sess-1",
+        client_id="cid-queued",
+        status="queued",
+        run_id="run-1",
+    )
+
+    await store.mark_interrupted_chat_runs()
+    assert await store.release_interrupted_queued_receipts() == 1
+    assert await store.get_chat_idempotency_key("sess-1", "cid-queued") is None
 
 
 @pytest.mark.asyncio
@@ -647,22 +615,6 @@ async def test_chat_idempotency_prunes_only_expired_terminal_rows(store: Session
 
 
 @pytest.mark.asyncio
-async def test_interrupted_chat_queued_messages_become_retryable(store: SessionStore):
-    await store.record_chat_run_started("run-1", "sess-1")
-    await store.record_chat_queued_message(
-        client_id="cid-queued",
-        session_id="sess-1",
-        run_id="run-1",
-        message={"role": "user", "content": "queued", "client_id": "cid-queued"},
-    )
-    await store.mark_interrupted_chat_runs()
-    changed = await store.mark_interrupted_chat_queued_messages_retryable()
-
-    assert changed == 1
-    queued = await store.list_chat_queued_messages("sess-1")
-    assert queued[0]["status"] == "failed_retryable"
-
-
 @pytest.mark.asyncio
 async def test_tool_call_round_trip(store: SessionStore):
     await store.record_tool_call_started(
@@ -1121,7 +1073,7 @@ async def test_run_sidecars_persist_context_and_derive_evidence_from_durable_fac
 
 
 @pytest.mark.asyncio
-async def test_run_sidecars_resolve_exact_initiating_queued_and_meta_turns(store: SessionStore):
+async def test_run_sidecars_resolve_exact_initiating_and_meta_turns(store: SessionStore):
     async def seed(run_id: str, session_id: str, client_id: str) -> None:
         await store.record_chat_run_started(run_id, session_id, metadata={"client_id": client_id})
         await store.record_run_context_manifest(
@@ -1142,38 +1094,13 @@ async def test_run_sidecars_resolve_exact_initiating_queued_and_meta_turns(store
 
     await seed("run-1", "s-1", "turn-1")
     await seed("run-2", "s-1", "turn-2")
-    await store.record_chat_queued_message(
-        client_id="queued-1",
-        session_id="s-1",
-        run_id="run-1",
-        message={"role": "user", "content": "follow up", "client_id": "queued-1"},
-    )
-    await store.mark_chat_queued_message_ingested("queued-1")
-
     initiating = await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="turn-1")
-    queued = await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="queued-1")
     meta = await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="meta-user-run-2")
 
     assert initiating and initiating["run_id"] == "run-1"
-    assert queued and queued["run_id"] == "run-1"
     assert meta and meta["run_id"] == "run-2"
     assert await store.get_run_sidecars_for_turn(session_id="other", turn_id="turn-1") is None
     assert await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="missing") is None
-
-
-@pytest.mark.asyncio
-async def test_run_sidecars_ignore_queued_turn_until_ingested(store: SessionStore):
-    await store.record_chat_run_started("run-1", "s-1", metadata={"client_id": "turn-1"})
-    await store.record_run_context_manifest(run_id="run-1", session_id="s-1", manifest=[])
-    await store.record_chat_queued_message(
-        client_id="queued-1",
-        session_id="s-1",
-        run_id="run-1",
-        message={"role": "user", "content": "pending", "client_id": "queued-1"},
-    )
-
-    assert await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="queued-1") is None
-
 
 @pytest.mark.asyncio
 async def test_list_tool_call_outcomes_returns_only_requested_session_calls(store: SessionStore):

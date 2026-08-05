@@ -44,7 +44,6 @@ export interface SessionListItem {
   latest_event_seq?: number;
   is_active?: boolean;
   pending_approvals_count?: number;
-  queued_messages_count?: number;
   run_error_code?: string | null;
   run_stop_reason?: string | null;
 }

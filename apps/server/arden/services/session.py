@@ -389,41 +389,18 @@ class SessionService:
             manifest=manifest,
         )
 
-    async def record_chat_queued_message(
-        self,
-        *,
-        client_id: str,
-        session_id: str,
-        run_id: str,
-        message: dict,
-        enqueued_seq: int | None = None,
-    ) -> str:
-        return await self.store.record_chat_queued_message(
-            client_id=client_id,
-            session_id=session_id,
-            run_id=run_id,
-            message=message,
-            enqueued_seq=enqueued_seq,
-        )
-
-    async def cancel_chat_queued_message(
+    async def cancel_chat_idempotency_key(
         self,
         *,
         session_id: str,
         client_id: str,
         run_id: str | None = None,
     ) -> str:
-        return await self.store.cancel_chat_queued_message(
+        return await self.store.cancel_chat_idempotency_key(
             session_id=session_id,
             client_id=client_id,
             run_id=run_id,
         )
-
-    async def mark_chat_queued_message_ingested(self, client_id: str, ingested_seq: int | None = None) -> None:
-        await self.store.mark_chat_queued_message_ingested(client_id, ingested_seq=ingested_seq)
-
-    async def mark_chat_queued_message_cancelled(self, client_id: str) -> None:
-        await self.store.mark_chat_queued_message_cancelled(client_id)
 
     async def record_chat_compaction(
         self,
