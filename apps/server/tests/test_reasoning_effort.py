@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from arden.agent import ProviderToolCall
+from arden.agent import Message, ProviderToolCall, ProviderToolPayloadError, Role
 from arden.agent.llm.parsing import normalize_assistant_message
 from arden.config import Config
 from arden.llm.anthropic import AnthropicClient
@@ -198,22 +198,42 @@ def test_anthropic_preserves_tool_search_blocks_for_next_request():
     _, tool_calls, _, anthropic_content = client._parse_content_blocks(blocks, None)
     provider_tool_calls = client._parse_provider_tool_calls(anthropic_content)
     assistant = normalize_assistant_message(
-        SimpleNamespace(
-            role="assistant",
+        Message(
+            role=Role.ASSISTANT,
             content=None,
             tool_calls=tool_calls,
             reasoning_content=None,
             reasoning_encrypted_content=None,
             anthropic_content=anthropic_content,
             provider_tool_calls=provider_tool_calls,
+            openai_response_items=None,
         )
     )
 
     assert assistant["anthropic_content"][1]["type"] == "tool_search_tool_result"
     assert assistant["provider_tool_calls"][0]["name"] == "tool_search"
-    assert assistant["provider_tool_calls"][0]["arguments"] == '{"tools": ["slack_search"]}'
+    assert assistant["provider_tool_calls"][0]["arguments"] == {
+        "query": "slack",
+        "tools": ["slack_search"],
+    }
+    assert assistant["provider_tool_calls"][0]["loaded_tool_names"] == ["slack_search"]
     assert assistant["provider_tool_calls"][0]["result"] == "Matched tools: slack_search"
     assert client._convert_messages(ModelHistory.from_raw([assistant]))[0]["content"] == anthropic_content
+
+
+def test_anthropic_rejects_orphan_tool_search_result():
+    client = AnthropicClient(api_key="test")
+
+    with pytest.raises(ProviderToolPayloadError, match="no matching server_tool_use"):
+        client._parse_provider_tool_calls(
+            [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": {"tool_references": []},
+                }
+            ]
+        )
 
 
 def test_anthropic_tool_error_exposes_structured_recovery_to_model():

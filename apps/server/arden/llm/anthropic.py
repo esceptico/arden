@@ -17,6 +17,7 @@ from arden.agent import (
     ToolCallStreamDelta,
     Usage,
 )
+from arden.agent.types.llm import ProviderToolPayloadError
 from arden.agent.types.tools import tool_result_content_for_model
 from arden.core.content import ContextContent, ImageContent, TextContent, render_context
 from arden.llm.base import CompletionClient
@@ -205,9 +206,9 @@ class AnthropicClient(CompletionClient):
                     provider_blocks[event.index] = block
                     if block.get("type") == "server_tool_use" and block.get("name") == "tool_search_tool_bm25":
                         yield ProviderToolCall(
-                            id=str(block.get("id") or f"tool_search_{event.index}"),
+                            id=_anthropic_tool_call_id(block, field="id"),
                             name="tool_search",
-                            arguments=json.dumps(block.get("input") or {}),
+                            arguments=_anthropic_tool_search_arguments(block),
                             done=False,
                         )
                     continue
@@ -224,12 +225,14 @@ class AnthropicClient(CompletionClient):
                 if event.type == "content_block_stop":
                     block = provider_blocks.get(event.index)
                     if block and block.get("type") == "tool_search_tool_result":
+                        names = _tool_reference_names(block.get("content"))
                         yield ProviderToolCall(
-                            id=str(block.get("tool_use_id") or f"tool_search_{event.index}"),
+                            id=_anthropic_tool_call_id(block, field="tool_use_id"),
                             name="tool_search",
-                            arguments=json.dumps({"tools": _tool_reference_names(block.get("content"))}),
-                            result=_tool_search_result_text(block.get("content")),
+                            arguments={"tools": names},
+                            result=_tool_search_result_text(names),
                             done=True,
+                            loaded_tool_names=tuple(names),
                         )
                     continue
             response = await stream.get_final_message()
@@ -538,25 +541,33 @@ class AnthropicClient(CompletionClient):
     def _parse_provider_tool_calls(self, blocks: list[dict] | None) -> list[ProviderToolCall] | None:
         if not blocks:
             return None
-        starts = {
-            block.get("id"): block
-            for block in blocks
-            if block.get("type") == "server_tool_use" and block.get("name") == "tool_search_tool_bm25"
-        }
+        starts: dict[str, dict] = {}
+        for block in blocks:
+            if block.get("type") != "server_tool_use" or block.get("name") != "tool_search_tool_bm25":
+                continue
+            call_id = _anthropic_tool_call_id(block, field="id")
+            if call_id in starts:
+                raise ProviderToolPayloadError(f"Anthropic returned duplicate tool-search id {call_id!r}")
+            _anthropic_tool_search_arguments(block)
+            starts[call_id] = block
         calls = []
         for block in blocks:
             if block.get("type") != "tool_search_tool_result":
                 continue
-            tool_use_id = block.get("tool_use_id")
+            tool_use_id = _anthropic_tool_call_id(block, field="tool_use_id")
             start = starts.get(tool_use_id)
             if not start:
-                continue
+                raise ProviderToolPayloadError(
+                    f"Anthropic tool-search result {tool_use_id!r} has no matching server_tool_use block"
+                )
+            names = _tool_reference_names(block.get("content"))
             calls.append(
                 ProviderToolCall(
-                    id=str(tool_use_id),
+                    id=tool_use_id,
                     name="tool_search",
-                    arguments=json.dumps({"tools": _tool_reference_names(block.get("content"))}),
-                    result=_tool_search_result_text(block.get("content")),
+                    arguments={**_anthropic_tool_search_arguments(start), "tools": names},
+                    result=_tool_search_result_text(names),
+                    loaded_tool_names=tuple(names),
                 )
             )
         return calls or None
@@ -577,15 +588,38 @@ class AnthropicClient(CompletionClient):
 
 def _tool_reference_names(content) -> list[str]:
     if not isinstance(content, dict):
-        return []
+        raise ProviderToolPayloadError("Anthropic tool-search result content must be an object")
     refs = content.get("tool_references")
     if not isinstance(refs, list):
-        return []
-    return [name for ref in refs if isinstance(ref, dict) and isinstance(name := ref.get("tool_name"), str)]
+        raise ProviderToolPayloadError("Anthropic tool-search result tool_references must be an array")
+    names: list[str] = []
+    for index, ref in enumerate(refs):
+        if not isinstance(ref, dict):
+            raise ProviderToolPayloadError(f"Anthropic tool_references[{index}] must be an object")
+        name = ref.get("tool_name")
+        if not isinstance(name, str) or not name.strip():
+            raise ProviderToolPayloadError(f"Anthropic tool_references[{index}].tool_name must be a non-empty string")
+        names.append(name)
+    return list(dict.fromkeys(names))
 
 
-def _tool_search_result_text(content) -> str:
-    names = _tool_reference_names(content)
+def _tool_search_result_text(names: list[str]) -> str:
     if names:
         return f"Matched tools: {', '.join(names)}"
-    return json.dumps(content or {}, default=str)
+    return "No matching tools found."
+
+
+def _anthropic_tool_call_id(block: dict, *, field: str) -> str:
+    value = block.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ProviderToolPayloadError(f"Anthropic tool-search block {field} must be a non-empty string")
+    return value
+
+
+def _anthropic_tool_search_arguments(block: dict) -> dict:
+    value = block.get("input")
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProviderToolPayloadError("Anthropic server_tool_use input must be an object")
+    return value

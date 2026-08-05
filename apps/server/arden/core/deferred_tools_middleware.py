@@ -1,8 +1,8 @@
-import json
 from collections.abc import Callable
 from dataclasses import replace
 
 from arden.agent.model_request import ModelRequest, ModelRequestNext
+from arden.agent.types.llm import provider_tool_calls_from_history
 from arden.llm.models import supports_native_deferred_tools
 from arden.tools.core.context import RunContext
 from arden.tools.core.registry import ToolRegistry
@@ -25,20 +25,8 @@ def _discovered_tool_names(messages: list[dict]) -> set[str]:
     """Recover native tool-search discoveries from structured history/compaction state."""
     names: set[str] = set()
     for message in messages:
-        for call in message.get("provider_tool_calls") or []:
-            if not isinstance(call, dict) or call.get("name") != "tool_search":
-                continue
-            arguments = call.get("arguments")
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except (TypeError, ValueError):
-                    continue
-            if not isinstance(arguments, dict):
-                continue
-            tools = arguments.get("tools")
-            if isinstance(tools, list):
-                names.update(name for name in tools if isinstance(name, str))
+        for call in provider_tool_calls_from_history(message):
+            names.update(call.loaded_tool_names)
 
         compaction = message.get("compaction")
         if not isinstance(compaction, dict):

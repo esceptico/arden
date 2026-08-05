@@ -37,19 +37,9 @@ def normalize_assistant_message(message: Message) -> dict:
         sanitized["reasoning_encrypted_content"] = message.reasoning_encrypted_content
     if message.anthropic_content:
         sanitized["anthropic_content"] = message.anthropic_content
-    if provider_tool_calls := getattr(message, "provider_tool_calls", None):
-        sanitized["provider_tool_calls"] = [
-            {
-                "id": call.id,
-                "name": call.name,
-                "arguments": call.arguments,
-                "result": call.result,
-                "done": call.done,
-                **({"provider_item": call.provider_item} if call.provider_item else {}),
-            }
-            for call in provider_tool_calls
-        ]
-    if openai_response_items := getattr(message, "openai_response_items", None):
+    if message.provider_tool_calls:
+        sanitized["provider_tool_calls"] = [call.to_history_dict() for call in message.provider_tool_calls]
+    if openai_response_items := message.openai_response_items:
         sanitized["openai_response_items"] = deepcopy(openai_response_items)
     return sanitized
 

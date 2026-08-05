@@ -288,7 +288,7 @@ async def test_schema_v6_backfills_area_refs_without_exposing_legacy_scope(tmp_p
     assert "knowledge_scope" not in columns
     assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
         "value"
-    ] == "8"
+    ] == "9"
 
     original_ref = health["area_ref"]
     await store.update_area(health["area_id"], name="Wellbeing")
@@ -1951,9 +1951,131 @@ async def test_schema_v7_backfills_session_and_agent_refs(tmp_path: Path):
     assert run is not None
     assert run["agent_ref"] == agent_ref
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "8"
+    assert version[0]["value"] == "9"
 
     await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v8_rewrites_provider_tool_receipts(tmp_path: Path):
+    db = tmp_path / "v8-provider-receipts.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    original = SessionStore(conn, read_conn)
+    await original.init_schema()
+    state = _make_state("provider-history")
+    old_message = {
+        "role": "assistant",
+        "content": "",
+        "provider_tool_calls": [
+            {
+                "id": "tsc-1",
+                "name": "tool_search",
+                "arguments": '{"tools":["emails","emails"]}',
+                "result": "Matched tools: emails",
+                "done": True,
+                "provider_item": {
+                    "id": "tsc-1",
+                    "type": "tool_search_call",
+                    "arguments": {"paths": ["emails", "read_email"]},
+                },
+            }
+        ],
+        "openai_response_items": [{"id": "opaque-1", "type": "tool_search_call"}],
+    }
+    await original.save_session(state, [old_message])
+    await read_conn.close()
+    await conn.execute("UPDATE session_store_meta SET value = '8' WHERE key = 'schema_version'")
+    await conn.commit()
+
+    migrated_read = await database.connect(db, readonly=True)
+    migrated = SessionStore(conn, migrated_read)
+    await migrated.init_schema()
+
+    expected_call = {
+        "id": "tsc-1",
+        "name": "tool_search",
+        "arguments": {"tools": ["emails", "emails"]},
+        "result": "Matched tools: emails",
+        "done": True,
+        "loaded_tool_names": ["emails", "read_email"],
+    }
+    loaded = await migrated.load_session(state.session_id)
+    assert loaded is not None
+    assert loaded.messages[0]["provider_tool_calls"] == [expected_call]
+    assert loaded.messages[0]["openai_response_items"] == old_message["openai_response_items"]
+    transcript = await conn.execute_fetchall(
+        "SELECT message_json FROM session_messages WHERE session_id = ?",
+        (state.session_id,),
+    )
+    assert json.loads(transcript[0]["message_json"])["provider_tool_calls"] == [expected_call]
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "9"
+
+    await migrated_read.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v8_provider_receipt_failure_rolls_back(tmp_path: Path):
+    db = tmp_path / "invalid-v8-provider-receipts.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    original = SessionStore(conn, read_conn)
+    await original.init_schema()
+    state = _make_state("provider-history")
+    valid_message = {
+        "role": "assistant",
+        "content": "",
+        "provider_tool_calls": [
+            {
+                "id": "tsc-1",
+                "name": "tool_search",
+                "arguments": '{"tools":["emails"]}',
+                "result": "Matched tools: emails",
+                "done": True,
+            }
+        ],
+    }
+    await original.save_session(state, [valid_message])
+    transcript = dict(valid_message)
+    transcript["provider_tool_calls"] = [{**valid_message["provider_tool_calls"][0], "arguments": '{"tools":[42]}'}]
+    await read_conn.close()
+    await conn.execute(
+        "UPDATE session_messages SET message_json = ? WHERE session_id = ?",
+        (json.dumps(transcript), state.session_id),
+    )
+    await conn.execute("UPDATE session_store_meta SET value = '8' WHERE key = 'schema_version'")
+    await conn.commit()
+    before_session = (
+        await conn.execute_fetchall("SELECT messages FROM sessions WHERE session_id = ?", (state.session_id,))
+    )[0]["messages"]
+    before_transcript = (
+        await conn.execute_fetchall(
+            "SELECT message_json FROM session_messages WHERE session_id = ?",
+            (state.session_id,),
+        )
+    )[0]["message_json"]
+
+    migrated_read = await database.connect(db, readonly=True)
+    migrated = SessionStore(conn, migrated_read)
+    with pytest.raises(SessionDataCorruptionError, match="must contain non-empty strings"):
+        await migrated.init_schema()
+
+    assert (await conn.execute_fetchall("SELECT messages FROM sessions WHERE session_id = ?", (state.session_id,)))[0][
+        "messages"
+    ] == before_session
+    assert (
+        await conn.execute_fetchall(
+            "SELECT message_json FROM session_messages WHERE session_id = ?",
+            (state.session_id,),
+        )
+    )[0]["message_json"] == before_transcript
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "8"
+
+    await migrated_read.close()
     await conn.close()
 
 
@@ -2042,7 +2164,7 @@ async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp
         }
     ]
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "8"
+    assert version[0]["value"] == "9"
 
     await read_conn.close()
     await conn.close()
@@ -2070,7 +2192,7 @@ async def test_schema_v4_adds_context_generation_before_serving_rows(tmp_path: P
     row = (await conn.execute_fetchall("SELECT context_generation FROM sessions WHERE session_id = 'legacy'"))[0]
     assert row["context_generation"] == 0
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "8"
+    assert version[0]["value"] == "9"
 
     await migrated_read.close()
     await conn.close()
@@ -2114,7 +2236,7 @@ async def test_schema_v5_backfills_active_count_and_missing_transcript(tmp_path:
     assert json.loads(row["metadata"]) == {"last_input_tokens": 7}
     assert len(transcript) == 2
     assert all(row["message_id"] for row in transcript)
-    assert version[0]["value"] == "8"
+    assert version[0]["value"] == "9"
 
     await migrated_read.close()
     await conn.close()
@@ -3285,10 +3407,10 @@ async def test_checkpoint_reconstructs_active_context_from_immutable_transcript(
                 {
                     "id": "tsc-2",
                     "name": "tool_search",
-                    "arguments": '{"tools":["wiki_read_page"]}',
+                    "arguments": {"tools": ["wiki_read_page"]},
                     "result": "Matched tools: wiki_read_page",
                     "done": True,
-                    "provider_item": {"id": "tsc-2", "type": "tool_search_call"},
+                    "loaded_tool_names": ["wiki_read_page"],
                 }
             ],
             "openai_response_items": [
@@ -3323,7 +3445,7 @@ async def test_checkpoint_reconstructs_active_context_from_immutable_transcript(
         "reply 2",
     ]
     assert loaded.messages[-1]["anthropic_content"] == [{"type": "text", "text": "reply 2"}]
-    assert loaded.messages[-1]["provider_tool_calls"][0]["provider_item"]["id"] == "tsc-2"
+    assert loaded.messages[-1]["provider_tool_calls"][0]["loaded_tool_names"] == ["wiki_read_page"]
     assert [item["type"] for item in loaded.messages[-1]["openai_response_items"]] == [
         "tool_search_call",
         "tool_search_output",

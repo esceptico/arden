@@ -59,8 +59,10 @@ def test_history_tool_calls_orders_provider_search_before_loaded_tools():
             {
                 "id": "tsc_1",
                 "name": "tool_search",
-                "arguments": '{"tools":["slack_search"]}',
+                "arguments": {"tools": ["slack_search"]},
                 "result": "Matched tools: slack_search",
+                "done": True,
+                "loaded_tool_names": ["slack_search"],
             }
         ],
         "tool_calls": [
@@ -75,6 +77,22 @@ def test_history_tool_calls_orders_provider_search_before_loaded_tools():
 
     assert [call["name"] for call in calls] == ["tool_search", "slack_search"]
     assert calls[0]["result"] == "Matched tools: slack_search"
+
+
+def test_history_tool_calls_rejects_malformed_provider_envelope():
+    with pytest.raises(ValueError, match="missing fields"):
+        _history_tool_calls(
+            {"provider_tool_calls": [{"id": "tsc_1", "name": "tool_search"}]},
+            lambda name: ("tool", None),
+        )
+
+
+def test_history_tool_calls_rejects_null_provider_envelope():
+    with pytest.raises(ValueError, match="must be an array"):
+        _history_tool_calls(
+            {"provider_tool_calls": None},
+            lambda name: ("tool", None),
+        )
 
 
 @pytest.mark.asyncio

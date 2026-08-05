@@ -1,6 +1,5 @@
-import json
 import warnings
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
@@ -22,6 +21,7 @@ from arden.agent import (
     ToolCallStreamDelta,
     Usage,
 )
+from arden.agent.types.llm import ProviderToolPayloadError
 from arden.agent.types.tools import tool_result_content_for_model
 from arden.core.content import ContextContent, ImageContent, TextContent, render_context
 from arden.llm.history import (
@@ -406,7 +406,8 @@ def parse_responses_response(
     reasoning_encrypted_content = None
     tool_calls: list[ToolCall] = []
     provider_tool_calls: list[ProviderToolCall] = []
-    loaded_tool_names: list[str] = []
+    tool_search_call_ids: list[str | None] = []
+    tool_search_outputs: list[tuple[str | None, list[str]]] = []
 
     source_items = output_items if output_items is not None else response.output
     response_items = [deepcopy(item if isinstance(item, dict) else _model_dump(item)) for item in source_items]
@@ -450,14 +451,27 @@ def parse_responses_response(
 
         if item_type == "tool_search_call":
             provider_tool_calls.append(_parse_tool_search_call(data))
-            loaded_tool_names.extend(_legacy_tool_search_names(data))
+            tool_search_call_ids.append(_optional_tool_search_call_id(data, path="OpenAI tool_search_call"))
             continue
 
         if item_type == "tool_search_output":
-            loaded_tool_names.extend(_tool_search_output_names(data))
+            if len(tool_search_outputs) >= len(provider_tool_calls):
+                raise ProviderToolPayloadError("OpenAI tool_search_output has no preceding unmatched tool_search_call")
+            tool_search_outputs.append(
+                (
+                    _optional_tool_search_call_id(data, path="OpenAI tool_search_output"),
+                    _tool_search_output_names(data),
+                )
+            )
 
     if provider_tool_calls:
-        provider_tool_calls = _with_tool_search_matches(provider_tool_calls, tool_calls, loaded_tool_names)
+        if not tool_search_outputs:
+            raise ProviderToolPayloadError("OpenAI response contains tool_search_call without tool_search_output")
+        provider_tool_calls = _pair_tool_search_outputs(
+            provider_tool_calls,
+            tool_search_call_ids,
+            tool_search_outputs,
+        )
 
     message = Message(
         role=Role.ASSISTANT,
@@ -479,68 +493,118 @@ def parse_responses_response(
 
 
 def _parse_tool_search_call(data: dict[str, Any], *, done: bool = True) -> ProviderToolCall:
-    call_id = data.get("id") or data.get("call_id") or data.get("item_id") or "tool_search"
-    query = data.get("arguments") or data.get("query") or data.get("queries") or data.get("input") or {}
-    provider_item = {key: deepcopy(value) for key, value in data.items() if key not in {"results", "output", "tools"}}
-    provider_item["type"] = "tool_search_call"
-    provider_item["id"] = str(call_id)
-    if done:
-        provider_item["status"] = provider_item.get("status") or "completed"
+    call_id = _tool_search_call_id(data)
+    expected_status = "completed" if done else "in_progress"
+    status = data.get("status")
+    if status != expected_status:
+        raise ProviderToolPayloadError(f"OpenAI tool_search_call.status must be {expected_status!r}, got {status!r}")
     return ProviderToolCall(
-        id=str(call_id),
+        id=call_id,
         name="tool_search",
-        arguments=json.dumps({"query": query}, default=str),
+        arguments=_tool_search_arguments(data, required=done),
         result="",
         done=done,
-        provider_item=provider_item,
     )
 
 
 def _with_tool_search_matches(
+    call: ProviderToolCall,
+    loaded_tool_names: list[str],
+) -> ProviderToolCall:
+    names = list(dict.fromkeys(loaded_tool_names))
+    result = f"Matched tools: {', '.join(names)}" if names else "No matching tools found."
+    return ProviderToolCall(
+        id=call.id,
+        name=call.name,
+        arguments={**call.arguments_dict(), "tools": names},
+        result=call.result or result,
+        done=True,
+        loaded_tool_names=tuple(names),
+    )
+
+
+def _pair_tool_search_outputs(
     calls: list[ProviderToolCall],
-    tool_calls: list[ToolCall],
-    loaded_tool_names: list[str] | None = None,
+    call_ids: list[str | None],
+    outputs: list[tuple[str | None, list[str]]],
 ) -> list[ProviderToolCall]:
-    names = list(dict.fromkeys(loaded_tool_names or [tc.function.name for tc in tool_calls]))
-    if not names:
-        return calls
-    result = f"Matched tools: {', '.join(names)}"
-    arguments = json.dumps({"tools": names})
+    if len(calls) != len(outputs):
+        raise ProviderToolPayloadError("OpenAI response must contain one tool_search_output for each tool_search_call")
+    if len(calls) == 1:
+        call_id = call_ids[0]
+        output_call_id, names = outputs[0]
+        if call_id is not None and output_call_id is not None and call_id != output_call_id:
+            raise ProviderToolPayloadError("OpenAI tool_search_output.call_id does not match tool_search_call.call_id")
+        return [_with_tool_search_matches(calls[0], names)]
+
+    if any(call_id is None for call_id in call_ids) or any(call_id is None for call_id, _names in outputs):
+        raise ProviderToolPayloadError("OpenAI multiple tool searches require call_id on every call and output")
+    concrete_call_ids = [call_id for call_id in call_ids if call_id is not None]
+    if len(set(concrete_call_ids)) != len(concrete_call_ids):
+        raise ProviderToolPayloadError("OpenAI returned duplicate tool_search_call.call_id values")
+    names_by_call_id = {call_id: names for call_id, names in outputs if call_id is not None}
+    if len(names_by_call_id) != len(outputs):
+        raise ProviderToolPayloadError("OpenAI returned duplicate tool_search_output.call_id values")
+    if set(names_by_call_id) != set(concrete_call_ids):
+        raise ProviderToolPayloadError("OpenAI tool search call/output call_id values do not match")
     return [
-        ProviderToolCall(
-            id=call.id,
-            name=call.name,
-            arguments=arguments,
-            result=call.result or result,
-            done=True,
-            provider_item=call.provider_item,
-        )
-        for call in calls
+        _with_tool_search_matches(call, names_by_call_id[call_id])
+        for call, call_id in zip(calls, concrete_call_ids, strict=True)
     ]
 
 
 def _tool_search_output_names(data: dict[str, Any]) -> list[str]:
-    return _tool_names(data.get("tools"))
+    if data.get("status") != "completed":
+        raise ProviderToolPayloadError("OpenAI tool_search_output.status must be 'completed'")
+    if "tools" not in data:
+        raise ProviderToolPayloadError("OpenAI tool_search_output is missing tools")
+    return _tool_names(data["tools"], path="OpenAI tool_search_output.tools")
 
 
-def _legacy_tool_search_names(data: dict[str, Any]) -> list[str]:
-    return _tool_names(data.get("results") or data.get("output") or data.get("tools"))
-
-
-def _tool_names(value: Any) -> list[str]:
+def _tool_names(value: Any, *, path: str) -> list[str]:
     if not isinstance(value, list):
-        return []
+        raise ProviderToolPayloadError(f"{path} must be an array")
     names: list[str] = []
-    for item in value:
+    for index, item in enumerate(value):
         if not isinstance(item, dict):
-            continue
+            raise ProviderToolPayloadError(f"{path}[{index}] must be an object")
         if item.get("type") == "namespace":
-            names.extend(_tool_names(item.get("tools")))
+            if "tools" not in item:
+                raise ProviderToolPayloadError(f"{path}[{index}] namespace is missing tools")
+            names.extend(_tool_names(item["tools"], path=f"{path}[{index}].tools"))
             continue
         name = item.get("name")
-        if isinstance(name, str) and name:
-            names.append(name)
+        if not isinstance(name, str) or not name.strip():
+            raise ProviderToolPayloadError(f"{path}[{index}].name must be a non-empty string")
+        names.append(name)
     return list(dict.fromkeys(names))
+
+
+def _tool_search_call_id(data: Mapping[str, Any]) -> str:
+    value = data.get("id")
+    if not isinstance(value, str) or not value.strip():
+        raise ProviderToolPayloadError("OpenAI tool_search_call.id must be a non-empty string")
+    return value
+
+
+def _optional_tool_search_call_id(data: Mapping[str, Any], *, path: str) -> str | None:
+    value = data.get("call_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ProviderToolPayloadError(f"{path}.call_id must be a non-empty string")
+    return value
+
+
+def _tool_search_arguments(data: Mapping[str, Any], *, required: bool) -> dict[str, Any]:
+    if "arguments" not in data:
+        if required:
+            raise ProviderToolPayloadError("OpenAI completed tool_search_call is missing arguments")
+        return {}
+    arguments = data["arguments"]
+    if not isinstance(arguments, Mapping):
+        raise ProviderToolPayloadError("OpenAI tool_search_call.arguments must be an object")
+    return dict(arguments)
 
 
 def _convert_messages(history: ModelHistory) -> tuple[str | None, list[dict[str, Any]]]:

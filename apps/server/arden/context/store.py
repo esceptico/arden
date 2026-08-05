@@ -11,6 +11,7 @@ from uuid import uuid4
 import aiosqlite
 from pydantic import BaseModel
 
+from arden.agent.types.llm import ProviderToolCall, ProviderToolPayloadError
 from arden.agent.types.tools import ToolResult
 from arden.areas.paths import normalize_area_page_path
 from arden.constants import (
@@ -46,7 +47,7 @@ from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 8
+_SESSION_SCHEMA_VERSION = 9
 
 
 class StaleSessionContextError(RuntimeError):
@@ -74,6 +75,11 @@ _DURABLE_TOOL_RESULT_DATA_KEYS = (
     "mode",
     "provenance",
 )
+
+
+def _reject_nonfinite_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant {value}")
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS session_store_meta (
@@ -929,9 +935,12 @@ class SessionStore:
             await self._migrate_session_agent_refs_schema()
             await self.conn.execute(
                 "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                (str(_SESSION_SCHEMA_VERSION),),
+                ("8",),
             )
             await self.conn.commit()
+            version = 8
+        if version == 8:
+            await self._migrate_provider_tool_call_receipts()
             await self._migrate_session_messages_fts()
             return
         for col in (
@@ -1028,6 +1037,147 @@ class SessionStore:
             return int(rows[0]["value"])
         except (TypeError, ValueError) as error:
             raise RuntimeError("persisted session schema version is invalid") from error
+
+    @staticmethod
+    def _legacy_provider_arguments(value: object, *, location: str) -> dict:
+        if not isinstance(value, str):
+            raise SessionDataCorruptionError(f"{location} arguments must be encoded JSON")
+        try:
+            value = json.loads(
+                value,
+                parse_constant=_reject_nonfinite_json_constant,
+            )
+        except (TypeError, ValueError) as error:
+            raise SessionDataCorruptionError(f"{location} arguments are invalid JSON") from error
+        if not isinstance(value, dict):
+            raise SessionDataCorruptionError(f"{location} arguments must be an object")
+        return value
+
+    @classmethod
+    def _migrate_provider_tool_calls_in_message(cls, message: dict, *, location: str) -> bool:
+        if "provider_tool_calls" not in message:
+            return False
+        calls = message["provider_tool_calls"]
+        if not isinstance(calls, list):
+            raise SessionDataCorruptionError(f"{location} provider_tool_calls must be an array")
+
+        migrated_calls: list[dict] = []
+        required_fields = {"id", "name", "arguments", "result", "done"}
+        allowed_fields = required_fields | {"provider_item"}
+        for index, raw_call in enumerate(calls):
+            call_location = f"{location} provider_tool_calls[{index}]"
+            if not isinstance(raw_call, dict):
+                raise SessionDataCorruptionError(f"{call_location} must be an object")
+            missing = required_fields - set(raw_call)
+            unknown = set(raw_call) - allowed_fields
+            if missing:
+                raise SessionDataCorruptionError(f"{call_location} is missing fields: {sorted(missing)}")
+            if unknown:
+                raise SessionDataCorruptionError(f"{call_location} has unknown fields: {sorted(unknown)}")
+
+            arguments = cls._legacy_provider_arguments(
+                raw_call["arguments"],
+                location=call_location,
+            )
+            argument_sources = [arguments]
+            provider_item = raw_call.get("provider_item")
+            if provider_item is not None:
+                if not isinstance(provider_item, dict):
+                    raise SessionDataCorruptionError(f"{call_location} provider_item must be an object")
+                provider_arguments = provider_item.get("arguments")
+                if provider_arguments is not None:
+                    if not isinstance(provider_arguments, dict):
+                        raise SessionDataCorruptionError(f"{call_location} provider_item arguments must be an object")
+                    argument_sources.append(provider_arguments)
+
+            loaded_tool_names: list[str] = []
+            for argument_source in argument_sources:
+                for key in ("tools", "paths", "names"):
+                    values = argument_source.get(key)
+                    if values is None:
+                        continue
+                    if not isinstance(values, list):
+                        raise SessionDataCorruptionError(f"{call_location} {key} must be an array")
+                    for value in values:
+                        if not isinstance(value, str) or not value.strip():
+                            raise SessionDataCorruptionError(f"{call_location} {key} must contain non-empty strings")
+                        if value not in loaded_tool_names:
+                            loaded_tool_names.append(value)
+
+            try:
+                migrated_call = ProviderToolCall(
+                    id=raw_call["id"],
+                    name=raw_call["name"],
+                    arguments=arguments,
+                    result=raw_call["result"],
+                    done=raw_call["done"],
+                    loaded_tool_names=tuple(loaded_tool_names),
+                )
+            except ProviderToolPayloadError as error:
+                raise SessionDataCorruptionError(f"{call_location} is invalid: {error}") from error
+            migrated_calls.append(migrated_call.to_history_dict())
+
+        message["provider_tool_calls"] = migrated_calls
+        return True
+
+    async def _migrate_provider_tool_call_receipts(self) -> None:
+        """Rewrite provider-native tool receipts into the provider-neutral v9 envelope."""
+
+        await self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            cold = await self.conn.execute_fetchall(
+                "SELECT session_id FROM sessions WHERE storage_state = 'cold' LIMIT 1"
+            )
+            if cold:
+                raise SessionDataCorruptionError(
+                    f"session {cold[0]['session_id']} must be restored from cold storage before schema v9 migration"
+                )
+
+            session_rows = await self.conn.execute_fetchall(
+                "SELECT session_id, messages FROM sessions WHERE instr(messages, '\"provider_tool_calls\"') > 0"
+            )
+            for row in session_rows:
+                session_id = str(row["session_id"])
+                messages = self._strict_active_projection(session_id, row["messages"])
+                changed = False
+                for index, message in enumerate(messages):
+                    if self._migrate_provider_tool_calls_in_message(
+                        message,
+                        location=f"session {session_id} messages[{index}]",
+                    ):
+                        changed = True
+                if changed:
+                    await self.conn.execute(
+                        "UPDATE sessions SET messages = ? WHERE session_id = ?",
+                        (json.dumps(messages, ensure_ascii=False, separators=(",", ":")), session_id),
+                    )
+
+            transcript_rows = await self.conn.execute_fetchall(
+                "SELECT rowid, session_id, message_id, message_json FROM session_messages "
+                "WHERE instr(message_json, '\"provider_tool_calls\"') > 0"
+            )
+            for row in transcript_rows:
+                location = f"session {row['session_id']} transcript message {row['message_id']}"
+                try:
+                    message = json.loads(row["message_json"])
+                except (TypeError, json.JSONDecodeError) as error:
+                    raise SessionDataCorruptionError(f"{location} is invalid JSON") from error
+                if not isinstance(message, dict):
+                    raise SessionDataCorruptionError(f"{location} must be an object")
+                if self._migrate_provider_tool_calls_in_message(message, location=location):
+                    await self.conn.execute(
+                        "UPDATE session_messages SET message_json = ? WHERE rowid = ?",
+                        (json.dumps(message, ensure_ascii=False, separators=(",", ":")), row["rowid"]),
+                    )
+
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+                (str(_SESSION_SCHEMA_VERSION),),
+            )
+            await self.conn.commit()
+        except BaseException:
+            await self.conn.rollback()
+            raise
 
     async def _migrate_session_context_generation_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(sessions)")

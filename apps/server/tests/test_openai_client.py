@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from arden.agent.llm.parsing import normalize_assistant_message
-from arden.agent.types.llm import ProviderToolCall, ToolCallStreamDelta
+from arden.agent.types.llm import Message, ProviderToolCall, ProviderToolPayloadError, Role, ToolCallStreamDelta
 from arden.llm.openai import OpenAIClient
 from arden.llm.openai_responses import (
     buffered_stream_responses_completion,
@@ -185,7 +185,16 @@ def test_chat_completions_projects_foreign_provider_history_without_mutation():
             "reasoning_content": "provider reasoning",
             "reasoning_encrypted_content": "responses-only-state",
             "anthropic_content": [{"type": "thinking", "signature": "anthropic-state"}],
-            "provider_tool_calls": [{"provider_item": {"type": "tool_search_call"}}],
+            "provider_tool_calls": [
+                {
+                    "id": "tsc_1",
+                    "name": "tool_search",
+                    "arguments": {},
+                    "result": "",
+                    "done": True,
+                    "loaded_tool_names": [],
+                }
+            ],
             "openai_response_items": [{"type": "reasoning", "encrypted_content": "opaque"}],
             "metadata": {"provider": "foreign"},
             "tool_calls": [
@@ -374,7 +383,7 @@ def test_responses_deferred_tool_search_preserves_prompt_cache_key():
     assert {"type": "tool_search"} in request["tools"]
 
 
-def test_responses_legacy_tool_search_receipt_does_not_emit_orphan_call():
+def test_responses_stored_tool_search_envelope_does_not_emit_orphan_call():
     client = OpenAIClient(api_key="test")
 
     request = client._prepare_responses(
@@ -387,51 +396,10 @@ def test_responses_legacy_tool_search_receipt_does_not_emit_orphan_call():
                     {
                         "id": "tsc_1",
                         "name": "tool_search",
-                        "arguments": '{"tools":["emails"]}',
+                        "arguments": {"tools": ["emails"]},
                         "result": "Matched tools: emails",
-                    }
-                ],
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "emails", "arguments": '{"days":1}'},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "call_1", "content": "20 emails"},
-        ],
-        model="gpt-5.5",
-        tools=[{"type": "function", "function": {"name": "current_time", "parameters": {"type": "object"}}}],
-        deferred_tools=[{"type": "function", "function": {"name": "emails", "parameters": {"type": "object"}}}],
-        tool_choice="auto",
-        temperature=None,
-        max_tokens=None,
-        reasoning_effort="high",
-        response_format=None,
-    )
-
-    replay = request["input"][1:]
-    assert [item["type"] for item in replay] == ["function_call", "function_call_output"]
-    assert replay[0]["name"] == "emails"
-
-
-def test_responses_legacy_stored_tool_search_item_does_not_emit_orphan_call():
-    client = OpenAIClient(api_key="test")
-
-    request = client._prepare_responses(
-        messages=[
-            {"role": "user", "content": "read email"},
-            {
-                "role": "assistant",
-                "content": "",
-                "provider_tool_calls": [
-                    {
-                        "id": "tsc_1",
-                        "name": "tool_search",
-                        "arguments": '{"tools":["emails"]}',
-                        "result": "Matched tools: emails",
-                        "provider_item": {"type": "tool_search_call", "id": "tsc_1", "status": "completed"},
+                        "done": True,
+                        "loaded_tool_names": ["emails"],
                     }
                 ],
                 "tool_calls": [
@@ -872,10 +840,17 @@ def test_responses_parser_preserves_provider_tool_search_call():
                 {
                     "type": "tool_search_call",
                     "id": "tsc_1",
-                    "query": "slack",
-                    "results": [{"name": "slack_search"}],
+                    "status": "completed",
+                    "arguments": {"paths": ["slack"]},
                 }
-            )
+            ),
+            _FakeItem(
+                {
+                    "type": "tool_search_output",
+                    "status": "completed",
+                    "tools": [{"type": "function", "name": "slack_search"}],
+                }
+            ),
         ],
     )
 
@@ -885,22 +860,105 @@ def test_responses_parser_preserves_provider_tool_search_call():
     assert provider_calls is not None
     assert provider_calls[0].id == "tsc_1"
     assert provider_calls[0].name == "tool_search"
-    assert provider_calls[0].arguments == '{"tools": ["slack_search"]}'
+    assert provider_calls[0].arguments_dict() == {"paths": ["slack"], "tools": ["slack_search"]}
     assert provider_calls[0].result == "Matched tools: slack_search"
-    assert provider_calls[0].provider_item == {
-        "type": "tool_search_call",
-        "id": "tsc_1",
-        "query": "slack",
-        "status": "completed",
-    }
+    assert provider_calls[0].loaded_tool_names == ("slack_search",)
     assert parsed.choices[0].message.openai_response_items == [
         {
             "type": "tool_search_call",
             "id": "tsc_1",
-            "query": "slack",
-            "results": [{"name": "slack_search"}],
-        }
+            "status": "completed",
+            "arguments": {"paths": ["slack"]},
+        },
+        {
+            "type": "tool_search_output",
+            "status": "completed",
+            "tools": [{"type": "function", "name": "slack_search"}],
+        },
     ]
+
+
+def test_responses_parser_pairs_each_tool_search_output_with_its_call():
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "search_1",
+                    "status": "completed",
+                    "arguments": {"paths": ["slack"]},
+                }
+            ),
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_2",
+                    "call_id": "search_2",
+                    "status": "completed",
+                    "arguments": {"paths": ["email"]},
+                }
+            ),
+            _FakeItem(
+                {
+                    "type": "tool_search_output",
+                    "call_id": "search_2",
+                    "status": "completed",
+                    "tools": [{"type": "function", "name": "email_search"}],
+                }
+            ),
+            _FakeItem(
+                {
+                    "type": "tool_search_output",
+                    "call_id": "search_1",
+                    "status": "completed",
+                    "tools": [{"type": "function", "name": "slack_search"}],
+                }
+            ),
+        ],
+    )
+
+    parsed = parse_responses_response(response, "gpt-5.5")
+    provider_calls = parsed.choices[0].message.provider_tool_calls
+
+    assert provider_calls is not None
+    assert [(call.id, call.loaded_tool_names) for call in provider_calls] == [
+        ("tsc_1", ("slack_search",)),
+        ("tsc_2", ("email_search",)),
+    ]
+
+
+def test_responses_parser_rejects_ambiguous_multiple_tool_searches():
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": f"tsc_{index}",
+                    "status": "completed",
+                    "arguments": {},
+                }
+            )
+            for index in (1, 2)
+        ]
+        + [
+            _FakeItem(
+                {
+                    "type": "tool_search_output",
+                    "status": "completed",
+                    "tools": [],
+                }
+            )
+            for _index in (1, 2)
+        ],
+    )
+
+    with pytest.raises(ProviderToolPayloadError, match="require call_id"):
+        parse_responses_response(response, "gpt-5.5")
 
 
 def test_responses_replays_exact_ordered_output_without_duplicates():
@@ -957,12 +1015,16 @@ def test_responses_replays_exact_ordered_output_without_duplicates():
     assert request["input"][4]["type"] == "function_call_output"
     assert [item.get("type") for item in request["input"]].count("tool_search_call") == 1
     assert [item.get("type") for item in request["input"]].count("tool_search_output") == 1
-    assert normalized["provider_tool_calls"][0]["arguments"] == '{"tools": ["slack_search"]}'
+    assert normalized["provider_tool_calls"][0]["arguments"] == {
+        "paths": ["slack"],
+        "tools": ["slack_search"],
+    }
     assert normalized["provider_tool_calls"][0]["result"] == "Matched tools: slack_search"
 
 
-def test_responses_normalizes_provider_tool_search_replay_item():
-    message = SimpleNamespace(
+def test_responses_normalizes_provider_tool_search_envelope():
+    message = Message(
+        role=Role.ASSISTANT,
         content=None,
         tool_calls=None,
         reasoning_content=None,
@@ -972,28 +1034,39 @@ def test_responses_normalizes_provider_tool_search_replay_item():
             ProviderToolCall(
                 id="tsc_1",
                 name="tool_search",
-                arguments='{"query":"slack"}',
+                arguments={"query": "slack"},
                 result="Matched tools: slack_search",
-                provider_item={"type": "tool_search_call", "id": "tsc_1", "status": "completed"},
+                loaded_tool_names=("slack_search",),
             )
         ],
+        openai_response_items=None,
     )
 
     normalized = normalize_assistant_message(message)
 
-    assert normalized["provider_tool_calls"][0]["provider_item"] == {
-        "type": "tool_search_call",
+    assert normalized["provider_tool_calls"][0] == {
         "id": "tsc_1",
-        "status": "completed",
+        "name": "tool_search",
+        "arguments": {"query": "slack"},
+        "result": "Matched tools: slack_search",
+        "done": True,
+        "loaded_tool_names": ["slack_search"],
     }
 
 
-def test_responses_parser_infers_tool_search_matches_from_function_calls():
+def test_responses_parser_requires_tool_search_output():
     response = SimpleNamespace(
         status="completed",
         usage=_Usage(),
         output=[
-            _FakeItem({"type": "tool_search_call", "id": "tsc_1", "status": "completed"}),
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "status": "completed",
+                    "arguments": {"paths": ["slack_search"]},
+                }
+            ),
             _FakeItem(
                 {
                     "type": "function_call",
@@ -1005,11 +1078,44 @@ def test_responses_parser_infers_tool_search_matches_from_function_calls():
         ],
     )
 
-    parsed = parse_responses_response(response, "gpt-5.5")
-    provider_call = parsed.choices[0].message.provider_tool_calls[0]
+    with pytest.raises(ProviderToolPayloadError, match="without tool_search_output"):
+        parse_responses_response(response, "gpt-5.5")
 
-    assert provider_call.arguments == '{"tools": ["slack_search"]}'
-    assert provider_call.result == "Matched tools: slack_search"
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "tool_search_call", "status": "completed"},
+        {"type": "tool_search_call", "id": "tsc_1", "status": "completed", "arguments": "{bad"},
+        {"type": "tool_search_call", "id": "tsc_1", "status": "in_progress", "arguments": {}},
+    ],
+)
+def test_responses_rejects_invalid_successful_tool_search_payload(item):
+    response = SimpleNamespace(status="completed", usage=_Usage(), output=[_FakeItem(item)])
+
+    with pytest.raises(ProviderToolPayloadError):
+        parse_responses_response(response, "gpt-5.5")
+
+
+def test_responses_rejects_invalid_tool_search_output():
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "status": "completed",
+                    "arguments": {},
+                }
+            ),
+            _FakeItem({"type": "tool_search_output", "status": "completed", "tools": [{"name": ""}]}),
+        ],
+    )
+
+    with pytest.raises(ProviderToolPayloadError, match="name must be a non-empty string"):
+        parse_responses_response(response, "gpt-5.5")
 
 
 class _ToolResponses:
@@ -1074,7 +1180,21 @@ class _ToolSearchThenFunctionResponses:
             status="completed",
             usage=_Usage(),
             output=[
-                _FakeItem({"type": "tool_search_call", "id": "tsc_1", "status": "completed"}),
+                _FakeItem(
+                    {
+                        "type": "tool_search_call",
+                        "id": "tsc_1",
+                        "status": "completed",
+                        "arguments": {"paths": ["Search"]},
+                    }
+                ),
+                _FakeItem(
+                    {
+                        "type": "tool_search_output",
+                        "status": "completed",
+                        "tools": [{"type": "function", "name": "Search"}],
+                    }
+                ),
                 _FakeItem(
                     {
                         "type": "function_call",

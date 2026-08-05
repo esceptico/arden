@@ -461,7 +461,14 @@ async def test_native_deferred_middleware_rehydrates_discovery_from_structured_h
                 "role": "assistant",
                 "content": "",
                 "provider_tool_calls": [
-                    {"id": "tsc_1", "name": "tool_search", "arguments": '{"tools":["slack_search"]}'}
+                    {
+                        "id": "tsc_1",
+                        "name": "tool_search",
+                        "arguments": {"tools": ["slack_search"]},
+                        "result": "Matched tools: slack_search",
+                        "done": True,
+                        "loaded_tool_names": ["slack_search"],
+                    }
                 ],
             },
             {"role": "user", "content": "continue"},
@@ -503,7 +510,14 @@ async def test_native_wiki_mutation_discovery_also_exposes_required_reader():
                 "role": "assistant",
                 "content": "",
                 "provider_tool_calls": [
-                    {"id": "tsc_wiki", "name": "tool_search", "arguments": '{"tools":["wiki_edit_page"]}'}
+                    {
+                        "id": "tsc_wiki",
+                        "name": "tool_search",
+                        "arguments": {"tools": ["wiki_edit_page"]},
+                        "result": "Matched tools: wiki_edit_page",
+                        "done": True,
+                        "loaded_tool_names": ["wiki_edit_page"],
+                    }
                 ],
             }
         ],
@@ -652,8 +666,9 @@ async def test_native_provider_tool_search_reveals_slack_on_next_model_step():
                         ProviderToolCall(
                             id="tsc_1",
                             name="tool_search",
-                            arguments='{"tools":["slack_search"]}',
+                            arguments={"tools": ["slack_search"]},
                             result="Matched tools: slack_search",
+                            loaded_tool_names=("slack_search",),
                         )
                     ],
                 ),
@@ -778,13 +793,8 @@ async def test_agent_marks_provider_searched_deferred_tools_loaded_for_next_step
                 ProviderToolCall(
                     id="tsc_1",
                     name="tool_search",
-                    arguments='{"tools":["email_search"]}',
-                    provider_item={
-                        "type": "tool_search_call",
-                        "id": "tsc_1",
-                        "status": "completed",
-                        "arguments": {"paths": ["email_read"]},
-                    },
+                    arguments={"tools": ["email_search", "email_read"]},
+                    loaded_tool_names=("email_search", "email_read"),
                 )
             ],
         ),
@@ -857,8 +867,9 @@ async def test_agent_continues_after_provider_only_tool_search_loads_names():
                         ProviderToolCall(
                             id="tsc_1",
                             name="tool_search",
-                            arguments='{"tools":["wiki_read_page"]}',
+                            arguments={"tools": ["wiki_read_page"]},
                             result="Matched tools: wiki_read_page",
+                            loaded_tool_names=("wiki_read_page",),
                         )
                     ],
                 ),

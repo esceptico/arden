@@ -1,5 +1,4 @@
 import asyncio
-import json
 import time
 from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
@@ -69,24 +68,6 @@ AgentEvent = (
 def _tool_name(tool: dict) -> str | None:
     name = tool.get("function", tool).get("name")
     return name if isinstance(name, str) else None
-
-
-def _provider_loaded_tool_names(call: ProviderToolCall) -> set[str]:
-    names: set[str] = set()
-    for raw in ((call.provider_item or {}).get("arguments"), call.arguments):
-        args = raw
-        if isinstance(raw, str):
-            try:
-                args = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-        if not isinstance(args, dict):
-            continue
-        for key in ("tools", "paths", "names"):
-            values = args.get(key)
-            if isinstance(values, list):
-                names.update(value for value in values if isinstance(value, str))
-    return names
 
 
 @dataclass
@@ -299,7 +280,7 @@ class Agent:
                     deferred_names = {name for tool in step_deferred_tools if (name := _tool_name(tool))}
                     loaded_names = {call.name for call in calls if call.name in deferred_names}
                     for provider_call in response_message.provider_tool_calls or []:
-                        loaded_names.update(_provider_loaded_tool_names(provider_call) & deferred_names)
+                        loaded_names.update(set(provider_call.loaded_tool_names) & deferred_names)
                     self._executor.mark_provider_loaded_tools(loaded_names)
                 rejection = self._tool_batch_rejection(calls)
                 if rejection is not None:
@@ -416,7 +397,7 @@ class Agent:
         deferred_names = {name for tool in deferred_tools if (name := _tool_name(tool))}
         loaded_names: set[str] = set()
         for provider_call in provider_tool_calls:
-            loaded_names.update(_provider_loaded_tool_names(provider_call) & deferred_names)
+            loaded_names.update(set(provider_call.loaded_tool_names) & deferred_names)
         if loaded_names:
             self._executor.mark_provider_loaded_tools(loaded_names)
         return loaded_names
@@ -738,7 +719,6 @@ class Agent:
                                 yield event
                             streamed_provider_tool_ids.add(item.id)
                             yield self._provider_tool_started(item)
-                        yield self._provider_tool_completed(item)
                 elif isinstance(item, CompletionResponse):
                     response = item
         except asyncio.CancelledError:
@@ -815,7 +795,7 @@ class Agent:
             parent_id=self.parent_id,
             tool_id=call.id,
             name=call.name,
-            args=self._provider_tool_args(call.arguments),
+            args=call.arguments_dict(),
             display_name="Search Tools" if call.name == "tool_search" else call.name,
             kind="tool",
             icon="search",
@@ -838,10 +818,3 @@ class Agent:
             kind="tool",
             outcome=ToolOutcome(status=ToolOutcomeStatus.SUCCEEDED),
         )
-
-    def _provider_tool_args(self, raw: str) -> dict:
-        try:
-            parsed = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            return {"input": raw}
-        return parsed if isinstance(parsed, dict) else {"input": parsed}

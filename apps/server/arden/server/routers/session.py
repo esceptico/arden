@@ -3,6 +3,7 @@ from collections.abc import Callable
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from arden.agent import Role
+from arden.agent.types.llm import provider_tool_calls_from_history
 from arden.areas.triage import TriageDecision, triage_chat
 from arden.constants import (
     COMPRESSION_TOKEN_HEADROOM,
@@ -275,28 +276,18 @@ def _history_tool_calls(
     outcomes: dict[str, dict] | None = None,
 ) -> list[dict]:
     tool_calls = []
-    raw_provider_calls = msg.get("provider_tool_calls") or []
-    if isinstance(raw_provider_calls, list):
-        for tc in raw_provider_calls:
-            if not isinstance(tc, dict):
-                continue
-            call_id = tc.get("id")
-            name = tc.get("name")
-            if not isinstance(call_id, str) or not isinstance(name, str):
-                continue
-            arguments = tc.get("arguments", "{}")
-            result = tc.get("result", "")
-            item = {
-                "id": call_id,
-                "name": name,
-                "arguments": arguments if isinstance(arguments, str) else "{}",
-                "kind": "tool",
-                "display_name": "Search Tools" if name == "tool_search" else name,
-                "result": result if isinstance(result, str) else "",
-            }
-            if outcomes and call_id in outcomes:
-                item["outcome"] = outcomes[call_id]
-            tool_calls.append(item)
+    for call in provider_tool_calls_from_history(msg):
+        item = {
+            "id": call.id,
+            "name": call.name,
+            "arguments": call.arguments_json(),
+            "kind": "tool",
+            "display_name": "Search Tools" if call.name == "tool_search" else call.name,
+            "result": call.result,
+        }
+        if outcomes and call.id in outcomes:
+            item["outcome"] = outcomes[call.id]
+        tool_calls.append(item)
     raw_tool_calls = msg.get("tool_calls") or []
     if not isinstance(raw_tool_calls, list):
         raw_tool_calls = []

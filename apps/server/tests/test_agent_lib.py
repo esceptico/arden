@@ -380,7 +380,7 @@ async def test_provider_tool_call_renders_without_executor_dispatch():
                     ProviderToolCall(
                         id="tsc_1",
                         name="tool_search",
-                        arguments='{"query":"slack"}',
+                        arguments={"query": "slack"},
                         result='[{"name":"slack_search"}]',
                     )
                 ],
@@ -404,6 +404,17 @@ async def test_provider_tool_call_renders_without_executor_dispatch():
     assert executor.call_log == []
 
 
+def test_provider_tool_call_freezes_nested_arguments():
+    source = {"query": {"paths": ["slack"]}}
+    call = ProviderToolCall(id="tsc_1", name="tool_search", arguments=source)
+
+    source["query"]["paths"].append("email")
+
+    assert call.arguments_dict() == {"query": {"paths": ["slack"]}}
+    with pytest.raises(TypeError):
+        call.arguments["query"] = "changed"
+
+
 @pytest.mark.asyncio
 async def test_streamed_provider_tool_call_keeps_trace_order_before_loaded_tool():
     class StreamingProviderToolLLM:
@@ -415,7 +426,8 @@ async def test_streamed_provider_tool_call_keeps_trace_order_before_loaded_tool(
             if self.call_count > 1:
                 yield _response(text="done")
                 return
-            yield ProviderToolCall(id="tsc_1", name="tool_search", arguments="{}", done=False)
+            yield ProviderToolCall(id="tsc_1", name="tool_search", arguments={}, done=False)
+            yield ProviderToolCall(id="tsc_1", name="tool_search", arguments={"paths": ["test"]}, done=True)
             yield ToolCallStreamDelta(index=0, tool_id="call_1", name="test")
             yield ToolCallStreamDelta(index=0, arguments_delta='{"x":1}')
             yield ToolCallStreamDelta(index=0, tool_id="call_1", name="test", done=True)
@@ -424,8 +436,9 @@ async def test_streamed_provider_tool_call_keeps_trace_order_before_loaded_tool(
                     ProviderToolCall(
                         id="tsc_1",
                         name="tool_search",
-                        arguments='{"tools":["test"]}',
+                        arguments={"tools": ["test"]},
                         result="Matched tools: test",
+                        loaded_tool_names=("test",),
                     )
                 ],
                 tool_calls=[_tc("call_1", "test", {"x": 1})],
@@ -440,9 +453,11 @@ async def test_streamed_provider_tool_call_keeps_trace_order_before_loaded_tool(
     events = [e async for e in agent.stream(_msgs())]
     started_names = [e.name for e in events if e.__class__.__name__ in {"ToolStarted", "ToolInputStarted"}]
     completed = [e for e in events if isinstance(e, ToolCompleted)]
+    provider_completed = [event for event in completed if event.tool_id == "tsc_1"]
 
     assert started_names[:2] == ["tool_search", "test"]
-    assert [e for e in completed if e.tool_id == "tsc_1"][-1].result == "Matched tools: test"
+    assert len(provider_completed) == 1
+    assert provider_completed[0].result == "Matched tools: test"
 
 
 @pytest.mark.asyncio
