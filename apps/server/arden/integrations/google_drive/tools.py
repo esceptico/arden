@@ -1,18 +1,22 @@
 import json
-from datetime import datetime
-from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
-
-from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
-from arden.integrations.google_drive.client import DriveFile, MultiGoogleDriveClient
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title, normalize_source_refs
+from arden.integrations.google_drive.client import MultiGoogleDriveClient
+from arden.integrations.google_drive.inputs import (
+    DriveCreateDocInput,
+    DriveCreateSheetInput,
+    DriveEditDocInput,
+    DriveReadDocInput,
+    DriveReadSheetInput,
+    DriveSearchInput,
+    SheetWriteInput,
+)
+from arden.integrations.google_drive.models import DriveFile
 from arden.integrations.mutations import execute_idempotent, mutation_result
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
-
-CellValue = str | int | float | bool | None
 
 
 def _drive(execution: ToolExecution) -> MultiGoogleDriveClient:
@@ -26,41 +30,53 @@ def _source_ref(file: DriveFile):
                 provider="google_drive",
                 kind=file.kind,
                 ref=file.ref,
-                title=file.name,
+                title=canonical_source_title(file.name, fallback=file.ref),
                 url=file.url,
             ),
         )
     )
 
 
-class DriveSearchInput(BaseModel):
-    query: str = Field(default="", max_length=500)
-    kind: Literal["all", "doc", "sheet"] = "all"
-    account: str | None = None
-    limit: int = Field(default=20, ge=1, le=100)
-
-
 async def drive_search(execution: ToolExecution, args: DriveSearchInput) -> ToolResult:
-    items = _drive(execution).search(args.query, kind=args.kind, account_id=args.account, limit=args.limit)
+    page = _drive(execution).search(
+        args.query,
+        kind=args.kind,
+        account_ref=args.account,
+        limit=args.limit,
+        page_ref=args.page_ref,
+    )
+    items = page.files
     if not items:
-        return ToolResult(content="No matching Google Docs or Sheets", preview="0 files")
+        continuation = ""
+        if page.next_page_ref is not None:
+            continuation = f"\nMore files exist. Continue with page_ref: {page.next_page_ref.encode()}"
+        return ToolResult(
+            content="No matching Google Docs or Sheets" + continuation,
+            preview="0 files" + (" (more available)" if page.has_more else ""),
+            data={
+                "count": 0,
+                "next_page_ref": page.next_page_ref.encode() if page.next_page_ref is not None else None,
+                "incomplete_search": page.incomplete_search,
+            },
+        )
     lines = []
     for item in items:
         modified = ""
-        if item.modified_time:
-            modified = (
-                f" · modified {format_timestamp(datetime.fromisoformat(item.modified_time.replace('Z', '+00:00')))}"
-            )
+        if item.modified_at is not None:
+            modified = f" · modified {format_timestamp(item.modified_at)}"
         lines.append(f"• {item.name} ({item.kind}) ref: {item.ref}{modified}")
-    may_have_more = len(items) == args.limit
+    may_have_more = page.has_more
     if may_have_more:
-        lines.append(f"Showing {args.limit} files; more may exist. Narrow the query to continue.")
+        next_page_ref = page.next_page_ref.encode()
+        lines.append(f"More files exist. Continue with page_ref: {next_page_ref}")
+    if page.incomplete_search:
+        lines.append("Google reported an incomplete search. Select one account or narrow the query.")
     refs = normalize_source_refs(
         ToolSourceRef(
             provider="google_drive",
             kind=item.kind,
             ref=item.ref,
-            title=item.name,
+            title=canonical_source_title(item.name, fallback=item.ref),
             url=item.url,
         )
         for item in items
@@ -68,16 +84,12 @@ async def drive_search(execution: ToolExecution, args: DriveSearchInput) -> Tool
     return ToolResult(
         content="\n".join(lines),
         preview=f"{len(items)} files" + (" (possibly capped)" if may_have_more else ""),
-        data={"count": len(items), "may_have_more": may_have_more},
+        data={
+            "count": len(items),
+            "next_page_ref": page.next_page_ref.encode() if page.next_page_ref is not None else None,
+            "incomplete_search": page.incomplete_search,
+        },
         source_refs=refs,
-    )
-
-
-class DriveReadDocInput(BaseModel):
-    document_ref: str = Field(
-        min_length=1,
-        max_length=500,
-        description="Exact account-qualified document ref returned by drive_search or drive_create_doc.",
     )
 
 
@@ -89,15 +101,6 @@ async def drive_read_doc(execution: ToolExecution, args: DriveReadDocInput) -> T
         preview=document.file.name,
         source_refs=_source_ref(document.file),
     )
-
-
-class DriveReadSheetInput(BaseModel):
-    spreadsheet_ref: str = Field(
-        min_length=1,
-        max_length=500,
-        description="Exact account-qualified spreadsheet ref returned by drive_search or drive_create_sheet.",
-    )
-    range: str = Field(default="A1:Z200", min_length=1, max_length=200)
 
 
 async def drive_read_sheet(execution: ToolExecution, args: DriveReadSheetInput) -> ToolResult:
@@ -113,15 +116,11 @@ async def drive_read_sheet(execution: ToolExecution, args: DriveReadSheetInput) 
     )
 
 
-class DriveCreateDocInput(BaseModel):
-    title: str = Field(min_length=1, max_length=300)
-    account: str | None = None
-    idempotency_key: str = Field(min_length=8, max_length=200)
-
-
 async def drive_create_doc(execution: ToolExecution, args: DriveCreateDocInput) -> ToolResult:
+    client = _drive(execution).select_account(args.account)
+
     async def invoke() -> ToolResult:
-        document = _drive(execution).select_account(args.account).create_doc(args.title)
+        document = client.create_doc(args.title)
         return mutation_result(
             content=f"Created {document.name}: {document.url}\nref: {document.ref}",
             preview="Created document",
@@ -135,7 +134,7 @@ async def drive_create_doc(execution: ToolExecution, args: DriveCreateDocInput) 
 
     return await execute_idempotent(
         execution,
-        namespace=f"drive:create_doc:{args.account or 'default'}",
+        namespace=f"drive:create_doc:{client.account_ref}",
         idempotency_key=args.idempotency_key,
         payload=args.model_dump(exclude={"idempotency_key"}),
         invoke=invoke,
@@ -144,24 +143,6 @@ async def drive_create_doc(execution: ToolExecution, args: DriveCreateDocInput) 
 
 async def approve_drive_create_doc(_execution: ToolExecution, args: DriveCreateDocInput) -> ApprovalInfo:
     return ApprovalInfo(description=args.title, preview="Create empty document", diff=None)
-
-
-class DriveEditDocInput(BaseModel):
-    document_ref: str = Field(
-        min_length=1,
-        max_length=500,
-        description="Exact account-qualified document ref returned by a Drive tool.",
-    )
-    operation: Literal["append", "replace_all"]
-    text: str = Field(max_length=100_000)
-    match: str | None = Field(default=None, max_length=10_000)
-    idempotency_key: str = Field(min_length=8, max_length=200)
-
-    @model_validator(mode="after")
-    def require_match(self):
-        if self.operation == "replace_all" and not self.match:
-            raise ValueError("replace_all requires match")
-        return self
 
 
 async def drive_edit_doc(execution: ToolExecution, args: DriveEditDocInput) -> ToolResult:
@@ -193,15 +174,11 @@ async def approve_drive_edit_doc(_execution: ToolExecution, args: DriveEditDocIn
     return ApprovalInfo(description=args.document_ref, preview=change[:1500], diff=None)
 
 
-class DriveCreateSheetInput(BaseModel):
-    title: str = Field(min_length=1, max_length=300)
-    account: str | None = None
-    idempotency_key: str = Field(min_length=8, max_length=200)
-
-
 async def drive_create_sheet(execution: ToolExecution, args: DriveCreateSheetInput) -> ToolResult:
+    client = _drive(execution).select_account(args.account)
+
     async def invoke() -> ToolResult:
-        spreadsheet = _drive(execution).select_account(args.account).create_sheet(args.title)
+        spreadsheet = client.create_sheet(args.title)
         return mutation_result(
             content=f"Created {spreadsheet.name}: {spreadsheet.url}\nref: {spreadsheet.ref}",
             preview="Created spreadsheet",
@@ -215,7 +192,7 @@ async def drive_create_sheet(execution: ToolExecution, args: DriveCreateSheetInp
 
     return await execute_idempotent(
         execution,
-        namespace=f"drive:create_sheet:{args.account or 'default'}",
+        namespace=f"drive:create_sheet:{client.account_ref}",
         idempotency_key=args.idempotency_key,
         payload=args.model_dump(exclude={"idempotency_key"}),
         invoke=invoke,
@@ -226,30 +203,18 @@ async def approve_drive_create_sheet(_execution: ToolExecution, args: DriveCreat
     return ApprovalInfo(description=args.title, preview="Create empty spreadsheet", diff=None)
 
 
-class SheetWriteInput(BaseModel):
-    spreadsheet_ref: str = Field(
-        min_length=1,
-        max_length=500,
-        description="Exact account-qualified spreadsheet ref returned by a Drive tool.",
-    )
-    range: str = Field(min_length=1, max_length=200)
-    values: list[list[CellValue]] = Field(min_length=1, max_length=500)
-    value_input_option: Literal["RAW", "USER_ENTERED"] = "USER_ENTERED"
-    idempotency_key: str = Field(min_length=8, max_length=200)
-
-
 async def drive_update_sheet(execution: ToolExecution, args: SheetWriteInput) -> ToolResult:
     async def invoke() -> ToolResult:
         client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
         receipt = client.update_sheet(spreadsheet_id, args.range, args.values, args.value_input_option)
         return mutation_result(
-            content=f"Updated {args.spreadsheet_ref} range {args.range}",
+            content=f"Updated {receipt.file_ref} range {args.range}",
             preview="Updated cells",
             operation="update",
             target=f"{args.spreadsheet_ref}:{args.range}",
             receipt=receipt.acknowledged_range,
             before_ref=args.spreadsheet_ref,
-            after_ref=args.spreadsheet_ref,
+            after_ref=receipt.file_ref,
             observed=f"Drive acknowledged {receipt.acknowledged_range}",
         )
 
@@ -267,13 +232,13 @@ async def drive_append_sheet_rows(execution: ToolExecution, args: SheetWriteInpu
         client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
         receipt = client.append_sheet_rows(spreadsheet_id, args.range, args.values, args.value_input_option)
         return mutation_result(
-            content=f"Appended rows to {args.spreadsheet_ref} range {args.range}",
+            content=f"Appended rows to {receipt.file_ref} range {args.range}",
             preview="Appended rows",
             operation="append",
             target=f"{args.spreadsheet_ref}:{args.range}",
             receipt=receipt.acknowledged_range,
             before_ref=args.spreadsheet_ref,
-            after_ref=args.spreadsheet_ref,
+            after_ref=receipt.file_ref,
             observed=f"Drive acknowledged append to {receipt.acknowledged_range}",
         )
 
@@ -315,7 +280,13 @@ def _policy(
 
 drive_search_tool = tool(
     display_name="Search Google Drive",
-    description="Search connected Google Docs and Sheets.",
+    description=(
+        "Search connected Google Docs and Sheets. Start with a query; optionally select one "
+        "connected account. Results include account-qualified file refs. If the result says "
+        "more files exist, call this tool again with only its exact page_ref; it preserves the "
+        "original account, query, type, and limit. Read files before editing. All writes require "
+        "approval preview and an idempotency_key; inspect the returned receipt to verify the change."
+    ),
     input_model=DriveSearchInput,
     policy=_policy(ToolAction.READ),
     execute=drive_search,
