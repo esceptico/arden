@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { sendMessage } from "@/actions/messages";
-import { archiveArea, goToNewSessionHome } from "@/actions/sessions";
+import { archiveArea, archiveSession, goToNewSessionHome } from "@/actions/sessions";
 import { getState, setState } from "@/stores";
 
 const requests: Array<{ path: string; method: string; body?: string }> = [];
@@ -208,6 +208,27 @@ test("archiving the pending Area moves the draft to Inbox", async () => {
 
   expect(getState().pendingNewChatAreaId).toBeNull();
   expect(getState().pendingNewChatDraftId).toBe(draftId + 1);
+});
+
+test("archiving the final chat opens an unpersisted draft", async () => {
+  setState({
+    currentSessionId: "session-1",
+    sessions: [
+      {
+        session_id: "session-1",
+        started_at: "",
+        last_activity: "",
+        name: "Only chat",
+        message_count: 1,
+      },
+    ],
+  });
+
+  await archiveSession("session-1");
+
+  expect(requests.some((request) => request.path === "/sessions" && request.method === "POST")).toBe(false);
+  expect(getState().currentSessionId).toBeNull();
+  expect(getState().pendingNewChatAreaId).toBeNull();
 });
 
 test("every explicit New Chat entry point routes to the lazy draft", () => {

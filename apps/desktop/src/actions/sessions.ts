@@ -157,7 +157,7 @@ export async function archiveSession(sessionId: string): Promise<void> {
     if (remaining.length > 0) {
       await switchSession(remaining[0].session_id);
     } else {
-      await createSession();
+      goToNewSessionHome();
     }
   }
 }
