@@ -28,6 +28,15 @@ import { createBackgroundAgentsDomainState } from "@/stores/background-agent-dom
 import type { HistoryMessage } from "@/api/chat";
 import type { SourceRef, UiMessage } from "@/stores/types";
 
+const CONTEXT_BUDGET = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
+
 beforeEach(() => {
   resetStreamStateForTest();
   resetEventSeqStateForTest();
@@ -535,7 +544,7 @@ test("replace loadHistory preserves event cursor for reconnect after canonical r
           status: 200,
           statusText: "OK",
           contentType: "application/json",
-          data: { messages: [], active_run_id: null },
+          data: { messages: [], active_run_id: null, context_budget: CONTEXT_BUDGET },
           text: "",
         }),
       },
@@ -608,7 +617,7 @@ test("rebuilds persisted transcript without replay animation marker", async () =
             status: 200,
             statusText: "OK",
             contentType: "application/json",
-            data: { messages, active_run_id: null },
+            data: { messages, active_run_id: null, context_budget: CONTEXT_BUDGET },
             text: "",
           }),
         },
@@ -954,6 +963,7 @@ test("active history hydrates old calls as executed and new tail as ongoing", as
               { role: "tool", content: "ok", id: "old-tool-result-2", tool_call_id: "old-tool-2" },
             ],
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "active-trace-status-session",
               latest_event_seq: 10,
@@ -1719,7 +1729,7 @@ test("stream_reset keeps tail blocked when history reload fails", async () => {
           status: 200,
           statusText: "OK",
           contentType: "application/json",
-          data: { messages: [], active_run_id: null },
+          data: { messages: [], active_run_id: null, context_budget: CONTEXT_BUDGET },
           text: "",
         }),
       },
@@ -2435,7 +2445,7 @@ test("loadHistory restores currentRunId for active sessions", async () => {
           status: 200,
           statusText: "OK",
           contentType: "application/json",
-          data: { messages: [], active_run_id: "active-run-1" },
+          data: { messages: [], active_run_id: "active-run-1", context_budget: CONTEXT_BUDGET },
           text: "",
         }),
       },
@@ -2490,6 +2500,7 @@ test("loadHistory lets replayed tools continue the active trailing history group
           data: {
             messages,
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "active-history-session",
               latest_event_seq: 10,
@@ -2569,6 +2580,7 @@ test("loadHistory starts replayed tools after a trailing hidden meta boundary", 
           data: {
             messages,
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "active-hidden-meta-session",
               latest_event_seq: 10,
@@ -2657,6 +2669,7 @@ test("live tools keep appending after canonical reload merged hidden-split activ
           data: {
             messages,
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "active-reload-session",
               latest_event_seq: 20,
