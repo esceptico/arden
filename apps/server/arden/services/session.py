@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from arden.agent.types.tools import ToolSourceRef
 from arden.context.models import SessionData, SessionHistoryHeader, SessionState
 from arden.context.store import AREA_FILTER_UNSET, SessionStore
 from arden.core.compactor import compact_messages, compactable_range
@@ -65,10 +66,7 @@ class SessionService:
     async def _publish(self, event: SSEEvent) -> None:
         if self._event_sink is None:
             return
-        try:
-            await self._event_sink(event)
-        except Exception:
-            _logger.debug("Failed to publish session event", exc_info=True)
+        await self._event_sink(event)
 
     def _lock_for(self, session_id: str) -> asyncio.Lock:
         lock = self._locks.get(session_id)
@@ -171,7 +169,7 @@ class SessionService:
             area_id=area_id,
             chat_model=chat_model,
         )
-        created = await self.store.create_session_if_absent(state)
+        state, created = await self.store.create_session_if_absent(state)
         if created and announce:
             await self.announce_created(state)
         return state, created
@@ -217,24 +215,16 @@ class SessionService:
         messages: list[dict],
         metadata: dict | None = None,
     ) -> None:
-        try:
-            session_state.last_activity = datetime.now(UTC)
-            async with self._lock_for(session_state.session_id):
-                await self.store.save_session(session_state, messages, metadata=metadata)
-        except Exception as e:
-            _logger.warning("Failed to save session: %s", e)
-            raise
+        session_state.last_activity = datetime.now(UTC)
+        async with self._lock_for(session_state.session_id):
+            await self.store.save_session(session_state, messages, metadata=metadata)
         await self._announce_activity(session_state, messages)
 
     async def save_progress(self, session_state: SessionState, messages: list[dict]) -> None:
         """Mid-run checkpoint — upserts messages, leaves metadata alone."""
-        try:
-            session_state.last_activity = datetime.now(UTC)
-            async with self._lock_for(session_state.session_id):
-                await self.store.update_progress(session_state, messages)
-        except Exception as e:
-            _logger.warning("Failed to save mid-run progress: %s", e)
-            raise
+        session_state.last_activity = datetime.now(UTC)
+        async with self._lock_for(session_state.session_id):
+            await self.store.update_progress(session_state, messages)
         await self._announce_activity(session_state, messages)
 
     async def clear_context(self, data: SessionData) -> bool:
@@ -284,11 +274,7 @@ class SessionService:
         await self._publish(SessionCreatedEvent(session=session_row(session_state, message_count)))
 
     async def record_chat_run_started(self, run_id: str, session_id: str, metadata: dict | None = None) -> None:
-        try:
-            await self.store.record_chat_run_started(run_id, session_id, metadata=metadata)
-        except Exception as e:
-            _logger.warning("Failed to record chat run start: %s", e)
-            raise
+        await self.store.record_chat_run_started(run_id, session_id, metadata=metadata)
 
     async def claim_chat_idempotency_key(
         self,
@@ -332,18 +318,14 @@ class SessionService:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
-        try:
-            await self.store.record_chat_run_status(
-                run_id,
-                status,
-                stop_reason=stop_reason,
-                last_seq=last_seq,
-                error_code=error_code,
-                error_message=error_message,
-            )
-        except Exception as e:
-            _logger.warning("Failed to record chat run status: %s", e)
-            raise
+        await self.store.record_chat_run_status(
+            run_id,
+            status,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+            error_code=error_code,
+            error_message=error_message,
+        )
 
     async def record_chat_run_completed_with_outbox(
         self,
@@ -381,12 +363,17 @@ class SessionService:
         *,
         run_id: str,
         session_id: str,
-        source_refs: list[dict],
+        source_refs: tuple[ToolSourceRef, ...],
     ) -> dict:
+        if not isinstance(source_refs, tuple) or any(
+            not isinstance(source_ref, ToolSourceRef) for source_ref in source_refs
+        ):
+            raise TypeError("run evidence source references must be ToolSourceRef values")
+        serialized_refs = [ref.to_dict() for ref in source_refs]
         return await self.store.record_run_evidence(
             run_id=run_id,
             session_id=session_id,
-            source_refs=source_refs,
+            source_refs=serialized_refs,
         )
 
     async def record_run_context_manifest(
@@ -411,17 +398,13 @@ class SessionService:
         message: dict,
         enqueued_seq: int | None = None,
     ) -> str:
-        try:
-            return await self.store.record_chat_queued_message(
-                client_id=client_id,
-                session_id=session_id,
-                run_id=run_id,
-                message=message,
-                enqueued_seq=enqueued_seq,
-            )
-        except Exception as e:
-            _logger.warning("Failed to record queued chat message: %s", e)
-            raise
+        return await self.store.record_chat_queued_message(
+            client_id=client_id,
+            session_id=session_id,
+            run_id=run_id,
+            message=message,
+            enqueued_seq=enqueued_seq,
+        )
 
     async def cancel_chat_queued_message(
         self,
@@ -430,29 +413,17 @@ class SessionService:
         client_id: str,
         run_id: str | None = None,
     ) -> str:
-        try:
-            return await self.store.cancel_chat_queued_message(
-                session_id=session_id,
-                client_id=client_id,
-                run_id=run_id,
-            )
-        except Exception as e:
-            _logger.warning("Failed to cancel queued chat message: %s", e)
-            raise
+        return await self.store.cancel_chat_queued_message(
+            session_id=session_id,
+            client_id=client_id,
+            run_id=run_id,
+        )
 
     async def mark_chat_queued_message_ingested(self, client_id: str, ingested_seq: int | None = None) -> None:
-        try:
-            await self.store.mark_chat_queued_message_ingested(client_id, ingested_seq=ingested_seq)
-        except Exception as e:
-            _logger.warning("Failed to mark queued chat message ingested: %s", e)
-            raise
+        await self.store.mark_chat_queued_message_ingested(client_id, ingested_seq=ingested_seq)
 
     async def mark_chat_queued_message_cancelled(self, client_id: str) -> None:
-        try:
-            await self.store.mark_chat_queued_message_cancelled(client_id)
-        except Exception as e:
-            _logger.warning("Failed to mark queued chat message cancelled: %s", e)
-            raise
+        await self.store.mark_chat_queued_message_cancelled(client_id)
 
     async def record_chat_compaction(
         self,
@@ -464,91 +435,48 @@ class SessionService:
         messages_after: int,
         rehydration_state: dict | None = None,
     ) -> None:
-        try:
-            await self.store.record_chat_compaction(
-                compaction_id=compaction_id,
-                session_id=session_id,
-                boundary_seq=boundary_seq,
-                messages_before=messages_before,
-                messages_after=messages_after,
-                rehydration_state=rehydration_state,
-            )
-        except Exception as e:
-            _logger.warning("Failed to record chat compaction: %s", e)
+        await self.store.record_chat_compaction(
+            compaction_id=compaction_id,
+            session_id=session_id,
+            boundary_seq=boundary_seq,
+            messages_before=messages_before,
+            messages_after=messages_after,
+            rehydration_state=rehydration_state,
+        )
 
     async def set_goal(self, session_id: str, objective: str, token_budget: int | None = None) -> dict | None:
-        try:
-            return await self.store.set_goal(session_id, objective, token_budget=token_budget)
-        except Exception as e:
-            _logger.warning("Failed to set goal: %s", e)
-            return None
+        return await self.store.set_goal(session_id, objective, token_budget=token_budget)
 
     async def get_goal(self, session_id: str) -> dict | None:
-        try:
-            return await self.store.get_goal(session_id)
-        except Exception as e:
-            _logger.warning("Failed to load goal: %s", e)
-            return None
+        return await self.store.get_goal(session_id)
 
     async def update_goal(self, session_id: str, **kwargs) -> dict | None:
-        try:
-            return await self.store.update_goal(session_id, **kwargs)
-        except Exception as e:
-            _logger.warning("Failed to update goal: %s", e)
-            return None
+        return await self.store.update_goal(session_id, **kwargs)
 
     async def clear_goal(self, session_id: str) -> bool:
-        try:
-            return await self.store.clear_goal(session_id)
-        except Exception as e:
-            _logger.warning("Failed to clear goal: %s", e)
-            return False
+        return await self.store.clear_goal(session_id)
 
     async def set_todo_override(
         self, session_id: str, items: list[dict], explanation: str | None = None
     ) -> dict | None:
-        try:
-            return await self.store.set_todo_override(session_id, items, explanation)
-        except Exception as e:
-            _logger.warning("Failed to set todo override: %s", e)
-            return None
+        return await self.store.set_todo_override(session_id, items, explanation)
 
     async def get_todo_override(self, session_id: str) -> dict | None:
-        try:
-            return await self.store.get_todo_override(session_id)
-        except Exception as e:
-            _logger.warning("Failed to load todo override: %s", e)
-            return None
+        return await self.store.get_todo_override(session_id)
 
     async def clear_todo_override(self, session_id: str) -> bool:
-        try:
-            return await self.store.clear_todo_override(session_id)
-        except Exception as e:
-            _logger.warning("Failed to clear todo override: %s", e)
-            return False
+        return await self.store.clear_todo_override(session_id)
 
     async def set_session_todos(
         self, session_id: str, items: list[dict], explanation: str | None = None
     ) -> dict | None:
-        try:
-            return await self.store.set_session_todos(session_id, items, explanation)
-        except Exception as e:
-            _logger.warning("Failed to set session todos: %s", e)
-            return None
+        return await self.store.set_session_todos(session_id, items, explanation)
 
     async def get_session_todos(self, session_id: str) -> dict | None:
-        try:
-            return await self.store.get_session_todos(session_id)
-        except Exception as e:
-            _logger.warning("Failed to load session todos: %s", e)
-            return None
+        return await self.store.get_session_todos(session_id)
 
     async def clear_session_todos(self, session_id: str) -> bool:
-        try:
-            return await self.store.clear_session_todos(session_id)
-        except Exception as e:
-            _logger.warning("Failed to clear session todos: %s", e)
-            return False
+        return await self.store.clear_session_todos(session_id)
 
     async def list_sessions(
         self,

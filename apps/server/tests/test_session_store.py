@@ -239,180 +239,11 @@ async def test_area_page_has_one_owner_including_archived_areas(store: SessionSt
         await store.update_area(second["area_id"], page_path="topics/health.md")
 
 
-async def _legacy_area_store(tmp_path: Path, rows: list[tuple], *, with_ref: bool = False):
-    db = tmp_path / "legacy-area-refs.db"
-    conn = await database.connect(db)
-    ref_column = ", area_ref TEXT" if with_ref else ""
-    await conn.executescript(
-        f"""
-        CREATE TABLE session_store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '6');
-        CREATE TABLE areas (
-            area_id TEXT PRIMARY KEY{ref_column}, name TEXT NOT NULL, name_key TEXT NOT NULL,
-            default_cwds TEXT NOT NULL DEFAULT '[]', instructions TEXT, knowledge_scope TEXT,
-            page_path TEXT, page_id TEXT, autonomy TEXT, attention TEXT, interrupts TEXT,
-            paused_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT
-        );
-        """
-    )
-    columns = (
-        "area_id, area_ref, name, name_key, knowledge_scope, created_at, updated_at"
-        if with_ref
-        else ("area_id, name, name_key, knowledge_scope, created_at, updated_at")
-    )
-    placeholders = ", ".join("?" for _ in rows[0])
-    await conn.executemany(f"INSERT INTO areas ({columns}) VALUES ({placeholders})", rows)
-    await conn.commit()
-    read_conn = await database.connect(db, readonly=True)
-    return db, conn, read_conn, SessionStore(conn, read_conn)
 
 
-@pytest.mark.asyncio
-async def test_schema_v6_backfills_area_refs_without_exposing_legacy_scope(tmp_path: Path):
-    db, conn, read_conn, store = await _legacy_area_store(
-        tmp_path,
-        [
-            ("area_internal_health", "Health", "health", "area:area_internal_health", "now", "now"),
-            ("area_internal_ops", "Ops", "ops", "custom:ops", "now", "now"),
-        ],
-    )
-
-    await store.init_schema()
-    health = await store.get_area("area_internal_health")
-    ops = await store.get_area("area_internal_ops")
-    assert health is not None and ops is not None
-    assert health["area_ref"].startswith("health~")
-    assert "knowledge_scope" not in health
-    assert "knowledge_scope" not in ops
-    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(areas)")}
-    assert "knowledge_scope" not in columns
-    assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
-        "value"
-    ] == "9"
-
-    original_ref = health["area_ref"]
-    await store.update_area(health["area_id"], name="Wellbeing")
-    await read_conn.close()
-    restarted_read = await database.connect(db, readonly=True)
-    restarted = SessionStore(conn, restarted_read)
-    await restarted.init_schema()
-    assert (await restarted.get_area(health["area_id"]))["area_ref"] == original_ref
-    await restarted_read.close()
-    await conn.close()
 
 
-@pytest.mark.asyncio
-async def test_schema_v6_rejects_blank_area_identity_transactionally(tmp_path: Path):
-    _, conn, read_conn, store = await _legacy_area_store(
-        tmp_path,
-        [("area_internal_blank", "", "", None, "now", "now")],
-    )
 
-    with pytest.raises(ValueError, match="must be non-empty"):
-        await store.init_schema()
-
-    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(areas)")}
-    assert "area_ref" not in columns
-    assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
-        "value"
-    ] == "6"
-    await read_conn.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_schema_v6_rejects_area_ref_collisions(tmp_path: Path):
-    _, conn, read_conn, store = await _legacy_area_store(
-        tmp_path,
-        [
-            ("area_a", "same~111111", "A", "a", None, "now", "now"),
-            ("area_b", "same~111111", "B", "b", None, "now", "now"),
-        ],
-        with_ref=True,
-    )
-
-    with pytest.raises(RuntimeError, match="collision"):
-        await store.init_schema()
-
-    assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
-        "value"
-    ] == "6"
-    await read_conn.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_area_schema_migrates_existing_sessions_table(tmp_path: Path):
-    conn = await database.connect(tmp_path / "legacy-areas.db")
-    read_conn = await database.connect(tmp_path / "legacy-areas.db", readonly=True)
-    await conn.executescript(
-        """
-        CREATE TABLE sessions (
-            session_id TEXT PRIMARY KEY,
-            started_at TEXT NOT NULL,
-            last_activity TEXT NOT NULL,
-            messages TEXT,
-            metadata TEXT,
-            name TEXT,
-            archived_at TEXT,
-            session_type TEXT NOT NULL DEFAULT 'chat',
-            origin_automation_id TEXT
-        );
-        """
-    )
-    await conn.commit()
-
-    store = SessionStore(conn, read_conn)
-    await store.init_schema()
-
-    columns = await conn.execute_fetchall("PRAGMA table_info(sessions)")
-    indexes = await conn.execute_fetchall("PRAGMA index_list(sessions)")
-    column_names = {row["name"] for row in columns}
-    assert "area_id" in column_names
-    assert "parent_session_id" in column_names
-    assert "parent_tool_call_id" in column_names
-    assert "agent_type" in column_names
-    assert "agent_status" in column_names
-    index_names = {row["name"] for row in indexes}
-    assert "idx_sessions_area_activity" in index_names
-    assert "idx_sessions_parent_activity" in index_names
-
-    await read_conn.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_tool_results_schema_migrates_legacy_table(tmp_path: Path):
-    conn = await database.connect(tmp_path / "legacy-tool-results.db")
-    read_conn = await database.connect(tmp_path / "legacy-tool-results.db", readonly=True)
-    await conn.executescript(
-        """
-        CREATE TABLE tool_results (
-            content_hash TEXT PRIMARY KEY,
-            content TEXT NOT NULL,
-            byte_len INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        INSERT INTO tool_results (content_hash, content, byte_len, created_at)
-        VALUES ('abc', 'legacy raw', 10, '2026-01-01T00:00:00+00:00');
-        """
-    )
-    await conn.commit()
-
-    store = SessionStore(conn, read_conn)
-    await store.init_schema()
-
-    columns = await conn.execute_fetchall("PRAGMA table_info(tool_results)")
-    column_names = {row["name"] for row in columns}
-    assert "tool_result_id" in column_names
-    assert "content_bytes" in column_names
-    assert "blob_path" in column_names
-
-    legacy_rows = await conn.execute_fetchall("SELECT content_hash, content FROM tool_results_legacy")
-    assert [(row["content_hash"], row["content"]) for row in legacy_rows] == [("abc", "legacy raw")]
-
-    await read_conn.close()
-    await conn.close()
 
 
 @pytest.mark.asyncio
@@ -1390,56 +1221,6 @@ async def test_list_interrupted_chat_runs_returns_restart_candidates(store: Sess
     assert resumed["ended_at"] is None
 
 
-@pytest.mark.asyncio
-async def test_tool_call_schema_migrates_single_column_primary_key(tmp_path):
-    conn = await database.connect(tmp_path / "legacy_sessions.db")
-    await conn.executescript(
-        """
-        CREATE TABLE tool_calls (
-            run_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            tool_call_id TEXT PRIMARY KEY,
-            tool_name TEXT NOT NULL,
-            action TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            args_hash TEXT,
-            status TEXT NOT NULL,
-            result_preview TEXT,
-            started_at TEXT NOT NULL,
-            ended_at TEXT
-        );
-        INSERT INTO tool_calls (
-            run_id, session_id, tool_call_id, tool_name, action, scope,
-            args_hash, status, result_preview, started_at, ended_at
-        )
-        VALUES (
-            'run-old', 's-old', 'call-1', 'read_state', 'read', 'internal',
-            'oldhash', 'success', 'ok', '2026-05-16T00:00:00+00:00', NULL
-        );
-        """
-    )
-    await conn.commit()
-    store = SessionStore(conn)
-
-    try:
-        await store.init_schema()
-        await store.record_tool_call_started(
-            run_id="run-new",
-            session_id="s-new",
-            tool_call_id="call-1",
-            tool_name="read_state",
-            action="read",
-            scope="internal",
-            args_hash="newhash",
-        )
-
-        old_rows = await store.list_tool_calls(run_id="run-old")
-        new_rows = await store.list_tool_calls(run_id="run-new")
-        assert old_rows[0]["args_hash"] == "oldhash"
-        assert new_rows[0]["args_hash"] == "newhash"
-    finally:
-        await conn.close()
-
 
 @pytest.mark.asyncio
 async def test_latest_session_checkpoint_uses_chat_run_last_seq(store: SessionStore):
@@ -1795,543 +1576,15 @@ async def test_awaited_child_completion_atomically_resolves_parent_suspension(st
     assert suspension["resolution"] == {"status": "completed", "result": "child result"}
 
 
-@pytest.mark.asyncio
-async def test_background_agent_schema_migrates_old_task_id_primary_key(tmp_path: Path):
-    conn = await database.connect(tmp_path / "old-sessions.db")
-    read_conn = await database.connect(tmp_path / "old-sessions.db", readonly=True)
-    await conn.execute(
-        """
-        CREATE TABLE background_agent_runs (
-            task_id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            parent_run_id TEXT,
-            status TEXT NOT NULL,
-            command TEXT NOT NULL,
-            detail TEXT,
-            result_ref TEXT,
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            updated_at TEXT NOT NULL,
-            ended_at TEXT,
-            cancel_requested_at TEXT,
-            notified_at TEXT
-        )
-        """
-    )
-    await conn.execute(
-        """
-        INSERT INTO background_agent_runs (
-            task_id, session_id, parent_run_id, status, command,
-            created_at, started_at, updated_at
-        )
-        VALUES ('bg-1', 'sess-1', 'run-1', 'running', 'old', 'now', 'now', 'now')
-        """
-    )
-    await conn.commit()
-
-    s = SessionStore(conn, read_conn)
-    await s.init_schema()
-    await s.record_background_agent_started(
-        task_id="bg-1",
-        agent_ref=_agent_ref("sess-2", "bg-1", "new"),
-        session_id="sess-2",
-        parent_run_id="run-2",
-        command="new",
-    )
-    await s.record_background_agent_finished(
-        task_id="bg-1",
-        session_id="sess-2",
-        status="completed",
-        result_text="result",
-    )
-
-    assert (await s.list_background_agent_runs("sess-1"))[0]["command"] == "old"
-    assert (await s.list_background_agent_runs("sess-2"))[0]["command"] == "new"
-    migrated = (await s.list_background_agent_runs("sess-1"))[0]
-    assert migrated["child_run_id"] == "bg-1"
-    assert migrated["parent_tool_call_id"] is None
-    assert migrated["agent_type"] == "background_research"
-    assert migrated["wait"] is False
-    assert await s.get_background_agent_result("sess-2", "bg-1") == "result"
-
-    await read_conn.close()
-    await conn.close()
 
 
-@pytest.mark.asyncio
-async def test_schema_v7_backfills_session_and_agent_refs(tmp_path: Path):
-    db = tmp_path / "v7-session-refs.db"
-    conn = await database.connect(db)
-    await conn.executescript(
-        """
-        CREATE TABLE session_store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '7');
-        CREATE TABLE sessions (
-            session_id TEXT PRIMARY KEY,
-            started_at TEXT NOT NULL,
-            last_activity TEXT NOT NULL,
-            last_accessed_at TEXT,
-            messages TEXT,
-            metadata TEXT,
-            name TEXT,
-            archived_at TEXT,
-            session_type TEXT NOT NULL DEFAULT 'chat',
-            origin_automation_id TEXT,
-            parent_session_id TEXT,
-            parent_tool_call_id TEXT,
-            agent_type TEXT,
-            agent_status TEXT,
-            area_id TEXT,
-            chat_model TEXT,
-            context_generation INTEGER NOT NULL DEFAULT 0,
-            active_message_count INTEGER NOT NULL DEFAULT 0,
-            storage_state TEXT NOT NULL DEFAULT 'hot',
-            cold_bundle_path TEXT,
-            cold_bundle_sha256 TEXT,
-            cold_bundle_bytes INTEGER,
-            cold_logical_bytes INTEGER,
-            cold_message_count INTEGER,
-            cold_prose_sha256 TEXT,
-            cold_blob_hashes_json TEXT
-        );
-        CREATE TABLE background_agent_runs (
-            task_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            parent_run_id TEXT,
-            parent_tool_call_id TEXT,
-            suspension_id TEXT,
-            child_session_id TEXT,
-            agent_type TEXT NOT NULL DEFAULT 'background_research',
-            wait INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL,
-            command TEXT NOT NULL,
-            detail TEXT,
-            result_ref TEXT,
-            result_text TEXT,
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            updated_at TEXT NOT NULL,
-            ended_at TEXT,
-            cancel_requested_at TEXT,
-            cancel_actor TEXT,
-            terminal_cause TEXT,
-            cancel_generation INTEGER NOT NULL DEFAULT 0,
-            cancel_idempotency_key TEXT,
-            notified_at TEXT,
-            completion_id TEXT,
-            spawn_spec TEXT,
-            spawn_attempts INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (session_id, task_id)
-        );
-        INSERT INTO sessions (session_id, started_at, last_activity, name, session_type)
-        VALUES
-            ('parent', 'now', 'now', 'Operations', 'chat'),
-            ('channel', 'now', 'now', NULL, 'channel'),
-            ('child', 'now', 'now', 'Research child', 'agent');
-        INSERT INTO background_agent_runs (
-            task_id, session_id, child_session_id, status, command, created_at, updated_at
-        ) VALUES ('bg-1', 'parent', 'child', 'running', 'Research docs', 'now', 'now');
-        """
-    )
-    await conn.commit()
-    read_conn = await database.connect(db, readonly=True)
-    store = SessionStore(conn, read_conn)
-
-    await store.init_schema()
-
-    rows = await conn.execute_fetchall("SELECT session_id, public_ref FROM sessions ORDER BY session_id")
-    refs = {row["session_id"]: row["public_ref"] for row in rows}
-    agent_ref = _agent_ref("parent", "bg-1", "Research docs")
-    assert refs == {
-        "channel": public_ref("channel", "channel", empty_slug="channel"),
-        "child": agent_ref,
-        "parent": public_ref("Operations", "parent", empty_slug="chat"),
-    }
-    run = await store.get_background_agent_run("parent", "bg-1")
-    assert run is not None
-    assert run["agent_ref"] == agent_ref
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "9"
-
-    await read_conn.close()
-    await conn.close()
 
 
-@pytest.mark.asyncio
-async def test_schema_v8_rewrites_provider_tool_receipts(tmp_path: Path):
-    db = tmp_path / "v8-provider-receipts.db"
-    conn = await database.connect(db)
-    read_conn = await database.connect(db, readonly=True)
-    original = SessionStore(conn, read_conn)
-    await original.init_schema()
-    state = _make_state("provider-history")
-    old_message = {
-        "role": "assistant",
-        "content": "",
-        "provider_tool_calls": [
-            {
-                "id": "tsc-1",
-                "name": "tool_search",
-                "arguments": '{"tools":["emails","emails"]}',
-                "result": "Matched tools: emails",
-                "done": True,
-                "provider_item": {
-                    "id": "tsc-1",
-                    "type": "tool_search_call",
-                    "arguments": {"paths": ["emails", "read_email"]},
-                },
-            }
-        ],
-        "openai_response_items": [{"id": "opaque-1", "type": "tool_search_call"}],
-    }
-    await original.save_session(state, [old_message])
-    await read_conn.close()
-    await conn.execute("UPDATE session_store_meta SET value = '8' WHERE key = 'schema_version'")
-    await conn.commit()
-
-    migrated_read = await database.connect(db, readonly=True)
-    migrated = SessionStore(conn, migrated_read)
-    await migrated.init_schema()
-
-    expected_call = {
-        "id": "tsc-1",
-        "name": "tool_search",
-        "arguments": {"tools": ["emails", "emails"]},
-        "result": "Matched tools: emails",
-        "done": True,
-        "loaded_tool_names": ["emails", "read_email"],
-    }
-    loaded = await migrated.load_session(state.session_id)
-    assert loaded is not None
-    assert loaded.messages[0]["provider_tool_calls"] == [expected_call]
-    assert loaded.messages[0]["openai_response_items"] == old_message["openai_response_items"]
-    transcript = await conn.execute_fetchall(
-        "SELECT message_json FROM session_messages WHERE session_id = ?",
-        (state.session_id,),
-    )
-    assert json.loads(transcript[0]["message_json"])["provider_tool_calls"] == [expected_call]
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "9"
-
-    await migrated_read.close()
-    await conn.close()
 
 
-@pytest.mark.asyncio
-async def test_schema_v8_provider_receipt_failure_rolls_back(tmp_path: Path):
-    db = tmp_path / "invalid-v8-provider-receipts.db"
-    conn = await database.connect(db)
-    read_conn = await database.connect(db, readonly=True)
-    original = SessionStore(conn, read_conn)
-    await original.init_schema()
-    state = _make_state("provider-history")
-    valid_message = {
-        "role": "assistant",
-        "content": "",
-        "provider_tool_calls": [
-            {
-                "id": "tsc-1",
-                "name": "tool_search",
-                "arguments": '{"tools":["emails"]}',
-                "result": "Matched tools: emails",
-                "done": True,
-            }
-        ],
-    }
-    await original.save_session(state, [valid_message])
-    transcript = dict(valid_message)
-    transcript["provider_tool_calls"] = [{**valid_message["provider_tool_calls"][0], "arguments": '{"tools":[42]}'}]
-    await read_conn.close()
-    await conn.execute(
-        "UPDATE session_messages SET message_json = ? WHERE session_id = ?",
-        (json.dumps(transcript), state.session_id),
-    )
-    await conn.execute("UPDATE session_store_meta SET value = '8' WHERE key = 'schema_version'")
-    await conn.commit()
-    before_session = (
-        await conn.execute_fetchall("SELECT messages FROM sessions WHERE session_id = ?", (state.session_id,))
-    )[0]["messages"]
-    before_transcript = (
-        await conn.execute_fetchall(
-            "SELECT message_json FROM session_messages WHERE session_id = ?",
-            (state.session_id,),
-        )
-    )[0]["message_json"]
-
-    migrated_read = await database.connect(db, readonly=True)
-    migrated = SessionStore(conn, migrated_read)
-    with pytest.raises(SessionDataCorruptionError, match="must contain non-empty strings"):
-        await migrated.init_schema()
-
-    assert (await conn.execute_fetchall("SELECT messages FROM sessions WHERE session_id = ?", (state.session_id,)))[0][
-        "messages"
-    ] == before_session
-    assert (
-        await conn.execute_fetchall(
-            "SELECT message_json FROM session_messages WHERE session_id = ?",
-            (state.session_id,),
-        )
-    )[0]["message_json"] == before_transcript
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "8"
-
-    await migrated_read.close()
-    await conn.close()
 
 
-@pytest.mark.asyncio
-async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp_path: Path):
-    db = tmp_path / "v3-sessions.db"
-    conn = await database.connect(db)
-    await conn.executescript(
-        """
-        CREATE TABLE session_store_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '3');
-        CREATE TABLE background_agent_runs (
-            task_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            parent_run_id TEXT,
-            parent_tool_call_id TEXT,
-            child_session_id TEXT,
-            agent_type TEXT NOT NULL DEFAULT 'background_research',
-            wait INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL,
-            command TEXT NOT NULL,
-            detail TEXT,
-            result_ref TEXT,
-            result_text TEXT,
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            updated_at TEXT NOT NULL,
-            ended_at TEXT,
-            cancel_requested_at TEXT,
-            notified_at TEXT,
-            completion_id TEXT,
-            spawn_spec TEXT,
-            spawn_attempts INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (session_id, task_id)
-        );
-        INSERT INTO background_agent_runs (
-            task_id, session_id, parent_run_id, status, command,
-            created_at, started_at, updated_at
-        ) VALUES ('bg-1', 'sess-1', 'run-1', 'running', 'research', 'now', 'now', 'now');
-        """
-    )
-    await conn.commit()
-    read_conn = await database.connect(db, readonly=True)
-    store = SessionStore(conn, read_conn)
 
-    await store.init_schema()
-
-    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")}
-    assert {
-        "suspension_id",
-        "cancel_actor",
-        "terminal_cause",
-        "cancel_generation",
-        "cancel_idempotency_key",
-    } <= columns
-    assert await store.list_background_agent_runs("sess-1") == [
-        {
-            "task_id": "bg-1",
-            "agent_ref": _agent_ref("sess-1", "bg-1", "research"),
-            "child_run_id": "bg-1",
-            "child_session_id": None,
-            "session_id": "sess-1",
-            "parent_run_id": "run-1",
-            "parent_tool_call_id": None,
-            "suspension_id": None,
-            "agent_type": "background_research",
-            "wait": False,
-            "status": "running",
-            "command": "research",
-            "detail": None,
-            "result_ref": None,
-            "created_at": "now",
-            "started_at": "now",
-            "updated_at": "now",
-            "ended_at": None,
-            "cancel_requested_at": None,
-            "cancel_actor": None,
-            "terminal_cause": None,
-            "cancel_generation": 0,
-            "cancel_idempotency_key": None,
-            "notified_at": None,
-            "completion_id": None,
-        }
-    ]
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "9"
-
-    await read_conn.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_schema_v4_adds_context_generation_before_serving_rows(tmp_path: Path):
-    db = tmp_path / "v4-sessions.db"
-    conn = await database.connect(db)
-    read_conn = await database.connect(db, readonly=True)
-    original = SessionStore(conn, read_conn)
-    await original.init_schema()
-    await original.save_session(_make_state("legacy"), [{"role": "user", "content": "kept"}])
-    await read_conn.close()
-    await conn.execute("ALTER TABLE sessions DROP COLUMN context_generation")
-    await conn.execute("UPDATE session_store_meta SET value = '4' WHERE key = 'schema_version'")
-    await conn.commit()
-
-    migrated_read = await database.connect(db, readonly=True)
-    migrated = SessionStore(conn, migrated_read)
-    await migrated.init_schema()
-
-    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(sessions)")}
-    assert "context_generation" in columns
-    row = (await conn.execute_fetchall("SELECT context_generation FROM sessions WHERE session_id = 'legacy'"))[0]
-    assert row["context_generation"] == 0
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "9"
-
-    await migrated_read.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_schema_v5_backfills_active_count_and_missing_transcript(tmp_path: Path):
-    db = tmp_path / "v5-sessions.db"
-    conn = await database.connect(db)
-    read_conn = await database.connect(db, readonly=True)
-    original = SessionStore(conn, read_conn)
-    await original.init_schema()
-    state = _make_state("legacy")
-    await original.save_session(
-        state,
-        [
-            {"role": "user", "content": "kept"},
-            {"role": "assistant", "content": "reply"},
-        ],
-        metadata={"last_input_tokens": 7, "last_message_count": 99},
-    )
-    await conn.execute("DELETE FROM session_messages WHERE session_id = 'legacy'")
-    await conn.execute("DELETE FROM session_turns WHERE session_id = 'legacy'")
-    await read_conn.close()
-    await conn.execute("ALTER TABLE sessions DROP COLUMN active_message_count")
-    await conn.execute("UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version'")
-    await conn.commit()
-
-    migrated_read = await database.connect(db, readonly=True)
-    migrated = SessionStore(conn, migrated_read)
-    await migrated.init_schema()
-
-    row = (
-        await conn.execute_fetchall("SELECT active_message_count, metadata FROM sessions WHERE session_id = 'legacy'")
-    )[0]
-    transcript = await conn.execute_fetchall(
-        "SELECT message_id FROM session_messages WHERE session_id = 'legacy' ORDER BY seq"
-    )
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert row["active_message_count"] == 2
-    assert json.loads(row["metadata"]) == {"last_input_tokens": 7}
-    assert len(transcript) == 2
-    assert all(row["message_id"] for row in transcript)
-    assert version[0]["value"] == "9"
-
-    await migrated_read.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("broken_projection", ["{broken", "{}"])
-async def test_schema_v5_rejects_invalid_active_projection(tmp_path: Path, broken_projection: str):
-    db = tmp_path / "invalid-v5-sessions.db"
-    conn = await database.connect(db)
-    read_conn = await database.connect(db, readonly=True)
-    original = SessionStore(conn, read_conn)
-    await original.init_schema()
-    await original.save_session(_make_state("broken"), [{"role": "user", "content": "kept"}])
-    await read_conn.close()
-    await conn.execute(
-        "UPDATE sessions SET messages = ? WHERE session_id = 'broken'",
-        (broken_projection,),
-    )
-    await conn.execute("ALTER TABLE sessions DROP COLUMN active_message_count")
-    await conn.execute("UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version'")
-    await conn.commit()
-
-    migrated_read = await database.connect(db, readonly=True)
-    migrated = SessionStore(conn, migrated_read)
-    with pytest.raises(SessionDataCorruptionError, match="messages projection"):
-        await migrated.init_schema()
-
-    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(sessions)")}
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert "active_message_count" not in columns
-    assert version[0]["value"] == "5"
-
-    await migrated_read.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_schema_v5_rejects_invalid_metadata_before_mutation(tmp_path: Path):
-    db = tmp_path / "invalid-v5-metadata.db"
-    conn = await database.connect(db)
-    read_conn = await database.connect(db, readonly=True)
-    original = SessionStore(conn, read_conn)
-    await original.init_schema()
-    await original.save_session(_make_state("broken"), [])
-    await read_conn.close()
-    await conn.execute("UPDATE sessions SET metadata = '{' WHERE session_id = 'broken'")
-    await conn.execute("ALTER TABLE sessions DROP COLUMN active_message_count")
-    await conn.execute("UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version'")
-    await conn.commit()
-
-    migrated_read = await database.connect(db, readonly=True)
-    migrated = SessionStore(conn, migrated_read)
-    with pytest.raises(SessionDataCorruptionError, match="metadata is invalid JSON"):
-        await migrated.init_schema()
-
-    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(sessions)")}
-    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert "active_message_count" not in columns
-    assert version[0]["value"] == "5"
-
-    await migrated_read.close()
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_background_agent_event_schema_adds_delivery_columns_before_index(tmp_path: Path):
-    conn = await database.connect(tmp_path / "old-events.db")
-    await conn.execute(
-        """
-        CREATE TABLE background_agent_events (
-            session_id TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            task_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            detail TEXT,
-            result_ref TEXT,
-            terminal INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (session_id, seq)
-        )
-        """
-    )
-    await conn.commit()
-
-    store = SessionStore(conn)
-    try:
-        await store.init_schema()
-        columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(background_agent_events)")}
-        indexes = {row["name"] for row in await conn.execute_fetchall("PRAGMA index_list(background_agent_events)")}
-
-        assert {"event_id", "delivered_at"}.issubset(columns)
-        assert "idx_background_agent_events_event_id" in indexes
-    finally:
-        await conn.close()
 
 
 @pytest.mark.asyncio
@@ -2857,6 +2110,49 @@ async def test_session_resume_rehydrates_distinct_raw_and_payload_files(store: S
     assert loaded is not None
     assert raw_path.read_text() == raw
     assert payload_path.read_text() == exact_payload
+
+
+@pytest.mark.asyncio
+async def test_session_resume_rejects_unreadable_durable_tool_result(store: SessionStore, tmp_path, monkeypatch):
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    session_id = "sess-corrupt-result"
+    tool_call_id = "call-corrupt-result"
+    blob = persist_raw_tool_result("durable result")
+    await store.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=session_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="bash",
+                content="bounded preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    raw_path = tool_result_files.result_file_path(session_id, tool_call_id)
+    await store.save_session(
+        _make_state(session_id=session_id),
+        [
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "client_id": "tool-message",
+                "content": f"Use file_read(path={str(raw_path)!r}).",
+            }
+        ],
+    )
+    await store.conn.execute(
+        "UPDATE tool_results SET blob_path = ? WHERE session_id = ? AND tool_call_id = ?",
+        (str(tmp_path / "missing.gz"), session_id, tool_call_id),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(SessionDataCorruptionError, match="cannot be rehydrated"):
+        await store.load_session(session_id)
 
 
 @pytest.mark.asyncio
@@ -3856,6 +3152,30 @@ async def test_create_session_if_absent_rolls_back_row_when_transcript_mirror_fa
 
 
 @pytest.mark.asyncio
+async def test_provision_if_absent_returns_existing_durable_identity(store: SessionStore):
+    service = SessionService(store)
+    first, created = await service.provision_if_absent(
+        name="first name",
+        session_type="channel",
+        session_id="stable-channel",
+        announce=False,
+    )
+    assert created is True
+
+    existing, created = await service.provision_if_absent(
+        name="retry name",
+        session_type="channel",
+        session_id="stable-channel",
+        announce=False,
+    )
+
+    assert created is False
+    assert existing == first
+    assert existing.name == "first name"
+    assert existing.public_ref == first.public_ref
+
+
+@pytest.mark.asyncio
 async def test_session_service_clear_context_atomically_removes_history_and_checkpoints(store: SessionStore):
     state = _make_state()
     original = [
@@ -4614,7 +3934,7 @@ async def test_permanent_delete_removes_all_session_owned_rows(store: SessionSto
     assert not await store.read_conn.execute_fetchall(
         "SELECT 1 FROM sessions WHERE session_id = ?", (state.session_id,)
     )
-    for table in await store._session_owned_tables(store.read_conn):
+    for table in await store.storage.session_owned_tables(store.read_conn):
         rows = await store.read_conn.execute_fetchall(
             f'SELECT 1 FROM "{table}" WHERE session_id = ? LIMIT 1',
             (state.session_id,),

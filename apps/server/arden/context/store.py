@@ -11,9 +11,7 @@ from uuid import uuid4
 import aiosqlite
 from pydantic import BaseModel
 
-from arden.agent.types.llm import ProviderToolCall, ProviderToolPayloadError
-from arden.agent.types.tools import ToolResult
-from arden.areas.paths import normalize_area_page_path
+from arden.agent.types.tools import ToolResult, ToolResultPayloadError
 from arden.constants import (
     RAW_SEARCH_RESULT_RETENTION_DAYS,
     RAW_TOOL_RESULT_INLINE_MAX_BYTES,
@@ -21,7 +19,23 @@ from arden.constants import (
     SESSION_EVENT_PRUNE_INTERVAL,
     SESSION_HANDOFF_MARKER,
 )
+from arden.context.areas_store import AREA_PATCH_UNSET, AreaStore
+from arden.context.background_cancellation_store import BackgroundCancellationStore
+from arden.context.background_start_store import BackgroundStartStore
+from arden.context.background_store import BackgroundAgentStore
+from arden.context.chat_queue_store import ChatQueueStore
+from arden.context.chat_run_store import ChatRunStore
+from arden.context.errors import SessionDataCorruptionError
+from arden.context.goals_store import GoalStore
 from arden.context.models import BackgroundStartDisposition, SessionData, SessionHistoryHeader, SessionState
+from arden.context.schema import initialize_context_schema
+from arden.context.storage_store import SessionStorageStore
+from arden.context.store_rows import (
+    tool_approval_payload,
+    tool_call_payload,
+    tool_result_payload,
+)
+from arden.context.transcript_store import AREA_FILTER_UNSET, TranscriptStore
 from arden.core.public_refs import is_public_ref, public_ref
 from arden.core.raw_tool_results import (
     RawToolResultBlob,
@@ -40,30 +54,16 @@ from arden.core.tool_result_files import (
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import event_from_payload
 from arden.logging import get_logger
-from arden.outbox.store import OutboxStore
 from arden.server.bus import StreamRecord
 from arden.storage_budget import StorageSessionCandidate
-from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_bundle, write_cold_session_bundle
+from arden.trajectory.cold_storage import ColdBundleManifest
 
 _logger = get_logger(__name__)
-
-_SESSION_SCHEMA_VERSION = 9
-
 
 class StaleSessionContextError(RuntimeError):
     """A run tried to save through a context generation that was replaced."""
 
 
-class SessionDataCorruptionError(RuntimeError):
-    """Persisted session data does not satisfy the current storage contract."""
-
-
-LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
-# Hard bound on the string handed to the FTS5 MATCH parser. A very long query
-# makes the parser run super-linearly and peg a core for minutes WITHOUT raising
-# (so the except-fallback below never fires). Real search queries are short; an
-# oversized one (e.g. a whole document passed as a query) is truncated here.
-MAX_FTS_QUERY_CHARS = 500
 _DURABLE_TOOL_RESULT_DATA_KEYS = (
     "child_agent",
     "workflow",
@@ -81,374 +81,6 @@ def _reject_nonfinite_json_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant {value}")
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS session_store_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS storage_cleanup_runs (
-    run_id TEXT PRIMARY KEY,
-    plan_id TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    completed_at TEXT NOT NULL,
-    before_bytes INTEGER NOT NULL,
-    target_bytes INTEGER NOT NULL,
-    after_bytes INTEGER NOT NULL,
-    reclaimed_bytes INTEGER NOT NULL,
-    actions_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    error TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_storage_cleanup_runs_completed
-    ON storage_cleanup_runs(completed_at DESC);
-
-CREATE TABLE IF NOT EXISTS areas (
-    area_id TEXT PRIMARY KEY,
-    area_ref TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    name_key TEXT NOT NULL,
-    default_cwds TEXT NOT NULL DEFAULT '[]',
-    instructions TEXT,
-    page_path TEXT,
-    page_id TEXT,
-    autonomy TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    archived_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_areas_archived_updated
-    ON areas(archived_at, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
-    public_ref TEXT NOT NULL UNIQUE,
-    started_at TEXT NOT NULL,
-    last_activity TEXT NOT NULL,
-    last_accessed_at TEXT,
-    messages TEXT,
-    metadata TEXT,
-    name TEXT,
-    archived_at TEXT,
-    session_type TEXT NOT NULL DEFAULT 'chat',
-    origin_automation_id TEXT,
-    parent_session_id TEXT,
-    parent_tool_call_id TEXT,
-    agent_type TEXT,
-    agent_status TEXT,
-    area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL,
-    chat_model TEXT,
-    context_generation INTEGER NOT NULL DEFAULT 0,
-    active_message_count INTEGER NOT NULL DEFAULT 0,
-    storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold')),
-    cold_bundle_path TEXT,
-    cold_bundle_sha256 TEXT,
-    cold_bundle_bytes INTEGER,
-    cold_logical_bytes INTEGER,
-    cold_message_count INTEGER,
-    cold_prose_sha256 TEXT,
-    cold_blob_hashes_json TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_activity ON sessions(last_activity);
-CREATE INDEX IF NOT EXISTS idx_sessions_archived ON sessions(archived_at);
-CREATE TABLE IF NOT EXISTS session_messages (
-    session_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    message_json TEXT NOT NULL,
-    client_id TEXT,
-    created_at TEXT NOT NULL,
-    search_text TEXT,
-    PRIMARY KEY (session_id, message_id),
-    UNIQUE (session_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_messages_session_seq
-    ON session_messages(session_id, seq);
-CREATE INDEX IF NOT EXISTS idx_session_messages_client
-    ON session_messages(session_id, client_id);
-
-CREATE TABLE IF NOT EXISTS session_turns (
-    session_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL,
-    turn_index INTEGER NOT NULL,
-    user_message_id TEXT NOT NULL,
-    message_start_id TEXT NOT NULL,
-    message_end_id TEXT NOT NULL,
-    message_start_seq INTEGER NOT NULL,
-    message_end_seq INTEGER NOT NULL,
-    started_at TEXT NOT NULL,
-    ended_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, turn_id),
-    UNIQUE (session_id, turn_index)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_turns_session_turn
-    ON session_turns(session_id, turn_index);
-
-CREATE TABLE IF NOT EXISTS chat_runs (
-    run_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    stop_reason TEXT,
-    started_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    ended_at TEXT,
-    last_seq INTEGER,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    error_code TEXT,
-    error_message TEXT,
-    client_id TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_runs_session_status
-    ON chat_runs(session_id, status);
-
-CREATE TABLE IF NOT EXISTS chat_queued_messages (
-    client_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    message_json TEXT NOT NULL,
-    enqueued_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    ingested_at TEXT,
-    enqueued_seq INTEGER,
-    ingested_seq INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_queued_messages_session_status
-    ON chat_queued_messages(session_id, status);
-CREATE INDEX IF NOT EXISTS idx_chat_queued_messages_run_status
-    ON chat_queued_messages(run_id, status);
-
-CREATE TABLE IF NOT EXISTS chat_idempotency_keys (
-    session_id TEXT NOT NULL,
-    client_id TEXT NOT NULL,
-    request_hash TEXT NOT NULL,
-    run_id TEXT,
-    message_id TEXT,
-    status TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    expires_at TEXT,
-    PRIMARY KEY (session_id, client_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_idempotency_run
-    ON chat_idempotency_keys(run_id);
-CREATE INDEX IF NOT EXISTS idx_chat_idempotency_expires
-    ON chat_idempotency_keys(expires_at);
-
-CREATE TABLE IF NOT EXISTS tool_calls (
-    run_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    tool_call_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    action TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    args_hash TEXT,
-    status TEXT NOT NULL,
-    result_preview TEXT,
-    result_ref TEXT,
-    outcome_json TEXT,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    PRIMARY KEY (run_id, tool_call_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tool_calls_run
-    ON tool_calls(run_id);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_session_started
-    ON tool_calls(session_id, started_at);
-
-CREATE TABLE IF NOT EXISTS tool_results (
-    tool_result_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    run_id TEXT,
-    tool_call_id TEXT NOT NULL,
-    tool_name TEXT,
-    content_sha256 TEXT NOT NULL,
-    content_bytes INTEGER NOT NULL,
-    stored_bytes INTEGER NOT NULL,
-    compression TEXT NOT NULL,
-    blob_ref TEXT NOT NULL,
-    blob_path TEXT NOT NULL,
-    preview TEXT,
-    retention_class TEXT NOT NULL DEFAULT 'session',
-    expires_at TEXT,
-    source_event_seq INTEGER,
-    created_at TEXT NOT NULL,
-    UNIQUE(session_id, tool_call_id, content_sha256)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tool_results_session_created
-    ON tool_results(session_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_tool_results_tool_call
-    ON tool_results(tool_call_id);
-CREATE INDEX IF NOT EXISTS idx_tool_results_expires
-    ON tool_results(expires_at)
-    WHERE expires_at IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS tool_approvals (
-    run_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    tool_call_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    action TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    preview TEXT,
-    diff TEXT,
-    status TEXT NOT NULL,
-    requested_at TEXT NOT NULL,
-    resolved_at TEXT,
-    expires_at TEXT,
-    result_feedback TEXT,
-    kind TEXT NOT NULL DEFAULT 'tool_approval',
-    payload_json TEXT,
-    resolution_json TEXT,
-    PRIMARY KEY (run_id, tool_call_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tool_approvals_run
-    ON tool_approvals(run_id);
-CREATE INDEX IF NOT EXISTS idx_tool_approvals_session_status
-    ON tool_approvals(session_id, status);
-
-CREATE TABLE IF NOT EXISTS run_sidecars (
-    run_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    context_manifest_json TEXT NOT NULL DEFAULT '[]',
-    source_refs_json TEXT NOT NULL DEFAULT '[]',
-    evidence_json TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_events (
-    session_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    event_type TEXT NOT NULL,
-    event_json TEXT NOT NULL,
-    run_id TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_events_session_seq
-    ON session_events(session_id, seq);
-CREATE INDEX IF NOT EXISTS idx_session_events_run
-    ON session_events(run_id);
-
-CREATE TABLE IF NOT EXISTS session_event_retention_state (
-    session_id TEXT PRIMARY KEY,
-    writes_since_prune INTEGER NOT NULL DEFAULT 0 CHECK(writes_since_prune >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS chat_compactions (
-    compaction_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    boundary_seq INTEGER NOT NULL,
-    messages_before INTEGER NOT NULL,
-    messages_after INTEGER NOT NULL,
-    rehydration_state TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_compactions_session_boundary
-    ON chat_compactions(session_id, boundary_seq);
-
-CREATE TABLE IF NOT EXISTS background_agent_runs (
-    task_id TEXT NOT NULL,
-    agent_ref TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    parent_run_id TEXT,
-    parent_tool_call_id TEXT,
-    suspension_id TEXT,
-    child_session_id TEXT,
-    agent_type TEXT NOT NULL DEFAULT 'background_research',
-    wait INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL,
-    command TEXT NOT NULL,
-    detail TEXT,
-    result_ref TEXT,
-    result_text TEXT,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    updated_at TEXT NOT NULL,
-    ended_at TEXT,
-    cancel_requested_at TEXT,
-    cancel_actor TEXT,
-    terminal_cause TEXT,
-    cancel_generation INTEGER NOT NULL DEFAULT 0,
-    cancel_idempotency_key TEXT,
-    notified_at TEXT,
-    completion_id TEXT,
-    spawn_spec TEXT,
-    spawn_attempts INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (session_id, task_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_background_agent_runs_session_status
-    ON background_agent_runs(session_id, status);
-
-CREATE TABLE IF NOT EXISTS execution_cancellation_scopes (
-    session_id TEXT PRIMARY KEY,
-    actor TEXT NOT NULL,
-    cause TEXT NOT NULL,
-    generation INTEGER NOT NULL,
-    idempotency_key TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS background_agent_events (
-    session_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    task_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    detail TEXT,
-    result_ref TEXT,
-    terminal INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    event_id TEXT,
-    delivered_at TEXT,
-    PRIMARY KEY (session_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_background_agent_events_task
-    ON background_agent_events(task_id);
-
-CREATE TABLE IF NOT EXISTS session_goals (
-    session_id TEXT PRIMARY KEY,
-    goal_id TEXT NOT NULL,
-    objective TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'blocked', 'budget_limited', 'complete')),
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    blocked_reason TEXT,
-    token_budget INTEGER,
-    tokens_used INTEGER NOT NULL DEFAULT 0,
-    time_used_seconds INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_todo_overrides (
-    session_id TEXT PRIMARY KEY,
-    items_json TEXT NOT NULL,
-    explanation TEXT,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_todos (
-    session_id TEXT PRIMARY KEY,
-    items_json TEXT NOT NULL,
-    explanation TEXT,
-    updated_at TEXT NOT NULL
-);
-		"""
 
 SQL_SAVE_SESSION = """
 INSERT INTO sessions (
@@ -571,8 +203,6 @@ CHAT_IDEMPOTENCY_TERMINAL_STATUSES = ("completed", "cancelled", "error", "failed
 # one. It lets DELETE win even when it reaches the server before the matching
 # POST has claimed its idempotency key.
 CHAT_IDEMPOTENCY_CANCELLED_TOMBSTONE_HASH = "cancelled-before-submit"
-AREA_FILTER_UNSET = object()
-_AREA_PATCH_UNSET = object()
 
 
 class SessionStore:
@@ -593,6 +223,21 @@ class SessionStore:
         self._session_context_transaction_lock = asyncio.Lock()
         self._session_locks_guard = asyncio.Lock()
         self._session_write_locks: dict[str, asyncio.Lock] = {}
+        self.areas = AreaStore(conn, self.read_conn)
+        self.goals = GoalStore(conn, self.read_conn, self._session_write_lock)
+        self.transcripts = TranscriptStore(self.read_conn)
+        self.storage = SessionStorageStore(
+            conn,
+            self.read_conn,
+            self._storage_maintenance_lock,
+            self._session_write_lock,
+            self._strict_active_projection,
+        )
+        self.background_agents = BackgroundAgentStore(conn, self.read_conn, self._background_event_lock)
+        self.background_starts = BackgroundStartStore(conn, self._background_event_lock)
+        self.background_cancellations = BackgroundCancellationStore(conn, self._background_event_lock)
+        self.chat_runs = ChatRunStore(conn, self.read_conn, chat_completion_conn)
+        self.chat_queue = ChatQueueStore(conn, self.read_conn)
 
     async def _session_write_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
@@ -604,7 +249,7 @@ class SessionStore:
 
     @asynccontextmanager
     async def _session_context_transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        async with self._session_context_transaction_lock, self._maintenance_connection() as connection:
+        async with self._session_context_transaction_lock, self.storage.maintenance_connection() as connection:
             await connection.execute("BEGIN IMMEDIATE")
             try:
                 yield connection
@@ -618,705 +263,21 @@ class SessionStore:
         await self.conn.commit()
         return cursor.rowcount > 0
 
-    def _chat_run_payload(self, row: aiosqlite.Row) -> dict:
-        columns = set(row.keys())
-        return {
-            "run_id": row["run_id"],
-            "session_id": row["session_id"],
-            "status": row["status"],
-            "stop_reason": row["stop_reason"],
-            "started_at": row["started_at"],
-            "updated_at": row["updated_at"],
-            "ended_at": row["ended_at"],
-            "last_seq": row["last_seq"],
-            "metadata": json.loads(row["metadata_json"] or "{}"),
-            "error_code": row["error_code"] if "error_code" in columns else None,
-            "error_message": row["error_message"] if "error_message" in columns else None,
-            "client_id": row["client_id"] if "client_id" in columns else None,
-        }
-
-    def _chat_queued_message_payload(self, row: aiosqlite.Row) -> dict:
-        return {
-            "client_id": row["client_id"],
-            "session_id": row["session_id"],
-            "run_id": row["run_id"],
-            "status": row["status"],
-            "message": json.loads(row["message_json"]),
-            "enqueued_at": row["enqueued_at"],
-            "updated_at": row["updated_at"],
-            "ingested_at": row["ingested_at"],
-            "enqueued_seq": row["enqueued_seq"],
-            "ingested_seq": row["ingested_seq"],
-        }
-
-    def _chat_idempotency_payload(self, row: aiosqlite.Row) -> dict:
-        return {
-            "session_id": row["session_id"],
-            "client_id": row["client_id"],
-            "request_hash": row["request_hash"],
-            "run_id": row["run_id"],
-            "message_id": row["message_id"],
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "expires_at": row["expires_at"],
-        }
-
-    def _background_agent_payload(self, row: aiosqlite.Row) -> dict:
-        return {
-            "task_id": row["task_id"],
-            "agent_ref": row["agent_ref"],
-            "child_run_id": row["task_id"],
-            "child_session_id": row["child_session_id"],
-            "session_id": row["session_id"],
-            "parent_run_id": row["parent_run_id"],
-            "parent_tool_call_id": row["parent_tool_call_id"],
-            "suspension_id": row["suspension_id"],
-            "agent_type": row["agent_type"] or "background_research",
-            "wait": bool(row["wait"]),
-            "status": row["status"],
-            "command": row["command"],
-            "detail": row["detail"],
-            "result_ref": row["result_ref"],
-            "created_at": row["created_at"],
-            "started_at": row["started_at"],
-            "updated_at": row["updated_at"],
-            "ended_at": row["ended_at"],
-            "cancel_requested_at": row["cancel_requested_at"],
-            "cancel_actor": row["cancel_actor"],
-            "terminal_cause": row["terminal_cause"],
-            "cancel_generation": int(row["cancel_generation"]),
-            "cancel_idempotency_key": row["cancel_idempotency_key"],
-            "notified_at": row["notified_at"],
-            "completion_id": dict(row).get("completion_id"),
-        }
-
-    def _background_agent_event_payload(self, row: aiosqlite.Row) -> dict:
-        return {
-            "session_id": row["session_id"],
-            "seq": row["seq"],
-            "task_id": row["task_id"],
-            "status": row["status"],
-            "detail": row["detail"],
-            "result_ref": row["result_ref"],
-            "terminal": bool(row["terminal"]),
-            "created_at": row["created_at"],
-            "event_id": dict(row).get("event_id"),
-            "delivered_at": dict(row).get("delivered_at"),
-        }
-
-    def _tool_call_payload(self, row: aiosqlite.Row) -> dict:
-        columns = set(row.keys())
-        return {
-            "run_id": row["run_id"],
-            "session_id": row["session_id"],
-            "tool_call_id": row["tool_call_id"],
-            "tool_name": row["tool_name"],
-            "action": row["action"],
-            "scope": row["scope"],
-            "args_hash": row["args_hash"],
-            "status": row["status"],
-            "result_preview": row["result_preview"],
-            "result_ref": row["result_ref"],
-            "outcome": json.loads(row["outcome_json"]) if "outcome_json" in columns and row["outcome_json"] else None,
-            "started_at": row["started_at"],
-            "ended_at": row["ended_at"],
-        }
-
-    def _tool_result_payload(self, row: aiosqlite.Row, *, content: str | None = None) -> dict:
-        return {
-            "tool_result_id": row["tool_result_id"],
-            "session_id": row["session_id"],
-            "run_id": row["run_id"],
-            "tool_call_id": row["tool_call_id"],
-            "tool_name": row["tool_name"],
-            "content_sha256": row["content_sha256"],
-            "content_bytes": row["content_bytes"],
-            "stored_bytes": row["stored_bytes"],
-            "compression": row["compression"],
-            "blob_ref": row["blob_ref"],
-            "blob_path": row["blob_path"],
-            "preview": row["preview"],
-            "retention_class": row["retention_class"],
-            "expires_at": row["expires_at"],
-            "source_event_seq": row["source_event_seq"],
-            "created_at": row["created_at"],
-            "content": content,
-        }
-
-    def _tool_approval_payload(self, row: aiosqlite.Row) -> dict:
-        columns = set(row.keys())
-        payload = json.loads(row["payload_json"] or "{}") if "payload_json" in columns else {}
-        resolution = (
-            json.loads(row["resolution_json"]) if "resolution_json" in columns and row["resolution_json"] else None
-        )
-        return {
-            "run_id": row["run_id"],
-            "session_id": row["session_id"],
-            "suspension_id": row["tool_call_id"],
-            "kind": row["kind"] if "kind" in columns else "tool_approval",
-            "payload": payload,
-            "resolution": resolution,
-            "tool_call_id": row["tool_call_id"],
-            "tool_name": row["tool_name"],
-            "action": row["action"],
-            "scope": row["scope"],
-            "preview": row["preview"],
-            "diff": row["diff"],
-            "status": row["status"],
-            "requested_at": row["requested_at"],
-            "resolved_at": row["resolved_at"],
-            "expires_at": row["expires_at"],
-            "result_feedback": row["result_feedback"],
-        }
-
-    def _goal_payload(self, row: aiosqlite.Row) -> dict:
-        return {
-            "session_id": row["session_id"],
-            "goal_id": row["goal_id"],
-            "objective": row["objective"],
-            "status": row["status"],
-            "evidence": json.loads(row["evidence_json"] or "[]"),
-            "blocked_reason": row["blocked_reason"],
-            "token_budget": row["token_budget"],
-            "tokens_used": int(row["tokens_used"] or 0),
-            "time_used_seconds": int(row["time_used_seconds"] or 0),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-
-    @staticmethod
-    def _normalize_cwd(default_cwd: str | None) -> str | None:
-        cwd = default_cwd.strip() if default_cwd else ""
-        return cwd or None
-
-    @staticmethod
-    def _area_name_key(name: str) -> str:
-        return name.strip().casefold()
-
-    @staticmethod
-    def _normalize_area_page_path(page_path: str | None) -> str | None:
-        return None if page_path is None else normalize_area_page_path(page_path)
-
-    async def _assert_area_name_available(self, name_key: str, *, exclude_area_id: str | None = None) -> None:
-        sql = "SELECT area_id FROM areas WHERE name_key = ? AND archived_at IS NULL"
-        params: list[object] = [name_key]
-        if exclude_area_id is not None:
-            sql += " AND area_id != ?"
-            params.append(exclude_area_id)
-        rows = await self.read_conn.execute_fetchall(sql, tuple(params))
-        if rows:
-            raise ValueError("An active Area with that name already exists")
-
-    async def _assert_area_page_available(self, page_path: str | None, *, exclude_area_id: str | None = None) -> None:
-        if page_path is None:
-            return
-        sql = "SELECT area_id FROM areas WHERE page_path = ?"
-        params: list[object] = [page_path]
-        if exclude_area_id is not None:
-            sql += " AND area_id != ?"
-            params.append(exclude_area_id)
-        rows = await self.read_conn.execute_fetchall(sql, tuple(params))
-        if rows:
-            raise ValueError("That page is already attached to another Area")
-
-    async def _assert_area_page_id_available(self, page_id: str | None, *, exclude_area_id: str | None = None) -> None:
-        if page_id is None:
-            return
-        sql = "SELECT area_id FROM areas WHERE page_id = ?"
-        params: list[object] = [page_id]
-        if exclude_area_id is not None:
-            sql += " AND area_id != ?"
-            params.append(exclude_area_id)
-        rows = await self.read_conn.execute_fetchall(sql, tuple(params))
-        if rows:
-            raise ValueError("That page is already attached to another Area")
-
-    @staticmethod
-    def _area_payload(row: aiosqlite.Row) -> dict:
-        return {
-            "area_id": row["area_id"],
-            "area_ref": row["area_ref"],
-            "name": row["name"],
-            "default_cwd": (json.loads(row["default_cwds"] or "[]") or [None])[0],
-            "instructions": row["instructions"],
-            "page_path": row["page_path"],
-            "page_id": row["page_id"],
-            "autonomy": row["autonomy"],
-            "attention": row["attention"] or "ambient",
-            "interrupts": row["interrupts"] or "asks",
-            "paused_at": row["paused_at"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "archived_at": row["archived_at"],
-        }
 
     async def init_schema(self) -> None:
-        tables = await self.conn.execute_fetchall(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        await initialize_context_schema(
+            self.conn,
+            strict_active_projection=self._strict_active_projection,
+            parse_metadata=self._session_metadata,
+            stamp_messages=self._stamp_messages,
+            mirror_session_messages=self._mirror_session_messages,
         )
-        if not tables:
-            # New databases can opt into bounded physical reclamation without
-            # a rewrite. Existing NONE databases migrate through the offline
-            # verified compactor because SQLite requires a full VACUUM.
-            await self.conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-            mode = await self.conn.execute_fetchall("PRAGMA auto_vacuum")
-            if int(mode[0][0]) != 2:
-                # database.connect enables WAL before the session schema is
-                # created. SQLite may then defer the header change until a
-                # VACUUM; on an empty DB this is bounded and contains no data.
-                await self.conn.execute("VACUUM")
-        await self._pre_migrate_tool_results_schema()
-        await self.conn.executescript(SCHEMA)
-        version = await self._session_schema_version()
-        if version >= _SESSION_SCHEMA_VERSION:
-            # Keep the trigger contract self-healing without repeating table
-            # scans or destructive column rewrites on every process start.
-            await self._migrate_session_messages_fts()
-            return
-        if version in {1, 2}:
-            if version == 1:
-                for col in (
-                    "storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold'))",
-                    "cold_bundle_path TEXT",
-                    "cold_bundle_sha256 TEXT",
-                    "cold_bundle_bytes INTEGER",
-                    "cold_logical_bytes INTEGER",
-                    "cold_message_count INTEGER",
-                    "cold_prose_sha256 TEXT",
-                    "cold_blob_hashes_json TEXT",
-                ):
-                    try:
-                        await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
-                    except aiosqlite.OperationalError as error:
-                        if "duplicate column name" not in str(error).lower():
-                            raise
-            for col in ("last_accessed_at TEXT",):
-                try:
-                    await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
-                except aiosqlite.OperationalError as error:
-                    if "duplicate column name" not in str(error).lower():
-                        raise
-            await self.conn.commit()
-            version = 3
-        if version == 3:
-            await self._migrate_background_agent_runs_schema()
-            await self.conn.execute(
-                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                ("4",),
-            )
-            await self.conn.commit()
-            version = 4
-        if version == 4:
-            await self._migrate_session_context_generation_schema()
-            await self.conn.execute(
-                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                ("5",),
-            )
-            await self.conn.commit()
-            version = 5
-        if version == 5:
-            await self._migrate_active_message_count_schema()
-            await self.conn.execute(
-                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                ("6",),
-            )
-            await self.conn.commit()
-            version = 6
-        if version == 6:
-            await self._migrate_area_refs_schema()
-            await self.conn.execute(
-                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                ("7",),
-            )
-            await self.conn.commit()
-            version = 7
-        if version == 7:
-            await self._migrate_session_agent_refs_schema()
-            await self.conn.execute(
-                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                ("8",),
-            )
-            await self.conn.commit()
-            version = 8
-        if version == 8:
-            await self._migrate_provider_tool_call_receipts()
-            await self._migrate_session_messages_fts()
-            return
-        for col in (
-            "name TEXT",
-            "archived_at TEXT",
-            "session_type TEXT NOT NULL DEFAULT 'chat'",
-            "origin_automation_id TEXT",
-            "parent_session_id TEXT",
-            "parent_tool_call_id TEXT",
-            "agent_type TEXT",
-            "agent_status TEXT",
-            "area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL",
-            "chat_model TEXT",
-            "context_generation INTEGER NOT NULL DEFAULT 0",
-            "last_accessed_at TEXT",
-            "storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold'))",
-            "cold_bundle_path TEXT",
-            "cold_bundle_sha256 TEXT",
-            "cold_bundle_bytes INTEGER",
-            "cold_logical_bytes INTEGER",
-            "cold_message_count INTEGER",
-            "cold_prose_sha256 TEXT",
-            "cold_blob_hashes_json TEXT",
-        ):
-            try:
-                await self.conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
-                await self.conn.commit()
-            except Exception:
-                pass
-        await self._migrate_active_message_count_schema()
-        # Area capabilities on the container itself : an area with a page is an area; autonomy set means
-        # it has a standing agent.
-        for col in (
-            "name_key TEXT",
-            "page_path TEXT",
-            "page_id TEXT",
-            "autonomy TEXT",
-            "attention TEXT",
-            "interrupts TEXT",
-            "paused_at TEXT",
-        ):
-            try:
-                await self.conn.execute(f"ALTER TABLE areas ADD COLUMN {col}")
-                await self.conn.commit()
-            except Exception:
-                pass
-        await self.conn.execute("UPDATE areas SET name_key = lower(trim(name)) WHERE name_key IS NULL OR name_key = ''")
-        await self.conn.commit()
-        await self._migrate_background_agent_runs_schema()
-        await self._migrate_area_refs_schema()
-        await self._migrate_session_agent_refs_schema()
-        try:
-            await self.conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_active_name_key "
-                "ON areas(name_key) WHERE archived_at IS NULL"
-            )
-            await self.conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_page_path ON areas(page_path) WHERE page_path IS NOT NULL"
-            )
-            await self.conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_page_id ON areas(page_id) WHERE page_id IS NOT NULL"
-            )
-        except aiosqlite.IntegrityError as exc:
-            raise RuntimeError(
-                "Existing Areas violate name/page uniqueness; resolve duplicate Areas before starting"
-            ) from exc
-        await self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_area_activity ON sessions(area_id, last_activity DESC)"
-        )
-        await self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sessions_parent_activity ON sessions(parent_session_id, started_at)"
-        )
-        await self._migrate_session_messages_fts()
-        await self._migrate_tool_calls_schema()
-        await self._migrate_run_suspensions_schema()
-        await self._migrate_background_agent_events_schema()
-        await self._migrate_chat_compactions_schema()
-        await self._migrate_chat_runs_schema()
-        await self._migrate_drop_command_sidecar_sessions()
-        await self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_chat_idempotency_expires ON chat_idempotency_keys(expires_at)"
-        )
-        await self.conn.execute(
-            "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-            (str(_SESSION_SCHEMA_VERSION),),
-        )
-        await self.conn.commit()
-
-    async def _session_schema_version(self) -> int:
-        rows = await self.conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-        if not rows:
-            return 0
-        try:
-            return int(rows[0]["value"])
-        except (TypeError, ValueError) as error:
-            raise RuntimeError("persisted session schema version is invalid") from error
-
-    @staticmethod
-    def _legacy_provider_arguments(value: object, *, location: str) -> dict:
-        if not isinstance(value, str):
-            raise SessionDataCorruptionError(f"{location} arguments must be encoded JSON")
-        try:
-            value = json.loads(
-                value,
-                parse_constant=_reject_nonfinite_json_constant,
-            )
-        except (TypeError, ValueError) as error:
-            raise SessionDataCorruptionError(f"{location} arguments are invalid JSON") from error
-        if not isinstance(value, dict):
-            raise SessionDataCorruptionError(f"{location} arguments must be an object")
-        return value
-
-    @classmethod
-    def _migrate_provider_tool_calls_in_message(cls, message: dict, *, location: str) -> bool:
-        if "provider_tool_calls" not in message:
-            return False
-        calls = message["provider_tool_calls"]
-        if not isinstance(calls, list):
-            raise SessionDataCorruptionError(f"{location} provider_tool_calls must be an array")
-
-        migrated_calls: list[dict] = []
-        required_fields = {"id", "name", "arguments", "result", "done"}
-        allowed_fields = required_fields | {"provider_item"}
-        for index, raw_call in enumerate(calls):
-            call_location = f"{location} provider_tool_calls[{index}]"
-            if not isinstance(raw_call, dict):
-                raise SessionDataCorruptionError(f"{call_location} must be an object")
-            missing = required_fields - set(raw_call)
-            unknown = set(raw_call) - allowed_fields
-            if missing:
-                raise SessionDataCorruptionError(f"{call_location} is missing fields: {sorted(missing)}")
-            if unknown:
-                raise SessionDataCorruptionError(f"{call_location} has unknown fields: {sorted(unknown)}")
-
-            arguments = cls._legacy_provider_arguments(
-                raw_call["arguments"],
-                location=call_location,
-            )
-            argument_sources = [arguments]
-            provider_item = raw_call.get("provider_item")
-            if provider_item is not None:
-                if not isinstance(provider_item, dict):
-                    raise SessionDataCorruptionError(f"{call_location} provider_item must be an object")
-                provider_arguments = provider_item.get("arguments")
-                if provider_arguments is not None:
-                    if not isinstance(provider_arguments, dict):
-                        raise SessionDataCorruptionError(f"{call_location} provider_item arguments must be an object")
-                    argument_sources.append(provider_arguments)
-
-            loaded_tool_names: list[str] = []
-            for argument_source in argument_sources:
-                for key in ("tools", "paths", "names"):
-                    values = argument_source.get(key)
-                    if values is None:
-                        continue
-                    if not isinstance(values, list):
-                        raise SessionDataCorruptionError(f"{call_location} {key} must be an array")
-                    for value in values:
-                        if not isinstance(value, str) or not value.strip():
-                            raise SessionDataCorruptionError(f"{call_location} {key} must contain non-empty strings")
-                        if value not in loaded_tool_names:
-                            loaded_tool_names.append(value)
-
-            try:
-                migrated_call = ProviderToolCall(
-                    id=raw_call["id"],
-                    name=raw_call["name"],
-                    arguments=arguments,
-                    result=raw_call["result"],
-                    done=raw_call["done"],
-                    loaded_tool_names=tuple(loaded_tool_names),
-                )
-            except ProviderToolPayloadError as error:
-                raise SessionDataCorruptionError(f"{call_location} is invalid: {error}") from error
-            migrated_calls.append(migrated_call.to_history_dict())
-
-        message["provider_tool_calls"] = migrated_calls
-        return True
-
-    async def _migrate_provider_tool_call_receipts(self) -> None:
-        """Rewrite provider-native tool receipts into the provider-neutral v9 envelope."""
-
-        await self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            cold = await self.conn.execute_fetchall(
-                "SELECT session_id FROM sessions WHERE storage_state = 'cold' LIMIT 1"
-            )
-            if cold:
-                raise SessionDataCorruptionError(
-                    f"session {cold[0]['session_id']} must be restored from cold storage before schema v9 migration"
-                )
-
-            session_rows = await self.conn.execute_fetchall(
-                "SELECT session_id, messages FROM sessions WHERE instr(messages, '\"provider_tool_calls\"') > 0"
-            )
-            for row in session_rows:
-                session_id = str(row["session_id"])
-                messages = self._strict_active_projection(session_id, row["messages"])
-                changed = False
-                for index, message in enumerate(messages):
-                    if self._migrate_provider_tool_calls_in_message(
-                        message,
-                        location=f"session {session_id} messages[{index}]",
-                    ):
-                        changed = True
-                if changed:
-                    await self.conn.execute(
-                        "UPDATE sessions SET messages = ? WHERE session_id = ?",
-                        (json.dumps(messages, ensure_ascii=False, separators=(",", ":")), session_id),
-                    )
-
-            transcript_rows = await self.conn.execute_fetchall(
-                "SELECT rowid, session_id, message_id, message_json FROM session_messages "
-                "WHERE instr(message_json, '\"provider_tool_calls\"') > 0"
-            )
-            for row in transcript_rows:
-                location = f"session {row['session_id']} transcript message {row['message_id']}"
-                try:
-                    message = json.loads(row["message_json"])
-                except (TypeError, json.JSONDecodeError) as error:
-                    raise SessionDataCorruptionError(f"{location} is invalid JSON") from error
-                if not isinstance(message, dict):
-                    raise SessionDataCorruptionError(f"{location} must be an object")
-                if self._migrate_provider_tool_calls_in_message(message, location=location):
-                    await self.conn.execute(
-                        "UPDATE session_messages SET message_json = ? WHERE rowid = ?",
-                        (json.dumps(message, ensure_ascii=False, separators=(",", ":")), row["rowid"]),
-                    )
-
-            await self.conn.execute(
-                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
-                (str(_SESSION_SCHEMA_VERSION),),
-            )
-            await self.conn.commit()
-        except BaseException:
-            await self.conn.rollback()
-            raise
-
-    async def _migrate_session_context_generation_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(sessions)")
-        if rows and "context_generation" not in {row["name"] for row in rows}:
-            await self.conn.execute("ALTER TABLE sessions ADD COLUMN context_generation INTEGER NOT NULL DEFAULT 0")
-
-    async def _migrate_area_refs_schema(self) -> None:
-        """Add immutable model-facing Area refs."""
-
-        await self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(areas)")}
-            if "area_ref" not in columns:
-                await self.conn.execute("ALTER TABLE areas ADD COLUMN area_ref TEXT")
-
-            rows = await self.conn.execute_fetchall("SELECT area_id, area_ref, name FROM areas")
-            refs: set[str] = set()
-            for row in rows:
-                area_id = row["area_id"]
-                area_ref = row["area_ref"]
-                if area_ref is None:
-                    area_ref = public_ref(row["name"], area_id, empty_slug="area")
-                    await self.conn.execute(
-                        "UPDATE areas SET area_ref = ? WHERE area_id = ?",
-                        (area_ref, area_id),
-                    )
-                if not isinstance(area_ref, str) or not area_ref or not is_public_ref(area_ref):
-                    raise RuntimeError(f"Area {area_id!r} has an invalid public ref")
-                if area_ref in refs:
-                    raise RuntimeError(f"Area public ref collision: {area_ref}")
-                refs.add(area_ref)
-
-            unique_ref_index = await self.conn.execute_fetchall(
-                "SELECT 1 FROM pragma_index_list('areas') AS indexes "
-                'WHERE indexes."unique" = 1 '
-                "AND (SELECT group_concat(name, ',') FROM pragma_index_info(indexes.name)) = 'area_ref' LIMIT 1"
-            )
-            if not unique_ref_index:
-                await self.conn.execute("CREATE UNIQUE INDEX idx_areas_area_ref ON areas(area_ref)")
-            if "knowledge_scope" in columns:
-                await self.conn.execute("ALTER TABLE areas DROP COLUMN knowledge_scope")
-            await self.conn.commit()
-        except BaseException:
-            await self.conn.rollback()
-            raise
 
     @staticmethod
     def _session_ref_text(name: object, session_type: object) -> tuple[str, str]:
         kind = str(session_type) if session_type in {"chat", "channel", "agent"} else "chat"
         title = name.strip() if isinstance(name, str) and name.strip() else kind
         return title, kind
-
-    async def _migrate_session_agent_refs_schema(self) -> None:
-        """Give model-facing session and agent identities one immutable address.
-
-        Background rows are assigned first. A linked child session is the same
-        logical agent, so it receives that exact address rather than a second
-        alias. This is intentionally a one-way migration: raw IDs never become
-        valid tool inputs.
-        """
-        await self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            session_columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
-            if "public_ref" not in session_columns:
-                await self.conn.execute("ALTER TABLE sessions ADD COLUMN public_ref TEXT")
-            run_columns = {
-                row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")
-            }
-            if "agent_ref" not in run_columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN agent_ref TEXT")
-
-            used_refs: set[tuple[str, str]] = set()
-            runs = await self.conn.execute_fetchall(
-                "SELECT session_id, task_id, agent_ref, command, child_session_id FROM background_agent_runs"
-            )
-            for row in runs:
-                task_id = str(row["task_id"])
-                agent_ref = row["agent_ref"]
-                if agent_ref is None:
-                    title = str(row["command"] or "agent").strip() or "agent"
-                    agent_ref = public_ref(
-                        title,
-                        f"{row['session_id']}:{task_id}",
-                        empty_slug="agent",
-                    )
-                    await self.conn.execute(
-                        "UPDATE background_agent_runs SET agent_ref = ? WHERE session_id = ? AND task_id = ?",
-                        (agent_ref, row["session_id"], task_id),
-                    )
-                if not isinstance(agent_ref, str) or not is_public_ref(agent_ref):
-                    raise RuntimeError(f"background agent {task_id!r} has an invalid public ref")
-                ref_key = (str(row["session_id"]), agent_ref)
-                if ref_key in used_refs:
-                    raise RuntimeError(f"background agent public ref collision: {agent_ref}")
-                used_refs.add(ref_key)
-                child_session_id = row["child_session_id"]
-                if child_session_id:
-                    child = await self.conn.execute_fetchall(
-                        "SELECT session_id, public_ref FROM sessions WHERE session_id = ?", (child_session_id,)
-                    )
-                    if not child:
-                        raise RuntimeError(
-                            f"background agent {task_id!r} owns missing child session {child_session_id!r}"
-                        )
-                    existing = child[0]["public_ref"]
-                    if existing is not None and existing != agent_ref:
-                        raise RuntimeError(f"child session {child_session_id!r} conflicts with its agent ref")
-                    await self.conn.execute(
-                        "UPDATE sessions SET public_ref = ? WHERE session_id = ?", (agent_ref, child_session_id)
-                    )
-
-            sessions = await self.conn.execute_fetchall(
-                "SELECT session_id, public_ref, name, session_type FROM sessions"
-            )
-            session_refs: set[str] = set()
-            for row in sessions:
-                session_id = str(row["session_id"])
-                session_ref = row["public_ref"]
-                if session_ref is None:
-                    title, kind = self._session_ref_text(row["name"], row["session_type"])
-                    session_ref = public_ref(title, session_id, empty_slug=kind)
-                    await self.conn.execute(
-                        "UPDATE sessions SET public_ref = ? WHERE session_id = ?", (session_ref, session_id)
-                    )
-                if not isinstance(session_ref, str) or not is_public_ref(session_ref):
-                    raise RuntimeError(f"session {session_id!r} has an invalid public ref")
-                if session_ref in session_refs:
-                    raise RuntimeError(f"session public ref collision: {session_ref}")
-                session_refs.add(session_ref)
-
-            await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_public_ref ON sessions(public_ref)")
-            await self.conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_background_agent_runs_session_agent_ref "
-                "ON background_agent_runs(session_id, agent_ref)"
-            )
-            await self.conn.commit()
-        except BaseException:
-            await self.conn.rollback()
-            raise
 
     @staticmethod
     def _strict_active_projection(session_id: str, raw_messages: object) -> list[dict]:
@@ -1329,69 +290,6 @@ class SessionStore:
         if not isinstance(messages, list) or not all(isinstance(message, dict) for message in messages):
             raise SessionDataCorruptionError(f"session {session_id} messages projection must be an array of objects")
         return messages
-
-    async def _migrate_active_message_count_schema(self) -> None:
-        cursor = await self.conn.execute("SELECT session_id, messages, metadata FROM sessions")
-        async with cursor:
-            async for row in cursor:
-                session_id = str(row["session_id"])
-                self._strict_active_projection(session_id, row["messages"])
-                self._session_metadata(session_id, row["metadata"])
-
-        columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
-        if "active_message_count" not in columns:
-            await self.conn.execute("ALTER TABLE sessions ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0")
-
-        await self.conn.execute(
-            """
-            UPDATE sessions
-            SET active_message_count = json_array_length(messages),
-                metadata = json_remove(metadata, '$.last_message_count')
-            """
-        )
-        missing_transcripts = await self.conn.execute_fetchall(
-            """
-            SELECT session_id, messages
-            FROM sessions AS s
-            WHERE active_message_count > 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM session_messages AS sm WHERE sm.session_id = s.session_id
-              )
-            """
-        )
-        now = datetime.now(UTC).isoformat()
-        for row in missing_transcripts:
-            session_id = str(row["session_id"])
-            messages = self._strict_active_projection(session_id, row["messages"])
-            self._stamp_messages(messages, now)
-            messages_json = json.dumps(messages, default=str)
-            await self._mirror_session_messages(session_id, messages, connection=self.conn)
-            await self.conn.execute(
-                "UPDATE sessions SET messages = ? WHERE session_id = ?",
-                (messages_json, session_id),
-            )
-
-    async def _pre_migrate_tool_results_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_results)")
-        if not rows:
-            return
-        columns = {row["name"] for row in rows}
-        expected = {"tool_result_id", "session_id", "tool_call_id", "content_bytes", "blob_path"}
-        if expected.issubset(columns):
-            return
-
-        existing = await self.conn.execute_fetchall(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'tool_results_legacy%'"
-        )
-        existing_names = {row["name"] for row in existing}
-        legacy_name = "tool_results_legacy"
-        suffix = 2
-        while legacy_name in existing_names:
-            legacy_name = f"tool_results_legacy_{suffix}"
-            suffix += 1
-
-        await self.conn.execute(f"ALTER TABLE tool_results RENAME TO {legacy_name}")
-        await self.conn.commit()
 
     async def ensure_startup_recovery_indexes(self) -> None:
         """Build recovery-only indexes after core API readiness."""
@@ -1426,172 +324,58 @@ class SessionStore:
         page_path: str | None = None,
         autonomy: str | None = None,
     ) -> dict:
-        trimmed_name = name.strip()
-        if not trimmed_name:
-            raise ValueError("Area name cannot be blank")
-        name_key = self._area_name_key(trimmed_name)
-        normalized_page_path = self._normalize_area_page_path(page_path)
-        await self._assert_area_name_available(name_key)
-        await self._assert_area_page_available(normalized_page_path)
-        area_id = f"area_{uuid4().hex[:12]}"
-        area_ref = public_ref(trimmed_name, area_id, empty_slug="area")
-        now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
-            """
-            INSERT INTO areas (
-                area_id, area_ref, name, name_key, default_cwds, instructions,
-                page_path, page_id, autonomy, created_at, updated_at, archived_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)
-            """,
-            (
-                area_id,
-                area_ref,
-                trimmed_name,
-                name_key,
-                json.dumps([self._normalize_cwd(default_cwd)] if self._normalize_cwd(default_cwd) else []),
-                instructions.strip() if instructions and instructions.strip() else None,
-                normalized_page_path,
-                autonomy,
-                now,
-                now,
-            ),
+        return await self.areas.create(
+            name=name,
+            default_cwd=default_cwd,
+            instructions=instructions,
+            page_path=page_path,
+            autonomy=autonomy,
         )
-        await self.conn.commit()
-        area = await self.get_area(area_id)
-        if area is None:
-            raise RuntimeError("area insert failed")
-        return area
 
     async def get_area(self, area_id: str | None) -> dict | None:
-        if not area_id:
-            return None
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM areas WHERE area_id = ? AND archived_at IS NULL",
-            (area_id,),
-        )
-        return self._area_payload(rows[0]) if rows else None
+        return await self.areas.get(area_id)
 
     async def get_area_by_ref(self, area_ref: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM areas WHERE area_ref = ? AND archived_at IS NULL",
-            (area_ref,),
-        )
-        return self._area_payload(rows[0]) if rows else None
+        return await self.areas.get_by_ref(area_ref)
 
     async def find_area_by_page_id(self, page_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM areas WHERE page_id = ? AND archived_at IS NULL",
-            (page_id,),
-        )
-        return self._area_payload(rows[0]) if rows else None
+        return await self.areas.find_by_page_id(page_id)
 
     async def list_areas(self) -> list[dict]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM areas
-            WHERE archived_at IS NULL
-            ORDER BY updated_at DESC, created_at DESC
-            """
-        )
-        return [self._area_payload(row) for row in rows]
+        return await self.areas.list_active()
 
     async def update_area(
         self,
         area_id: str,
         *,
-        name: str | object = _AREA_PATCH_UNSET,
-        default_cwd: str | object | None = _AREA_PATCH_UNSET,
-        instructions: str | object | None = _AREA_PATCH_UNSET,
-        page_path: str | object | None = _AREA_PATCH_UNSET,
-        page_id: str | object | None = _AREA_PATCH_UNSET,
-        autonomy: str | object | None = _AREA_PATCH_UNSET,
-        attention: str | object = _AREA_PATCH_UNSET,
-        interrupts: str | object = _AREA_PATCH_UNSET,
-        paused: bool | object = _AREA_PATCH_UNSET,
+        name: str | object = AREA_PATCH_UNSET,
+        default_cwd: str | object | None = AREA_PATCH_UNSET,
+        instructions: str | object | None = AREA_PATCH_UNSET,
+        page_path: str | object | None = AREA_PATCH_UNSET,
+        page_id: str | object | None = AREA_PATCH_UNSET,
+        autonomy: str | object | None = AREA_PATCH_UNSET,
+        attention: str | object = AREA_PATCH_UNSET,
+        interrupts: str | object = AREA_PATCH_UNSET,
+        paused: bool | object = AREA_PATCH_UNSET,
     ) -> dict | None:
-        assignments = ["updated_at = ?"]
-        params: list[object] = [datetime.now(UTC).isoformat()]
-        if name is not _AREA_PATCH_UNSET:
-            trimmed_name = str(name).strip()
-            if not trimmed_name:
-                raise ValueError("Area name cannot be blank")
-            name_key = self._area_name_key(trimmed_name)
-            await self._assert_area_name_available(name_key, exclude_area_id=area_id)
-            assignments.append("name = ?")
-            params.append(trimmed_name)
-            assignments.append("name_key = ?")
-            params.append(name_key)
-        if default_cwd is not _AREA_PATCH_UNSET:
-            assignments.append("default_cwds = ?")
-            cwd = self._normalize_cwd(default_cwd if isinstance(default_cwd, str) else None)
-            params.append(json.dumps([cwd] if cwd else []))
-        if instructions is not _AREA_PATCH_UNSET:
-            assignments.append("instructions = ?")
-            text = instructions if isinstance(instructions, str) else None
-            params.append(text.strip() if text and text.strip() else None)
-        if page_path is not _AREA_PATCH_UNSET:
-            normalized_page_path = self._normalize_area_page_path(page_path if isinstance(page_path, str) else None)
-            await self._assert_area_page_available(normalized_page_path, exclude_area_id=area_id)
-            assignments.append("page_path = ?")
-            params.append(normalized_page_path)
-        if page_id is not _AREA_PATCH_UNSET:
-            if page_id is not None and (not isinstance(page_id, str) or not page_id.strip()):
-                raise ValueError("page_id must be a nonempty string")
-            await self._assert_area_page_id_available(page_id, exclude_area_id=area_id)
-            assignments.append("page_id = ?")
-            params.append(page_id)
-        if autonomy is not _AREA_PATCH_UNSET:
-            assignments.append("autonomy = ?")
-            params.append(autonomy if isinstance(autonomy, str) else None)
-        if attention is not _AREA_PATCH_UNSET:
-            if attention not in ("dormant", "ambient", "active"):
-                raise ValueError("attention must be dormant | ambient | active")
-            assignments.append("attention = ?")
-            params.append(attention)
-        if interrupts is not _AREA_PATCH_UNSET:
-            if interrupts not in ("asks", "all", "none"):
-                raise ValueError("interrupts must be asks | all | none")
-            assignments.append("interrupts = ?")
-            params.append(interrupts)
-        if paused is not _AREA_PATCH_UNSET:
-            assignments.append("paused_at = ?")
-            params.append(datetime.now(UTC).isoformat() if paused else None)
-        params.append(area_id)
-        cursor = await self.conn.execute(
-            f"UPDATE areas SET {', '.join(assignments)} WHERE area_id = ? AND archived_at IS NULL",
-            tuple(params),
+        return await self.areas.update(
+            area_id,
+            name=name,
+            default_cwd=default_cwd,
+            instructions=instructions,
+            page_path=page_path,
+            page_id=page_id,
+            autonomy=autonomy,
+            attention=attention,
+            interrupts=interrupts,
+            paused=paused,
         )
-        await self.conn.commit()
-        if cursor.rowcount == 0:
-            return None
-        return await self.get_area(area_id)
 
     async def archive_area(self, area_id: str) -> bool:
-        now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            "UPDATE areas SET archived_at = ?, updated_at = ? WHERE area_id = ? AND archived_at IS NULL",
-            (now, now, area_id),
-        )
-        await self.conn.commit()
-        return cursor.rowcount > 0
+        return await self.areas.archive(area_id)
 
     async def restore_area(self, area_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM areas WHERE area_id = ? AND archived_at IS NOT NULL",
-            (area_id,),
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        await self._assert_area_name_available(row["name_key"], exclude_area_id=area_id)
-        now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            "UPDATE areas SET archived_at = NULL, updated_at = ? WHERE area_id = ? AND archived_at IS NOT NULL",
-            (now, area_id),
-        )
-        await self.conn.commit()
-        return await self.get_area(area_id) if cursor.rowcount else None
+        return await self.areas.restore(area_id)
 
     async def set_goal(
         self,
@@ -1600,138 +384,41 @@ class SessionStore:
         *,
         token_budget: int | None = None,
     ) -> dict:
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            return await self._set_goal_unlocked(session_id, objective, token_budget=token_budget)
-
-    async def _set_goal_unlocked(
-        self,
-        session_id: str,
-        objective: str,
-        *,
-        token_budget: int | None = None,
-    ) -> dict:
-        now = datetime.now(UTC).isoformat()
-        goal_id = uuid4().hex
-        await self.conn.execute(
-            """
-            INSERT INTO session_goals (
-                session_id, goal_id, objective, status, evidence_json,
-                blocked_reason, token_budget, tokens_used, time_used_seconds,
-                created_at, updated_at
-            )
-            VALUES (?, ?, ?, 'active', '[]', NULL, ?, 0, 0, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                goal_id = excluded.goal_id,
-                objective = excluded.objective,
-                status = excluded.status,
-                evidence_json = excluded.evidence_json,
-                blocked_reason = NULL,
-                token_budget = excluded.token_budget,
-                tokens_used = 0,
-                time_used_seconds = 0,
-                created_at = excluded.created_at,
-                updated_at = excluded.updated_at
-            """,
-            (session_id, goal_id, objective, token_budget, now, now),
-        )
-        await self.conn.commit()
-        goal = await self.get_goal(session_id)
-        if goal is None:
-            raise RuntimeError("goal insert failed")
-        return goal
+        return await self.goals.set(session_id, objective, token_budget=token_budget)
 
     async def get_goal(self, session_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM session_goals WHERE session_id = ?",
-            (session_id,),
-        )
-        return self._goal_payload(rows[0]) if rows else None
+        return await self.goals.get(session_id)
 
-    async def set_todo_override(self, session_id: str, items: list[dict], explanation: str | None = None) -> dict:
-        now = datetime.now(UTC).isoformat()
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            await self.conn.execute(
-                """
-                INSERT INTO session_todo_overrides (session_id, items_json, explanation, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    items_json = excluded.items_json,
-                    explanation = excluded.explanation,
-                    updated_at = excluded.updated_at
-                """,
-                (session_id, json.dumps(items), explanation, now),
-            )
-            await self.conn.commit()
-        return {"items": items, "explanation": explanation, "updated_at": now}
+    async def set_todo_override(
+        self,
+        session_id: str,
+        items: list[dict],
+        explanation: str | None = None,
+    ) -> dict:
+        return await self.goals.set_todo_override(session_id, items, explanation)
 
     async def get_todo_override(self, session_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT items_json, explanation, updated_at FROM session_todo_overrides WHERE session_id = ?",
-            (session_id,),
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "items": json.loads(row["items_json"]),
-            "explanation": row["explanation"],
-            "updated_at": row["updated_at"],
-        }
+        return await self.goals.get_todo_override(session_id)
 
     async def clear_todo_override(self, session_id: str) -> bool:
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            cursor = await self.conn.execute("DELETE FROM session_todo_overrides WHERE session_id = ?", (session_id,))
-            await self.conn.commit()
-            return cursor.rowcount > 0
+        return await self.goals.clear_todo_override(session_id)
 
-    async def set_session_todos(self, session_id: str, items: list[dict], explanation: str | None = None) -> dict:
-        now = datetime.now(UTC).isoformat()
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            await self.conn.execute(
-                """
-                INSERT INTO session_todos (session_id, items_json, explanation, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    items_json = excluded.items_json,
-                    explanation = excluded.explanation,
-                    updated_at = excluded.updated_at
-                """,
-                (session_id, json.dumps(items), explanation, now),
-            )
-            await self.conn.commit()
-        return {"items": items, "explanation": explanation, "updated_at": now}
+    async def set_session_todos(
+        self,
+        session_id: str,
+        items: list[dict],
+        explanation: str | None = None,
+    ) -> dict:
+        return await self.goals.set_session_todos(session_id, items, explanation)
 
     async def get_session_todos(self, session_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT items_json, explanation, updated_at FROM session_todos WHERE session_id = ?",
-            (session_id,),
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "items": json.loads(row["items_json"]),
-            "explanation": row["explanation"],
-            "updated_at": row["updated_at"],
-        }
+        return await self.goals.get_session_todos(session_id)
 
     async def clear_session_todos(self, session_id: str) -> bool:
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            cursor = await self.conn.execute("DELETE FROM session_todos WHERE session_id = ?", (session_id,))
-            await self.conn.commit()
-            return cursor.rowcount > 0
+        return await self.goals.clear_session_todos(session_id)
 
     async def clear_goal(self, session_id: str) -> bool:
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            cursor = await self.conn.execute("DELETE FROM session_goals WHERE session_id = ?", (session_id,))
-            await self.conn.commit()
-            return cursor.rowcount > 0
+        return await self.goals.clear(session_id)
 
     async def update_goal(
         self,
@@ -1746,406 +433,17 @@ class SessionStore:
         tokens_used_delta: int = 0,
         time_used_seconds_delta: int = 0,
     ) -> dict | None:
-        lock = await self._session_write_lock(session_id)
-        async with lock:
-            return await self._update_goal_unlocked(
-                session_id,
-                goal_id=goal_id,
-                status=status,
-                evidence=evidence,
-                blocked_reason=blocked_reason,
-                evidence_kind=evidence_kind,
-                evidence_blocked_reason=evidence_blocked_reason,
-                tokens_used_delta=tokens_used_delta,
-                time_used_seconds_delta=time_used_seconds_delta,
-            )
-
-    async def _update_goal_unlocked(
-        self,
-        session_id: str,
-        *,
-        goal_id: str | None = None,
-        status: str | None = None,
-        evidence: str | None = None,
-        blocked_reason: str | None = None,
-        evidence_kind: str | None = None,
-        evidence_blocked_reason: str | None = None,
-        tokens_used_delta: int = 0,
-        time_used_seconds_delta: int = 0,
-    ) -> dict | None:
-        current = await self.get_goal(session_id)
-        if current is None:
-            return None
-        if goal_id is not None and current["goal_id"] != goal_id:
-            return None
-        next_evidence = list(current["evidence"])
-        if evidence:
-            evidence_entry = {"text": evidence, "created_at": datetime.now(UTC).isoformat()}
-            if evidence_kind:
-                evidence_entry["kind"] = evidence_kind
-            if evidence_blocked_reason:
-                evidence_entry["blocked_reason"] = evidence_blocked_reason
-            next_evidence.append(evidence_entry)
-        next_status = status or current["status"]
-        next_tokens_used = current["tokens_used"] + max(0, tokens_used_delta)
-        if (
-            status is None
-            and current.get("token_budget")
-            and next_tokens_used >= current["token_budget"]
-            and current["status"] == "active"
-        ):
-            next_status = "budget_limited"
-        next_blocked_reason = blocked_reason if next_status == "blocked" else None
-        now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
-            """
-            UPDATE session_goals
-            SET status = ?,
-                evidence_json = ?,
-                blocked_reason = ?,
-                tokens_used = tokens_used + ?,
-                time_used_seconds = time_used_seconds + ?,
-                updated_at = ?
-            WHERE session_id = ?
-            """,
-            (
-                next_status,
-                json.dumps(next_evidence),
-                next_blocked_reason,
-                max(0, tokens_used_delta),
-                max(0, time_used_seconds_delta),
-                now,
-                session_id,
-            ),
+        return await self.goals.update(
+            session_id,
+            goal_id=goal_id,
+            status=status,
+            evidence=evidence,
+            blocked_reason=blocked_reason,
+            evidence_kind=evidence_kind,
+            evidence_blocked_reason=evidence_blocked_reason,
+            tokens_used_delta=tokens_used_delta,
+            time_used_seconds_delta=time_used_seconds_delta,
         )
-        await self.conn.commit()
-        return await self.get_goal(session_id)
-
-    async def _migrate_chat_compactions_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(chat_compactions)")
-        columns = {row["name"] for row in rows}
-        if "rehydration_state" in columns:
-            return
-        await self.conn.execute("ALTER TABLE chat_compactions ADD COLUMN rehydration_state TEXT")
-        await self.conn.commit()
-
-    _FTS_TRIGGERS = """
-        CREATE TRIGGER IF NOT EXISTS session_messages_ai
-        AFTER INSERT ON session_messages BEGIN
-            INSERT INTO session_messages_fts(rowid, search_text)
-            VALUES (new.rowid, new.search_text);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS session_messages_ad
-        AFTER DELETE ON session_messages BEGIN
-            INSERT INTO session_messages_fts(session_messages_fts, rowid, search_text)
-            VALUES ('delete', old.rowid, old.search_text);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS session_messages_au
-        AFTER UPDATE ON session_messages BEGIN
-            INSERT INTO session_messages_fts(session_messages_fts, rowid, search_text)
-            VALUES ('delete', old.rowid, old.search_text);
-            INSERT INTO session_messages_fts(rowid, search_text)
-            VALUES (new.rowid, new.search_text);
-        END;
-    """
-
-    async def _migrate_session_messages_fts(self) -> None:
-        """Full-text index over transcript messages. External-content FTS5
-        keyed to session_messages.rowid, kept in sync by triggers so every
-        write path stays correct. Indexes the flattened text projection
-        (search_text), not the JSON envelope.
-
-        Healthy databases take only catalog reads plus idempotent trigger DDL.
-        Large legacy backfills and removal of the briefly-shipped
-        ``file_search_text`` column belong to explicit offline maintenance."""
-        cols = await self.conn.execute_fetchall("PRAGMA table_info(session_messages)")
-        added_search_text = "search_text" not in {c["name"] for c in cols}
-        if added_search_text:
-            await self.conn.execute("ALTER TABLE session_messages ADD COLUMN search_text TEXT")
-            await self.conn.commit()
-
-        existed = bool(
-            await self.conn.execute_fetchall(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_messages_fts'"
-            )
-        )
-        trigger_rows = await self.conn.execute_fetchall(
-            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'session_messages_a_'"
-        )
-        canonical_triggers = len(trigger_rows) == 3 and all(
-            "search_text" in (row["sql"] or "") and "file_search_text" not in (row["sql"] or "") for row in trigger_rows
-        )
-        if existed and canonical_triggers and not added_search_text:
-            return
-
-        # Replacing trigger definitions is O(1) and repairs the briefly-shipped
-        # file_search_text trigger bug without rewriting the large content table.
-        await self.conn.executescript(
-            """
-            DROP TRIGGER IF EXISTS session_messages_ai;
-            DROP TRIGGER IF EXISTS session_messages_ad;
-            DROP TRIGGER IF EXISTS session_messages_au;
-            """
-        )
-        await self.conn.commit()
-
-        needs_rebuild = not existed
-        if not existed:
-            await self.conn.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS session_messages_fts USING fts5(
-                    search_text,
-                    content='session_messages',
-                    content_rowid='rowid'
-                )
-                """
-            )
-
-        if needs_rebuild:
-            legacy = await self.conn.execute_fetchall(
-                "SELECT rowid, message_json FROM session_messages WHERE search_text IS NULL"
-            )
-            for row in legacy:
-                try:
-                    msg = json.loads(row["message_json"])
-                except Exception:
-                    msg = {}
-                await self.conn.execute(
-                    "UPDATE session_messages SET search_text = ? WHERE rowid = ?",
-                    (self._flatten_message_text(msg), row["rowid"]),
-                )
-        await self.conn.executescript(self._FTS_TRIGGERS)
-        if needs_rebuild:
-            await self.conn.execute("INSERT INTO session_messages_fts(session_messages_fts) VALUES('rebuild')")
-        await self.conn.commit()
-
-    async def _migrate_chat_runs_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(chat_runs)")
-        if not rows:
-            return
-        columns = {row["name"] for row in rows}
-        changed = False
-        for column in (
-            "error_code TEXT",
-            "error_message TEXT",
-            "client_id TEXT",
-        ):
-            name = column.split()[0]
-            if name in columns:
-                continue
-            await self.conn.execute(f"ALTER TABLE chat_runs ADD COLUMN {column}")
-            changed = True
-        if changed:
-            await self.conn.commit()
-
-    async def _migrate_drop_command_sidecar_sessions(self) -> None:
-        # The command sidecar is gone; its hidden `command_*` scratch sessions
-        # were only ever out of the sidebar because of a WHERE clause that no
-        # longer exists.
-        cursor = await self.conn.execute("DELETE FROM sessions WHERE agent_type = 'command_sidecar'")
-        if cursor.rowcount:
-            await self.conn.commit()
-
-    async def _migrate_tool_calls_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_calls)")
-        if not rows:
-            return
-
-        pk_columns = [row["name"] for row in sorted(rows, key=lambda row: row["pk"]) if row["pk"]]
-        if pk_columns != ["run_id", "tool_call_id"]:
-            await self.conn.execute("ALTER TABLE tool_calls RENAME TO tool_calls_old")
-            await self.conn.execute(
-                """
-                CREATE TABLE tool_calls (
-                    run_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    tool_call_id TEXT NOT NULL,
-                    tool_name TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    scope TEXT NOT NULL,
-                    args_hash TEXT,
-                    status TEXT NOT NULL,
-                    result_preview TEXT,
-                    result_ref TEXT,
-                    outcome_json TEXT,
-                    started_at TEXT NOT NULL,
-                    ended_at TEXT,
-                    PRIMARY KEY (run_id, tool_call_id)
-                )
-                """
-            )
-            await self.conn.execute(
-                """
-                INSERT OR IGNORE INTO tool_calls (
-                    run_id, session_id, tool_call_id, tool_name, action, scope,
-                    args_hash, status, result_preview, started_at, ended_at
-                )
-                SELECT
-                    run_id, session_id, tool_call_id, tool_name, action, scope,
-                    args_hash, status, result_preview, started_at, ended_at
-                FROM tool_calls_old
-                """
-            )
-            await self.conn.execute("DROP TABLE tool_calls_old")
-            await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id)")
-            await self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tool_calls_session_started ON tool_calls(session_id, started_at)"
-            )
-            await self.conn.commit()
-
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_calls)")
-        columns = {row["name"] for row in rows}
-        if "result_ref" not in columns:
-            await self.conn.execute("ALTER TABLE tool_calls ADD COLUMN result_ref TEXT")
-        if "outcome_json" not in columns:
-            await self.conn.execute("ALTER TABLE tool_calls ADD COLUMN outcome_json TEXT")
-        await self.conn.commit()
-
-    async def _migrate_run_suspensions_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_approvals)")
-        if not rows:
-            return
-        columns = {row["name"] for row in rows}
-        for column in (
-            "kind TEXT NOT NULL DEFAULT 'tool_approval'",
-            "payload_json TEXT",
-            "resolution_json TEXT",
-        ):
-            if column.split()[0] not in columns:
-                await self.conn.execute(f"ALTER TABLE tool_approvals ADD COLUMN {column}")
-        await self.conn.commit()
-
-    async def _migrate_background_agent_runs_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")
-        if not rows:
-            return
-
-        columns = {row["name"] for row in rows}
-        pk_columns = [row["name"] for row in sorted(rows, key=lambda row: row["pk"]) if row["pk"]]
-        if "result_text" in columns and pk_columns == ["session_id", "task_id"]:
-            changed = False
-            if "parent_tool_call_id" not in columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN parent_tool_call_id TEXT")
-                changed = True
-            if "suspension_id" not in columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN suspension_id TEXT")
-                changed = True
-            if "child_session_id" not in columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN child_session_id TEXT")
-                changed = True
-            if "agent_type" not in columns:
-                await self.conn.execute(
-                    "ALTER TABLE background_agent_runs ADD COLUMN agent_type TEXT NOT NULL DEFAULT 'background_research'"
-                )
-                changed = True
-            if "wait" not in columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN wait INTEGER NOT NULL DEFAULT 0")
-                changed = True
-            if "completion_id" not in columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN completion_id TEXT")
-                changed = True
-            if "spawn_spec" not in columns:
-                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN spawn_spec TEXT")
-                changed = True
-            if "spawn_attempts" not in columns:
-                await self.conn.execute(
-                    "ALTER TABLE background_agent_runs ADD COLUMN spawn_attempts INTEGER NOT NULL DEFAULT 0"
-                )
-                changed = True
-            for column in (
-                "cancel_actor TEXT",
-                "terminal_cause TEXT",
-                "cancel_generation INTEGER NOT NULL DEFAULT 0",
-                "cancel_idempotency_key TEXT",
-            ):
-                if column.split()[0] not in columns:
-                    await self.conn.execute(f"ALTER TABLE background_agent_runs ADD COLUMN {column}")
-                    changed = True
-            if changed:
-                await self.conn.commit()
-            return
-
-        result_text_expr = "result_text" if "result_text" in columns else "NULL"
-        parent_tool_call_expr = "parent_tool_call_id" if "parent_tool_call_id" in columns else "NULL"
-        child_session_expr = "child_session_id" if "child_session_id" in columns else "NULL"
-        agent_type_expr = (
-            "COALESCE(agent_type, 'background_research')" if "agent_type" in columns else "'background_research'"
-        )
-        wait_expr = "COALESCE(wait, 0)" if "wait" in columns else "0"
-        await self.conn.execute("ALTER TABLE background_agent_runs RENAME TO background_agent_runs_old")
-        await self.conn.execute(
-            """
-            CREATE TABLE background_agent_runs (
-                task_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                parent_run_id TEXT,
-                parent_tool_call_id TEXT,
-                suspension_id TEXT,
-                child_session_id TEXT,
-                agent_type TEXT NOT NULL DEFAULT 'background_research',
-                wait INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL,
-                command TEXT NOT NULL,
-                detail TEXT,
-                result_ref TEXT,
-                result_text TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                updated_at TEXT NOT NULL,
-                ended_at TEXT,
-                cancel_requested_at TEXT,
-                cancel_actor TEXT,
-                terminal_cause TEXT,
-                cancel_generation INTEGER NOT NULL DEFAULT 0,
-                cancel_idempotency_key TEXT,
-                notified_at TEXT,
-                completion_id TEXT,
-                spawn_spec TEXT,
-                spawn_attempts INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (session_id, task_id)
-            )
-            """
-        )
-        await self.conn.execute(
-            f"""
-            INSERT OR IGNORE INTO background_agent_runs (
-                task_id, session_id, parent_run_id, parent_tool_call_id, child_session_id,
-                agent_type, wait, status, command, detail, result_ref, result_text, created_at, started_at,
-                updated_at, ended_at, cancel_requested_at, notified_at
-            )
-            SELECT
-                task_id, session_id, parent_run_id, {parent_tool_call_expr}, {child_session_expr},
-                {agent_type_expr}, {wait_expr}, status, command,
-                detail, result_ref, {result_text_expr}, created_at, started_at,
-                updated_at, ended_at, cancel_requested_at, notified_at
-            FROM background_agent_runs_old
-            """
-        )
-        await self.conn.execute("DROP TABLE background_agent_runs_old")
-        await self.conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_background_agent_runs_session_status
-                ON background_agent_runs(session_id, status)
-            """
-        )
-        await self.conn.commit()
-
-    async def _migrate_background_agent_events_schema(self) -> None:
-        rows = await self.conn.execute_fetchall("PRAGMA table_info(background_agent_events)")
-        if not rows:
-            return
-        columns = {row["name"] for row in rows}
-        if "event_id" not in columns:
-            await self.conn.execute("ALTER TABLE background_agent_events ADD COLUMN event_id TEXT")
-        if "delivered_at" not in columns:
-            await self.conn.execute("ALTER TABLE background_agent_events ADD COLUMN delivered_at TEXT")
-        await self.conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_background_agent_events_event_id "
-            "ON background_agent_events(event_id) WHERE event_id IS NOT NULL"
-        )
-        await self.conn.commit()
 
     def _to_serializable_messages(self, messages: list[dict | Any]) -> list[dict]:
         serializable: list[dict] = []
@@ -2472,17 +770,6 @@ class SessionStore:
         ]
         return [*([system] if system is not None else []), checkpoint_message, *retained, *appended]
 
-    def _message_row_payload(self, row: aiosqlite.Row) -> dict:
-        return {
-            "session_id": row["session_id"],
-            "message_id": row["message_id"],
-            "seq": row["seq"],
-            "role": row["role"],
-            "client_id": row["client_id"],
-            "created_at": row["created_at"],
-            "message": json.loads(row["message_json"]),
-        }
-
     async def _restore_active_tool_result_files(self, session_id: str, messages: list[dict]) -> None:
         """Rehydrate pruned file-read targets from the durable result manifest."""
         missing = {
@@ -2529,14 +816,10 @@ class SessionStore:
                 if missing_payload:
                     if decoded is not None:
                         await asyncio.to_thread(persist_result_payload, session_id, tool_call_id, content)
-            except OSError:
-                _logger.warning(
-                    "Failed to rehydrate tool result file for %s/%s",
-                    session_id,
-                    tool_call_id,
-                    exc_info=True,
-                )
-                continue
+            except (OSError, ToolResultPayloadError) as exc:
+                raise SessionDataCorruptionError(
+                    f"session {session_id} tool result {tool_call_id} cannot be rehydrated"
+                ) from exc
             restored.add(tool_call_id)
 
     def _is_turn_message(self, row: aiosqlite.Row) -> bool:
@@ -2654,53 +937,10 @@ class SessionStore:
         *,
         metadata: dict | None = None,
     ) -> None:
-        now = datetime.now(UTC).isoformat()
-        metadata = dict(metadata or {})
-        client_id = metadata.get("client_id") if isinstance(metadata.get("client_id"), str) else None
-        metadata_json = await asyncio.to_thread(lambda: json.dumps(metadata))
-        try:
-            await self.conn.execute(
-                """
-                INSERT INTO chat_runs (
-                    run_id, session_id, status, started_at, updated_at, metadata_json, client_id
-                )
-                VALUES (?, ?, 'pending', ?, ?, ?, ?)
-                """,
-                (run_id, session_id, now, now, metadata_json, client_id),
-            )
-            await self.conn.execute(
-                """
-                UPDATE chat_runs
-                SET status = 'interrupted',
-                    stop_reason = 'superseded',
-                    error_code = 'run_superseded',
-                    error_message = 'Run was superseded by a newer run in the same session.',
-                    updated_at = ?,
-                    ended_at = ?
-                WHERE session_id = ?
-                  AND run_id != ?
-                  AND status IN ('pending', 'running')
-                """,
-                (now, now, session_id, run_id),
-            )
-            await self.conn.commit()
-        except BaseException:
-            await self.conn.rollback()
-            raise
+        await self.chat_runs.record_chat_run_started(run_id, session_id, metadata=metadata)
 
     async def prune_expired_chat_idempotency_keys(self, now: datetime | None = None) -> int:
-        now_iso = (now or datetime.now(UTC)).isoformat()
-        cursor = await self.conn.execute(
-            f"""
-            DELETE FROM chat_idempotency_keys
-            WHERE expires_at IS NOT NULL
-              AND expires_at <= ?
-              AND status IN ({", ".join("?" for _ in CHAT_IDEMPOTENCY_TERMINAL_STATUSES)})
-            """,
-            (now_iso, *CHAT_IDEMPOTENCY_TERMINAL_STATUSES),
-        )
-        await self.conn.commit()
-        return cursor.rowcount
+        return await self.chat_queue.prune_expired_chat_idempotency_keys(now)
 
     async def claim_chat_idempotency_key(
         self,
@@ -2711,35 +951,16 @@ class SessionStore:
         status: str = "accepted",
         expires_at: str | None = None,
     ) -> tuple[bool, dict]:
-        now_dt = datetime.now(UTC)
-        now = now_dt.isoformat()
-        expires_at = expires_at or (now_dt + timedelta(days=CHAT_IDEMPOTENCY_TTL_DAYS)).isoformat()
-        await self.conn.execute(
-            """
-            INSERT OR IGNORE INTO chat_idempotency_keys (
-                session_id, client_id, request_hash, status, created_at, updated_at, expires_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (session_id, client_id, request_hash, status, now, now, expires_at),
+        return await self.chat_queue.claim_chat_idempotency_key(
+            session_id=session_id,
+            client_id=client_id,
+            request_hash=request_hash,
+            status=status,
+            expires_at=expires_at,
         )
-        await self.conn.commit()
-        row = await self.get_chat_idempotency_key(session_id, client_id)
-        if row is None:
-            raise RuntimeError("chat idempotency claim insert failed")
-        return row["request_hash"] == request_hash and row["created_at"] == now, row
 
     async def get_chat_idempotency_key(self, session_id: str, client_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM chat_idempotency_keys
-            WHERE session_id = ? AND client_id = ?
-            """,
-            (session_id, client_id),
-        )
-        if not rows:
-            return None
-        return self._chat_idempotency_payload(rows[0])
+        return await self.chat_queue.get_chat_idempotency_key(session_id, client_id)
 
     async def update_chat_idempotency_key(
         self,
@@ -2750,59 +971,12 @@ class SessionStore:
         run_id: str | None = None,
         message_id: str | None = None,
     ) -> dict | None:
-        now_dt = datetime.now(UTC)
-        now = now_dt.isoformat()
-        expires_at = (
-            (now_dt + timedelta(days=CHAT_IDEMPOTENCY_TTL_DAYS)).isoformat()
-            if status in CHAT_IDEMPOTENCY_TERMINAL_STATUSES
-            else None
-        )
-        await self.conn.execute(
-            """
-            UPDATE chat_idempotency_keys
-            SET status = ?,
-                run_id = COALESCE(?, run_id),
-                message_id = COALESCE(?, message_id),
-                updated_at = ?,
-                expires_at = COALESCE(?, expires_at)
-            WHERE session_id = ? AND client_id = ?
-            """,
-            (status, run_id, message_id, now, expires_at, session_id, client_id),
-        )
-        await self.conn.commit()
-        return await self.get_chat_idempotency_key(session_id, client_id)
-
-    async def _upsert_cancelled_chat_idempotency(
-        self,
-        *,
-        session_id: str,
-        client_id: str,
-        run_id: str | None,
-        now: str,
-        expires_at: str,
-    ) -> None:
-        """Durably make a client id terminal without replacing its request hash."""
-        await self.conn.execute(
-            """
-            INSERT INTO chat_idempotency_keys (
-                session_id, client_id, request_hash, run_id, status, created_at, updated_at, expires_at
-            )
-            VALUES (?, ?, ?, ?, 'cancelled', ?, ?, ?)
-            ON CONFLICT(session_id, client_id) DO UPDATE SET
-                status = 'cancelled',
-                run_id = COALESCE(chat_idempotency_keys.run_id, excluded.run_id),
-                updated_at = excluded.updated_at,
-                expires_at = excluded.expires_at
-            """,
-            (
-                session_id,
-                client_id,
-                CHAT_IDEMPOTENCY_CANCELLED_TOMBSTONE_HASH,
-                run_id,
-                now,
-                now,
-                expires_at,
-            ),
+        return await self.chat_queue.update_chat_idempotency_key(
+            session_id=session_id,
+            client_id=client_id,
+            status=status,
+            run_id=run_id,
+            message_id=message_id,
         )
 
     async def cancel_chat_queued_message(
@@ -2812,60 +986,11 @@ class SessionStore:
         client_id: str,
         run_id: str | None = None,
     ) -> str:
-        """Cancel a queued message, or tombstone a client id before it queues.
-
-        Returns ``cancelled`` when the client may discard its optimistic queue
-        item and ``ingested`` once the agent has already consumed it.
-        """
-        now_dt = datetime.now(UTC)
-        now = now_dt.isoformat()
-        expires_at = (now_dt + timedelta(days=CHAT_IDEMPOTENCY_TTL_DAYS)).isoformat()
-        rows = await self.conn.execute_fetchall(
-            """
-            SELECT status, run_id FROM chat_queued_messages
-            WHERE session_id = ? AND client_id = ?
-            """,
-            (session_id, client_id),
-        )
-        if rows:
-            row = rows[0]
-            if row["status"] == "ingested":
-                return "ingested"
-            if row["status"] in {"queued", "failed_retryable", "cancelled"}:
-                if row["status"] != "cancelled":
-                    await self.conn.execute(
-                        """
-                        UPDATE chat_queued_messages
-                        SET status = 'cancelled', updated_at = ?
-                        WHERE session_id = ? AND client_id = ?
-                          AND status IN ('queued', 'failed_retryable')
-                        """,
-                        (now, session_id, client_id),
-                    )
-                await self._upsert_cancelled_chat_idempotency(
-                    session_id=session_id,
-                    client_id=client_id,
-                    run_id=row["run_id"],
-                    now=now,
-                    expires_at=expires_at,
-                )
-                await self.conn.commit()
-                return "cancelled"
-            return "ingested"
-
-        idempotency = await self.get_chat_idempotency_key(session_id, client_id)
-        if idempotency is not None:
-            return "cancelled" if idempotency["status"] == "cancelled" else "ingested"
-
-        await self._upsert_cancelled_chat_idempotency(
+        return await self.chat_queue.cancel_chat_queued_message(
             session_id=session_id,
             client_id=client_id,
             run_id=run_id,
-            now=now,
-            expires_at=expires_at,
         )
-        await self.conn.commit()
-        return "cancelled"
 
     async def record_chat_run_status(
         self,
@@ -2877,23 +1002,14 @@ class SessionStore:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
-        now = datetime.now(UTC).isoformat()
-        ended_at = now if status in {"completed", "cancelled", "error", "failed", "interrupted"} else None
-        await self.conn.execute(
-            """
-            UPDATE chat_runs
-            SET status = ?,
-                stop_reason = ?,
-                updated_at = ?,
-                ended_at = ?,
-                last_seq = COALESCE(?, last_seq),
-                error_code = ?,
-                error_message = ?
-            WHERE run_id = ?
-            """,
-            (status, stop_reason, now, ended_at, last_seq, error_code, error_message, run_id),
+        await self.chat_runs.record_chat_run_status(
+            run_id,
+            status,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+            error_code=error_code,
+            error_message=error_message,
         )
-        await self.conn.commit()
 
     async def record_chat_run_completed_with_outbox(
         self,
@@ -2902,34 +1018,11 @@ class SessionStore:
         stop_reason: str | None,
         last_seq: int | None,
     ) -> None:
-        if self.chat_completion_conn is None:
-            raise RuntimeError("chat completion connection is not configured")
-        now = datetime.now(UTC).isoformat()
-        conn = self.chat_completion_conn
-        await conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = await conn.execute(
-                """
-                UPDATE chat_runs
-                SET status = 'completed',
-                    stop_reason = ?,
-                    updated_at = ?,
-                    ended_at = ?,
-                    last_seq = COALESCE(?, last_seq),
-                    error_code = NULL,
-                    error_message = NULL
-                WHERE run_id = ?
-                """,
-                (stop_reason, now, now, last_seq, event.run_id),
-            )
-            if cursor.rowcount != 1:
-                raise KeyError(f"unknown chat run: {event.run_id}")
-            outbox = OutboxStore(conn)
-            await outbox.enqueue_run_completed_in_transaction(event)
-            await conn.commit()
-        except BaseException:
-            await conn.rollback()
-            raise
+        await self.chat_runs.record_chat_run_completed_with_outbox(
+            event,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+        )
 
     async def record_chat_run_failed_with_outbox(
         self,
@@ -2941,73 +1034,23 @@ class SessionStore:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
-        if self.chat_completion_conn is None:
-            raise RuntimeError("chat completion connection is not configured")
-        now = datetime.now(UTC).isoformat()
-        conn = self.chat_completion_conn
-        await conn.execute("BEGIN IMMEDIATE")
-        try:
-            cursor = await conn.execute(
-                """
-                UPDATE chat_runs
-                SET status = ?,
-                    stop_reason = ?,
-                    updated_at = ?,
-                    ended_at = ?,
-                    last_seq = COALESCE(?, last_seq),
-                    error_code = ?,
-                    error_message = ?
-                WHERE run_id = ?
-                """,
-                (
-                    status,
-                    stop_reason,
-                    now,
-                    now,
-                    last_seq,
-                    error_code,
-                    error_message,
-                    event.run_id,
-                ),
-            )
-            if cursor.rowcount != 1:
-                raise KeyError(f"unknown chat run: {event.run_id}")
-            outbox = OutboxStore(conn)
-            await outbox.enqueue_run_failed_in_transaction(event)
-            await conn.commit()
-        except BaseException:
-            await conn.rollback()
-            raise
+        await self.chat_runs.record_chat_run_failed_with_outbox(
+            event,
+            status=status,
+            stop_reason=stop_reason,
+            last_seq=last_seq,
+            error_code=error_code,
+            error_message=error_message,
+        )
 
     async def get_chat_run(self, run_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall("SELECT * FROM chat_runs WHERE run_id = ?", (run_id,))
-        if not rows:
-            return None
-        return self._chat_run_payload(rows[0])
+        return await self.chat_runs.get_chat_run(run_id)
 
     async def get_latest_chat_run_for_session(self, session_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM chat_runs
-            WHERE session_id = ?
-            ORDER BY updated_at DESC, started_at DESC
-            LIMIT 1
-            """,
-            (session_id,),
-        )
-        if not rows:
-            return None
-        return self._chat_run_payload(rows[0])
+        return await self.chat_runs.get_latest_chat_run_for_session(session_id)
 
     async def list_interrupted_chat_runs(self) -> list[dict]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM chat_runs
-            WHERE status = 'interrupted' AND stop_reason = 'server_restart'
-            ORDER BY updated_at ASC
-            """
-        )
-        return [self._chat_run_payload(row) for row in rows]
+        return await self.chat_runs.list_interrupted_chat_runs()
 
     async def list_pending_tool_approvals(self, session_id: str, *, run_id: str | None = None) -> list[dict]:
         return await self.list_pending_run_suspensions(session_id, run_id=run_id, kind="tool_approval")
@@ -3043,7 +1086,7 @@ class SessionStore:
             f"SELECT * FROM tool_approvals WHERE {' AND '.join(conditions)} ORDER BY requested_at ASC",
             tuple(params),
         )
-        return [self._tool_approval_payload(row) for row in rows]
+        return [tool_approval_payload(row) for row in rows]
 
     async def list_all_pending_run_suspensions(self, *, kind: str | None = None) -> list[dict]:
         """Every pending suspension across all sessions — the queryable index
@@ -3058,7 +1101,7 @@ class SessionStore:
             f"SELECT * FROM tool_approvals WHERE {' AND '.join(conditions)} ORDER BY requested_at ASC",
             tuple(params),
         )
-        return [self._tool_approval_payload(row) for row in rows]
+        return [tool_approval_payload(row) for row in rows]
 
     async def record_tool_call_started(
         self,
@@ -3154,7 +1197,7 @@ class SessionStore:
             "SELECT * FROM tool_calls WHERE run_id = ? ORDER BY started_at ASC",
             (run_id,),
         )
-        return [self._tool_call_payload(row) for row in rows]
+        return [tool_call_payload(row) for row in rows]
 
     async def list_tool_call_outcomes(
         self,
@@ -3359,7 +1402,7 @@ class SessionStore:
             return None
         row = rows[0]
         content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
-        return self._tool_result_payload(row, content=content)
+        return tool_result_payload(row, content=content)
 
     async def list_tool_result_content_hashes(self) -> set[str]:
         rows = await self.read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
@@ -3585,7 +1628,7 @@ class SessionStore:
             return None
         row = rows[0]
         content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
-        return self._tool_result_payload(row, content=content)
+        return tool_result_payload(row, content=content)
 
     async def record_tool_approval_requested(
         self,
@@ -3634,26 +1677,19 @@ class SessionStore:
         detail: str,
         expires_at: str | None = None,
     ) -> None:
+        from arden.integrations.connection_request import IntegrationConnectionRequestEnvelope
+
+        envelope = IntegrationConnectionRequestEnvelope.from_descriptor(
+            descriptor,
+            source=source,
+            detail=detail,
+        )
         await self.record_run_suspension(
             run_id=run_id,
             session_id=session_id,
             suspension_id=tool_call_id,
             kind="integration_connection",
-            payload={
-                "tool_name": "connection_request",
-                "action": descriptor.action,
-                "scope": "external",
-                "integration_id": descriptor.integration_id,
-                "connection_id": descriptor.connection_id,
-                "label": descriptor.label,
-                "reason": descriptor.state,
-                "detail": detail,
-                "capability": descriptor.capability,
-                "settings_tab": descriptor.settings_tab,
-                "required_scopes": list(descriptor.required_scopes),
-                "tool_names": list(descriptor.tool_names),
-                "source": source,
-            },
+            payload=envelope.model_dump(mode="json"),
             expires_at=expires_at,
         )
 
@@ -3804,7 +1840,7 @@ class SessionStore:
         )
         if not rows:
             return None
-        return self._tool_approval_payload(rows[0])
+        return tool_approval_payload(rows[0])
 
     async def mark_run_suspension_consumed(self, *, run_id: str, suspension_id: str) -> bool:
         return await self._update(
@@ -3816,22 +1852,7 @@ class SessionStore:
         )
 
     async def mark_interrupted_chat_runs(self) -> int:
-        now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            """
-            UPDATE chat_runs
-            SET status = 'interrupted',
-                stop_reason = 'server_restart',
-                error_code = 'run_interrupted',
-                error_message = 'Run was interrupted by server restart.',
-                updated_at = ?,
-                ended_at = ?
-            WHERE status IN ('pending', 'running', 'backgrounded')
-            """,
-            (now, now),
-        )
-        await self.conn.commit()
-        return cursor.rowcount
+        return await self.chat_runs.mark_interrupted_chat_runs()
 
     async def record_background_agent_started(
         self,
@@ -3848,179 +1869,19 @@ class SessionStore:
         wait: bool = False,
         spawn_spec: str | None = None,
     ) -> BackgroundStartDisposition:
-        now = datetime.now(UTC).isoformat()
-        if not is_public_ref(agent_ref):
-            raise ValueError("background agent_ref is invalid")
-        async with self._background_event_lock:
-            existing_rows = await self.conn.execute_fetchall(
-                "SELECT agent_ref FROM background_agent_runs WHERE session_id = ? AND task_id = ?",
-                (session_id, task_id),
-            )
-            if existing_rows and existing_rows[0]["agent_ref"] != agent_ref:
-                raise ValueError("background agent_ref is immutable")
-            if child_session_id is not None:
-                child_rows = await self.conn.execute_fetchall(
-                    "SELECT public_ref FROM sessions WHERE session_id = ?", (child_session_id,)
-                )
-                if not child_rows:
-                    raise KeyError(f"unknown background child session: {child_session_id}")
-                if child_rows[0]["public_ref"] != agent_ref:
-                    raise ValueError("background agent_ref must equal its child session public_ref")
-            scope_rows = await self.conn.execute_fetchall(
-                "SELECT * FROM execution_cancellation_scopes WHERE session_id = ?",
-                (session_id,),
-            )
-            cancellation = scope_rows[0] if scope_rows else None
-            cursor = await self.conn.execute(
-                """
-                INSERT INTO background_agent_runs (
-                    task_id, agent_ref, session_id, parent_run_id, parent_tool_call_id, suspension_id, child_session_id,
-                    agent_type, wait, status, command, spawn_spec,
-                    created_at, started_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id, task_id) DO UPDATE SET
-                    session_id = excluded.session_id,
-                    parent_run_id = excluded.parent_run_id,
-                    parent_tool_call_id = excluded.parent_tool_call_id,
-                    suspension_id = excluded.suspension_id,
-                    child_session_id = excluded.child_session_id,
-                    agent_type = excluded.agent_type,
-                    wait = excluded.wait,
-                    status = 'running',
-                    command = excluded.command,
-                    spawn_spec = COALESCE(excluded.spawn_spec, spawn_spec),
-                    detail = NULL,
-                    result_ref = NULL,
-                    result_text = NULL,
-                    updated_at = excluded.updated_at,
-                    ended_at = NULL,
-                    cancel_requested_at = NULL,
-                    cancel_actor = NULL,
-                    terminal_cause = NULL,
-                    cancel_idempotency_key = NULL,
-                    notified_at = NULL,
-                    completion_id = NULL
-                WHERE background_agent_runs.completion_id IS NULL
-                """,
-                (
-                    task_id,
-                    agent_ref,
-                    session_id,
-                    parent_run_id,
-                    parent_tool_call_id,
-                    suspension_id,
-                    child_session_id,
-                    agent_type,
-                    int(wait),
-                    command,
-                    spawn_spec,
-                    now,
-                    now,
-                    now,
-                ),
-            )
-            if cursor.rowcount <= 0:
-                await self.conn.commit()
-                return BackgroundStartDisposition.CANCELLED
-
-            disposition = BackgroundStartDisposition.CANCELLED if cancellation else BackgroundStartDisposition.STARTED
-            event_id = None
-            detail = None
-            terminal = 0
-            if cancellation is not None:
-                actor = str(cancellation["actor"])
-                cause = str(cancellation["cause"])
-                generation = int(cancellation["generation"])
-                idempotency_key = str(cancellation["idempotency_key"])
-                completion_id = f"cancel-before-start:{idempotency_key}:{session_id}:{task_id}"
-                await self.conn.execute(
-                    """
-                    UPDATE background_agent_runs
-                    SET status = 'cancelled', detail = ?, ended_at = ?, updated_at = ?,
-                        cancel_requested_at = ?, cancel_actor = ?, terminal_cause = ?,
-                        cancel_generation = MAX(cancel_generation, ?), cancel_idempotency_key = ?,
-                        completion_id = ?
-                    WHERE session_id = ? AND task_id = ?
-                    """,
-                    (
-                        cause,
-                        now,
-                        now,
-                        now,
-                        actor,
-                        cause,
-                        generation,
-                        idempotency_key,
-                        completion_id,
-                        session_id,
-                        task_id,
-                    ),
-                )
-                if child_session_id:
-                    await self.conn.execute(
-                        """
-                        INSERT INTO execution_cancellation_scopes (
-                            session_id, actor, cause, generation, idempotency_key, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(session_id) DO UPDATE SET
-                            actor = excluded.actor,
-                            cause = excluded.cause,
-                            generation = MAX(execution_cancellation_scopes.generation, excluded.generation),
-                            idempotency_key = excluded.idempotency_key,
-                            updated_at = excluded.updated_at
-                        WHERE execution_cancellation_scopes.idempotency_key <> excluded.idempotency_key
-                        """,
-                        (child_session_id, actor, cause, generation, idempotency_key, now),
-                    )
-                if wait and parent_run_id and suspension_id:
-                    resolution = json.dumps(
-                        {"status": "cancelled", "result": cause},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    await self.conn.execute(
-                        """
-                        UPDATE tool_approvals
-                        SET status = 'cancelled', resolved_at = COALESCE(resolved_at, ?),
-                            result_feedback = COALESCE(?, result_feedback),
-                            resolution_json = COALESCE(?, resolution_json)
-                        WHERE run_id = ? AND tool_call_id = ? AND status = 'pending'
-                        """,
-                        (now, cause, resolution, parent_run_id, suspension_id),
-                    )
-                event_id = completion_id
-                detail = cause
-                terminal = 1
-            elif child_session_id:
-                await self.conn.execute(
-                    "DELETE FROM execution_cancellation_scopes WHERE session_id = ?",
-                    (child_session_id,),
-                )
-
-            seq_rows = await self.conn.execute_fetchall(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM background_agent_events WHERE session_id = ?",
-                (session_id,),
-            )
-            await self.conn.execute(
-                """
-                INSERT OR IGNORE INTO background_agent_events (
-                    session_id, seq, task_id, status, detail, terminal, created_at, event_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    session_id,
-                    int(seq_rows[0]["next_seq"]),
-                    task_id,
-                    disposition.value,
-                    detail,
-                    terminal,
-                    now,
-                    event_id,
-                ),
-            )
-            await self.conn.commit()
-        return disposition
+        return await self.background_starts.record_background_agent_started(
+            task_id=task_id,
+            agent_ref=agent_ref,
+            session_id=session_id,
+            parent_run_id=parent_run_id,
+            command=command,
+            parent_tool_call_id=parent_tool_call_id,
+            suspension_id=suspension_id,
+            child_session_id=child_session_id,
+            agent_type=agent_type,
+            wait=wait,
+            spawn_spec=spawn_spec,
+        )
 
     async def record_background_agent_event(
         self,
@@ -4031,39 +1892,13 @@ class SessionStore:
         detail: str | None = None,
         result_ref: str | None = None,
     ) -> int:
-        terminal = status in {"completed", "failed", "cancelled", "interrupted"}
-        now = datetime.now(UTC).isoformat()
-        async with self._background_event_lock:
-            rows = await self.conn.execute_fetchall(
-                """
-                SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
-                FROM background_agent_events
-                WHERE session_id = ?
-                """,
-                (session_id,),
-            )
-            seq = int(rows[0]["next_seq"])
-            await self.conn.execute(
-                """
-                INSERT INTO background_agent_events (
-                    session_id, seq, task_id, status, detail, result_ref, terminal, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (session_id, seq, task_id, status, detail, result_ref, int(terminal), now),
-            )
-            await self.conn.execute(
-                """
-            UPDATE background_agent_runs
-            SET detail = COALESCE(?, detail),
-                result_ref = COALESCE(?, result_ref),
-                updated_at = ?
-            WHERE session_id = ? AND task_id = ?
-            """,
-                (detail, result_ref, now, session_id, task_id),
-            )
-            await self.conn.commit()
-        return seq
+        return await self.background_agents.record_background_agent_event(
+            task_id=task_id,
+            session_id=session_id,
+            status=status,
+            detail=detail,
+            result_ref=result_ref,
+        )
 
     async def record_background_agent_finished(
         self,
@@ -4075,14 +1910,13 @@ class SessionStore:
         detail: str | None = None,
         result_text: str | None = None,
     ) -> None:
-        await self.claim_background_agent_completion(
+        await self.background_agents.record_background_agent_finished(
             task_id=task_id,
             session_id=session_id,
             status=status,
-            detail=detail,
             result_ref=result_ref,
+            detail=detail,
             result_text=result_text,
-            completion_id=f"bg:{task_id}:{status}",
         )
 
     async def claim_background_agent_completion(
@@ -4096,79 +1930,15 @@ class SessionStore:
         detail: str | None = None,
         result_text: str | None = None,
     ) -> dict:
-        now = datetime.now(UTC).isoformat()
-        async with self._background_event_lock:
-            rows = await self.conn.execute_fetchall(
-                "SELECT * FROM background_agent_runs WHERE session_id = ? AND task_id = ?",
-                (session_id, task_id),
-            )
-            if not rows:
-                raise KeyError(f"Unknown background task {session_id}/{task_id}")
-            existing = rows[0]
-            if existing["completion_id"]:
-                return {
-                    "claimed": False,
-                    "delivered": existing["notified_at"] is not None,
-                    "completion_id": existing["completion_id"],
-                    "status": existing["status"],
-                    "result_ref": existing["result_ref"],
-                    "result_text": existing["result_text"],
-                }
-
-            seq_rows = await self.conn.execute_fetchall(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM background_agent_events WHERE session_id = ?",
-                (session_id,),
-            )
-            seq = int(seq_rows[0]["next_seq"])
-            await self.conn.execute(
-                """
-                UPDATE background_agent_runs
-                SET status = ?, detail = COALESCE(?, detail), result_ref = COALESCE(?, result_ref),
-                    result_text = COALESCE(?, result_text), completion_id = ?, updated_at = ?, ended_at = ?
-                WHERE session_id = ? AND task_id = ? AND completion_id IS NULL
-                """,
-                (status, detail, result_ref, result_text, completion_id, now, now, session_id, task_id),
-            )
-            await self.conn.execute(
-                """
-                INSERT INTO background_agent_events (
-                    session_id, seq, task_id, status, detail, result_ref, terminal, created_at, event_id
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-                """,
-                (session_id, seq, task_id, status, detail, result_ref, now, completion_id),
-            )
-            if existing["wait"] and existing["parent_run_id"] and existing["suspension_id"]:
-                resolution = json.dumps(
-                    {"status": status, "result": result_text or ""},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                await self.conn.execute(
-                    """
-                    UPDATE tool_approvals
-                    SET status = ?, resolved_at = COALESCE(resolved_at, ?),
-                        result_feedback = COALESCE(?, result_feedback),
-                        resolution_json = COALESCE(?, resolution_json)
-                    WHERE run_id = ? AND tool_call_id = ? AND status = 'pending'
-                    """,
-                    (
-                        status,
-                        now,
-                        result_text,
-                        resolution,
-                        existing["parent_run_id"],
-                        existing["suspension_id"],
-                    ),
-                )
-            await self.conn.commit()
-        return {
-            "claimed": True,
-            "delivered": False,
-            "completion_id": completion_id,
-            "status": status,
-            "result_ref": result_ref,
-            "result_text": result_text,
-        }
+        return await self.background_agents.claim_background_agent_completion(
+            task_id=task_id,
+            session_id=session_id,
+            status=status,
+            completion_id=completion_id,
+            result_ref=result_ref,
+            detail=detail,
+            result_text=result_text,
+        )
 
     async def mark_background_completion_delivered(
         self,
@@ -4177,46 +1947,17 @@ class SessionStore:
         task_id: str,
         completion_id: str,
     ) -> bool:
-        now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            """
-            UPDATE background_agent_runs SET notified_at = COALESCE(notified_at, ?), updated_at = ?
-            WHERE session_id = ? AND task_id = ? AND completion_id = ?
-            """,
-            (now, now, session_id, task_id, completion_id),
-        )
-        await self.conn.execute(
-            "UPDATE background_agent_events SET delivered_at = COALESCE(delivered_at, ?) WHERE event_id = ?",
-            (now, completion_id),
-        )
-        await self.conn.commit()
-        return cursor.rowcount > 0
-
-    async def list_undelivered_background_completions(self) -> list[dict]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM background_agent_runs
-            WHERE completion_id IS NOT NULL AND notified_at IS NULL
-            ORDER BY ended_at ASC
-            """
-        )
-        return [
-            {
-                **self._background_agent_payload(row),
-                "result_text": row["result_text"],
-            }
-            for row in rows
-        ]
-
-    async def request_background_agent_cancel(self, session_id: str, task_id: str) -> bool:
-        cancelled = await self.request_background_agent_cancel_cascade(
+        return await self.background_agents.mark_background_completion_delivered(
             session_id=session_id,
             task_id=task_id,
-            actor="user",
-            cause="user_cancelled",
-            idempotency_key=f"user_cancelled:{session_id}:{task_id}",
+            completion_id=completion_id,
         )
-        return bool(cancelled)
+
+    async def list_undelivered_background_completions(self) -> list[dict]:
+        return await self.background_agents.list_undelivered_background_completions()
+
+    async def request_background_agent_cancel(self, session_id: str, task_id: str) -> bool:
+        return await self.background_cancellations.request_background_agent_cancel(session_id, task_id)
 
     async def request_background_agent_cancel_cascade(
         self,
@@ -4227,185 +1968,28 @@ class SessionStore:
         cause: str,
         idempotency_key: str,
     ) -> list[tuple[str, str]]:
-        """Persist one cancellation intent across the stored spawn subtree.
-
-        The recursive edge is `parent.child_session_id -> child.session_id`.
-        One transaction updates every open descendant and appends an event in
-        each affected session, so restart recovery sees the same cause even if
-        the in-memory task cancellation is interrupted.
-        """
-        now = datetime.now(UTC).isoformat()
-        async with self._background_event_lock:
-            rows = await self.conn.execute_fetchall(
-                """
-                WITH RECURSIVE descendants(session_id, task_id, child_session_id) AS (
-                    SELECT session_id, task_id, child_session_id
-                    FROM background_agent_runs
-                    WHERE session_id = ? AND task_id = ?
-                    UNION ALL
-                    SELECT child.session_id, child.task_id, child.child_session_id
-                    FROM background_agent_runs AS child
-                    JOIN descendants AS parent ON child.session_id = parent.child_session_id
-                )
-                SELECT run.session_id, run.task_id, run.child_session_id
-                FROM background_agent_runs AS run
-                JOIN descendants AS node
-                  ON run.session_id = node.session_id AND run.task_id = node.task_id
-                WHERE run.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted')
-                  AND COALESCE(run.cancel_idempotency_key, '') <> ?
-                """,
-                (session_id, task_id, idempotency_key),
-            )
-            cancelled = [(str(row["session_id"]), str(row["task_id"])) for row in rows]
-            for row in rows:
-                cancelled_session = str(row["session_id"])
-                cancelled_task = str(row["task_id"])
-                await self.conn.execute(
-                    """
-                    UPDATE background_agent_runs
-                    SET status = 'cancel_requested',
-                        cancel_requested_at = COALESCE(cancel_requested_at, ?),
-                        cancel_actor = ?, terminal_cause = ?,
-                        cancel_generation = cancel_generation + 1,
-                        cancel_idempotency_key = ?, detail = ?, updated_at = ?
-                    WHERE session_id = ? AND task_id = ?
-                    """,
-                    (
-                        now,
-                        actor,
-                        cause,
-                        idempotency_key,
-                        cause,
-                        now,
-                        cancelled_session,
-                        cancelled_task,
-                    ),
-                )
-                if row["child_session_id"]:
-                    await self.conn.execute(
-                        """
-                        INSERT INTO execution_cancellation_scopes (
-                            session_id, actor, cause, generation, idempotency_key, updated_at
-                        ) VALUES (?, ?, ?, 1, ?, ?)
-                        ON CONFLICT(session_id) DO UPDATE SET
-                            actor = excluded.actor,
-                            cause = excluded.cause,
-                            generation = execution_cancellation_scopes.generation + 1,
-                            idempotency_key = excluded.idempotency_key,
-                            updated_at = excluded.updated_at
-                        WHERE execution_cancellation_scopes.idempotency_key <> excluded.idempotency_key
-                        """,
-                        (row["child_session_id"], actor, cause, idempotency_key, now),
-                    )
-                seq_row = await self.conn.execute_fetchall(
-                    """
-                    SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
-                    FROM background_agent_events WHERE session_id = ?
-                    """,
-                    (cancelled_session,),
-                )
-                await self.conn.execute(
-                    """
-                    INSERT INTO background_agent_events (
-                        session_id, seq, task_id, status, detail, terminal, created_at, event_id
-                    ) VALUES (?, ?, ?, 'cancel_requested', ?, 0, ?, ?)
-                    """,
-                    (
-                        cancelled_session,
-                        int(seq_row[0]["next_seq"]),
-                        cancelled_task,
-                        cause,
-                        now,
-                        f"cancel:{idempotency_key}:{cancelled_session}:{cancelled_task}",
-                    ),
-                )
-            await self.conn.commit()
-        return cancelled
+        return await self.background_cancellations.request_background_agent_cancel_cascade(
+            session_id=session_id,
+            task_id=task_id,
+            actor=actor,
+            cause=cause,
+            idempotency_key=idempotency_key,
+        )
 
     async def get_background_agent_result(self, session_id: str, task_id: str) -> str | None:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT result_text FROM background_agent_runs
-            WHERE session_id = ? AND task_id = ?
-            """,
-            (session_id, task_id),
-        )
-        if not rows:
-            return None
-        value = rows[0]["result_text"]
-        return value if isinstance(value, str) else None
+        return await self.background_agents.get_background_agent_result(session_id, task_id)
 
     async def get_background_agent_result_by_ref(self, session_id: str, agent_ref: str) -> str | None:
-        if not is_public_ref(agent_ref):
-            return None
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT result_text FROM background_agent_runs WHERE session_id = ? AND agent_ref = ?",
-            (session_id, agent_ref),
-        )
-        if not rows:
-            return None
-        value = rows[0]["result_text"]
-        return value if isinstance(value, str) else None
+        return await self.background_agents.get_background_agent_result_by_ref(session_id, agent_ref)
 
     async def get_background_agent_run(self, session_id: str, task_id: str) -> dict | None:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM background_agent_runs
-            WHERE session_id = ? AND task_id = ?
-            """,
-            (session_id, task_id),
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            **self._background_agent_payload(row),
-            "result_text": row["result_text"],
-            "spawn_spec": row["spawn_spec"],
-            "spawn_attempts": int(row["spawn_attempts"]),
-        }
+        return await self.background_agents.get_background_agent_run(session_id, task_id)
 
     async def list_respawnable_background_agent_runs(self, *, max_attempts: int) -> list[dict]:
-        """Interrupted detached runs eligible for a boot-time respawn: a stored
-        spec to re-dispatch, no completion to redeliver instead, and a spawn
-        budget left. Awaited children recover via their parent run's resume."""
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM background_agent_runs
-            WHERE status = 'interrupted'
-              AND wait = 0
-              AND spawn_spec IS NOT NULL
-              AND completion_id IS NULL
-              AND spawn_attempts < ?
-            ORDER BY updated_at ASC
-            """,
-            (max_attempts,),
-        )
-        return [
-            {
-                **self._background_agent_payload(row),
-                "spawn_spec": row["spawn_spec"],
-                "spawn_attempts": int(row["spawn_attempts"]),
-            }
-            for row in rows
-        ]
+        return await self.background_agents.list_respawnable_background_agent_runs(max_attempts=max_attempts)
 
     async def increment_background_agent_spawn_attempts(self, session_id: str, task_id: str) -> int:
-        now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
-            """
-            UPDATE background_agent_runs
-            SET spawn_attempts = spawn_attempts + 1, updated_at = ?
-            WHERE session_id = ? AND task_id = ?
-            """,
-            (now, session_id, task_id),
-        )
-        await self.conn.commit()
-        rows = await self.conn.execute_fetchall(
-            "SELECT spawn_attempts FROM background_agent_runs WHERE session_id = ? AND task_id = ?",
-            (session_id, task_id),
-        )
-        return int(rows[0]["spawn_attempts"]) if rows else 0
+        return await self.background_agents.increment_background_agent_spawn_attempts(session_id, task_id)
 
     async def list_background_agent_runs(
         self,
@@ -4413,26 +1997,10 @@ class SessionStore:
         *,
         include_terminal: bool = True,
     ) -> list[dict]:
-        if include_terminal:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM background_agent_runs
-                WHERE session_id = ?
-                ORDER BY updated_at DESC
-                """,
-                (session_id,),
-            )
-        else:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM background_agent_runs
-                WHERE session_id = ?
-                  AND status NOT IN ('completed', 'failed', 'cancelled', 'interrupted')
-                ORDER BY updated_at DESC
-                """,
-                (session_id,),
-            )
-        return [self._background_agent_payload(row) for row in rows]
+        return await self.background_agents.list_background_agent_runs(
+            session_id,
+            include_terminal=include_terminal,
+        )
 
     async def list_background_agent_events(
         self,
@@ -4441,138 +2009,20 @@ class SessionStore:
         after_seq: int = 0,
         limit: int = 10000,
     ) -> list[dict]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM background_agent_events
-            WHERE session_id = ? AND seq > ?
-            ORDER BY seq ASC
-            LIMIT ?
-            """,
-            (session_id, after_seq, limit),
+        return await self.background_agents.list_background_agent_events(
+            session_id,
+            after_seq=after_seq,
+            limit=limit,
         )
-        return [self._background_agent_event_payload(row) for row in rows]
 
     async def mark_interrupted_background_agent_runs(self) -> int:
-        now = datetime.now(UTC).isoformat()
-        async with self._background_event_lock:
-            rows = await self.conn.execute_fetchall(
-                """
-                SELECT * FROM background_agent_runs
-                WHERE status IN ('running', 'activity', 'cancel_requested')
-                """,
-            )
-            if not rows:
-                return 0
-            for row in rows:
-                was_cancel_requested = row["status"] == "cancel_requested"
-                status = "cancelled" if was_cancel_requested else "interrupted"
-                if was_cancel_requested:
-                    detail = row["terminal_cause"] or "user_cancelled"
-                    event_detail = detail
-                else:
-                    detail = row["detail"] or "server_restart"
-                    event_detail = "server_restart"
-                completion_id = (
-                    row["completion_id"]
-                    or f"restart-cancel:{row['session_id']}:{row['task_id']}:{int(row['cancel_generation'])}"
-                    if was_cancel_requested
-                    else None
-                )
-                await self.conn.execute(
-                    """
-                    UPDATE background_agent_runs
-                    SET status = ?, detail = ?, updated_at = ?, ended_at = COALESCE(ended_at, ?),
-                        completion_id = COALESCE(completion_id, ?)
-                    WHERE session_id = ? AND task_id = ?
-                    """,
-                    (
-                        status,
-                        detail,
-                        now,
-                        now,
-                        completion_id,
-                        row["session_id"],
-                        row["task_id"],
-                    ),
-                )
-                seq_rows = await self.conn.execute_fetchall(
-                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM background_agent_events WHERE session_id = ?",
-                    (row["session_id"],),
-                )
-                await self.conn.execute(
-                    """
-                    INSERT OR IGNORE INTO background_agent_events (
-                        session_id, seq, task_id, status, detail, terminal, created_at, event_id
-                    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-                    """,
-                    (
-                        row["session_id"],
-                        int(seq_rows[0]["next_seq"]),
-                        row["task_id"],
-                        status,
-                        event_detail,
-                        now,
-                        completion_id,
-                    ),
-                )
-                if was_cancel_requested and row["wait"] and row["parent_run_id"] and row["suspension_id"]:
-                    resolution = json.dumps(
-                        {"status": "cancelled", "result": detail},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    await self.conn.execute(
-                        """
-                        UPDATE tool_approvals
-                        SET status = 'cancelled', resolved_at = COALESCE(resolved_at, ?),
-                            result_feedback = COALESCE(?, result_feedback),
-                            resolution_json = COALESCE(?, resolution_json)
-                        WHERE run_id = ? AND tool_call_id = ? AND status = 'pending'
-                        """,
-                        (now, detail, resolution, row["parent_run_id"], row["suspension_id"]),
-                    )
-            await self.conn.commit()
-        return len(rows)
+        return await self.background_cancellations.mark_interrupted_background_agent_runs()
 
     async def mark_interrupted_agent_sessions(self) -> int:
-        """A subagent session left 'running' after a restart can never resume —
-        its run died with the process — so the status is a lie that strands the
-        UI on a spinner until a manual reload. Flip orphaned agent sessions to
-        'interrupted' so a history load resolves them. Mirrors
-        mark_interrupted_background_agent_runs for the foreground/session path."""
-        rows = await self.conn.execute_fetchall(
-            """
-            SELECT session_id FROM sessions
-            WHERE session_type = 'agent' AND agent_status = 'running'
-            """,
-        )
-        if not rows:
-            return 0
-        await self.conn.execute(
-            """
-            UPDATE sessions SET agent_status = 'interrupted'
-            WHERE session_type = 'agent' AND agent_status = 'running'
-            """,
-        )
-        await self.conn.commit()
-        return len(rows)
+        return await self.background_cancellations.mark_interrupted_agent_sessions()
 
     async def mark_interrupted_chat_queued_messages_retryable(self) -> int:
-        now = datetime.now(UTC).isoformat()
-        cursor = await self.conn.execute(
-            """
-            UPDATE chat_queued_messages
-            SET status = 'failed_retryable',
-                updated_at = ?
-            WHERE status = 'queued'
-              AND run_id IN (
-                  SELECT run_id FROM chat_runs WHERE status = 'interrupted'
-              )
-            """,
-            (now,),
-        )
-        await self.conn.commit()
-        return cursor.rowcount
+        return await self.chat_queue.mark_interrupted_chat_queued_messages_retryable()
 
     async def record_chat_queued_message(
         self,
@@ -4583,114 +2033,27 @@ class SessionStore:
         message: dict,
         enqueued_seq: int | None = None,
     ) -> str:
-        """Record a queue item without reopening a terminal client id.
+        return await self.chat_queue.record_chat_queued_message(
+            client_id=client_id,
+            session_id=session_id,
+            run_id=run_id,
+            message=message,
+            enqueued_seq=enqueued_seq,
+        )
 
-        A cancellation can arrive while an earlier enqueue request is waiting
-        on storage. Its tombstone must win; otherwise the late write recreates
-        an invisible, never-drained queue row.
-        """
-        terminal_receipt = await self.conn.execute_fetchall(
-            """
-            SELECT status FROM chat_idempotency_keys
-            WHERE session_id = ? AND client_id = ?
-              AND status IN ('cancelled', 'ingested')
-            """,
-            (session_id, client_id),
-        )
-        if terminal_receipt:
-            return str(terminal_receipt[0]["status"])
-
-        now = datetime.now(UTC).isoformat()
-        message_json = await asyncio.to_thread(lambda: json.dumps(message, default=str))
-        cursor = await self.conn.execute(
-            """
-            INSERT INTO chat_queued_messages (
-                client_id, session_id, run_id, status, message_json, enqueued_at, updated_at, enqueued_seq
-            )
-            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)
-            ON CONFLICT(client_id) DO UPDATE SET
-                session_id = excluded.session_id,
-                run_id = excluded.run_id,
-                status = excluded.status,
-                message_json = excluded.message_json,
-                updated_at = excluded.updated_at,
-                enqueued_seq = excluded.enqueued_seq,
-                ingested_at = NULL,
-                ingested_seq = NULL
-            WHERE chat_queued_messages.status NOT IN ('cancelled', 'ingested')
-            """,
-            (client_id, session_id, run_id, message_json, now, now, enqueued_seq),
-        )
-        await self.conn.commit()
-        if cursor.rowcount > 0:
-            return "queued"
-        rows = await self.conn.execute_fetchall(
-            "SELECT status FROM chat_queued_messages WHERE client_id = ?",
-            (client_id,),
-        )
-        return str(rows[0]["status"]) if rows else "cancelled"
-
-    async def mark_chat_queued_message_ingested(self, client_id: str, *, ingested_seq: int | None = None) -> None:
-        now_dt = datetime.now(UTC)
-        now = now_dt.isoformat()
-        expires_at = (now_dt + timedelta(days=CHAT_IDEMPOTENCY_TTL_DAYS)).isoformat()
-        await self.conn.execute(
-            """
-            UPDATE chat_queued_messages
-            SET status = 'ingested', updated_at = ?, ingested_at = ?, ingested_seq = COALESCE(?, ingested_seq)
-            WHERE client_id = ?
-            """,
-            (now, now, ingested_seq, client_id),
-        )
-        # The client id is a durable request receipt too. Leaving it at
-        # ``queued`` makes a retry render a ghost queue item after the agent
-        # has already consumed it.
-        await self.conn.execute(
-            """
-            UPDATE chat_idempotency_keys
-            SET status = 'ingested', updated_at = ?, expires_at = ?
-            WHERE client_id = ?
-              AND session_id = (
-                  SELECT session_id FROM chat_queued_messages WHERE client_id = ?
-              )
-              AND status != 'cancelled'
-            """,
-            (now, expires_at, client_id, client_id),
-        )
-        await self.conn.commit()
+    async def mark_chat_queued_message_ingested(
+        self,
+        client_id: str,
+        *,
+        ingested_seq: int | None = None,
+    ) -> None:
+        await self.chat_queue.mark_chat_queued_message_ingested(client_id, ingested_seq=ingested_seq)
 
     async def mark_chat_queued_message_cancelled(self, client_id: str) -> None:
-        now = datetime.now(UTC).isoformat()
-        await self.conn.execute(
-            """
-            UPDATE chat_queued_messages
-            SET status = 'cancelled', updated_at = ?
-            WHERE client_id = ? AND status = 'queued'
-            """,
-            (now, client_id),
-        )
-        await self.conn.commit()
+        await self.chat_queue.mark_chat_queued_message_cancelled(client_id)
 
     async def list_chat_queued_messages(self, session_id: str, *, status: str | None = None) -> list[dict]:
-        if status:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM chat_queued_messages
-                WHERE session_id = ? AND status = ?
-                ORDER BY enqueued_at ASC
-                """,
-                (session_id, status),
-            )
-        else:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM chat_queued_messages
-                WHERE session_id = ?
-                ORDER BY enqueued_at ASC
-                """,
-                (session_id,),
-            )
-        return [self._chat_queued_message_payload(row) for row in rows]
+        return await self.chat_queue.list_chat_queued_messages(session_id, status=status)
 
     @staticmethod
     def _tool_result_id(*, session_id: str, tool_call_id: str, content_sha256: str) -> str:
@@ -5313,11 +2676,16 @@ class SessionStore:
         state: SessionState,
         messages: list[dict | Any] | None = None,
         metadata: dict | None = None,
-    ) -> bool:
+    ) -> tuple[SessionState, bool]:
         """Insert a new session without replacing a row created by a racing owner."""
         lock = await self._session_write_lock(state.session_id)
         async with lock:
             async with self._session_context_transaction() as connection:
+                existing = await connection.execute_fetchall(SQL_LOAD_SESSION, (state.session_id,))
+                if existing:
+                    durable_state = self._session_state_from_row(existing[0])
+                    durable_state.context_etag = self._projection_etag(existing[0]["messages"])
+                    return durable_state, False
                 serializable_messages = self._to_serializable_messages(messages or [])
                 await self._ensure_session_public_ref(state, connection)
                 now = datetime.now(UTC).isoformat()
@@ -5349,15 +2717,15 @@ class SessionStore:
                     ),
                 )
                 created = cursor.rowcount > 0
-                if created:
-                    await self._mirror_session_messages(
-                        state.session_id,
-                        serializable_messages,
-                        connection=connection,
-                    )
-            if created:
-                state.context_etag = self._projection_etag(messages_json)
-            return created
+                if not created:
+                    raise RuntimeError("session insert lost its exclusive transaction")
+                await self._mirror_session_messages(
+                    state.session_id,
+                    serializable_messages,
+                    connection=connection,
+                )
+            state.context_etag = self._projection_etag(messages_json)
+            return state, True
 
     @staticmethod
     def _session_state_from_row(row: aiosqlite.Row) -> SessionState:
@@ -5664,57 +3032,7 @@ class SessionStore:
         ]
 
     async def permanently_delete_session(self, session_id: str) -> bool:
-        return await self.purge_session(session_id, require_archived=True)
-
-    @staticmethod
-    def _quoted_identifier(identifier: str) -> str:
-        return '"' + identifier.replace('"', '""') + '"'
-
-    @asynccontextmanager
-    async def _maintenance_connection(self) -> AsyncIterator[aiosqlite.Connection]:
-        """Use an isolated transaction connection for file-backed databases."""
-
-        rows = await self.conn.execute_fetchall("PRAGMA database_list")
-        database_path = next((str(row["file"]) for row in rows if row["name"] == "main"), "")
-        if not database_path:
-            yield self.conn
-            return
-        connection = await aiosqlite.connect(database_path)
-        connection.row_factory = aiosqlite.Row
-        try:
-            await connection.execute("PRAGMA busy_timeout=5000")
-            await connection.execute("PRAGMA foreign_keys=ON")
-            yield connection
-        finally:
-            await connection.close()
-
-    async def _session_owned_tables(self, connection: aiosqlite.Connection) -> list[str]:
-        rows = await connection.execute_fetchall(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )
-        owned: list[str] = []
-        for row in rows:
-            table = str(row["name"])
-            if table == "sessions" or table.startswith("session_messages_fts"):
-                continue
-            columns = await connection.execute_fetchall(f"PRAGMA table_info({self._quoted_identifier(table)})")
-            if any(column["name"] == "session_id" for column in columns):
-                owned.append(table)
-        return owned
-
-    async def _snapshot_session(self, session_id: str) -> dict[str, Any] | None:
-        rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))
-        if not rows:
-            return None
-        tables: dict[str, list[dict[str, Any]]] = {}
-        for table in await self._session_owned_tables(self.read_conn):
-            table_rows = await self.read_conn.execute_fetchall(
-                f"SELECT * FROM {self._quoted_identifier(table)} WHERE session_id = ?",
-                (session_id,),
-            )
-            if table_rows:
-                tables[table] = [dict(row) for row in table_rows]
-        return {"session": dict(rows[0]), "tables": tables}
+        return await self.storage.permanently_delete_session(session_id)
 
     async def cold_convert_session(
         self,
@@ -5722,240 +3040,22 @@ class SessionStore:
         *,
         cold_root: Path,
     ) -> ColdBundleManifest | None:
-        """Move an archived hot session into a verified, restorable bundle."""
-
-        session_lock = await self._session_write_lock(session_id)
-        async with self._storage_maintenance_lock, session_lock:
-            snapshot = await self._snapshot_session(session_id)
-            if snapshot is None:
-                return None
-            session = snapshot["session"]
-            if session.get("archived_at") is None:
-                raise ValueError("only archived sessions can be converted to cold storage")
-            if session.get("storage_state") == "cold":
-                return None
-            digest = hashlib.sha256(session_id.encode()).hexdigest()
-            bundle_path = cold_root / digest[:2] / f"{digest}.session.tar.zst"
-            manifest = await asyncio.to_thread(write_cold_session_bundle, snapshot, bundle_path)
-            try:
-                async with self._maintenance_connection() as connection:
-                    await connection.execute("BEGIN IMMEDIATE")
-                    current = await connection.execute_fetchall(
-                        "SELECT archived_at, storage_state FROM sessions WHERE session_id = ?",
-                        (session_id,),
-                    )
-                    if not current or current[0]["archived_at"] is None or current[0]["storage_state"] != "hot":
-                        await connection.rollback()
-                        raise RuntimeError("session changed while cold conversion was being prepared")
-                    for table in await self._session_owned_tables(connection):
-                        await connection.execute(
-                            f"DELETE FROM {self._quoted_identifier(table)} WHERE session_id = ?",
-                            (session_id,),
-                        )
-                    await connection.execute(
-                        """
-                        UPDATE sessions
-                        SET messages = '[]', metadata = '{}', storage_state = 'cold',
-                            active_message_count = 0,
-                            context_generation = context_generation + 1,
-                            cold_bundle_path = ?, cold_bundle_sha256 = ?, cold_bundle_bytes = ?,
-                            cold_logical_bytes = ?, cold_message_count = ?, cold_prose_sha256 = ?,
-                            cold_blob_hashes_json = ?
-                        WHERE session_id = ?
-                        """,
-                        (
-                            manifest.bundle_path,
-                            manifest.bundle_sha256,
-                            manifest.bundle_bytes,
-                            manifest.logical_bytes,
-                            manifest.message_count,
-                            manifest.user_assistant_prose_sha256,
-                            json.dumps(manifest.blob_hashes),
-                            session_id,
-                        ),
-                    )
-                    await connection.commit()
-            except Exception:
-                bundle_path.unlink(missing_ok=True)
-                raise
-            return manifest
+        return await self.storage.cold_convert_session(session_id, cold_root=cold_root)
 
     async def rehydrate_cold_session(self, session_id: str, *, blob_root: Path) -> bool:
-        """Restore a cold bundle into the live schema before unarchiving it."""
-
-        session_lock = await self._session_write_lock(session_id)
-        async with self._storage_maintenance_lock, session_lock:
-            rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))
-            if not rows or rows[0]["storage_state"] != "cold":
-                return False
-            row = rows[0]
-            bundle_path = Path(str(row["cold_bundle_path"] or ""))
-            manifest = ColdBundleManifest(
-                format_version="arden-cold-session-v1",
-                session_id=session_id,
-                bundle_path=str(bundle_path),
-                bundle_sha256=str(row["cold_bundle_sha256"]),
-                bundle_bytes=int(row["cold_bundle_bytes"] or 0),
-                message_count=int(row["cold_message_count"] or 0),
-                logical_bytes=int(row["cold_logical_bytes"] or 0),
-                user_assistant_prose_sha256=str(row["cold_prose_sha256"]),
-                blob_hashes=tuple(json.loads(row["cold_blob_hashes_json"] or "[]")),
-            )
-            snapshot = await asyncio.to_thread(
-                read_cold_session_bundle,
-                bundle_path,
-                blob_root=blob_root,
-                restore_blobs=True,
-                verify_manifest=manifest,
-            )
-            async with self._maintenance_connection() as connection:
-                await connection.execute("BEGIN IMMEDIATE")
-                current = await connection.execute_fetchall(
-                    "SELECT storage_state, cold_bundle_sha256, context_generation FROM sessions WHERE session_id = ?",
-                    (session_id,),
-                )
-                if (
-                    not current
-                    or current[0]["storage_state"] != "cold"
-                    or current[0]["cold_bundle_sha256"] != manifest.bundle_sha256
-                ):
-                    await connection.rollback()
-                    raise RuntimeError("cold session changed while restoration was being prepared")
-                for table, table_rows in snapshot.get("tables", {}).items():
-                    if not table_rows:
-                        continue
-                    schema_rows = await connection.execute_fetchall(
-                        f"PRAGMA table_info({self._quoted_identifier(table)})"
-                    )
-                    available = {schema_row["name"] for schema_row in schema_rows}
-                    columns = [column for column in table_rows[0] if column in available]
-                    if not columns:
-                        continue
-                    quoted_columns = ", ".join(self._quoted_identifier(column) for column in columns)
-                    placeholders = ", ".join("?" for _ in columns)
-                    await connection.executemany(
-                        f"INSERT INTO {self._quoted_identifier(table)} ({quoted_columns}) VALUES ({placeholders})",
-                        [tuple(table_row.get(column) for column in columns) for table_row in table_rows],
-                    )
-                original = snapshot["session"]
-                restored_messages = self._strict_active_projection(session_id, original.get("messages"))
-                schema_rows = await connection.execute_fetchall("PRAGMA table_info(sessions)")
-                restorable = {
-                    schema_row["name"]
-                    for schema_row in schema_rows
-                    if schema_row["name"] not in {"session_id", "context_generation", "active_message_count"}
-                    and not schema_row["name"].startswith("cold_")
-                }
-                columns = [column for column in original if column in restorable and column != "storage_state"]
-                assignments = ", ".join(f"{self._quoted_identifier(column)} = ?" for column in columns)
-                await connection.execute(
-                    f"""
-                    UPDATE sessions SET {assignments}, storage_state = 'hot',
-                        active_message_count = ?,
-                        cold_bundle_path = NULL, cold_bundle_sha256 = NULL, cold_bundle_bytes = NULL,
-                        cold_logical_bytes = NULL, cold_message_count = NULL, cold_prose_sha256 = NULL,
-                        cold_blob_hashes_json = NULL
-                    WHERE session_id = ?
-                    """,
-                    (*[original.get(column) for column in columns], len(restored_messages), session_id),
-                )
-                await connection.commit()
-            bundle_path.unlink(missing_ok=True)
-            return True
+        return await self.storage.rehydrate_cold_session(session_id, blob_root=blob_root)
 
     async def purge_session(self, session_id: str, *, require_archived: bool) -> bool:
-        """Delete the session row and every table row owned by it."""
-
-        session_lock = await self._session_write_lock(session_id)
-        async with self._storage_maintenance_lock, session_lock:
-            async with self._maintenance_connection() as connection:
-                await connection.execute("BEGIN IMMEDIATE")
-                rows = await connection.execute_fetchall(
-                    "SELECT archived_at, cold_bundle_path FROM sessions WHERE session_id = ?",
-                    (session_id,),
-                )
-                if not rows or (require_archived and rows[0]["archived_at"] is None):
-                    await connection.rollback()
-                    return False
-                bundle_path = Path(rows[0]["cold_bundle_path"]) if rows[0]["cold_bundle_path"] else None
-                for table in await self._session_owned_tables(connection):
-                    await connection.execute(
-                        f"DELETE FROM {self._quoted_identifier(table)} WHERE session_id = ?",
-                        (session_id,),
-                    )
-                await connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-                await connection.commit()
-            if bundle_path is not None:
-                bundle_path.unlink(missing_ok=True)
-            return True
+        return await self.storage.purge_session(session_id, require_archived=require_archived)
 
     async def list_storage_cleanup_candidates(self) -> list[StorageSessionCandidate]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT s.session_id, s.archived_at, s.storage_state,
-                   COALESCE(s.last_accessed_at, s.last_activity) AS last_activity,
-                   s.session_type, s.origin_automation_id,
-                   CASE WHEN s.storage_state = 'cold'
-                        THEN COALESCE(s.cold_bundle_bytes, 0)
-                        ELSE length(COALESCE(s.messages, '')) + length(COALESCE(s.metadata, ''))
-                           + COALESCE((SELECT sum(length(message_json) + length(COALESCE(search_text, '')))
-                                       FROM session_messages m WHERE m.session_id = s.session_id), 0)
-                           + COALESCE((SELECT sum(length(event_json))
-                                       FROM session_events e WHERE e.session_id = s.session_id), 0)
-                           + COALESCE((SELECT sum(stored_bytes)
-                                       FROM tool_results t WHERE t.session_id = s.session_id), 0)
-                   END AS logical_bytes,
-                   CASE WHEN s.storage_state = 'cold' THEN COALESCE(s.cold_message_count, 0)
-                        ELSE (SELECT count(*) FROM session_messages m WHERE m.session_id = s.session_id)
-                   END AS message_count,
-                   (SELECT status FROM session_goals g WHERE g.session_id = s.session_id) AS goal_status
-            FROM sessions s
-            ORDER BY s.last_activity ASC, s.session_id ASC
-            """
-        )
-        candidates: list[StorageSessionCandidate] = []
-        for row in rows:
-            protected: list[str] = []
-            if (row["session_type"] or "chat") != "chat" or row["origin_automation_id"] is not None:
-                protected.append("automation or agent session")
-            if row["goal_status"] not in {None, "complete"}:
-                protected.append("unfinished goal")
-            candidates.append(
-                StorageSessionCandidate(
-                    session_id=row["session_id"],
-                    archived=row["archived_at"] is not None,
-                    storage_state=row["storage_state"] or "hot",
-                    last_activity=row["last_activity"],
-                    logical_bytes=max(0, int(row["logical_bytes"] or 0)),
-                    message_count=max(0, int(row["message_count"] or 0)),
-                    protected_reasons=tuple(protected),
-                )
-            )
-        return candidates
+        return await self.storage.list_storage_cleanup_candidates()
 
     async def database_reclaim_status(self) -> dict[str, int | str]:
-        mode_rows = await self.read_conn.execute_fetchall("PRAGMA auto_vacuum")
-        page_rows = await self.read_conn.execute_fetchall("PRAGMA page_size")
-        free_rows = await self.read_conn.execute_fetchall("PRAGMA freelist_count")
-        mode = int(mode_rows[0][0])
-        return {
-            "mode": "incremental" if mode == 2 else "offline_migration_required",
-            "page_size": int(page_rows[0][0]),
-            "free_pages": int(free_rows[0][0]),
-        }
+        return await self.storage.database_reclaim_status()
 
     async def incremental_vacuum(self, *, pages: int = 2048) -> int:
-        status = await self.database_reclaim_status()
-        if status["mode"] != "incremental":
-            return 0
-        before = int(status["free_pages"]) * int(status["page_size"])
-        async with self._storage_maintenance_lock:
-            await self.conn.execute(f"PRAGMA incremental_vacuum({max(1, min(pages, 8192))})")
-            await self.conn.commit()
-            await self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        after_status = await self.database_reclaim_status()
-        after = int(after_status["free_pages"]) * int(after_status["page_size"])
-        return max(0, before - after)
+        return await self.storage.incremental_vacuum(pages=pages)
 
     async def record_storage_cleanup_run(
         self,
@@ -5970,51 +3070,20 @@ class SessionStore:
         status: str,
         error: str | None = None,
     ) -> str:
-        run_id = f"storage_{uuid4().hex}"
-        await self.conn.execute(
-            """
-            INSERT INTO storage_cleanup_runs (
-                run_id, plan_id, started_at, completed_at, before_bytes, target_bytes,
-                after_bytes, reclaimed_bytes, actions_json, status, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                plan_id,
-                started_at,
-                datetime.now(UTC).isoformat(),
-                before_bytes,
-                target_bytes,
-                after_bytes,
-                reclaimed_bytes,
-                json.dumps(actions, sort_keys=True),
-                status,
-                error,
-            ),
+        return await self.storage.record_storage_cleanup_run(
+            plan_id=plan_id,
+            started_at=started_at,
+            before_bytes=before_bytes,
+            target_bytes=target_bytes,
+            after_bytes=after_bytes,
+            reclaimed_bytes=reclaimed_bytes,
+            actions=actions,
+            status=status,
+            error=error,
         )
-        await self.conn.commit()
-        return run_id
 
     async def latest_storage_cleanup_run(self) -> dict[str, Any] | None:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT * FROM storage_cleanup_runs ORDER BY completed_at DESC LIMIT 1"
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "run_id": row["run_id"],
-            "plan_id": row["plan_id"],
-            "started_at": row["started_at"],
-            "completed_at": row["completed_at"],
-            "before_bytes": row["before_bytes"],
-            "target_bytes": row["target_bytes"],
-            "after_bytes": row["after_bytes"],
-            "reclaimed_bytes": row["reclaimed_bytes"],
-            "actions": json.loads(row["actions_json"]),
-            "status": row["status"],
-            "error": row["error"],
-        }
+        return await self.storage.latest_storage_cleanup_run()
 
     async def list_session_messages(
         self,
@@ -6028,175 +3097,26 @@ class SessionStore:
         after_seq: int | None = None,
         area_id: str | object | None = AREA_FILTER_UNSET,
     ) -> dict:
-        if area_id is not AREA_FILTER_UNSET and not await self._session_matches_area(session_id, area_id):
-            return {
-                "messages": [],
-                "has_more_before": False,
-                "has_more_after": False,
-                "before": None,
-                "after": None,
-            }
-        limit = max(1, min(limit, 250))
-
-        async def seq_for_message(ref: str | None) -> int | None:
-            if not ref:
-                return None
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT seq FROM session_messages
-                WHERE session_id = ? AND (message_id = ? OR client_id = ?)
-                LIMIT 1
-                """,
-                (session_id, ref, ref),
-            )
-            return int(rows[0]["seq"]) if rows else None
-
-        rows: list[Any]
-        around_at = await seq_for_message(around)
-        # Raw-int seq cursors (from search hits / prior pages) take precedence
-        # over message-id refs when both are somehow supplied.
-        before_at = before_seq if before_seq is not None else await seq_for_message(before)
-        after_at = after_seq if after_seq is not None else await seq_for_message(after)
-        if around_seq is not None:
-            start = max(0, around_seq - (limit // 2))
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM session_messages
-                WHERE session_id = ? AND seq >= ?
-                ORDER BY seq ASC
-                LIMIT ?
-                """,
-                (session_id, start, limit),
-            )
-        elif around_at is not None:
-            start = max(0, around_at - (limit // 2))
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM session_messages
-                WHERE session_id = ? AND seq >= ?
-                ORDER BY seq ASC
-                LIMIT ?
-                """,
-                (session_id, start, limit),
-            )
-        elif before_at is not None:
-            desc_rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM session_messages
-                WHERE session_id = ? AND seq < ?
-                ORDER BY seq DESC
-                LIMIT ?
-                """,
-                (session_id, before_at, limit),
-            )
-            rows = list(reversed(desc_rows))
-        elif after_at is not None:
-            rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM session_messages
-                WHERE session_id = ? AND seq > ?
-                ORDER BY seq ASC
-                LIMIT ?
-                """,
-                (session_id, after_at, limit),
-            )
-        else:
-            desc_rows = await self.read_conn.execute_fetchall(
-                """
-                SELECT * FROM session_messages
-                WHERE session_id = ?
-                ORDER BY seq DESC
-                LIMIT ?
-                """,
-                (session_id, limit),
-            )
-            rows = list(reversed(desc_rows))
-            rows = await self._latest_rows_with_visible_user_anchor(session_id, rows)
-
-        messages = [self._message_row_payload(row) for row in rows]
-        first_seq = messages[0]["seq"] if messages else None
-        last_seq = messages[-1]["seq"] if messages else None
-        has_more_before = False
-        has_more_after = False
-        if first_seq is not None:
-            has_more_before = bool(
-                await self.read_conn.execute_fetchall(
-                    "SELECT 1 FROM session_messages WHERE session_id = ? AND seq < ? LIMIT 1",
-                    (session_id, first_seq),
-                )
-            )
-        if last_seq is not None:
-            has_more_after = bool(
-                await self.read_conn.execute_fetchall(
-                    "SELECT 1 FROM session_messages WHERE session_id = ? AND seq > ? LIMIT 1",
-                    (session_id, last_seq),
-                )
-            )
-
-        return {
-            "messages": messages,
-            "has_more_before": has_more_before,
-            "has_more_after": has_more_after,
-            "before": messages[0]["message_id"] if messages else None,
-            "after": messages[-1]["message_id"] if messages else None,
-        }
+        return await self.transcripts.list_session_messages(
+            session_id,
+            limit=limit,
+            before=before,
+            after=after,
+            around=around,
+            around_seq=around_seq,
+            before_seq=before_seq,
+            after_seq=after_seq,
+            area_id=area_id,
+        )
 
     async def messages_since(self, session_id: str, seq: int) -> list[dict]:
-        """Ordered transcript rows with seq > `seq` (oldest-first) for the
-        curator. Returns the same `_message_row_payload` shape as list_messages
-        (carries `seq`, `role`, parsed `message`)."""
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM session_messages
-            WHERE session_id = ? AND seq > ?
-            ORDER BY seq ASC
-            """,
-            (session_id, seq),
-        )
-        return [self._message_row_payload(row) for row in rows]
+        return await self.transcripts.messages_since(session_id, seq)
 
     async def recent_session_scopes(self, limit: int) -> list[dict]:
-        """The `limit` most-recently-active live sessions (archived excluded),
-        as {session_id, area_id, session_type, origin_automation_id} — the
-        curation sweep's worklist (it gates on the origin fields)."""
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT session_id, area_id, session_type, origin_automation_id FROM sessions
-            WHERE archived_at IS NULL
-            ORDER BY last_activity DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
-        return [
-            {
-                "session_id": row["session_id"],
-                "area_id": row["area_id"],
-                "session_type": row["session_type"] or "chat",
-                "origin_automation_id": row["origin_automation_id"],
-            }
-            for row in rows
-        ]
+        return await self.transcripts.recent_session_scopes(limit)
 
     async def session_scope(self, session_id: str) -> dict | None:
-        """Return one session's scope exactly, independent of sweep recency."""
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT session_id, area_id, session_type, origin_automation_id
-            FROM sessions
-            WHERE session_id = ?
-            """,
-            (session_id,),
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        return {
-            "session_id": row["session_id"],
-            "area_id": row["area_id"],
-            "session_type": row["session_type"] or "chat",
-            "origin_automation_id": row["origin_automation_id"],
-        }
+        return await self.transcripts.session_scope(session_id)
 
     async def search_messages(
         self,
@@ -6209,250 +3129,15 @@ class SessionStore:
         until: str | None = None,
         area_id: str | object | None = AREA_FILTER_UNSET,
     ) -> dict:
-        """Full-text search across transcript messages using SQLite FTS5.
-
-        Returns {hits, has_more}. Each hit carries session_id + session name,
-        seq, role, created_at, and a trimmed snippet. Scope to one chat with
-        `session_id`; bound by time with ISO `since`/`until`. Empty/whitespace
-        query → no hits (rather than an FTS syntax error)."""
-        q = query.strip()
-        if not q:
-            return {"hits": [], "has_more": False}
-        # Bound the FTS5 parser input so an oversized/pathological query can't peg
-        # a core (it spins without raising, so the except-fallback below won't catch it).
-        q = q[:MAX_FTS_QUERY_CHARS]
-        limit = max(1, min(limit, 100))
-        offset = max(0, offset)
-
-        where = ["session_messages_fts MATCH ?"]
-        params: list[Any] = [q]
-        if session_id is not None:
-            where.append("m.session_id = ?")
-            params.append(session_id)
-        if since is not None:
-            where.append("m.created_at >= ?")
-            params.append(since)
-        if until is not None:
-            where.append("m.created_at <= ?")
-            params.append(until)
-        if area_id is not AREA_FILTER_UNSET:
-            if area_id is None:
-                where.append("s.area_id IS NULL")
-            else:
-                where.append("s.area_id = ?")
-                params.append(area_id)
-
-        # One extra row signals a further page.
-        fts_sql_limit, fts_sql_offset = limit + 1, offset
-        sql = f"""
-            SELECT m.session_id AS session_id, s.public_ref AS public_ref, s.name AS session_name,
-                   m.seq AS seq, m.role AS role, m.created_at AS created_at,
-                   snippet(session_messages_fts, 0, '[', ']', '…', 16) AS snippet
-            FROM session_messages_fts
-            JOIN session_messages m ON m.rowid = session_messages_fts.rowid
-            LEFT JOIN sessions s ON s.session_id = m.session_id
-            WHERE {" AND ".join(where)}
-            ORDER BY bm25(session_messages_fts), m.created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        params.extend([fts_sql_limit, fts_sql_offset])
-
-        try:
-            fts_rows = await self.read_conn.execute_fetchall(sql, tuple(params))
-        except Exception:
-            # Malformed FTS query (stray operators, unbalanced quotes). Retry
-            # as a quoted phrase so user text never surfaces a SQL error.
-            phrase = '"' + q.replace('"', '""') + '"'
-            params[0] = phrase
-            fts_rows = await self.read_conn.execute_fetchall(sql, tuple(params))
-
-        has_more = len(fts_rows) > limit
-        hits = [self._search_hit(r) for r in fts_rows[:limit]]
-        return {"hits": hits, "has_more": has_more}
-
-    @staticmethod
-    def _search_hit(r: Any, snippet: str | None = None) -> dict:
-        return {
-            "session_id": r["session_id"],
-            "public_ref": r["public_ref"],
-            "session_name": r["session_name"],
-            "seq": r["seq"],
-            "role": r["role"],
-            "created_at": r["created_at"],
-            "snippet": (snippet if snippet is not None else (r["snippet"] or "")).strip(),
-        }
-
-    async def _session_matches_area(self, session_id: str, area_id: str | object | None) -> bool:
-        rows = await self.read_conn.execute_fetchall(
-            "SELECT area_id FROM sessions WHERE session_id = ? LIMIT 1",
-            (session_id,),
+        return await self.transcripts.search_messages(
+            query,
+            limit=limit,
+            offset=offset,
+            session_id=session_id,
+            since=since,
+            until=until,
+            area_id=area_id,
         )
-        return bool(rows) and rows[0]["area_id"] == area_id
-
-    def _row_is_visible_user(self, row: Any) -> bool:
-        if row["role"] != "user":
-            return False
-        try:
-            message = json.loads(row["message_json"])
-        except Exception:
-            return True
-        return not bool(message.get("is_meta"))
-
-    async def _latest_rows_with_visible_user_anchor(self, session_id: str, rows: list[Any]) -> list[Any]:
-        if not rows:
-            return rows
-
-        visible_users = [row for row in rows if self._row_is_visible_user(row)]
-        if len(visible_users) >= 2:
-            return rows
-
-        if visible_users:
-            anchor = visible_users[0]
-            previous_anchor = await self._visible_user_before(session_id, anchor["seq"])
-            if previous_anchor:
-                expanded = await self._bounded_rows_between(
-                    session_id,
-                    previous_anchor["seq"],
-                    rows[-1]["seq"],
-                    max_count=LATEST_VISIBLE_ANCHOR_ROW_LIMIT,
-                )
-                if expanded is not None:
-                    return expanded
-            return rows
-
-        anchor = await self._visible_user_before(session_id, rows[0]["seq"])
-        if not anchor:
-            # No visible-user anchor before the window. Automation / channel
-            # sessions drive their turns with meta user messages
-            # (loop:/bg:/goal:), so a tool-heavy active run leaves the newest
-            # window with zero visible anchors. Fall back to the most recent
-            # user turn boundary regardless of meta, so prior turns still load
-            # instead of dead-ending on the active run's tool stream.
-            return await self._expand_from_user_boundary(session_id, rows)
-
-        previous_anchor = await self._visible_user_before(session_id, anchor["seq"])
-        if previous_anchor:
-            expanded = await self._bounded_rows_between(
-                session_id,
-                previous_anchor["seq"],
-                rows[-1]["seq"],
-                max_count=LATEST_VISIBLE_ANCHOR_ROW_LIMIT,
-            )
-            if expanded is not None:
-                return expanded
-
-        expanded = await self._bounded_rows_between(
-            session_id,
-            anchor["seq"],
-            rows[-1]["seq"],
-            max_count=LATEST_VISIBLE_ANCHOR_ROW_LIMIT,
-        )
-        if expanded is not None:
-            return expanded
-        return rows
-
-    async def _visible_user_before(self, session_id: str, before_seq: int) -> Any | None:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM session_messages
-            WHERE session_id = ? AND seq < ? AND role = 'user'
-            ORDER BY seq DESC
-            LIMIT 50
-            """,
-            (session_id, before_seq),
-        )
-        for row in rows:
-            if self._row_is_visible_user(row):
-                return row
-        return None
-
-    async def _user_before(self, session_id: str, before_seq: int) -> Any | None:
-        """Most recent user row before `before_seq`, meta or not — a turn
-        boundary for sessions that have no visible (non-meta) user."""
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM session_messages
-            WHERE session_id = ? AND seq < ? AND role = 'user'
-            ORDER BY seq DESC
-            LIMIT 1
-            """,
-            (session_id, before_seq),
-        )
-        return rows[0] if rows else None
-
-    async def _expand_from_user_boundary(self, session_id: str, rows: list[Any]) -> list[Any]:
-        boundary = await self._user_before(session_id, rows[0]["seq"])
-        if boundary is None:
-            return rows
-        # Reach back one further turn boundary so the previous exchange shows,
-        # not just the active run's own opening line.
-        previous = await self._user_before(session_id, boundary["seq"])
-        start_seq = (previous or boundary)["seq"]
-        expanded = await self._bounded_rows_between(
-            session_id,
-            start_seq,
-            rows[-1]["seq"],
-            max_count=LATEST_VISIBLE_ANCHOR_ROW_LIMIT,
-        )
-        return expanded if expanded is not None else rows
-
-    async def _bounded_rows_between(
-        self,
-        session_id: str,
-        start_seq: int,
-        end_seq: int,
-        *,
-        max_count: int = 250,
-    ) -> list[Any] | None:
-        count_rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT COUNT(*) AS count FROM session_messages
-            WHERE session_id = ? AND seq >= ? AND seq <= ?
-            """,
-            (session_id, start_seq, end_seq),
-        )
-        if not count_rows or int(count_rows[0]["count"]) > max_count:
-            return None
-        return await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM session_messages
-            WHERE session_id = ? AND seq >= ? AND seq <= ?
-            ORDER BY seq ASC
-            """,
-            (session_id, start_seq, end_seq),
-        )
-
-    @staticmethod
-    def _row_message_json(row: Any) -> dict:
-        try:
-            payload = json.loads(row["message_json"])
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
 
     async def list_session_turns(self, session_id: str, limit: int = 100) -> list[dict]:
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT *
-            FROM session_turns
-            WHERE session_id = ?
-            ORDER BY turn_index ASC
-            LIMIT ?
-            """,
-            (session_id, max(1, min(limit, 500))),
-        )
-        return [
-            {
-                "session_id": row["session_id"],
-                "turn_id": row["turn_id"],
-                "turn_index": row["turn_index"],
-                "user_message_id": row["user_message_id"],
-                "message_start_id": row["message_start_id"],
-                "message_end_id": row["message_end_id"],
-                "message_start_seq": row["message_start_seq"],
-                "message_end_seq": row["message_end_seq"],
-                "started_at": row["started_at"],
-                "ended_at": row["ended_at"],
-            }
-            for row in rows
-        ]
+        return await self.transcripts.list_session_turns(session_id, limit)
