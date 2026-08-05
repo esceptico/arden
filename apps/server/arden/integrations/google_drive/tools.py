@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
-from arden.integrations.google_drive.client import MultiGoogleDriveClient
+from arden.integrations.google_drive.client import DriveFile, MultiGoogleDriveClient
 from arden.integrations.mutations import execute_idempotent, mutation_result
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.collections import format_timestamp
@@ -19,15 +19,15 @@ def _drive(execution: ToolExecution) -> MultiGoogleDriveClient:
     return execution.ctx.get_client("google_drive", MultiGoogleDriveClient)
 
 
-def _source_ref(data: dict, kind: Literal["document", "spreadsheet"]):
+def _source_ref(file: DriveFile):
     return normalize_source_refs(
         (
             ToolSourceRef(
                 provider="google_drive",
-                kind=kind,
-                ref=data["ref"],
-                title=data.get("title") or data["ref"],
-                url=data.get("url"),
+                kind=file.kind,
+                ref=file.ref,
+                title=file.name,
+                url=file.url,
             ),
         )
     )
@@ -51,7 +51,7 @@ async def drive_search(execution: ToolExecution, args: DriveSearchInput) -> Tool
             modified = (
                 f" · modified {format_timestamp(datetime.fromisoformat(item.modified_time.replace('Z', '+00:00')))}"
             )
-        lines.append(f"• {item.name} ({item.kind}) id: {item.ref}{modified}")
+        lines.append(f"• {item.name} ({item.kind}) ref: {item.ref}{modified}")
     may_have_more = len(items) == args.limit
     if may_have_more:
         lines.append(f"Showing {args.limit} files; more may exist. Narrow the query to continue.")
@@ -74,35 +74,42 @@ async def drive_search(execution: ToolExecution, args: DriveSearchInput) -> Tool
 
 
 class DriveReadDocInput(BaseModel):
-    document_ref: str = Field(min_length=1, max_length=500)
+    document_ref: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Exact account-qualified document ref returned by drive_search or drive_create_doc.",
+    )
 
 
 async def drive_read_doc(execution: ToolExecution, args: DriveReadDocInput) -> ToolResult:
     client, document_id = _drive(execution).resolve_ref(args.document_ref)
-    data = client.read_doc(document_id)
+    document = client.read_doc(document_id)
     return ToolResult(
-        content=data["text"],
-        preview=data["title"],
-        source_refs=_source_ref(data, "document"),
+        content=document.text,
+        preview=document.file.name,
+        source_refs=_source_ref(document.file),
     )
 
 
 class DriveReadSheetInput(BaseModel):
-    spreadsheet_ref: str = Field(min_length=1, max_length=500)
+    spreadsheet_ref: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Exact account-qualified spreadsheet ref returned by drive_search or drive_create_sheet.",
+    )
     range: str = Field(default="A1:Z200", min_length=1, max_length=200)
 
 
 async def drive_read_sheet(execution: ToolExecution, args: DriveReadSheetInput) -> ToolResult:
     client, spreadsheet_id = _drive(execution).resolve_ref(args.spreadsheet_ref)
-    data = client.read_sheet(spreadsheet_id, args.range)
-    data["title"] = f"Sheet {data['range']}"
-    rows = data["values"]
+    sheet_range = client.read_sheet(spreadsheet_id, args.range)
+    rows = [list(row) for row in sheet_range.values]
     table = "\n".join(" | ".join("" if value is None else str(value) for value in row) for row in rows)
     return ToolResult(
-        content=f"Range: {data['range']}\n{table or '(empty)'}",
-        preview=f"Read {data['range']}",
-        data={"range": data["range"], "values": rows, "row_count": len(rows)},
-        source_refs=_source_ref(data, "spreadsheet"),
+        content=f"Range: {sheet_range.range_name}\n{table or '(empty)'}",
+        preview=f"Read {sheet_range.range_name}",
+        data={"range": sheet_range.range_name, "values": rows, "row_count": len(rows)},
+        source_refs=_source_ref(sheet_range.file),
     )
 
 
@@ -114,16 +121,16 @@ class DriveCreateDocInput(BaseModel):
 
 async def drive_create_doc(execution: ToolExecution, args: DriveCreateDocInput) -> ToolResult:
     async def invoke() -> ToolResult:
-        data = _drive(execution).select_account(args.account).create_doc(args.title)
+        document = _drive(execution).select_account(args.account).create_doc(args.title)
         return mutation_result(
-            content=f"Created {data['title']}: {data['url']}\nref: {data['ref']}",
+            content=f"Created {document.name}: {document.url}\nref: {document.ref}",
             preview="Created document",
             operation="create",
             target=args.title,
-            receipt=data["ref"],
-            after_ref=data["ref"],
-            observed=f"Drive returned {data['ref']}",
-            data={"file_ref": data["ref"], "url": data["url"]},
+            receipt=document.ref,
+            after_ref=document.ref,
+            observed=f"Drive returned {document.ref}",
+            data={"file_ref": document.ref, "url": document.url},
         )
 
     return await execute_idempotent(
@@ -140,7 +147,11 @@ async def approve_drive_create_doc(_execution: ToolExecution, args: DriveCreateD
 
 
 class DriveEditDocInput(BaseModel):
-    document_ref: str = Field(min_length=1, max_length=500)
+    document_ref: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Exact account-qualified document ref returned by a Drive tool.",
+    )
     operation: Literal["append", "replace_all"]
     text: str = Field(max_length=100_000)
     match: str | None = Field(default=None, max_length=10_000)
@@ -156,16 +167,16 @@ class DriveEditDocInput(BaseModel):
 async def drive_edit_doc(execution: ToolExecution, args: DriveEditDocInput) -> ToolResult:
     async def invoke() -> ToolResult:
         client, document_id = _drive(execution).resolve_ref(args.document_ref)
-        data = client.edit_doc(document_id, operation=args.operation, text=args.text, match=args.match)
+        document = client.edit_doc(document_id, operation=args.operation, text=args.text, match=args.match)
         return mutation_result(
-            content=f"Updated {data['title']}: {data['url']}",
+            content=f"Updated {document.name}: {document.url}",
             preview="Updated document",
             operation=args.operation,
             target=args.document_ref,
             receipt=args.idempotency_key,
             before_ref=args.document_ref,
-            after_ref=data["ref"],
-            observed=f"Drive returned {data['ref']}",
+            after_ref=document.ref,
+            observed=f"Drive returned {document.ref}",
         )
 
     return await execute_idempotent(
@@ -190,16 +201,16 @@ class DriveCreateSheetInput(BaseModel):
 
 async def drive_create_sheet(execution: ToolExecution, args: DriveCreateSheetInput) -> ToolResult:
     async def invoke() -> ToolResult:
-        data = _drive(execution).select_account(args.account).create_sheet(args.title)
+        spreadsheet = _drive(execution).select_account(args.account).create_sheet(args.title)
         return mutation_result(
-            content=f"Created {data['title']}: {data['url']}\nref: {data['ref']}",
+            content=f"Created {spreadsheet.name}: {spreadsheet.url}\nref: {spreadsheet.ref}",
             preview="Created spreadsheet",
             operation="create",
             target=args.title,
-            receipt=data["ref"],
-            after_ref=data["ref"],
-            observed=f"Drive returned {data['ref']}",
-            data={"file_ref": data["ref"], "url": data["url"]},
+            receipt=spreadsheet.ref,
+            after_ref=spreadsheet.ref,
+            observed=f"Drive returned {spreadsheet.ref}",
+            data={"file_ref": spreadsheet.ref, "url": spreadsheet.url},
         )
 
     return await execute_idempotent(
@@ -216,7 +227,11 @@ async def approve_drive_create_sheet(_execution: ToolExecution, args: DriveCreat
 
 
 class SheetWriteInput(BaseModel):
-    spreadsheet_ref: str = Field(min_length=1, max_length=500)
+    spreadsheet_ref: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Exact account-qualified spreadsheet ref returned by a Drive tool.",
+    )
     range: str = Field(min_length=1, max_length=200)
     values: list[list[CellValue]] = Field(min_length=1, max_length=500)
     value_input_option: Literal["RAW", "USER_ENTERED"] = "USER_ENTERED"
@@ -232,10 +247,10 @@ async def drive_update_sheet(execution: ToolExecution, args: SheetWriteInput) ->
             preview="Updated cells",
             operation="update",
             target=f"{args.spreadsheet_ref}:{args.range}",
-            receipt=json.dumps(receipt, sort_keys=True),
+            receipt=receipt.acknowledged_range,
             before_ref=args.spreadsheet_ref,
             after_ref=args.spreadsheet_ref,
-            observed=f"Drive acknowledged {receipt.get('updatedRange', args.range)}",
+            observed=f"Drive acknowledged {receipt.acknowledged_range}",
         )
 
     return await execute_idempotent(
@@ -256,10 +271,10 @@ async def drive_append_sheet_rows(execution: ToolExecution, args: SheetWriteInpu
             preview="Appended rows",
             operation="append",
             target=f"{args.spreadsheet_ref}:{args.range}",
-            receipt=json.dumps(receipt, sort_keys=True),
+            receipt=receipt.acknowledged_range,
             before_ref=args.spreadsheet_ref,
             after_ref=args.spreadsheet_ref,
-            observed=f"Drive acknowledged append to {args.range}",
+            observed=f"Drive acknowledged append to {receipt.acknowledged_range}",
         )
 
     return await execute_idempotent(

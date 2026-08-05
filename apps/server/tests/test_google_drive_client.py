@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from arden.integrations.google_drive.client import GoogleDriveClient, MultiGoogleDriveClient
+import pytest
+
+from arden.integrations.google_drive.client import GoogleDriveClient, GoogleDrivePayloadError, MultiGoogleDriveClient
 from arden.integrations.google_drive.render import flatten_google_doc
 
 
@@ -85,6 +87,15 @@ class Values:
         self.updated_range = range
         self.body = body
         return Request({"updatedRange": range})
+
+    def get(self, *, spreadsheetId, range):
+        assert spreadsheetId == "sheet-1"
+        return Request({"range": range, "values": [["Name", "Count"], ["Ada", 2]]})
+
+    def append(self, *, spreadsheetId, range, valueInputOption, insertDataOption, body):
+        assert spreadsheetId == "sheet-1"
+        assert insertDataOption == "INSERT_ROWS"
+        return Request({"updates": {"updatedRange": range}})
 
 
 class Spreadsheets:
@@ -175,11 +186,12 @@ def test_edit_doc_uses_required_revision_control():
 def test_sheet_update_writes_only_requested_range():
     client, services = _client()
 
-    client.update_sheet("sheet-1", "Data!A2:B2", [["a", 2]], "USER_ENTERED")
+    receipt = client.update_sheet("sheet-1", "Data!A2:B2", [["a", 2]], "USER_ENTERED")
 
     values = services[("sheets", "v4")].resource.values_resource
     assert values.updated_range == "Data!A2:B2"
     assert values.body == {"values": [["a", 2]]}
+    assert receipt.acknowledged_range == "Data!A2:B2"
 
 
 def test_create_doc_creates_empty_file_without_content_write():
@@ -190,7 +202,7 @@ def test_create_doc_creates_empty_file_without_content_write():
     documents = services[("docs", "v1")].resource
     assert documents.created_body == {"title": "Empty document"}
     assert documents.batch_body is None
-    assert result["ref"] == "acct-1:doc-new"
+    assert result.ref == "acct-1:doc-new"
 
 
 def test_create_sheet_creates_empty_file_without_values_write():
@@ -201,7 +213,38 @@ def test_create_sheet_creates_empty_file_without_values_write():
     spreadsheets = services[("sheets", "v4")].resource
     assert spreadsheets.created_body == {"properties": {"title": "Empty sheet"}}
     assert spreadsheets.values_resource.body is None
-    assert result["ref"] == "acct-1:sheet-new"
+    assert result.ref == "acct-1:sheet-new"
+
+
+def test_client_parses_provider_responses_into_immutable_envelopes():
+    client, _ = _client()
+
+    document = client.read_doc("doc-1")
+    sheet_range = client.read_sheet("sheet-1", "A1:B2")
+    append_receipt = client.append_sheet_rows("sheet-1", "A3:B3", [["Grace", 3]], "USER_ENTERED")
+
+    assert document.file.name == "Roadmap"
+    assert document.text == "Old"
+    assert sheet_range.range_name == "A1:B2"
+    assert sheet_range.values == (("Name", "Count"), ("Ada", 2))
+    assert append_receipt.acknowledged_range == "A3:B3"
+
+
+def test_client_rejects_malformed_successful_provider_payload():
+    client, services = _client()
+    services[("sheets", "v4")].resource.values_resource.get = lambda **_kwargs: Request(
+        {"range": "A1:B2", "values": {}}
+    )
+
+    with pytest.raises(GoogleDrivePayloadError, match="invalid response for spreadsheet read"):
+        client.read_sheet("sheet-1", "A1:B2")
+
+
+def test_client_decodes_an_omitted_values_field_as_an_empty_sheet_range():
+    client, services = _client()
+    services[("sheets", "v4")].resource.values_resource.get = lambda **_kwargs: Request({"range": "A1:B2"})
+
+    assert client.read_sheet("sheet-1", "A1:B2").values == ()
 
 
 def test_multi_account_client_resolves_account_by_email():
@@ -216,6 +259,15 @@ def test_multi_account_client_resolves_account_by_email():
 
     assert client.select_account("user@example.com") is first
     assert client.select_account("OTHER@example.com") is second
+
+
+def test_drive_refs_must_be_account_qualified_even_with_one_account():
+    first, _ = _client()
+    client = MultiGoogleDriveClient([first])
+
+    assert client.resolve_ref("acct-1:doc-1") == (first, "doc-1")
+    with pytest.raises(ValueError, match="account-qualified"):
+        client.resolve_ref("doc-1")
 
 
 def test_multi_account_error_names_available_account_emails():
