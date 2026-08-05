@@ -13,8 +13,8 @@ from arden.context.models import SessionState
 from arden.orchestra.dynamic import run_script
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import BUILTIN_SKILLS_DIR
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,

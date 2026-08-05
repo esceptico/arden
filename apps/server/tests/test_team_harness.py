@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-import arden.tools.core.context as context_module
+import arden.tools.core.background_tasks as background_tasks_module
 from arden.agent import AgentHooks, Result, StopReason, Usage
 from arden.context.models import SessionData, SessionState
 from arden.core import spawner as spawner_module
@@ -21,8 +21,8 @@ from arden.tools.app_control import (
     app_followup_task_tool,
     approve_app_followup_task,
 )
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,
@@ -285,7 +285,7 @@ async def _delivered(registry: BackgroundTaskRegistry, *, status: str, result: s
 
 @pytest.mark.asyncio
 async def test_deliver_result_truncates_failed_bodies_and_appends_guidance(tmp_path, monkeypatch):
-    monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
     registry = BackgroundTaskRegistry(session_id="cur")
     content = await _delivered(registry, status="failed", result="x" * 10_000)
 
@@ -298,7 +298,7 @@ async def test_deliver_result_truncates_failed_bodies_and_appends_guidance(tmp_p
 
 @pytest.mark.asyncio
 async def test_deliver_result_keeps_completed_results_under_the_bound(tmp_path, monkeypatch):
-    monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
     registry = BackgroundTaskRegistry(session_id="cur")
     body = "y" * 10_000
     content = await _delivered(registry, status="completed", result=body)
@@ -310,7 +310,7 @@ async def test_deliver_result_keeps_completed_results_under_the_bound(tmp_path, 
 
 @pytest.mark.asyncio
 async def test_deliver_result_bounds_large_completion_after_persisting_exact_body(tmp_path, monkeypatch):
-    monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
     order: list[tuple[str, object]] = []
 
     async def record_event(**kwargs):
@@ -340,7 +340,7 @@ async def test_deliver_result_bounds_large_completion_after_persisting_exact_bod
     assert order[1][0] == "inject"
     content = order[1][1]
     assert isinstance(content, str)
-    assert len(content) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
+    assert len(content) <= background_tasks_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
     assert f'agent_ref="{_agent_ref("agent-1")}"' in content
     assert f'result_ref="background://{_agent_ref("agent-1")}"' in content
     assert "H" * 1_000 in content
@@ -353,7 +353,7 @@ async def test_deliver_result_bounds_large_completion_after_persisting_exact_bod
 
 @pytest.mark.asyncio
 async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_path, monkeypatch):
-    monkeypatch.setattr(context_module, "RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
     recorded: list[str] = []
     injected: list[str] = []
 
@@ -387,7 +387,7 @@ async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_
         "undelivered_steering": steering,
     }
     assert await registry.read_background_result("agent-1") == recorded[0]
-    assert len(injected[0]) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
+    assert len(injected[0]) <= background_tasks_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
     assert "A" * 1_000 in injected[0]
     assert "C" * 1_000 in injected[0]
     assert "[Middle omitted from this bounded completion.]" in injected[0]
@@ -404,6 +404,6 @@ async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_
     )
 
     assert json.loads(recorded[1])["undelivered_steering"] == steering
-    assert len(injected[1]) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
+    assert len(injected[1]) <= background_tasks_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
     assert "[truncated]" in injected[1]
     assert f'agent_result_read(agent_ref="{_agent_ref("agent-2")}", offset=0, limit=4000)' in injected[1]

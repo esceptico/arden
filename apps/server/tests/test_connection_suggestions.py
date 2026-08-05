@@ -13,7 +13,8 @@ from arden.tools.connections import (
     connection_request_tool,
     render_connection_catalog,
 )
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolOverrideDecision
 

@@ -11,7 +11,8 @@ from arden.constants import OFFLOAD_THRESHOLD
 from arden.context.models import SessionState
 from arden.core.public_refs import public_ref
 from arden.server.state import RunRegistry
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 
 

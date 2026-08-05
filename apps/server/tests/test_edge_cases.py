@@ -13,7 +13,8 @@ from arden.context.models import SessionState
 from arden.context.store import SessionStore
 from arden.core.public_refs import public_ref
 from arden.tools.core import EmptyInput, Tool, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from arden.tools.core.context import BackgroundTaskRegistry, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import ToolExecution
 from tests.helpers import (
     MockCompletionClient,
     MockLLMClient,

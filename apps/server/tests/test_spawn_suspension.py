@@ -13,7 +13,8 @@ from arden.core import spawner as spawner_module
 from arden.core.public_refs import public_ref
 from arden.core.spawner import create_spawn_fn
 from arden.server.state import RunRegistry
-from arden.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import ChildSession, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor
 
 

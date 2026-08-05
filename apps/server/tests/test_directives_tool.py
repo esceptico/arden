@@ -9,7 +9,8 @@ import arden.tools.directives as directives_module
 from arden.agent.ledger import SharedLedger
 from arden.context.models import SessionState
 from arden.core.tool_executor import ArdenToolExecutor
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolOverrideDecision
 from arden.tools.directives import (

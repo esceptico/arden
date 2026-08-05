@@ -36,8 +36,8 @@ from arden.tools.app_control import (
     session_send_message,
     session_send_message_tool,
 )
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,

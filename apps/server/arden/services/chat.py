@@ -65,7 +65,8 @@ from arden.skills.mentions import render_skill_mentions
 from arden.skills.registry import SkillRegistry
 from arden.tool_call_metadata import split_tool_arguments
 from arden.tools.connections import render_connection_catalog
-from arden.tools.core.context import BackgroundTaskRegistry, ChildIOFactory, ChildIOParams, ChildSession, IOBridge
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import ChildIOFactory, ChildIOParams, ChildSession, IOBridge
 from arden.tools.core.types import ToolAction
 from arden.tools.deferred import (
     build_deferred_tools_prompt_for_schemas,

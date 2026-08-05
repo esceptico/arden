@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from arden.core.public_refs import PublicRef, is_public_ref
 from arden.events.sse import BackgroundTaskEvent
 from arden.tools.core import ToolResult, tool
-from arden.tools.core.context import BACKGROUND_RESULT_READ_MAX_CHARS, ToolExecution
+from arden.tools.core.background_tasks import BACKGROUND_RESULT_READ_MAX_CHARS
+from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ApprovalInfo, ToolAction, ToolPolicy, ToolScope
 
 

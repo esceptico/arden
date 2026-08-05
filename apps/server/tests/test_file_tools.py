@@ -11,7 +11,8 @@ from pydantic import ValidationError
 from arden.context.models import AreaContext, SessionState
 from arden.core.prompts import AREA_BLOCK
 from arden.core.tool_executor import ArdenToolExecutor
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.file_mutation import RevisionConflict, atomic_compare_and_swap, file_revision
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolPlacement

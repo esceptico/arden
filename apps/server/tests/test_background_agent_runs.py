@@ -3,9 +3,10 @@ from pathlib import Path
 
 import pytest
 
+import arden.tools.core.background_tasks as background_tasks_module
 from arden.context.models import BackgroundStartDisposition
 from arden.core.public_refs import public_ref
-from arden.tools.core.context import BackgroundTaskRegistry
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 
 
 def _agent_ref(task_id: str) -> str:
@@ -228,7 +229,7 @@ async def _extend(items, values):
 
 @pytest.mark.asyncio
 async def test_background_result_fallback_rejects_path_traversal(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("arden.tools.core.context.RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
     result_dir = tmp_path / "sess-1" / "bg_results"
     result_dir.mkdir(parents=True)
     (tmp_path / "secret.txt").write_text("other session secret")
@@ -241,7 +242,7 @@ async def test_background_result_fallback_rejects_path_traversal(tmp_path: Path,
 
 @pytest.mark.asyncio
 async def test_durable_background_reader_is_authoritative(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("arden.tools.core.context.RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
 
     async def missing_owned_result(_task_id: str) -> None:
         return None

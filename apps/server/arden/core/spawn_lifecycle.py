@@ -5,7 +5,8 @@ from typing import Protocol, cast
 
 from arden.context.models import SessionState
 from arden.core.public_refs import is_public_ref
-from arden.tools.core.context import BackgroundTaskRegistry, ChildIOParams, IOBridge, ToolContext
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import ChildIOParams, IOBridge, ToolContext
 
 
 class _SessionService(Protocol):

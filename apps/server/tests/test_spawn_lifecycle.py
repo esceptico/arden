@@ -51,7 +51,8 @@ from arden.events.sse import (
 from arden.server.state import RunRegistry, RunStatus
 from arden.services.session import SessionService
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from arden.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import ChildSession, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
 

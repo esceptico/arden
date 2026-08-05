@@ -10,8 +10,8 @@ from pydantic import ValidationError
 from arden.context.models import SessionState
 from arden.context.store import AREA_FILTER_UNSET
 from arden.core.public_refs import public_ref
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,

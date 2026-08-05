@@ -37,7 +37,8 @@ from arden.operator.runner import RunResult
 from arden.revisions.models import CollectionReport
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext
 from arden.tools.facts import FACT_SERVICE
 from arden.wiki.constants import WIKI_PAGE_READ_POSTCONDITION, wiki_page_read_proof_id
 from arden.wiki.exceptions import WikiSnapshotChangedError

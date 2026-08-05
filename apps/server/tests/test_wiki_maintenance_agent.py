@@ -9,7 +9,8 @@ from arden.context.models import SessionState
 from arden.operator.runner import RunResult
 from arden.revisions.models import ResourceState, ResourceVersion
 from arden.server.runtime.core import Runtime
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.wiki_maintenance import (
     WIKI_MAINTENANCE_SERVICE,

@@ -19,7 +19,8 @@ from arden.execution import (
 from arden.execution.backend import ClientExecutionBackend
 from arden.execution.results import DeviceResultEnvelope
 from arden.tools.core.base import ToolResult
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.execution import ExecutionRouter, ToolInvocation
 from arden.tools.core.function import tool
 from arden.tools.core.registry import ToolRegistry

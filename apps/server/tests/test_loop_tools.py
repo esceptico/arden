@@ -33,8 +33,8 @@ from arden.tools.automation import (
     loop_schedule_wakeup,
 )
 from arden.tools.core.base import Tool
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,

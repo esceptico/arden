@@ -17,7 +17,8 @@ from arden.core.agent_types import apply_profile
 from arden.core.public_refs import public_ref
 from arden.core.spawner import SpawnResult, create_spawn_fn
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.scope import tools
 from arden.tools.executor import ToolExecutor

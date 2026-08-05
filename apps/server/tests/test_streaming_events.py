@@ -61,7 +61,8 @@ from arden.services.chat import (
     run_chat,
 )
 from arden.tool_call_metadata import DISPLAY_TITLE_ARG
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor, make_text_response
 
 

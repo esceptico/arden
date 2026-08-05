@@ -14,8 +14,8 @@ from arden.events.sse import InputNeededEvent
 from arden.server.routers.chat import router as chat_router
 from arden.server.runtime import get_runtime
 from arden.server.state import RunRegistry
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,

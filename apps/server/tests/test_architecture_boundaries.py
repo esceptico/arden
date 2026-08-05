@@ -42,6 +42,14 @@ def test_services_do_not_import_runtime_composition_root():
     assert violations == []
 
 
+def test_tool_context_does_not_own_background_task_registry():
+    context_source = SERVER_ROOT.joinpath("tools/core/context.py").read_text()
+    registry_source = SERVER_ROOT.joinpath("tools/core/background_tasks.py").read_text()
+
+    assert "class BackgroundTaskRegistry" not in context_source
+    assert "class BackgroundTaskRegistry" in registry_source
+
+
 def test_server_app_does_not_own_http_route_handlers():
     source = SERVER_ROOT.joinpath("server/app.py").read_text()
     route_decorators = ("@app.get(", "@app.post(", "@app.put(", "@app.patch(", "@app.delete(")

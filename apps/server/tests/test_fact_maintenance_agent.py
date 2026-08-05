@@ -13,7 +13,8 @@ from arden.memory.facts.maintenance.runner import (
 )
 from arden.memory.facts.maintenance.store import FactMaintenanceError
 from arden.memory.facts.models import Fact
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.fact_maintenance import (
     FACT_MAINTENANCE_SERVICE,

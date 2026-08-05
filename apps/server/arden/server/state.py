@@ -8,7 +8,8 @@ from arden.agent.types.tools import normalize_source_refs
 from arden.context.models import SessionState
 from arden.core.ids import generate_run_id
 from arden.integrations.base import IntegrationConnectionDescriptor
-from arden.tools.core.context import ApprovalControls, BackgroundTaskRegistry, ResourceObservation
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import ApprovalControls, ResourceObservation
 
 
 class RunStatus(StrEnum):

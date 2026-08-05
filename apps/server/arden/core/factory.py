@@ -14,9 +14,9 @@ from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.usage_tracker import UsageTracker
 from arden.llm.models import get_model
 from arden.server.state import RunRegistry
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
     ApprovalControls,
-    BackgroundTaskRegistry,
     ChildIOFactory,
     IOBridge,
     ResourceObservation,

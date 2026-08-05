@@ -12,8 +12,8 @@ from arden.context.models import SessionState
 from arden.integrations.core import CORE_INTEGRATIONS, WIKI
 from arden.revisions import ManagedFileRepository
 from arden.services.session import SessionService
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
-    BackgroundTaskRegistry,
     IOBridge,
     ResourceObservation,
     RunContext,

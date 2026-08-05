@@ -9,7 +9,8 @@ from arden.context.models import SessionState
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.llm.base import CompletionClient
 from arden.tools.core import Tool
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext
 from arden.tools.core.execution import ExecutionRouter
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.executor import ToolExecutor

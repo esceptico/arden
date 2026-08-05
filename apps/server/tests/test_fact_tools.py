@@ -17,7 +17,8 @@ from arden.memory.facts.boundary import source_time
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactPrincipal, FactService
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.facts import (
     FACT_SERVICE,

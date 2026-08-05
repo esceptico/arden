@@ -8,13 +8,15 @@ import pytest_asyncio
 from pydantic import BaseModel
 
 import arden.database as database
+import arden.tools.core.background_tasks as background_tasks_module
 from arden.agent import Agent
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
 from arden.core.public_refs import public_ref
 from arden.services.chat import _retain_user_content, _time_gap_note
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from tests.helpers import MockCompletionClient, MockLLMClient, make_executor, make_test_executor, make_text_response
 
@@ -202,7 +204,7 @@ async def test_save_message_with_newlines_and_quotes(store: SessionStore):
 @pytest.mark.asyncio
 async def test_registry_deliver_result_with_no_callback(tmp_path, monkeypatch):
     """deliver_result with on_result=None should not crash (just warn)."""
-    monkeypatch.setattr("arden.tools.core.context.RESULT_BASE", tmp_path)
+    monkeypatch.setattr(background_tasks_module, "RESULT_BASE", tmp_path)
     registry = BackgroundTaskRegistry(session_id="sess-1")
     # No on_result set — should log warning but not crash
     await registry.deliver_result(

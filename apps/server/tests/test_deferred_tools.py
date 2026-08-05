@@ -26,7 +26,8 @@ from arden.core.spawner import create_spawn_fn
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.core import APP_CONTROL, SESSIONS
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.execution import ExecutionRouter
 from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.scope import tools

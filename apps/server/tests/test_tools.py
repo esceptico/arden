@@ -29,9 +29,9 @@ from arden.tools.automation import automation_create_tool, loop_done_tool, loop_
 from arden.tools.background import agent_cancel_tool
 from arden.tools.bash import bash_tool, is_blocked_command
 from arden.tools.core import EmptyInput, Tool, ToolCall, ToolNext, tool
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
 from arden.tools.core.context import (
     ApprovalControls,
-    BackgroundTaskRegistry,
     IOBridge,
     RunContext,
     ToolContext,

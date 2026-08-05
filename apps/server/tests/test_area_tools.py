@@ -21,7 +21,8 @@ from arden.tools.area import (
     area_submit_report,
     area_submit_report_tool,
 )
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE
 from arden.wiki.service import WikiService

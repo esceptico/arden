@@ -19,7 +19,8 @@ from arden.core.spawner import create_spawn_fn
 from arden.core.usage_tracker import UsageTracker
 from arden.server.runtime import Runtime
 from arden.settings import verify_api_key
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
+from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 
 type ResearchDepth = Literal["quick", "normal", "deep"]
 
