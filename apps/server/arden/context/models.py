@@ -59,3 +59,12 @@ class SessionData:
             self.context_generation = self.state.context_generation
         if self.context_etag is None:
             self.context_etag = self.state.context_etag
+
+
+@dataclass(frozen=True)
+class SessionHistoryHeader:
+    """Budget and routing fields needed before fetching a transcript page."""
+
+    state: SessionState
+    last_input_tokens: int | None = None
+    last_message_count: int | None = None

@@ -11,7 +11,7 @@ export const initialUsage: SessionUsage = {
   observedCacheWriteTokens: 0,
   totalTokens: 0,
   totalCost: 0,
-  messageCount: 0,
+  messageCount: null,
   contextBudget: null,
 };
 

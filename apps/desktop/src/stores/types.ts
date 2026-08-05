@@ -375,9 +375,9 @@ export interface SessionUsage {
   observedCacheWriteTokens: number;
   totalTokens: number;
   totalCost: number;
-  /** Server-side message count after the latest run. Drives the message
-   *  scale on the budget dial. 0 before the first run finishes. */
-  messageCount: number;
+  /** Server-side active-context count after the latest run. Legacy sessions
+   *  remain unknown rather than using their larger immutable transcript. */
+  messageCount: number | null;
   /** Model-specific limits captured with this session's history. */
   contextBudget: SessionContextBudget | null;
 }
@@ -606,7 +606,7 @@ export interface Actions {
    *  for the session view (server doesn't persist running totals). */
   hydrateUsageSnapshot: (snapshot: {
     contextInputTokens: number;
-    messageCount: number;
+    messageCount: number | null;
     contextBudget?: SessionContextBudget | null;
   }) => void;
   openSettings: (tab?: SettingsTabId) => void;

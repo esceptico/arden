@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from arden.context.models import SessionData, SessionState
+from arden.context.models import SessionData, SessionHistoryHeader, SessionState
 from arden.context.store import AREA_FILTER_UNSET, SessionStore
 from arden.core.compactor import compact_messages, compactable_range
 from arden.core.tool_result_files import clone_result_files, purge_session_results, rewrite_result_paths
@@ -181,6 +181,16 @@ class SessionService:
             return await self.store.load_session(sid)
         except Exception as e:
             _logger.warning("Failed to load session %s: %s", session_id or "latest", e)
+            return None
+
+    async def load_history_header(self, session_id: str | None = None) -> SessionHistoryHeader | None:
+        try:
+            sid = session_id or await self.store.get_latest_id()
+            if not sid:
+                return None
+            return await self.store.load_session_history_header(sid)
+        except Exception as e:
+            _logger.warning("Failed to load session history header %s: %s", session_id or "latest", e)
             return None
 
     async def save(

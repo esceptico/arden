@@ -10,7 +10,7 @@ from arden.constants import (
     HISTORY_MESSAGE_LIMIT,
     MAX_MESSAGES,
 )
-from arden.context.models import SessionData
+from arden.context.models import SessionState
 from arden.core.compactor import is_handoff_message, token_compaction_budget
 from arden.core.content import blocks_to_text
 from arden.core.llm_client import llm_client
@@ -343,12 +343,17 @@ async def _triage_candidates(svc: SessionService) -> list[dict]:
     return [{"key": p["area_id"], "title": p.get("name", "")} for p in await svc.list_areas()]
 
 
-def _context_budget_snapshot(data: SessionData, runtime: Runtime) -> ContextBudgetResponse:
+def _context_budget_snapshot(
+    state: SessionState,
+    runtime: Runtime,
+    *,
+    input_tokens: int,
+    message_count: int | None,
+) -> ContextBudgetResponse:
     config = getattr(runtime, "config", None)
-    model = data.state.chat_model or getattr(config, "chat_model", None)
+    model = state.chat_model or getattr(config, "chat_model", None)
     threshold = getattr(config, "compression_threshold", COMPRESSION_THRESHOLD)
     message_limit = getattr(config, "max_messages", MAX_MESSAGES)
-    message_count = data.last_message_count if data.last_message_count is not None else len(data.messages)
     hard_limit = None
     compaction_trigger = None
     if model:
@@ -365,11 +370,11 @@ def _context_budget_snapshot(data: SessionData, runtime: Runtime) -> ContextBudg
             compaction_trigger = budget.compaction_trigger
     return ContextBudgetResponse(
         model=model,
-        uses_default_model=data.state.chat_model is None,
+        uses_default_model=state.chat_model is None,
         hard_limit=hard_limit,
         compaction_trigger=compaction_trigger,
         message_limit=message_limit,
-        input_tokens=data.last_input_tokens or 0,
+        input_tokens=input_tokens,
         message_count=message_count,
     )
 
@@ -386,8 +391,8 @@ async def get_session_history(
     around: str | None = None,
     around_seq: int | None = Query(default=None, ge=0),
 ):
-    data = await svc.load(session_id)
-    if not data:
+    header = await svc.load_history_header(session_id)
+    if not header:
         return {
             "messages": [],
             "active_run_id": None,
@@ -406,7 +411,7 @@ async def get_session_history(
     # Runtime snapshot: durable run state + event cursor. The desktop renders
     # this first, then opens the SSE stream with after_seq=checkpoint_seq so
     # replay is a delta rather than the whole active-session reconstruction.
-    sid = data.state.session_id
+    sid = header.state.session_id
     mark_accessed = getattr(svc, "mark_accessed", None)
     if mark_accessed is not None:
         await mark_accessed(sid)
@@ -434,7 +439,6 @@ async def get_session_history(
         around=around,
         around_seq=around_seq,
     )
-
     tool_call_ids = [
         call_id
         for row in page["messages"]
@@ -522,14 +526,19 @@ async def get_session_history(
         # Snapshot of the session's budget-relevant counters so the desktop
         # can populate the BudgetDial immediately on session open instead of
         # waiting for the next run to finish and emit RunFinishedEvent.
-        # `last_message_count` reflects durable transcript pressure. Falls
-        # back to the on-disk count for sessions saved before this field
-        # existed.
+        # An absent legacy counter stays unknown: immutable transcript rows
+        # overstate active model context after compaction, while parsing the
+        # full saved projection would put the latency back on this hot path.
         "usage": {
-            "last_input_tokens": data.last_input_tokens or 0,
-            "message_count": data.last_message_count if data.last_message_count is not None else len(data.messages),
+            "last_input_tokens": header.last_input_tokens or 0,
+            "message_count": header.last_message_count,
         },
-        "context_budget": _context_budget_snapshot(data, runtime).model_dump(),
+        "context_budget": _context_budget_snapshot(
+            header.state,
+            runtime,
+            input_tokens=header.last_input_tokens or 0,
+            message_count=header.last_message_count,
+        ).model_dump(),
     }
 
 
@@ -889,7 +898,12 @@ async def update_session_model(
     return {
         "session_id": session_id,
         "chat_model": req.chat_model,
-        "context_budget": _context_budget_snapshot(data, runtime).model_dump(),
+        "context_budget": _context_budget_snapshot(
+            data.state,
+            runtime,
+            input_tokens=data.last_input_tokens or 0,
+            message_count=data.last_message_count if data.last_message_count is not None else len(data.messages),
+        ).model_dump(),
     }
 
 

@@ -285,12 +285,11 @@ async def test_session_history_restores_persisted_source_refs_unchanged():
     class _SessionService:
         store = _Store()
 
-        async def load(self, _session_id: str):
+        async def load_history_header(self, _session_id: str):
             return SimpleNamespace(
-                state=SimpleNamespace(session_id="session-1"),
-                messages=[],
+                state=SimpleNamespace(session_id="session-1", chat_model=None),
                 last_input_tokens=None,
-                last_message_count=None,
+                last_message_count=0,
             )
 
         async def list_messages(self, *_args, **_kwargs):

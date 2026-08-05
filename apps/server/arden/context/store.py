@@ -20,7 +20,7 @@ from arden.constants import (
     SESSION_EVENT_PRUNE_INTERVAL,
     SESSION_HANDOFF_MARKER,
 )
-from arden.context.models import BackgroundStartDisposition, SessionData, SessionState
+from arden.context.models import BackgroundStartDisposition, SessionData, SessionHistoryHeader, SessionState
 from arden.core.raw_tool_results import (
     RawToolResultBlob,
     internal_blob_from_data,
@@ -515,6 +515,13 @@ LIMIT ?
 """
 
 SQL_LOAD_SESSION = "SELECT * FROM sessions WHERE session_id = ?"
+SQL_LOAD_SESSION_HISTORY_HEADER = """
+SELECT session_id, started_at, last_activity, metadata, name, session_type,
+       origin_automation_id, parent_session_id, parent_tool_call_id,
+       agent_type, agent_status, area_id, chat_model, context_generation
+FROM sessions
+WHERE session_id = ?
+"""
 # Upsert: a fresh session won't have a row yet on its very first save,
 # and an UPDATE-only would silently no-op (lost user message until the
 # final end-of-run save).
@@ -4970,12 +4977,9 @@ class SessionStore:
                 state.context_etag = self._projection_etag(messages_json)
             return created
 
-    async def load_session(self, session_id: str) -> SessionData | None:
-        rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))
-        if not rows:
-            return None
-
-        row = rows[0]
+    @staticmethod
+    def _session_state_from_row(row: aiosqlite.Row) -> SessionState:
+        values = dict(row)
         started_at = datetime.fromisoformat(row["started_at"])
         last_activity = datetime.fromisoformat(row["last_activity"])
         # Attach UTC to naive datetimes from old sessions
@@ -4984,23 +4988,61 @@ class SessionStore:
         if last_activity.tzinfo is None:
             last_activity = last_activity.replace(tzinfo=UTC)
 
-        name = row["name"]
-
-        state = SessionState(
+        return SessionState(
             session_id=row["session_id"],
             started_at=started_at,
             last_activity=last_activity,
-            name=name,
+            name=row["name"],
             session_type=row["session_type"] or "chat",
             origin_automation_id=row["origin_automation_id"],
-            parent_session_id=dict(row).get("parent_session_id"),
-            parent_tool_call_id=dict(row).get("parent_tool_call_id"),
-            agent_type=dict(row).get("agent_type"),
-            agent_status=dict(row).get("agent_status"),
+            parent_session_id=values.get("parent_session_id"),
+            parent_tool_call_id=values.get("parent_tool_call_id"),
+            agent_type=values.get("agent_type"),
+            agent_status=values.get("agent_status"),
             area_id=row["area_id"],
-            chat_model=dict(row).get("chat_model"),
-            context_generation=int(dict(row).get("context_generation") or 0),
+            chat_model=values.get("chat_model"),
+            context_generation=int(values.get("context_generation") or 0),
         )
+
+    @staticmethod
+    def _session_metadata(raw_metadata: str | None) -> dict:
+        try:
+            parsed = json.loads(raw_metadata) if raw_metadata else {}
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _nonnegative_metadata_int(value: object) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    async def load_session_history_header(self, session_id: str) -> SessionHistoryHeader | None:
+        """Load only fields needed to render one paged history response."""
+        rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION_HISTORY_HEADER, (session_id,))
+        if not rows:
+            return None
+
+        row = rows[0]
+        state = self._session_state_from_row(row)
+        metadata = self._session_metadata(row["metadata"])
+        input_tokens = self._nonnegative_metadata_int(metadata.get("last_input_tokens"))
+        message_count = self._nonnegative_metadata_int(metadata.get("last_message_count"))
+
+        return SessionHistoryHeader(
+            state=state,
+            last_input_tokens=input_tokens,
+            last_message_count=message_count,
+        )
+
+    async def load_session(self, session_id: str) -> SessionData | None:
+        rows = await self.read_conn.execute_fetchall(SQL_LOAD_SESSION, (session_id,))
+        if not rows:
+            return None
+
+        row = rows[0]
+        state = self._session_state_from_row(row)
 
         raw_messages, raw_metadata = row["messages"], row["metadata"]
         context_etag = self._projection_etag(raw_messages)
@@ -5015,11 +5057,7 @@ class SessionStore:
                 isinstance(message, dict) for message in parsed_messages
             )
             messages = parsed_messages if projection_valid else []
-            try:
-                parsed_metadata = json.loads(raw_metadata) if raw_metadata else {}
-            except (TypeError, json.JSONDecodeError):
-                parsed_metadata = {}
-            metadata = parsed_metadata if isinstance(parsed_metadata, dict) else {}
+            metadata = self._session_metadata(raw_metadata)
             return messages, projection_valid, metadata
 
         messages, projection_valid, metadata = await asyncio.to_thread(_parse_session_projection)
@@ -5540,7 +5578,12 @@ class SessionStore:
                 "before": None,
                 "after": None,
             }
-        await self._ensure_session_messages(session_id)
+        has_transcript_rows = await self.read_conn.execute_fetchall(
+            SQL_LOAD_SESSION_MESSAGES_COUNT,
+            (session_id,),
+        )
+        if not has_transcript_rows:
+            await self._ensure_session_messages(session_id)
         limit = max(1, min(limit, 250))
 
         async def seq_for_message(ref: str | None) -> int | None:

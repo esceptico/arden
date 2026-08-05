@@ -53,6 +53,43 @@ test("history caches budget counters with their session model", () => {
   });
 });
 
+test("keeps legacy active message count unknown", async () => {
+  const cached = cachedSessionFromHistory(
+    "legacy-session",
+    {
+      messages: [],
+      active_run_id: null,
+      context_budget: {
+        model: "session/model",
+        uses_default_model: false,
+        hard_limit: 200_000,
+        compaction_trigger: 152_000,
+        message_limit: 100,
+        input_tokens: 50_000,
+        message_count: null,
+      },
+    },
+    undefined,
+    false,
+  );
+  expect(cached.usage?.messageCount).toBeNull();
+
+  setState({ currentSessionId: "legacy-session", usage: cached.usage });
+  const app = document.createElement("div");
+  app.id = "app";
+  const host = document.createElement("div");
+  app.append(host);
+  document.body.append(app);
+  root = createRoot(host);
+
+  await act(async () => root?.render(<BudgetDial />));
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Context budget"]')!;
+  expect(trigger.title).toContain("unknown / 100 msgs");
+
+  await act(async () => trigger.click());
+  expect(app.querySelector<HTMLElement>('[role="dialog"]')?.textContent).toContain("unknown / 100");
+});
+
 test("shows the selected session's hard window and distinct compaction trigger", async () => {
   const serverConfig = {
     chat_model: "global/model",

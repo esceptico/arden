@@ -170,8 +170,152 @@ async def test_history_context_budget_keeps_usage_when_model_is_unknown(
         "compaction_trigger": None,
         "message_limit": 120,
         "input_tokens": 321,
-        "message_count": 1,
+        "message_count": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_history_pages_large_transcript_without_loading_full_session(
+    session_service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = _state("sess-large-history")
+    messages = [{"role": "user", "content": f"message {index}"} for index in range(1_001)]
+    await session_service.save(
+        state,
+        messages,
+        metadata={"last_input_tokens": 45_678},
+    )
+
+    async def fail_full_load(*_args, **_kwargs):
+        raise AssertionError("paged history must not load the full session")
+
+    monkeypatch.setattr(session_service, "load", fail_full_load)
+    monkeypatch.setattr(session_service.store, "load_session", fail_full_load)
+    monkeypatch.setattr(session_service.store, "_ensure_session_messages", fail_full_load)
+
+    result = await get_session_history(
+        session_service,
+        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        BusRegistry(),
+        state.session_id,
+        limit=3,
+        around_seq=None,
+    )
+
+    assert [message["content"] for message in result["messages"]] == [
+        "message 998",
+        "message 999",
+        "message 1000",
+    ]
+    assert result["page"]["has_more_before"] is True
+    assert result["usage"] == {"last_input_tokens": 45_678, "message_count": None}
+    assert result["context_budget"]["message_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_history_budget_does_not_guess_from_page_or_transcript(session_service: SessionService):
+    state = _state("sess-history-count-fallback")
+    messages = [{"role": "user", "content": f"message {index}"} for index in range(7)]
+    await session_service.save(state, messages, metadata={"last_input_tokens": 123})
+
+    result = await get_session_history(
+        session_service,
+        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        BusRegistry(),
+        state.session_id,
+        limit=3,
+        around_seq=None,
+    )
+
+    assert len(result["messages"]) == 3
+    assert result["usage"] == {"last_input_tokens": 123, "message_count": None}
+    assert result["context_budget"]["message_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_history_does_not_use_immutable_count_for_compacted_context(session_service: SessionService):
+    state = _state("sess-compacted-history-count")
+    original = [
+        {"role": "user", "content": "first", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+        {"role": "user", "content": "second", "client_id": "u-2"},
+    ]
+    await session_service.save(state, original)
+    await session_service.save(
+        state,
+        [
+            {"role": "assistant", "content": "Summary of earlier chat.", "client_id": "summary-1"},
+            original[-1],
+        ],
+    )
+
+    result = await get_session_history(
+        session_service,
+        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        BusRegistry(),
+        state.session_id,
+        limit=10,
+        around_seq=None,
+    )
+
+    assert len(result["messages"]) == 4
+    assert result["usage"]["message_count"] is None
+    assert result["context_budget"]["message_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_history_legacy_projection_is_mirrored_then_paged(session_service: SessionService):
+    state = _state("sess-legacy-history")
+    messages = [{"role": "user", "content": f"legacy {index}"} for index in range(5)]
+    await session_service.save(state, messages)
+    await session_service.store.conn.execute(
+        "DELETE FROM session_messages WHERE session_id = ?",
+        (state.session_id,),
+    )
+    await session_service.store.conn.commit()
+
+    result = await get_session_history(
+        session_service,
+        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        BusRegistry(),
+        state.session_id,
+        limit=2,
+        around_seq=None,
+    )
+    transcript_rows = await session_service.store.read_conn.execute_fetchall(
+        "SELECT COUNT(*) AS count FROM session_messages WHERE session_id = ?",
+        (state.session_id,),
+    )
+
+    assert [message["content"] for message in result["messages"]] == ["legacy 3", "legacy 4"]
+    assert result["usage"]["message_count"] is None
+    assert transcript_rows[0]["count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_history_malformed_metadata_uses_safe_projection_count(session_service: SessionService):
+    state = _state("sess-malformed-history-metadata")
+    await session_service.save(
+        state,
+        [{"role": "user", "content": "one"}, {"role": "assistant", "content": "two"}],
+    )
+    await session_service.store.conn.execute(
+        "UPDATE sessions SET metadata = ? WHERE session_id = ?",
+        ("{", state.session_id),
+    )
+    await session_service.store.conn.commit()
+
+    result = await get_session_history(
+        session_service,
+        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        BusRegistry(),
+        state.session_id,
+        limit=1,
+        around_seq=None,
+    )
+
+    assert result["usage"] == {"last_input_tokens": 0, "message_count": None}
 
 
 @pytest.mark.asyncio

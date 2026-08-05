@@ -29,7 +29,7 @@ export interface HistoryResponse {
   active_run_id: string | null;
   runtime?: SessionRuntimeSnapshot;
   page?: HistoryPage;
-  usage?: { last_input_tokens: number; message_count: number };
+  usage?: { last_input_tokens: number; message_count: number | null };
   context_budget?: ContextBudgetSnapshot;
 }
 
@@ -198,7 +198,7 @@ export function cachedSessionFromHistory(
       ? {
           ...(base.usage ?? initialUsage),
           contextInputTokens: contextBudget?.input_tokens ?? usage?.last_input_tokens ?? 0,
-          messageCount: contextBudget?.message_count ?? usage?.message_count ?? 0,
+          messageCount: contextBudget?.message_count ?? usage?.message_count ?? null,
           contextBudget: contextBudget
             ? sessionContextBudgetFromHistory(contextBudget)
             : (base.usage ?? initialUsage).contextBudget,

@@ -331,7 +331,7 @@ export async function loadHistory(sessionId: string, options: LoadHistoryOptions
     if (contextBudget || usage) {
       s.hydrateUsageSnapshot({
         contextInputTokens: contextBudget?.input_tokens ?? usage?.last_input_tokens ?? 0,
-        messageCount: contextBudget?.message_count ?? usage?.message_count ?? 0,
+        messageCount: contextBudget?.message_count ?? usage?.message_count ?? null,
         contextBudget: contextBudget
           ? sessionContextBudgetFromHistory(contextBudget)
           : undefined,

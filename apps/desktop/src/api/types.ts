@@ -71,7 +71,7 @@ export interface ContextBudgetSnapshot {
   compaction_trigger: number | null;
   message_limit: number;
   input_tokens: number;
-  message_count: number;
+  message_count: number | null;
 }
 
 export type TodoStatus = "pending" | "in_progress" | "completed";

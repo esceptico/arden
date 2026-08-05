@@ -60,9 +60,12 @@ export function BudgetDial() {
   const tokenRatio = hardLimit && hardLimit > 0
     ? Math.min(1, usage.contextInputTokens / hardLimit)
     : 0;
-  const messageRatio = messageLimit > 0 ? Math.min(1, usage.messageCount / messageLimit) : 0;
+  const messageRatio = usage.messageCount !== null && messageLimit > 0
+    ? Math.min(1, usage.messageCount / messageLimit)
+    : 0;
   const maxRatio = Math.max(tokenRatio, messageRatio);
-  const hasAnyData = usage.contextInputTokens > 0 || usage.messageCount > 0 || usage.totalCost > 0;
+  const hasAnyData = usage.contextInputTokens > 0 || (usage.messageCount ?? 0) > 0 || usage.totalCost > 0;
+  const messageCountLabel = usage.messageCount ?? "unknown";
 
   const compactLabel = usage.contextInputTokens > 0
     ? formatTokens(usage.contextInputTokens)
@@ -84,7 +87,7 @@ export function BudgetDial() {
             aria-expanded={open}
             title={
               hasAnyData
-                ? `${formatTokens(usage.contextInputTokens)} / ${hardLimit ? formatTokens(hardLimit) : "unknown"} context tokens · ${usage.messageCount} / ${messageLimit || "unknown"} msgs`
+                ? `${formatTokens(usage.contextInputTokens)} / ${hardLimit ? formatTokens(hardLimit) : "unknown"} context tokens · ${messageCountLabel} / ${messageLimit || "unknown"} msgs`
                 : "Context budget"
             }
             className={clsx(
@@ -171,8 +174,8 @@ export function BudgetDial() {
         />
         <Row
           label="Messages"
-          value={`${usage.messageCount} / ${messageLimit}`}
-          hint={messageLimit > 0 ? formatPct(messageRatio) : "—"}
+          value={`${messageCountLabel} / ${messageLimit || "—"}`}
+          hint={usage.messageCount !== null && messageLimit > 0 ? formatPct(messageRatio) : "—"}
           color={ratioColor(messageRatio)}
         />
         <div className="mt-2 pt-2 border-t border-line-soft grid grid-cols-2 gap-y-1 gap-x-3">

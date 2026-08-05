@@ -429,7 +429,7 @@ class ContextBudgetResponse(BaseModel):
     compaction_trigger: int | None = None
     message_limit: int
     input_tokens: int
-    message_count: int
+    message_count: int | None
 
 
 class InspectorSourceResponse(BaseModel):
