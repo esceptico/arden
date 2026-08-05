@@ -496,7 +496,7 @@ function WebSearchSection() {
     <button
       type="button"
       onClick={openManage}
-      className="text-muted underline decoration-line-strong underline-offset-2 transition-colors duration-check hover:text-ink"
+      className="whitespace-nowrap text-muted underline decoration-line-strong underline-offset-2 transition-colors duration-check hover:text-ink"
     >
       Manage key
     </button>
@@ -508,41 +508,41 @@ function WebSearchSection() {
         <SettingsSettingRow
           title="Search provider"
           hint={
-            /* Fixed two-line footprint: the Auto hint wraps to two lines and
-               the others are one — without the reserve the whole card jumps
-               on every switch. The swap itself rides BlurSwap. */
+            /* Prose only. Live state and the key affordance used to sit inline
+               here, which turned the hint column into a ragged third column and
+               broke "Manage key" across two lines. They belong with the control.
+               Fixed two-line footprint: the Auto hint wraps to two lines and the
+               others are one — without the reserve the card jumps on every
+               switch. The swap itself rides BlurSwap. */
             <span className="block min-h-[2lh]">
-              <BlurSwap swapKey={`${mode}:${resolved}:${exaConnected}`}>
-                {mode === "auto" ? (
-                  <>
-                    Auto prefers Exa when its key is connected and falls back to DuckDuckGo.{" "}
-                    <strong className="font-medium text-ink-soft">
-                      Currently using {resolved === "exa" ? "Exa" : resolved === "ddgs" ? "DuckDuckGo" : "none"}.
-                    </strong>
-                    {exaConnected && <> {manageAffordance}</>}
-                  </>
-                ) : mode === "none" ? (
-                  "Web search tools are disabled for the agent."
-                ) : mode === "exa" ? (
-                  <>
-                    All agent web searches go through Exa
-                    {exa?.key_hint ? ` (${exa.key_hint})` : ""}. {manageAffordance}
-                  </>
-                ) : (
-                  "All agent web searches go through DuckDuckGo. No key needed."
-                )}
+              <BlurSwap swapKey={`${mode}:${resolved}`}>
+                {mode === "auto"
+                  ? `Prefers Exa when its key is connected, otherwise DuckDuckGo. Currently using ${
+                      resolved === "exa" ? "Exa" : resolved === "ddgs" ? "DuckDuckGo" : "none"
+                    }.`
+                  : mode === "none"
+                    ? "Web search tools are disabled for the agent."
+                    : mode === "exa"
+                      ? `All agent web searches go through Exa${exa?.key_hint ? ` (${exa.key_hint})` : ""}.`
+                      : "All agent web searches go through DuckDuckGo. No key needed."}
               </BlurSwap>
             </span>
           }
           control={
-            <div className="flex flex-col items-end gap-1">
+            /* One horizontal cluster, which is what `.settings-setting-control`
+               is: flex, end-justified, `--space-2` gap. Stacking a status line
+               under the tabs put a second, differently-ragged edge in the row —
+               and the key affordance is an action, so it sits with the control
+               it acts on, never inside the hint prose. */
+            <>
+              {(exaConnected || mode === "exa") && manageAffordance}
               <Tabs variant="segmented" size="sm" value={mode} onChange={select}>
                 {WEB_SEARCH_MODES.map((option) => (
                   <Tab key={option.id} value={option.id}>{option.label}</Tab>
                 ))}
               </Tabs>
               {error && <span role="alert" className="text-xs text-bad">{error}</span>}
-            </div>
+            </>
           }
         />
       </SettingsSurface>
