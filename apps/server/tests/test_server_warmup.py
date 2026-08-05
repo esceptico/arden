@@ -114,3 +114,38 @@ async def test_post_ready_warmup_failure_keeps_core_api_available(monkeypatch, t
     assert runtime.connected is True
     assert runtime.warmup_status()["status"] == "error"
     assert runtime.warmup_status()["error"] == "RuntimeError: projection failed"
+
+
+async def test_deferred_warmup_coordinates_one_wiki_health_projection(monkeypatch, tmp_path) -> None:
+    runtime = Runtime(Config(arden_dir=tmp_path, memory=False))
+    calls: list[tuple[str, dict]] = []
+
+    class _Projection:
+        last_state = SimpleNamespace(status="ready", detail=None)
+
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        async def sync(self, **kwargs) -> None:
+            calls.append((self.label, kwargs))
+
+    async def no_op() -> None:
+        return None
+
+    async def health() -> None:
+        calls.append(("health", {}))
+
+    runtime.stores = SimpleNamespace(reconcile_interrupted_state=no_op)
+    runtime.fact_index_projection = _Projection("fact")
+    runtime.wiki_page_projection = _Projection("wiki")
+    monkeypatch.setattr(runtime, "_reconcile_wiki_curator_history", no_op)
+    monkeypatch.setattr(runtime, "_project_initial_wiki_health", health)
+    monkeypatch.setattr(runtime, "sync_mcp", no_op)
+
+    await runtime.complete_deferred_runtime_warmup()
+
+    assert calls == [
+        ("fact", {"raise_on_error": False}),
+        ("wiki", {"raise_on_error": False, "notify_state_change": False}),
+        ("health", {}),
+    ]

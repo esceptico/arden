@@ -5,6 +5,7 @@ import pytest
 
 from arden.core.prompts import build_system_blocks
 from arden.revisions import ChangeSet, Create, ManagedFileRepository
+from arden.search.index import SyncResult
 from arden.search.types import SearchResult
 from arden.wiki.context import (
     WIKI_PAGE_SOURCE,
@@ -20,6 +21,7 @@ from arden.wiki.service import WikiService, WikiSnapshotChangedError
 class _Store:
     def __init__(self) -> None:
         self.items: dict[str, tuple[str, str, dict]] = {}
+        self.checkpoints: dict[str, str] = {}
 
     async def get_indexed_hashes(self, source: str):
         assert source == WIKI_PAGE_SOURCE
@@ -33,6 +35,16 @@ class _Index:
     def __init__(self) -> None:
         self.store = _Store()
         self.deleted: list[str] = []
+        self.sync_calls = 0
+
+    async def get_projection_checkpoint(self, source: str) -> str | None:
+        return self.store.checkpoints.get(source)
+
+    async def set_projection_checkpoint(self, source: str, checkpoint: str) -> None:
+        self.store.checkpoints[source] = checkpoint
+
+    async def clear_projection_checkpoint(self, source: str) -> None:
+        self.store.checkpoints.pop(source, None)
 
     async def upsert(self, source, source_id, title, content, metadata):
         assert source == WIKI_PAGE_SOURCE
@@ -52,6 +64,7 @@ class _Index:
         return True
 
     async def sync(self, source, items, **_kwargs):
+        self.sync_calls += 1
         current_ids = {item.source_id for item in items}
         for source_id in set(self.store.items) - current_ids:
             await self.delete(source, source_id)
@@ -390,6 +403,111 @@ async def test_projection_state_callback_is_outside_the_lock_and_propagates_fail
     assert await projection.sync() is index
     assert states == [WikiPageIndexState(wiki.repository.head, "ready")]
     assert lock_states == [False]
+
+
+@pytest.mark.asyncio
+async def test_projection_restores_checkpoint_without_reading_pages(tmp_path, monkeypatch) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Checkpointed topic.\n")
+    index = _Index()
+    await WikiPageIndexProjection(wiki, lambda: index, _fact_revision).sync()
+
+    def fail_read():
+        raise AssertionError("matching checkpoint reread wiki pages")
+
+    monkeypatch.setattr(wiki, "readable_pages", fail_read)
+    restored = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+
+    assert await restored.sync() is index
+    assert restored.last_state == WikiPageIndexState(wiki.repository.current_revision, "ready")
+    assert index.sync_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_projection_fact_revision_change_and_force_bypass_checkpoint(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Fact-aware topic.\n")
+    index = _Index()
+    revision = {"value": "a" * 64}
+
+    async def fact_revision() -> str:
+        return revision["value"]
+
+    projection = WikiPageIndexProjection(wiki, lambda: index, fact_revision)
+    await projection.sync()
+    await projection.sync()
+    revision["value"] = "b" * 64
+    await projection.sync()
+    await projection.sync(force=True)
+
+    assert index.sync_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_projection_never_checkpoints_a_repeatedly_changing_fact_revision(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Fact-race topic.\n")
+    revision = {"value": "a" * 64}
+
+    async def fact_revision() -> str:
+        return revision["value"]
+
+    class _FactChangingIndex(_Index):
+        async def sync(self, source, items, **kwargs):
+            await super().sync(source, items, **kwargs)
+            revision["value"] = chr(ord("a") + self.sync_calls) * 64
+
+    index = _FactChangingIndex()
+    projection = WikiPageIndexProjection(wiki, lambda: index, fact_revision)
+
+    assert await projection.sync() is None
+    assert projection.last_state == WikiPageIndexState(
+        None,
+        "not_ready",
+        "fact revision changed during wiki index sync",
+    )
+    assert index.store.checkpoints == {}
+
+
+@pytest.mark.asyncio
+async def test_projection_does_not_checkpoint_degraded_embeddings(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Degraded topic.\n")
+
+    class _DegradedIndex(_Index):
+        async def sync(self, source, items, **kwargs):
+            await super().sync(source, items, **kwargs)
+            return SyncResult(len(items), 0, degraded=True)
+
+    index = _DegradedIndex()
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+
+    assert await projection.sync() is index
+    assert await projection.sync() is index
+    assert index.sync_calls == 2
+    assert index.store.checkpoints == {}
+
+
+@pytest.mark.asyncio
+async def test_projection_can_suppress_state_callback_for_coordinated_health(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"One health pass.\n")
+    states: list[WikiPageIndexState] = []
+    index = _Index()
+
+    async def record_state(state: WikiPageIndexState) -> None:
+        states.append(state)
+
+    projection = WikiPageIndexProjection(
+        wiki,
+        lambda: index,
+        _fact_revision,
+        on_state_change=record_state,
+    )
+
+    await projection.sync(notify_state_change=False)
+
+    assert states == []
 
 
 @pytest.mark.asyncio

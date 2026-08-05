@@ -133,6 +133,7 @@ async def test_sync_keeps_full_text_current_when_embedding_times_out():
 
     assert result.updated == 1
     assert result.deleted == 1
+    assert result.degraded is True
     assert store.deleted == [("memory", "stale")]
     assert len(store.upserts) == 1
     assert store.upserts[0][4] is None
@@ -236,6 +237,26 @@ async def test_no_embeddings_keeps_fact_and_wiki_keyword_search(tmp_path):
     await conn.close()
 
 
+async def test_projection_checkpoints_persist_and_clear_with_their_source(tmp_path):
+    db_path = tmp_path / "search.db"
+    conn = await database.connect(db_path)
+    store = SearchStore(conn, embedding_dim=None)
+    await store.init_schema()
+
+    await store.set_projection_checkpoint("fact", "fact-index-v1:abc")
+    assert await store.get_projection_checkpoint("fact") == "fact-index-v1:abc"
+    await conn.close()
+
+    conn = await database.connect(db_path)
+    store = SearchStore(conn, embedding_dim=None)
+    await store.init_schema()
+    assert await store.get_projection_checkpoint("fact") == "fact-index-v1:abc"
+
+    await store.clear_source("fact")
+    assert await store.get_projection_checkpoint("fact") is None
+    await conn.close()
+
+
 async def test_disabling_embeddings_does_not_load_vector_extension(tmp_path, monkeypatch):
     db_path = tmp_path / "search.db"
     conn = await database.connect(db_path, vec=True)
@@ -249,6 +270,7 @@ async def test_disabling_embeddings_does_not_load_vector_extension(tmp_path, mon
         database.serialize_embedding([1.0]),
     )
     await store.mark_embedding_ready()
+    await store.set_projection_checkpoint("fact", "fact-index-v1:abc")
     await conn.close()
 
     async def reject_vector_extension(_self, _path):
@@ -271,4 +293,5 @@ async def test_disabling_embeddings_does_not_load_vector_extension(tmp_path, mon
     reenabled = SearchStore(conn, embedding_dim=1, embedding_model="test")
     assert await reenabled.init_schema() is True
     assert reenabled.has_vector_index is True
+    assert await reenabled.get_projection_checkpoint("fact") is None
     await conn.close()

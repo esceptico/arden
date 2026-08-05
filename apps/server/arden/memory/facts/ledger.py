@@ -136,6 +136,12 @@ class FactLedger:
 
         return self._snapshot().head
 
+    @property
+    def current_revision(self) -> str | None:
+        """Cheap published-head hint for rebuildable projection checkpoints."""
+
+        return self._repository.current_revision
+
     def collect_history(self) -> CollectionReport:
         """Collect unreachable fact-history objects using the repository grace period."""
 

@@ -461,6 +461,7 @@ class Runtime:
                     await self.fact_index_projection.sync(
                         progress_callback=self._index_progress_callback("facts"),
                         raise_on_error=True,
+                        force=True,
                     )
                     is None
                 ):
@@ -471,6 +472,7 @@ class Runtime:
                     await self.wiki_page_projection.sync(
                         progress_callback=self._index_progress_callback("wiki"),
                         raise_on_error=True,
+                        force=True,
                     )
                     is None
                 ):
@@ -584,12 +586,16 @@ class Runtime:
                     lambda: self.search_index,
                     self.fact_service.revision,
                     on_state_change=lambda _state: self.project_wiki_health(),
+                    fact_revision_hint=self.fact_service.current_revision,
                 )
                 self.wiki_page_projection = projection
                 self.wiki_context = WikiContextBuilder(self.wiki_service, projection, self.fact_service.revision)
                 if not rebuild_pending and not defer_warmup:
                     try:
-                        await projection.sync(raise_on_error=self.config.embedding is not None)
+                        await projection.sync(
+                            raise_on_error=self.config.embedding is not None,
+                            notify_state_change=False,
+                        )
                     except Exception:
                         _logger.warning("initial wiki index sync failed", exc_info=True)
             if defer_warmup:
@@ -824,7 +830,13 @@ class Runtime:
                     if projection is None:
                         continue
                     try:
-                        await projection.sync(raise_on_error=self.config.embedding is not None)
+                        if projection is self.wiki_page_projection:
+                            await projection.sync(
+                                raise_on_error=self.config.embedding is not None,
+                                notify_state_change=False,
+                            )
+                        else:
+                            await projection.sync(raise_on_error=self.config.embedding is not None)
                     except Exception:
                         _logger.warning("initial %s index sync failed", label, exc_info=True)
                 if self.config.embedding is None:
@@ -1426,9 +1438,9 @@ class Runtime:
                 return
             final_head = None
             for _attempt in range(3):
-                await self.wiki_page_projection.sync()
+                await self.wiki_page_projection.sync(notify_state_change=False)
                 await self.project_wiki_health()
-                await self.wiki_page_projection.sync()
+                await self.wiki_page_projection.sync(notify_state_change=False)
                 final_head = await self.project_wiki_health()
                 if self.wiki_service.repository.head == final_head:
                     break

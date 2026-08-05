@@ -19,6 +19,7 @@ _EMBEDDINGS_DISABLED = "disabled"
 _EMBEDDING_READY = "ready"
 _EMBEDDING_PENDING = "pending"
 _EMBEDDING_RETRY_AT = "embedding_retry_at"
+_PROJECTION_CHECKPOINT_PREFIX = "projection_checkpoint:"
 
 SNIPPET_DISPLAY_LIMIT = 500
 
@@ -167,6 +168,11 @@ class SearchStore:
         await self._set_meta("vec_schema_version", _VEC_SCHEMA_VERSION)
         if model_changed:
             await self._set_meta(_EMBEDDING_RETRY_AT, "")
+        if needs_rebuild:
+            await self.conn.execute(
+                "DELETE FROM meta WHERE key LIKE ?",
+                (f"{_PROJECTION_CHECKPOINT_PREFIX}%",),
+            )
         await run_migrations(self.conn)
         await self.conn.commit()
         return needs_rebuild
@@ -195,6 +201,25 @@ class SearchStore:
         value = retry_at.isoformat() if retry_at is not None else ""
         await self._set_meta(_EMBEDDING_RETRY_AT, value)
         await self.conn.commit()
+
+    async def get_projection_checkpoint(self, source: str) -> str | None:
+        return await self._get_meta(self._projection_checkpoint_key(source))
+
+    async def set_projection_checkpoint(self, source: str, checkpoint: str) -> None:
+        if not isinstance(checkpoint, str) or not checkpoint:
+            raise ValueError("projection checkpoint must be a non-empty string")
+        await self._set_meta(self._projection_checkpoint_key(source), checkpoint)
+        await self.conn.commit()
+
+    async def clear_projection_checkpoint(self, source: str) -> None:
+        await self.conn.execute("DELETE FROM meta WHERE key = ?", (self._projection_checkpoint_key(source),))
+        await self.conn.commit()
+
+    @staticmethod
+    def _projection_checkpoint_key(source: str) -> str:
+        if not isinstance(source, str) or not source:
+            raise ValueError("projection source must be a non-empty string")
+        return f"{_PROJECTION_CHECKPOINT_PREFIX}{source}"
 
     async def _check_integrity(self) -> None:
         try:
@@ -357,6 +382,7 @@ class SearchStore:
     async def clear_source(self, source: str) -> int:
         rows = await self.conn.execute_fetchall("SELECT id FROM items WHERE source = ?", (source,))
         if not rows:
+            await self.clear_projection_checkpoint(source)
             return 0
 
         item_ids = [row["id"] for row in rows]
@@ -369,6 +395,7 @@ class SearchStore:
             )
 
         cursor = await self.conn.execute("DELETE FROM items WHERE source = ?", (source,))
+        await self.conn.execute("DELETE FROM meta WHERE key = ?", (self._projection_checkpoint_key(source),))
         await self.conn.commit()
         return cursor.rowcount
 
@@ -380,6 +407,10 @@ class SearchStore:
         if self._has_vec:
             await self.conn.execute("DELETE FROM items_vec")
         cursor = await self.conn.execute("DELETE FROM items")
+        await self.conn.execute(
+            "DELETE FROM meta WHERE key LIKE ?",
+            (f"{_PROJECTION_CHECKPOINT_PREFIX}%",),
+        )
         await self.conn.commit()
         return cursor.rowcount
 

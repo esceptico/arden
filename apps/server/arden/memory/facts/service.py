@@ -194,6 +194,11 @@ class FactService:
     async def revision(self) -> str | None:
         return await asyncio.to_thread(lambda: self.ledger.revision)
 
+    async def current_revision(self) -> str | None:
+        """Return the cheap published head used to validate derived caches."""
+
+        return await asyncio.to_thread(lambda: self.ledger.current_revision)
+
     async def changes_since(self, watermark: str | None) -> FactChangeFeed:
         """Read one stable canonical delta for a durable backend consumer."""
 

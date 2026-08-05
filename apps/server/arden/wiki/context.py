@@ -19,6 +19,11 @@ WIKI_CONTEXT_CHAR_BUDGET = 6_000
 WIKI_RESIDENT_CHAR_BUDGET = 5_000
 WIKI_MIN_QUERY_CHARS = 12
 WIKI_QUERY_CHAR_LIMIT = 512
+_WIKI_INDEX_CHECKPOINT_VERSION = 1
+
+
+def _checkpoint(wiki_head: str | None, fact_revision: str | None) -> str:
+    return f"wiki-index-v{_WIKI_INDEX_CHECKPOINT_VERSION}:{wiki_head or 'none'}:{fact_revision or 'none'}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,13 +70,17 @@ class WikiPageIndexProjection:
         get_search_index: Callable[[], object | None],
         fact_revision: Callable[[], Awaitable[str | None]],
         on_state_change: Callable[[WikiPageIndexState], Awaitable[None]] | None = None,
+        fact_revision_hint: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         self._wiki = wiki
         self._get_search_index = get_search_index
         self._fact_revision = fact_revision
+        self._fact_revision_hint = fact_revision_hint or fact_revision
         self._on_state_change = on_state_change
         self._lock = asyncio.Lock()
         self._last_state = WikiPageIndexState(None, "not_ready")
+        self._ready_index: object | None = None
+        self._ready_fact_revision: str | None = None
 
     @property
     def last_state(self) -> WikiPageIndexState:
@@ -85,6 +94,7 @@ class WikiPageIndexProjection:
         force: bool = False,
         progress_callback: Callable[[int, int], None] | None = None,
         raise_on_error: bool = False,
+        notify_state_change: bool = True,
     ) -> object | None:
         changed_state: WikiPageIndexState | None = None
         result: object | None = None
@@ -93,11 +103,20 @@ class WikiPageIndexProjection:
             for attempt in range(2):
                 search_index = self._get_search_index()
                 if search_index is None:
+                    self._ready_index = None
+                    self._ready_fact_revision = None
                     changed_state = self._set_state(
                         WikiPageIndexState(self._last_state.wiki_head, "not_ready", "search index is unavailable")
                     )
                     break
                 try:
+                    wiki_head = self._wiki.repository.current_revision
+                    fact_revision = await self._fact_revision_hint()
+                    if not force and await self._is_current(search_index, wiki_head, fact_revision):
+                        changed_state = self._set_state(WikiPageIndexState(wiki_head, "ready"))
+                        result = search_index
+                        break
+                    await search_index.clear_projection_checkpoint(WIKI_PAGE_SOURCE)
                     state = await self._sync(
                         search_index,
                         force=force,
@@ -107,6 +126,8 @@ class WikiPageIndexProjection:
                 except Exception as error:
                     if attempt == 0 and self._get_search_index() is not search_index:
                         continue
+                    self._ready_index = None
+                    self._ready_fact_revision = None
                     changed_state = self._set_state(
                         WikiPageIndexState(None, "error", f"{type(error).__name__}: {error}".rstrip(": "))
                     )
@@ -115,6 +136,8 @@ class WikiPageIndexProjection:
                 if state.status != "ready":
                     if attempt == 0 and self._get_search_index() is not search_index:
                         continue
+                    self._ready_index = None
+                    self._ready_fact_revision = None
                     changed_state = self._set_state(state)
                     break
                 if self._get_search_index() is search_index:
@@ -122,10 +145,12 @@ class WikiPageIndexProjection:
                     result = search_index
                     break
             else:
+                self._ready_index = None
+                self._ready_fact_revision = None
                 changed_state = self._set_state(
                     WikiPageIndexState(None, "not_ready", "search index changed during wiki_page sync")
                 )
-        if changed_state is not None:
+        if changed_state is not None and notify_state_change:
             await self._notify_state_change(changed_state)
         if failure is not None:
             raise failure
@@ -175,18 +200,48 @@ class WikiPageIndexProjection:
                 )
                 for record in pages
             ]
-            await search_index.sync(
+            sync_result = await search_index.sync(
                 WIKI_PAGE_SOURCE,
                 items,
                 progress_callback=progress_callback,
                 force=force,
                 raise_on_error=raise_on_error,
             )
-            if self._wiki.repository.head == wiki_head:
+            current_wiki_head = self._wiki.repository.head
+            current_fact_revision = await self._fact_revision()
+            if current_wiki_head == wiki_head and current_fact_revision == fact_revision:
+                if not getattr(sync_result, "degraded", False):
+                    await search_index.set_projection_checkpoint(
+                        WIKI_PAGE_SOURCE,
+                        _checkpoint(wiki_head, fact_revision),
+                    )
+                self._ready_index = search_index
+                self._ready_fact_revision = fact_revision
                 return WikiPageIndexState(wiki_head, "ready")
             if attempt == 0:
                 continue
-        return WikiPageIndexState(None, "not_ready", "wiki head changed during index sync")
+            if current_wiki_head != wiki_head:
+                return WikiPageIndexState(None, "not_ready", "wiki head changed during index sync")
+            return WikiPageIndexState(None, "not_ready", "fact revision changed during wiki index sync")
+        return WikiPageIndexState(None, "not_ready", "wiki source changed during index sync")
+
+    async def _is_current(
+        self,
+        search_index: object,
+        wiki_head: str | None,
+        fact_revision: str | None,
+    ) -> bool:
+        if await search_index.get_projection_checkpoint(WIKI_PAGE_SOURCE) != _checkpoint(wiki_head, fact_revision):
+            return False
+        if (
+            self._ready_index is search_index
+            and self._last_state == WikiPageIndexState(wiki_head, "ready")
+            and self._ready_fact_revision == fact_revision
+        ):
+            return True
+        self._ready_index = search_index
+        self._ready_fact_revision = fact_revision
+        return True
 
     def _set_state(self, state: WikiPageIndexState) -> WikiPageIndexState | None:
         if self._last_state == state:

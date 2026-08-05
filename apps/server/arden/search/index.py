@@ -31,6 +31,7 @@ def item_hash(title: str, content: str) -> str:
 class SyncResult(NamedTuple):
     updated: int
     deleted: int
+    degraded: bool = False
 
 
 type ProgressCallback = Callable[[int, int], None]
@@ -143,6 +144,7 @@ class SearchIndex:
                 items_to_embed.append(item)
 
             updated = 0
+            degraded = False
             for batch_start in range(0, len(items_to_embed), batch_size):
                 batch = items_to_embed[batch_start : batch_start + batch_size]
                 embeddings = None
@@ -153,6 +155,7 @@ class SearchIndex:
                         embeddings = await self.embedder.embed(texts)
                     except Exception as exc:
                         embedding_error = exc
+                        degraded = True
                         if not raise_on_error:
                             _logger.warning(
                                 "semantic index batch embedding failed; using full-text only",
@@ -179,7 +182,7 @@ class SearchIndex:
                 if embedding_error is not None and raise_on_error:
                     raise embedding_error
 
-            return SyncResult(updated, deleted)
+            return SyncResult(updated, deleted, degraded)
 
     async def search(
         self,
@@ -212,6 +215,15 @@ class SearchIndex:
 
     async def get_stats(self) -> dict[str, int]:
         return await self.store.get_stats()
+
+    async def get_projection_checkpoint(self, source: str) -> str | None:
+        return await self.store.get_projection_checkpoint(source)
+
+    async def set_projection_checkpoint(self, source: str, checkpoint: str) -> None:
+        await self.store.set_projection_checkpoint(source, checkpoint)
+
+    async def clear_projection_checkpoint(self, source: str) -> None:
+        await self.store.clear_projection_checkpoint(source)
 
     async def clear_source(self, source: str) -> int:
         return await self.store.clear_source(source)

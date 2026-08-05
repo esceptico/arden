@@ -528,7 +528,7 @@ async def test_wiki_state_projection_syncs_index_before_health(tmp_path, monkeyp
     class _Projection:
         last_state = SimpleNamespace(wiki_head=None)
 
-        async def sync(self) -> None:
+        async def sync(self, **_kwargs) -> None:
             calls.append("index")
 
     async def health() -> str:
@@ -571,7 +571,7 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
             self.last_state = SimpleNamespace(wiki_head="old-head")
             self.sync_calls = 0
 
-        async def sync(self) -> None:
+        async def sync(self, **_kwargs) -> None:
             self.sync_calls += 1
             await asyncio.sleep(0)
             self.last_state = SimpleNamespace(wiki_head="new-head")
@@ -640,7 +640,7 @@ async def test_latest_external_page_edit_is_not_suppressed_by_older_self_edit(
     class _Projection:
         last_state = SimpleNamespace(wiki_head="new-head")
 
-        async def sync(self) -> None:
+        async def sync(self, **_kwargs) -> None:
             return None
 
     notifications: list[dict[str, set[str]]] = []
@@ -684,7 +684,7 @@ async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkey
     class _Projection:
         last_state = SimpleNamespace(wiki_head="old-head")
 
-        async def sync(self) -> None:
+        async def sync(self, **_kwargs) -> None:
             self.last_state = SimpleNamespace(wiki_head="new-head")
 
     notifications: list[list[str]] = []
@@ -761,7 +761,7 @@ async def test_new_common_page_requests_fact_synthesis_but_automation_and_readme
     class _Projection:
         last_state = SimpleNamespace(wiki_head="new-head")
 
-        async def sync(self) -> None:
+        async def sync(self, **_kwargs) -> None:
             return None
 
     requested = 0
@@ -1245,7 +1245,7 @@ async def test_contended_wiki_projection_defers_instead_of_raising(tmp_path, mon
     class _Projection:
         last_state = SimpleNamespace(wiki_head="old-head")
 
-        async def sync(self) -> None:
+        async def sync(self, **_kwargs) -> None:
             return None
 
     class _Watermarks:
