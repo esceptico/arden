@@ -4,11 +4,31 @@ import {
   handleAutomationEvent,
   memoryVaultChangeFromEvent,
   parseAutomationEvent,
+  reconcileAutomationStreamReset,
 } from "@/features/automations/hooks/useAutomationEvents";
 import { useStore } from "@/stores";
 import { MEMORY_VAULT_CHANGE_CAP } from "@/stores/memory-vault-domain";
 
 describe("automation event stream helpers", () => {
+  test("stream reset awaits every projection refresh and surfaces a failure", async () => {
+    const calls: string[] = [];
+    useStore.setState({
+      currentSessionId: "session-1",
+      areas: { ...useStore.getState().areas, openAreaKey: null },
+    });
+
+    await expect(reconcileAutomationStreamReset({
+      automations: async () => { calls.push("automations"); },
+      loops: async () => { calls.push("loops"); },
+      sessions: async () => { calls.push("sessions"); },
+      areas: async () => { calls.push("areas"); },
+      areasOverview: async () => { calls.push("overview"); return false; },
+      areaDetail: async () => { calls.push("detail"); return true; },
+    })).rejects.toThrow("areas overview refresh failed after stream reset");
+
+    expect(calls.toSorted()).toEqual(["areas", "automations", "loops", "overview", "sessions"]);
+  });
+
   test("parses a valid event and rejects malformed or unknown events", () => {
     expect(parseAutomationEvent('{"type":"automation_progress","task_id":"task-1","status":"running","seq":4}'))
       .toEqual({ type: "automation_progress", task_id: "task-1", status: "running", seq: 4 });

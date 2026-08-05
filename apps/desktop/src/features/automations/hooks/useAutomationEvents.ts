@@ -37,6 +37,24 @@ export type AutomationEvent =
   | { type: "stream_keepalive"; latest_seq: number; seq?: number }
   | { type: "stream_reset"; reason: string; seq?: number };
 
+interface AutomationProjectionRefreshes {
+  automations: () => Promise<void>;
+  loops: (sessionId: string) => Promise<void>;
+  sessions: () => Promise<void>;
+  areas: () => Promise<void>;
+  areasOverview: () => Promise<boolean>;
+  areaDetail: (key: string) => Promise<boolean>;
+}
+
+const projectionRefreshes: AutomationProjectionRefreshes = {
+  automations: fetchAutomations,
+  loops: refreshLoops,
+  sessions: refreshSessions,
+  areas: refreshAreas,
+  areasOverview: fetchAreasOverview,
+  areaDetail: fetchAreaDetail,
+};
+
 type JsonObject = Record<string, unknown>;
 
 function requireObject(value: unknown, label: string): JsonObject {
@@ -145,10 +163,30 @@ export function applyNavigationRequest(
   });
 }
 
+export async function reconcileAutomationStreamReset(
+  refreshes: AutomationProjectionRefreshes = projectionRefreshes,
+): Promise<void> {
+  const state = useStore.getState();
+  state.automationStreamReset();
+  invalidateMemoryArtifactCache(state.config);
+  state.memoryVaultChanged();
+
+  const [overviewLoaded, detailLoaded] = await Promise.all([
+    refreshes.areasOverview(),
+    state.areas.openAreaKey ? refreshes.areaDetail(state.areas.openAreaKey) : Promise.resolve(true),
+    refreshes.automations(),
+    state.currentSessionId ? refreshes.loops(state.currentSessionId) : Promise.resolve(),
+    refreshes.sessions(),
+    refreshes.areas(),
+  ]);
+  if (!overviewLoaded) throw new Error("areas overview refresh failed after stream reset");
+  if (!detailLoaded) throw new Error("open area refresh failed after stream reset");
+}
+
 /** Apply one decoded automation-stream event. Transport liveness stays in
  *  the hook; domain projections remain directly testable without an SSE
  *  connection. */
-export function handleAutomationEvent(event: AutomationEvent): void {
+export function handleAutomationEvent(event: AutomationEvent): Promise<void> | undefined {
   const store = () => useStore.getState();
   if (event.type === "automation_progress") {
     store().automationProgress(event.task_id, event.status);
@@ -210,16 +248,9 @@ export function handleAutomationEvent(event: AutomationEvent): void {
     // The stream multiplexes automations, sessions, Areas, and Memory. A gap
     // makes every replayable projection suspect; navigation requests remain
     // intentionally ephemeral.
-    const st = store();
-    st.automationStreamReset();
-    invalidateMemoryArtifactCache(st.config);
-    st.memoryVaultChanged();
-    void fetchAutomations();
-    if (st.currentSessionId) void refreshLoops(st.currentSessionId);
-    void Promise.allSettled([refreshSessions(), refreshAreas()]);
-    void fetchAreasOverview();
-    if (st.areas.openAreaKey) void fetchAreaDetail(st.areas.openAreaKey);
+    return reconcileAutomationStreamReset();
   }
+  return undefined;
 }
 
 /** Subscribe to `/automations/events` for the lifetime of the app. The
@@ -247,7 +278,13 @@ export function useAutomationEvents(): void {
 
     const handle = (event: AutomationEvent) => {
       watchdog.bump();
-      handleAutomationEvent(event);
+      const reconciliation = handleAutomationEvent(event);
+      if (reconciliation) {
+        void reconciliation.catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          store().automationStreamFailed(message);
+        });
+      }
     };
 
     store().automationStreamConnecting();
