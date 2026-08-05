@@ -452,23 +452,14 @@ async def session_read(execution: ToolExecution, args: SessionReadInput) -> Tool
             preview="Session not found",
             recovery_action="Call session_list and retry with an exact session_ref.",
         )
-    try:
-        page = await svc.list_messages(
-            session_id,
-            limit=args.limit,
-            after_seq=args.after_seq,
-            before_seq=args.before_seq,
-            around_seq=args.around_seq,
-            area_id=area_filter(execution),
-        )
-    except Exception:
-        return ToolResult.failure(
-            code="session_read_failed",
-            message=f"Failed to read session {args.session_ref}.",
-            preview="Read failed",
-            retryable=True,
-            recovery_action="Call session_list and retry with an exact readable session_ref.",
-        )
+    page = await svc.list_messages(
+        session_id,
+        limit=args.limit,
+        after_seq=args.after_seq,
+        before_seq=args.before_seq,
+        around_seq=args.around_seq,
+        area_id=area_filter(execution),
+    )
 
     raw_messages = page.get("messages") if isinstance(page, dict) else page
     if not raw_messages:

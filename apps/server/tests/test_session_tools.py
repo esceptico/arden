@@ -381,6 +381,27 @@ async def test_read_session_role_filter():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("error", "match"),
+    [
+        (sqlite3.DatabaseError("database is malformed"), "malformed"),
+        (RuntimeError("unexpected page shape"), "unexpected page shape"),
+    ],
+)
+async def test_read_session_propagates_service_errors(error: Exception, match: str):
+    service = _StubSessionService(sessions=[], messages={"s1": []})
+
+    async def unavailable(*_args, **_kwargs):
+        raise error
+
+    service.list_messages = unavailable
+    execution = _make_execution(services={"session": service})
+
+    with pytest.raises(type(error), match=match):
+        await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("more_key", "expected_cursor"),
     [
         ("has_more_after", "after_seq=12"),
