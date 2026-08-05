@@ -5,9 +5,9 @@ import pytest
 
 from arden.events.triggers import EventApproaching
 from arden.integrations.calendar.client import MultiCalendarSource
+from arden.integrations.calendar.models import CalendarAccount, CalendarEvent, CalendarEventPage
 from arden.monitor.calendar import CalendarMonitor
 from arden.monitor.service import Monitor
-from arden.search.types import RawItem
 
 
 def _event(event_id: str = "event-1") -> EventApproaching:
@@ -83,18 +83,17 @@ def test_calendar_monitor_distinguishes_same_event_id_across_accounts():
     start = datetime.now(UTC) + timedelta(minutes=1)
 
     def account_source(account: str):
-        item = RawItem(
-            source="calendar",
-            source_id="same-id",
+        item = CalendarEvent(
+            event_ref=f"{account}:same-id",
+            account_ref=account,
             title="Review",
-            content="",
-            created_at=start,
-            updated_at=start,
-            metadata={"start": start.isoformat()},
+            start=start,
+            end=start + timedelta(hours=1),
+            is_all_day=False,
         )
         return SimpleNamespace(
-            get_email_address=lambda: account,
-            get_upcoming=lambda days, limit: [item][:limit],
+            account=CalendarAccount(account),
+            get_upcoming=lambda days, limit: CalendarEventPage(events=(item,)[:limit]),
         )
 
     source = object.__new__(MultiCalendarSource)
@@ -106,3 +105,13 @@ def test_calendar_monitor_distinguishes_same_event_id_across_accounts():
         "first@example.test:same-id",
         "second@example.test:same-id",
     ]
+
+
+def test_calendar_monitor_propagates_provider_failure():
+    failure = RuntimeError("provider failed")
+    source = SimpleNamespace(get_upcoming=lambda **_kwargs: (_ for _ in ()).throw(failure))
+
+    with pytest.raises(RuntimeError, match="provider failed") as exc_info:
+        CalendarMonitor(source=source, state_store=object())._poll()
+
+    assert exc_info.value is failure

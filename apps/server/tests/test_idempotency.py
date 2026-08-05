@@ -312,6 +312,9 @@ async def test_create_with_idempotency_key_returns_none_on_repeat(service: Autom
     assert first is not None
     assert first.idempotency_key == "item-1"
     assert first.idempotency_scope == "global"
+    assert first.tool_scope == "read_only"
+    persisted = await service.store.get(first.task_id)
+    assert persisted is not None and persisted.tool_scope == "read_only"
 
     second = await service.create(
         name="watch-item-1",

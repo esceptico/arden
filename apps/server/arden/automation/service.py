@@ -522,6 +522,7 @@ class AutomationService:
     ) -> Automation | None:
         name = self._normalize_name(name)
         prompt = self._normalize_prompt(prompt)
+        resolved_tool_scope: ScopeKey = "read_only" if tool_scope is None else tool_scope
         if idempotency_key is not None and idempotency_scope is None:
             raise ValueError("idempotency_scope required when idempotency_key is set")
         claim_parent_automation_id = parent_automation_id
@@ -612,7 +613,7 @@ class AutomationService:
             parent_automation_id=parent_automation_id,
             idempotency_key=idempotency_key,
             idempotency_scope=idempotency_scope,
-            tool_scope=tool_scope,
+            tool_scope=resolved_tool_scope,
         )
 
         try:

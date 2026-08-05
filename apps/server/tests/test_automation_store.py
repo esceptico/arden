@@ -10,7 +10,8 @@ import pytest_asyncio
 import arden.database as database
 from arden.automation.models import Automation, create_automation_ref
 from arden.automation.scheduler import Scheduler
-from arden.automation.store import CURRENT_SCHEMA_VERSION, AutomationStore
+from arden.automation.store import AutomationStore
+from arden.automation.store_schema import CURRENT_SCHEMA_VERSION
 from arden.automation.triggers import CountTrigger, IdleTrigger, TimeTrigger, parse_triggers
 from arden.outbox import (
     OUTBOX_AUTOMATION_SETTLED,
@@ -964,6 +965,52 @@ async def test_incomplete_current_schema_is_rejected_without_repair(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_current_schema_rejects_unexpected_columns(tmp_path: Path):
+    conn = await database.connect(tmp_path / "extra-column.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await conn.execute("ALTER TABLE automation_event_queue ADD COLUMN legacy_payload TEXT")
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="unexpected columns in automation_event_queue"):
+        await store.init_schema()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_current_schema_rejects_missing_indexes_without_repair(tmp_path: Path):
+    conn = await database.connect(tmp_path / "missing-index.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await conn.execute("DROP INDEX idx_automation_event_queue_task_claimed_id")
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="missing indexes: idx_automation_event_queue_task_claimed_id"):
+        await store.init_schema()
+    indexes = await conn.execute_fetchall(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_automation_event_queue_task_claimed_id'"
+    )
+    assert indexes == []
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v16_upgrade_rejects_noncanonical_columns(tmp_path: Path):
+    conn = await database.connect(tmp_path / "noncanonical-v16.db")
+    store = AutomationStore(conn)
+    await store.init_schema()
+    await _downgrade_refs_to_v16(store)
+    await conn.execute("ALTER TABLE automation_count_state ADD COLUMN legacy_count INTEGER")
+    await conn.commit()
+
+    with pytest.raises(RuntimeError, match="unexpected columns in automation_count_state"):
+        await store.init_schema()
+    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "16"
+    await conn.close()
+
+
+@pytest.mark.asyncio
 async def test_v17_migration_backfills_task_and_run_refs(tmp_path: Path):
     conn = await database.connect(tmp_path / "v16.db")
     store = AutomationStore(conn)
@@ -1012,7 +1059,7 @@ async def test_v17_migration_rolls_back_after_a_late_failure(tmp_path: Path, mon
     async def fail_indexes(_conn):
         raise RuntimeError("index write failed")
 
-    monkeypatch.setattr("arden.automation.store._ensure_v17_indexes", fail_indexes)
+    monkeypatch.setattr("arden.automation.store_schema._create_v17_indexes", fail_indexes)
     with pytest.raises(RuntimeError, match="index write failed"):
         await store.init_schema()
 
@@ -1052,7 +1099,7 @@ async def test_v17_migration_rejects_public_ref_collisions(tmp_path: Path, monke
     await store.save(_automation("one", name="One"))
     await store.save(_automation("two", name="Two"))
     await _downgrade_refs_to_v16(store)
-    monkeypatch.setattr("arden.automation.store.create_automation_ref", lambda _name, _task_id: "same~000000")
+    monkeypatch.setattr("arden.automation.store_schema.create_automation_ref", lambda _name, _task_id: "same~000000")
 
     with pytest.raises(RuntimeError, match="public-ref collision"):
         await store.init_schema()
