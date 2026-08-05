@@ -43,7 +43,47 @@ _ADAPTIVE_THINKING_MODELS = (
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
+    # Claude 5 rejects `thinking.type.enabled` outright — adaptive thinking plus
+    # `output_config.effort` is the only accepted shape.
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-haiku-5",
 )
+
+
+def _flatten_root_combinator(schema: dict) -> dict:
+    """Fold a top-level `oneOf`/`anyOf`/`allOf` of object variants into one
+    object schema, at the Anthropic boundary only.
+
+    Pydantic's `RootModel` over a discriminated union emits the combinator at
+    the schema root; the Anthropic API rejects any `input_schema` carrying one
+    there, while OpenAI accepts it — so providers that understand the union
+    keep it and this converter alone pays the tax (the shape hermes-agent's
+    `convert_tools_to_anthropic` uses, but merging variant properties instead
+    of dropping them). Properties are united, `required` is what every variant
+    agrees on; the union itself still validates strictly at execute time and a
+    mismatch returns a self-correcting error.
+    """
+    for key in ("oneOf", "anyOf", "allOf"):
+        variants = schema.get(key)
+        if not isinstance(variants, list) or not variants:
+            continue
+        if not all(isinstance(v, dict) and v.get("type", "object") == "object" for v in variants):
+            continue
+        merged_properties: dict = {}
+        for variant in variants:
+            merged_properties.update(variant.get("properties") or {})
+        required_sets = [set(variant.get("required") or []) for variant in variants]
+        required = set.union(*required_sets) if key == "allOf" else set.intersection(*required_sets)
+        rest = {k: v for k, v in schema.items() if k not in (key, "properties", "required", "type")}
+        return {
+            **rest,
+            "type": "object",
+            "properties": {**merged_properties, **(schema.get("properties") or {})},
+            "required": sorted(required),
+        }
+    return schema
 
 
 class AnthropicClient(CompletionClient):
@@ -347,7 +387,7 @@ class AnthropicClient(CompletionClient):
             {
                 "name": (fn := tool.get("function", tool))["name"],
                 "description": fn.get("description", ""),
-                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                "input_schema": _flatten_root_combinator(fn.get("parameters", {"type": "object", "properties": {}})),
             }
             for tool in (tools or [])
             if not (deferred_tools and (tool.get("function", tool)).get("name") == "tool_search")
@@ -358,7 +398,9 @@ class AnthropicClient(CompletionClient):
                 {
                     "name": (fn := tool.get("function", tool))["name"],
                     "description": fn.get("description", ""),
-                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                    "input_schema": _flatten_root_combinator(
+                        fn.get("parameters", {"type": "object", "properties": {}})
+                    ),
                     "defer_loading": True,
                 }
                 for tool in deferred_tools
@@ -369,7 +411,7 @@ class AnthropicClient(CompletionClient):
         return {
             "name": "_structured_output",
             "description": f"Return structured output as {model_class.__name__}",
-            "input_schema": model_class.model_json_schema(),
+            "input_schema": _flatten_root_combinator(model_class.model_json_schema()),
         }
 
     def _inject_cache_control_last_message(self, messages: list[dict]) -> None:
@@ -431,7 +473,7 @@ class AnthropicClient(CompletionClient):
     ) -> tuple[str | None, list[ToolCall], str | None, list[dict] | None]:
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-        reasoning = None
+        reasoning_parts: list[str] = []
         anthropic_content: list[dict] = []
 
         for block in blocks:
@@ -453,9 +495,12 @@ class AnthropicClient(CompletionClient):
                         )
                     )
             elif block.type == "thinking":
-                reasoning = block.thinking
+                # A turn can carry several thinking blocks; assigning here kept
+                # only the last, so every block but the final one vanished.
+                reasoning_parts.append(block.thinking)
 
         content = "\n".join(text_parts) if text_parts else None
+        reasoning = "\n\n".join(part for part in reasoning_parts if part) or None
         return content, tool_calls, reasoning, anthropic_content or None
 
     def _parse_provider_tool_calls(self, blocks: list[dict] | None) -> list[ProviderToolCall] | None:

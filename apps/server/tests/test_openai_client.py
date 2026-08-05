@@ -572,7 +572,7 @@ async def test_native_openai_tools_with_reasoning_use_responses_for_completion()
     request = fake.responses.requests[0]
     assert request["model"] == "gpt-5.5"
     assert request["store"] is False
-    assert request["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert request["reasoning"] == {"effort": "high", "summary": "detailed"}
     assert request["tools"][0]["name"] == "Search"
     assert response.choices[0].message.content == "ok"
 
@@ -596,7 +596,7 @@ async def test_native_openai_tools_with_reasoning_use_responses_for_streaming():
 
     request = fake.responses.requests[0]
     assert "stream" not in request
-    assert request["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert request["reasoning"] == {"effort": "high", "summary": "detailed"}
     assert events[0] == "ok"
     assert events[-1].choices[0].message.content == "ok"
 

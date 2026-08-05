@@ -187,7 +187,7 @@ def test_prepare_responses_request_uses_codex_model_and_response_shapes():
         }
     ]
     assert request["tool_choice"] == {"type": "function", "name": "Read"}
-    assert request["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert request["reasoning"] == {"effort": "high", "summary": "detailed"}
     assert request["text"]["format"]["name"] == "_Structured"
     assert request["prompt_cache_key"] == "session-1"
 

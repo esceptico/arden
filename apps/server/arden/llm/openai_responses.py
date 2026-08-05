@@ -94,7 +94,11 @@ def prepare_responses_request(
         if max_tokens is not None:
             request["max_output_tokens"] = max_tokens
     if reasoning_effort is not None:
-        request["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
+        # `auto` lets the model decide, and current models answer with bare
+        # `**Title**` headings whose body is the `<!-- -->` placeholder — a
+        # timeline of captions with no reasoning in it. `detailed` is what
+        # actually returns prose under each heading.
+        request["reasoning"] = {"effort": reasoning_effort, "summary": "detailed"}
     if response_format is not None:
         request["text"] = {
             "format": {
@@ -225,6 +229,13 @@ class _ResponsesStreamCollector:
         if event_type in ("response.reasoning_text.delta", "response.reasoning_summary_text.delta"):
             return self._consume_reasoning_delta(data.get("delta"), emit_deltas=emit_deltas)
 
+        # A reasoning summary is a LIST of parts, each shaped `**Title**\n\nbody`.
+        # Their deltas carry no separator, so without a boundary here part N+1's
+        # `**Title**` lands mid-line at the end of part N's body — no longer a
+        # heading, just inline bold, and the whole summary collapses to one step.
+        if event_type in ("response.reasoning_summary_part.added", "response.reasoning_text.done"):
+            return self._consume_reasoning_boundary(emit_deltas=emit_deltas)
+
         if event_type == "response.output_item.added":
             item = data.get("item")
             if isinstance(item, dict) and item.get("type") == "function_call":
@@ -306,6 +317,16 @@ class _ResponsesStreamCollector:
             return []
         self.reasoning_parts.append(delta)
         return [ReasoningContentDelta(delta)] if emit_deltas else []
+
+    def _consume_reasoning_boundary(self, *, emit_deltas: bool) -> list[ReasoningContentDelta]:
+        """Blank line between summary parts, emitted as a delta so the live
+        stream and the collected fallback stay byte-identical."""
+        if not self.reasoning_parts:
+            return []
+        if "".join(self.reasoning_parts).endswith("\n\n"):
+            return []
+        self.reasoning_parts.append("\n\n")
+        return [ReasoningContentDelta("\n\n")] if emit_deltas else []
 
 
 def _missing_done_text_delta(data: dict[str, Any], text_parts: list[str]) -> str | None:
@@ -392,13 +413,17 @@ def parse_responses_response(
         if item_type == "reasoning":
             if encrypted := data.get("encrypted_content"):
                 reasoning_encrypted_content = encrypted
-            for part in data.get("content") or []:
-                if part.get("type") == "reasoning_text":
-                    reasoning_parts.append(part.get("text", ""))
-            if not reasoning_parts:
-                for part in data.get("summary") or []:
-                    if part.get("type") == "summary_text":
-                        reasoning_parts.append(part.get("text", ""))
+            # Per ITEM, not across items: `reasoning_parts` accumulates every
+            # reasoning item in the response, so testing it here made one item's
+            # `reasoning_text` suppress every later item's summary entirely.
+            item_parts = [
+                part.get("text", "") for part in data.get("content") or [] if part.get("type") == "reasoning_text"
+            ]
+            if not item_parts:
+                item_parts = [
+                    part.get("text", "") for part in data.get("summary") or [] if part.get("type") == "summary_text"
+                ]
+            reasoning_parts.extend(part for part in item_parts if part)
             continue
 
         if item_type == "function_call":
@@ -427,7 +452,10 @@ def parse_responses_response(
         role=Role.ASSISTANT,
         content="".join(content_parts) or None,
         tool_calls=tool_calls or None,
-        reasoning_content="".join(reasoning_parts) or None,
+        # Blank line between parts: each is `**Title**\n\nbody`, and gluing them
+        # buries every title after the first mid-line, where it reads as inline
+        # bold instead of starting a new step.
+        reasoning_content="\n\n".join(reasoning_parts) or None,
         reasoning_encrypted_content=reasoning_encrypted_content,
         provider_tool_calls=provider_tool_calls or None,
         openai_response_items=response_items or None,
