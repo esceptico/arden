@@ -150,6 +150,7 @@ test("memory routes content and peek motion through shared primitives", () => {
 
 test("memory review keeps the sheet mounted through the exact room-release lifecycle", () => {
   const view = read("../src/features/memory/components/ArtifactMemoryView.tsx");
+  const editing = read("../src/features/memory/hooks/useMemoryEditing.ts");
   const review = read("../src/features/memory/components/MemoryEditReview.tsx");
   const css = read("../src/design/memory.css");
 
@@ -163,7 +164,7 @@ test("memory review keeps the sheet mounted through the exact room-release lifec
   expect(review).toContain("scrimMotionProps");
   expect(review).toContain("sheetMotionProps");
   expect(review).toContain('className="memory-edit-review__scrim"');
-  expect(view).toContain("requestReviewExit");
+  expect(editing).toContain("requestReviewExit");
   expect(view).toContain("review-closing");
   expect(view).toContain("diff-closing");
   expect(view).toContain("onOpenChange={(open) => setDiffClosing(!open)}");
