@@ -73,7 +73,6 @@ function stubApi(requests: Array<{ path: string; method?: string; body?: string 
               chat_model: model,
               context_budget: {
                 model,
-                uses_default_model: false,
                 hard_limit: 180_000,
                 compaction_trigger: 136_800,
                 message_limit: 100,

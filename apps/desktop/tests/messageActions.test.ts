@@ -4,6 +4,15 @@ import { getState, setState } from "@/stores/index";
 
 type CapturedRequest = { path: string; method: string; body?: string };
 
+const CONTEXT_BUDGET = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
+
 function mockBridge(requests: CapturedRequest[]) {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   (globalThis as typeof globalThis & { window?: unknown }).window = {
@@ -259,7 +268,12 @@ test("sendMessage with no current session lazily creates one, then sends into it
             return {
               ok: true,
               contentType: "application/json",
-              data: { messages: [], active_run_id: null, page: { has_more_before: false, has_more_after: false } },
+              data: {
+                messages: [],
+                active_run_id: null,
+                context_budget: CONTEXT_BUDGET,
+                page: { has_more_before: false, has_more_after: false },
+              },
             };
           }
           if (request.path === "/sessions/new-1/goal") {

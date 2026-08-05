@@ -7,6 +7,15 @@ import type { UiMessage } from "@/stores/index";
 import { createInitialSessionViewState } from "@/stores/session-view";
 import { snapshotSession } from "@/stores/session-cache";
 
+const CONTEXT_BUDGET = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
+
 function blank() {
   setState({
     sessionView: createInitialSessionViewState(),
@@ -302,6 +311,7 @@ test("switchSession preserves cached preview until canonical history replaces it
           },
         ],
         active_run_id: null,
+        context_budget: CONTEXT_BUDGET,
       },
       text: "",
     });
@@ -417,6 +427,7 @@ test("older replace history response cannot override newer response", async () =
           },
         ],
         active_run_id: null,
+        context_budget: CONTEXT_BUDGET,
       },
       text: "",
     });
@@ -436,6 +447,7 @@ test("older replace history response cannot override newer response", async () =
           },
         ],
         active_run_id: "old-run",
+        context_budget: CONTEXT_BUDGET,
       },
       text: "",
     });
@@ -477,6 +489,7 @@ test("newer history tool-only page updates result and advances cursor", async ()
                 },
               ],
               active_run_id: null,
+              context_budget: CONTEXT_BUDGET,
               page: {
                 has_more_before: true,
                 has_more_after: true,
@@ -552,6 +565,7 @@ test("history tool result page can load before the tool call page", async () => 
                   },
                 ],
                 active_run_id: null,
+                context_budget: CONTEXT_BUDGET,
                 page: {
                   has_more_before: true,
                   has_more_after: false,
@@ -571,6 +585,7 @@ test("history tool result page can load before the tool call page", async () => 
                   },
                 ],
                 active_run_id: null,
+                context_budget: CONTEXT_BUDGET,
                 page: {
                   has_more_before: true,
                   has_more_after: true,
@@ -626,6 +641,7 @@ test("canonical history replace drops stale pending tool result patches", async 
                   },
                 ],
                 active_run_id: null,
+                context_budget: CONTEXT_BUDGET,
                 page: {
                   has_more_before: true,
                   has_more_after: false,
@@ -645,6 +661,7 @@ test("canonical history replace drops stale pending tool result patches", async 
                   },
                 ],
                 active_run_id: null,
+                context_budget: CONTEXT_BUDGET,
                 page: {
                   has_more_before: false,
                   has_more_after: false,
@@ -696,6 +713,7 @@ test("newer non-tail active history page does not steal live activity target", a
               },
             ],
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             page: {
               has_more_before: true,
               has_more_after: true,

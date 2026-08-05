@@ -29,17 +29,14 @@ export interface HistoryResponse {
   active_run_id: string | null;
   runtime?: SessionRuntimeSnapshot;
   page?: HistoryPage;
-  usage?: { last_input_tokens: number; message_count: number | null };
-  context_budget?: ContextBudgetSnapshot;
+  context_budget: ContextBudgetSnapshot;
 }
 
 export function sessionContextBudgetFromHistory(
-  budget: HistoryResponse["context_budget"],
-): SessionContextBudget | null {
-  if (!budget) return null;
+  budget: ContextBudgetSnapshot,
+): SessionContextBudget {
   return {
     model: budget.model,
-    usesDefaultModel: budget.uses_default_model,
     hardLimit: budget.hard_limit,
     compactionTrigger: budget.compaction_trigger,
     messageLimit: budget.message_limit,
@@ -165,7 +162,7 @@ export function cachedSessionFromHistory(
   skipApprovals: boolean,
 ): CachedSessionState {
   const base = existing ?? blankSessionView();
-  const { runtime, page, usage, context_budget: contextBudget } = history;
+  const { runtime, page, context_budget: contextBudget } = history;
   const { activeForegroundRunId, activeActivityId, items } = areaHistoryResponse(
     history,
     page?.has_more_after !== true,
@@ -194,16 +191,12 @@ export function cachedSessionFromHistory(
     order,
     running: view.hasForegroundRun,
     currentRunId: view.currentRunId,
-    usage: contextBudget || usage
-      ? {
-          ...(base.usage ?? initialUsage),
-          contextInputTokens: contextBudget?.input_tokens ?? usage?.last_input_tokens ?? 0,
-          messageCount: contextBudget?.message_count ?? usage?.message_count ?? null,
-          contextBudget: contextBudget
-            ? sessionContextBudgetFromHistory(contextBudget)
-            : (base.usage ?? initialUsage).contextBudget,
-        }
-      : base.usage,
+    usage: {
+      ...(base.usage ?? initialUsage),
+      contextInputTokens: contextBudget.input_tokens,
+      messageCount: contextBudget.message_count,
+      contextBudget: sessionContextBudgetFromHistory(contextBudget),
+    },
     activeActivityId,
     compacting: false,
     pendingApprovals: pendingApprovalsFromRuntime(runtime, view.hasForegroundRun, skipApprovals),

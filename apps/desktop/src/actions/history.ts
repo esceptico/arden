@@ -309,7 +309,7 @@ export async function loadHistory(sessionId: string, options: LoadHistoryOptions
     pendingHistoryToolResultsBySession.delete(sessionId);
   }
 
-  const { messages, runtime, page, usage, context_budget: contextBudget } = history;
+  const { messages, runtime, page, context_budget: contextBudget } = history;
   const isNewestPage = mode !== "prepend" && page?.has_more_after !== true;
   const { activeForegroundRunId, activeActivityId, items } = areaHistoryResponse(
     history,
@@ -328,15 +328,11 @@ export async function loadHistory(sessionId: string, options: LoadHistoryOptions
     // Only hydrate the budget snapshot on a fresh load — paging in older /
     // newer chunks doesn't change "what the agent's current context size
     // looks like" so we leave the dial alone.
-    if (contextBudget || usage) {
-      s.hydrateUsageSnapshot({
-        contextInputTokens: contextBudget?.input_tokens ?? usage?.last_input_tokens ?? 0,
-        messageCount: contextBudget?.message_count ?? usage?.message_count ?? null,
-        contextBudget: contextBudget
-          ? sessionContextBudgetFromHistory(contextBudget)
-          : undefined,
-      });
-    }
+    s.hydrateUsageSnapshot({
+      contextInputTokens: contextBudget.input_tokens,
+      messageCount: contextBudget.message_count,
+      contextBudget: sessionContextBudgetFromHistory(contextBudget),
+    });
     // The workflows (FleetView) domain is in-memory, built only from live SSE
     // events, so a fresh transcript load leaves it empty and the cards collapse.
     // Replay the persisted workflow events to rebuild it. Non-blocking so the

@@ -2,6 +2,15 @@ import { expect, test } from "bun:test";
 import { areaHistoryResponse, type HistoryResponse } from "@/stores/history-response";
 import type { UiMessage } from "@/stores/types";
 
+const contextBudget = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
+
 test("active history merge keeps child agent metadata from durable result data", () => {
   const history: HistoryResponse = {
     messages: [
@@ -36,6 +45,7 @@ test("active history merge keeps child agent metadata from durable result data",
       },
     ],
     active_run_id: "run-A",
+    context_budget: contextBudget,
     runtime: {
       session_id: "A",
       latest_event_seq: 20,
@@ -110,6 +120,7 @@ test("history rebuild keeps durable tool outcomes", () => {
       { role: "tool", content: "done", id: "tool-result", tool_call_id: "call-1" },
     ],
     active_run_id: null,
+    context_budget: contextBudget,
   };
 
   const activity = areaHistoryResponse(history, true).items.find((item) => item.role === "activity");

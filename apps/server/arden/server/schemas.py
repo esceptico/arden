@@ -429,13 +429,12 @@ class SessionResponse(BaseModel):
 
 
 class ContextBudgetResponse(BaseModel):
-    model: str | None = None
-    uses_default_model: bool
-    hard_limit: int | None = None
-    compaction_trigger: int | None = None
+    model: str
+    hard_limit: int
+    compaction_trigger: int
     message_limit: int
     input_tokens: int
-    message_count: int | None
+    message_count: int
 
 
 class InspectorSourceResponse(BaseModel):

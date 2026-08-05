@@ -45,15 +45,12 @@ export function BudgetDial() {
   const defaultBudget = serverConfig
     ? {
         model: serverConfig.chat_model,
-        usesDefaultModel: true,
-        hardLimit: serverConfig.chat_model_max_context || null,
-        compactionTrigger: serverConfig.compaction_token_trigger || null,
+        hardLimit: serverConfig.chat_model_max_context,
+        compactionTrigger: serverConfig.compaction_token_trigger,
         messageLimit: serverConfig.max_messages,
       }
     : null;
-  const budget = currentSessionId === null || usage.contextBudget?.usesDefaultModel
-    ? defaultBudget
-    : usage.contextBudget;
+  const budget = currentSessionId === null ? defaultBudget : usage.contextBudget;
   const hardLimit = budget?.hardLimit ?? null;
   const tokenTrigger = budget?.compactionTrigger ?? null;
   const messageLimit = budget?.messageLimit ?? 0;

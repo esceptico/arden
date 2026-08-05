@@ -28,7 +28,6 @@ test("history caches budget counters with their session model", () => {
       active_run_id: null,
       context_budget: {
         model: "session/model",
-        uses_default_model: false,
         hard_limit: 200_000,
         compaction_trigger: 152_000,
         message_limit: 100,
@@ -45,7 +44,6 @@ test("history caches budget counters with their session model", () => {
     messageCount: 12,
     contextBudget: {
       model: "session/model",
-      usesDefaultModel: false,
       hardLimit: 200_000,
       compactionTrigger: 152_000,
       messageLimit: 100,
@@ -53,7 +51,7 @@ test("history caches budget counters with their session model", () => {
   });
 });
 
-test("keeps legacy active message count unknown", async () => {
+test("keeps an exact zero active message count", async () => {
   const cached = cachedSessionFromHistory(
     "legacy-session",
     {
@@ -61,18 +59,17 @@ test("keeps legacy active message count unknown", async () => {
       active_run_id: null,
       context_budget: {
         model: "session/model",
-        uses_default_model: false,
         hard_limit: 200_000,
         compaction_trigger: 152_000,
         message_limit: 100,
         input_tokens: 50_000,
-        message_count: null,
+        message_count: 0,
       },
     },
     undefined,
     false,
   );
-  expect(cached.usage?.messageCount).toBeNull();
+  expect(cached.usage?.messageCount).toBe(0);
 
   setState({ currentSessionId: "legacy-session", usage: cached.usage });
   const app = document.createElement("div");
@@ -84,10 +81,10 @@ test("keeps legacy active message count unknown", async () => {
 
   await act(async () => root?.render(<BudgetDial />));
   const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Context budget"]')!;
-  expect(trigger.title).toContain("unknown / 100 msgs");
+  expect(trigger.title).toContain("0 / 100 msgs");
 
   await act(async () => trigger.click());
-  expect(app.querySelector<HTMLElement>('[role="dialog"]')?.textContent).toContain("unknown / 100");
+  expect(app.querySelector<HTMLElement>('[role="dialog"]')?.textContent).toContain("0 / 100");
 });
 
 test("shows the selected session's hard window and distinct compaction trigger", async () => {
@@ -112,7 +109,6 @@ test("shows the selected session's hard window and distinct compaction trigger",
       messageCount: 12,
       contextBudget: {
         model: "session/model",
-        usesDefaultModel: false,
         hardLimit: 200_000,
         compactionTrigger: 152_000,
         messageLimit: 100,
@@ -146,7 +142,7 @@ test("shows the selected session's hard window and distinct compaction trigger",
   expect(dialog.textContent).not.toContain("799k");
 });
 
-test("an unpinned session follows the current global model budget", async () => {
+test("a loaded default-model session keeps its server budget snapshot", async () => {
   setState({
     currentSessionId: "session-1",
     serverConfig: {
@@ -160,7 +156,6 @@ test("an unpinned session follows the current global model budget", async () => 
       contextInputTokens: 30_000,
       contextBudget: {
         model: "old/default",
-        usesDefaultModel: true,
         hardLimit: 100_000,
         compactionTrigger: 76_000,
         messageLimit: 100,
@@ -177,6 +172,6 @@ test("an unpinned session follows the current global model budget", async () => 
   await act(async () => root?.render(<BudgetDial />));
 
   const trigger = host.querySelector<HTMLButtonElement>('[aria-label="Context budget"]')!;
-  expect(trigger.title).toContain("30k / 300k context tokens");
-  expect(trigger.title).not.toContain("100k");
+  expect(trigger.title).toContain("30k / 100k context tokens");
+  expect(trigger.title).not.toContain("300k");
 });

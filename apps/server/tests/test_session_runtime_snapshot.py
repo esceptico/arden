@@ -41,6 +41,18 @@ def _state(session_id: str) -> SessionState:
     return SessionState(session_id=session_id, started_at=datetime.now(UTC), name="runtime test")
 
 
+def _runtime(*, run_registry: RunRegistry | None = None, executor=None):
+    return SimpleNamespace(
+        run_registry=run_registry or RunRegistry(),
+        executor=executor,
+        config=SimpleNamespace(
+            chat_model="openai-codex/gpt-5.6-sol",
+            compression_threshold=0.8,
+            max_messages=120,
+        ),
+    )
+
+
 def test_history_tool_calls_orders_provider_search_before_loaded_tools():
     msg = {
         "provider_tool_calls": [
@@ -70,7 +82,7 @@ async def test_explicit_missing_history_returns_not_found(session_service: Sessi
     with pytest.raises(HTTPException) as exc_info:
         await get_session_history(
             session_service,
-            SimpleNamespace(run_registry=RunRegistry(), executor=None),
+            _runtime(),
             BusRegistry(),
             "missing-session",
             limit=100,
@@ -78,6 +90,30 @@ async def test_explicit_missing_history_returns_not_found(session_service: Sessi
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_empty_history_returns_the_complete_default_context_budget(session_service: SessionService):
+    runtime = _runtime()
+
+    result = await get_session_history(
+        session_service,
+        runtime,
+        BusRegistry(),
+        session_id=None,
+        limit=100,
+        around_seq=None,
+    )
+
+    expected = token_compaction_budget(runtime.config.chat_model, threshold=runtime.config.compression_threshold)
+    assert result["context_budget"] == {
+        "model": runtime.config.chat_model,
+        "hard_limit": expected.hard_limit,
+        "compaction_trigger": expected.compaction_trigger,
+        "message_limit": runtime.config.max_messages,
+        "input_tokens": 0,
+        "message_count": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -121,7 +157,7 @@ async def test_history_includes_runtime_snapshot_for_active_session(session_serv
         enqueued_seq=13,
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-runtime", limit=100, around_seq=None
     )
@@ -162,7 +198,6 @@ async def test_history_context_budget_uses_session_model_and_exact_compaction_tr
     expected = token_compaction_budget("gpt-5.2", threshold=0.8)
     assert result["context_budget"] == {
         "model": "gpt-5.2",
-        "uses_default_model": False,
         "hard_limit": expected.hard_limit,
         "compaction_trigger": expected.compaction_trigger,
         "message_limit": 99,
@@ -172,7 +207,7 @@ async def test_history_context_budget_uses_session_model_and_exact_compaction_tr
 
 
 @pytest.mark.asyncio
-async def test_history_context_budget_keeps_usage_when_model_is_unknown(
+async def test_history_context_budget_rejects_unknown_model(
     session_service: SessionService,
 ):
     state = _state("sess-unknown-budget")
@@ -182,26 +217,19 @@ async def test_history_context_budget_keeps_usage_when_model_is_unknown(
         [{"role": "user", "content": "hi"}],
         metadata={"last_input_tokens": 321},
     )
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
 
-    result = await get_session_history(
-        session_service,
-        runtime,
-        BusRegistry(),
-        "sess-unknown-budget",
-        limit=100,
-        around_seq=None,
-    )
-
-    assert result["context_budget"] == {
-        "model": "custom/missing-model",
-        "uses_default_model": False,
-        "hard_limit": None,
-        "compaction_trigger": None,
-        "message_limit": 120,
-        "input_tokens": 321,
-        "message_count": 1,
-    }
+    with pytest.raises(HTTPException) as exc_info:
+        await get_session_history(
+            session_service,
+            runtime,
+            BusRegistry(),
+            "sess-unknown-budget",
+            limit=100,
+            around_seq=None,
+        )
+    assert exc_info.value.status_code == 409
+    assert "Select another model" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -224,7 +252,7 @@ async def test_history_pages_large_transcript_without_loading_full_session(
     monkeypatch.setattr(session_service.store, "load_session", fail_full_load)
     result = await get_session_history(
         session_service,
-        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        _runtime(),
         BusRegistry(),
         state.session_id,
         limit=3,
@@ -237,7 +265,7 @@ async def test_history_pages_large_transcript_without_loading_full_session(
         "message 1000",
     ]
     assert result["page"]["has_more_before"] is True
-    assert result["usage"] == {"last_input_tokens": 45_678, "message_count": 1_001}
+    assert "usage" not in result
     assert result["context_budget"]["message_count"] == 1_001
 
 
@@ -249,7 +277,7 @@ async def test_history_budget_uses_active_projection_count(session_service: Sess
 
     result = await get_session_history(
         session_service,
-        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        _runtime(),
         BusRegistry(),
         state.session_id,
         limit=3,
@@ -257,7 +285,7 @@ async def test_history_budget_uses_active_projection_count(session_service: Sess
     )
 
     assert len(result["messages"]) == 3
-    assert result["usage"] == {"last_input_tokens": 123, "message_count": 7}
+    assert "usage" not in result
     assert result["context_budget"]["message_count"] == 7
 
 
@@ -280,7 +308,7 @@ async def test_history_does_not_use_immutable_count_for_compacted_context(sessio
 
     result = await get_session_history(
         session_service,
-        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        _runtime(),
         BusRegistry(),
         state.session_id,
         limit=10,
@@ -288,7 +316,7 @@ async def test_history_does_not_use_immutable_count_for_compacted_context(sessio
     )
 
     assert len(result["messages"]) == 4
-    assert result["usage"]["message_count"] == 2
+    assert "usage" not in result
     assert result["context_budget"]["message_count"] == 2
 
 
@@ -305,7 +333,7 @@ async def test_history_does_not_repair_missing_transcript_at_read_time(session_s
 
     result = await get_session_history(
         session_service,
-        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        _runtime(),
         BusRegistry(),
         state.session_id,
         limit=2,
@@ -317,7 +345,7 @@ async def test_history_does_not_repair_missing_transcript_at_read_time(session_s
     )
 
     assert result["messages"] == []
-    assert result["usage"]["message_count"] == 5
+    assert "usage" not in result
     assert transcript_rows[0]["count"] == 0
 
 
@@ -337,7 +365,7 @@ async def test_history_malformed_metadata_surfaces_corruption(session_service: S
     with pytest.raises(SessionDataCorruptionError, match="metadata is invalid JSON"):
         await get_session_history(
             session_service,
-            SimpleNamespace(run_registry=RunRegistry(), executor=None),
+            _runtime(),
             BusRegistry(),
             state.session_id,
             limit=1,
@@ -372,13 +400,33 @@ async def test_model_update_returns_the_new_session_budget(session_service: Sess
     expected = token_compaction_budget("gpt-5.2", threshold=0.8)
     assert result["context_budget"] == {
         "model": "gpt-5.2",
-        "uses_default_model": False,
         "hard_limit": expected.hard_limit,
         "compaction_trigger": expected.compaction_trigger,
         "message_limit": 88,
         "input_tokens": 456,
         "message_count": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_model_update_rejects_unknown_model_before_persisting(session_service: SessionService):
+    state = _state("sess-invalid-model-update")
+    await session_service.save(state, [{"role": "user", "content": "hi"}])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_session_model(
+            state.session_id,
+            UpdateSessionModelRequest(chat_model="custom/missing-model"),
+            session_service,
+            RunRegistry(),
+            _runtime(),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Unknown model: custom/missing-model" in exc_info.value.detail
+
+    loaded = await session_service.load(state.session_id)
+    assert loaded is not None
+    assert loaded.state.chat_model is None
 
 
 @pytest.mark.asyncio
@@ -407,7 +455,7 @@ async def test_history_runtime_snapshot_includes_pending_connection(session_serv
         detail="Reconnect Gmail",
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-connection", limit=100, around_seq=None
     )
@@ -441,7 +489,7 @@ async def test_history_runtime_snapshot_reports_live_backgrounded_run(session_se
     run.status = RunStatus.RUNNING
     run.backgrounded = True
 
-    runtime = SimpleNamespace(run_registry=registry, executor=None)
+    runtime = _runtime(run_registry=registry)
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-live-backgrounded", limit=100, around_seq=None
     )
@@ -482,7 +530,7 @@ async def test_history_runtime_snapshot_hides_stale_queue_rows(session_service: 
         enqueued_seq=8,
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-stale-queue", limit=100, around_seq=None
     )
@@ -512,7 +560,7 @@ async def test_history_runtime_snapshot_omits_retryable_queue_after_terminal_run
     await session_service.store.record_chat_run_status("run-1", "interrupted", last_seq=10)
     await session_service.store.mark_interrupted_chat_queued_messages_retryable()
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-terminal-queue", limit=100, around_seq=None
     )
@@ -544,7 +592,7 @@ async def test_history_clamps_huge_persisted_tool_content(session_service: Sessi
         ],
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-huge-tool", limit=100, around_seq=None
     )
@@ -568,7 +616,7 @@ async def test_history_ignores_legacy_null_tool_calls(session_service: SessionSe
         ],
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-null-tool-calls", limit=100, around_seq=None
     )
@@ -601,7 +649,7 @@ async def test_history_skips_malformed_tool_calls_but_keeps_valid_calls(session_
         ],
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-malformed-tool-calls", limit=100, around_seq=None
     )
@@ -642,7 +690,7 @@ async def test_history_includes_tool_display_name_when_executor_knows_tool(sessi
                 return SimpleNamespace(kind="tool", display_name="SearchText")
             return None
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=SimpleNamespace(registry=Registry()))
+    runtime = _runtime(executor=SimpleNamespace(registry=Registry()))
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-tool-display-name", limit=100, around_seq=None
     )
@@ -693,7 +741,7 @@ async def test_history_includes_tool_result_data(session_service: SessionService
         ],
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-tool-result-data", limit=100, around_seq=None
     )
@@ -745,7 +793,7 @@ async def test_history_hydrates_tool_outcomes_from_durable_calls(session_service
 
     result = await get_session_history(
         session_service,
-        SimpleNamespace(run_registry=RunRegistry(), executor=None),
+        _runtime(),
         BusRegistry(),
         "sess-tool-outcome",
         limit=100,
@@ -817,7 +865,7 @@ async def test_history_omits_non_durable_tool_result_data(session_service: Sessi
         ],
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(
         session_service, runtime, BusRegistry(), "sess-tool-large-data", limit=100, around_seq=None
     )
@@ -840,7 +888,7 @@ async def test_history_runtime_snapshot_keeps_live_tail_after_checkpoint(session
     bus.mark_checkpoint()
     await bus.emit(ThinkingEvent(status="live-tail"))
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await get_session_history(session_service, runtime, buses, "sess-live-tail", limit=100, around_seq=None)
 
     assert result["runtime"]["checkpoint_seq"] == 1
@@ -862,7 +910,7 @@ async def test_sessions_list_surfaces_interrupted_runtime_state(session_service:
         error_code="run_interrupted",
     )
 
-    runtime = SimpleNamespace(run_registry=RunRegistry(), executor=None)
+    runtime = _runtime()
     result = await list_sessions(session_service, runtime, BusRegistry())
 
     session = result["sessions"][0]

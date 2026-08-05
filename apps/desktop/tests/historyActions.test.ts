@@ -14,6 +14,15 @@ import {
   resetStreamStateForTest,
 } from "@/hooks/useEvents";
 
+const CONTEXT_BUDGET = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
+
 beforeEach(() => {
   resetStreamStateForTest();
   resetEventSeqStateForTest();
@@ -50,6 +59,7 @@ test("loadHistory does not rewind past a stream_reset cursor", async () => {
           data: {
             messages: [],
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "cursor-session",
               latest_event_seq: 8,
@@ -128,6 +138,7 @@ test("active-session cache refresh hydrates inactive running sessions with curre
                 },
               ],
               active_run_id: "run-A",
+              context_budget: CONTEXT_BUDGET,
               runtime: {
                 session_id: "A",
                 latest_event_seq: 4,
@@ -214,6 +225,7 @@ test("active-session cache refresh preserves live agent trace not represented in
               },
             ],
             active_run_id: "run-A",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "A",
               latest_event_seq: 20,
@@ -332,6 +344,7 @@ test("loadHistory preserves visible live agent trace not represented in history"
               },
             ],
             active_run_id: "run-A",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "A",
               latest_event_seq: 20,
@@ -435,6 +448,7 @@ test("loadHistory reapplies local Auto to active runtime and hides stale approva
               ? {
                   messages: [],
                   active_run_id: "run-auto",
+                  context_budget: CONTEXT_BUDGET,
                   runtime: {
                     session_id: sessionId,
                     latest_event_seq: 7,
@@ -518,6 +532,7 @@ test("loadHistory keeps active run tail activity open while a tool is being call
               },
             ],
             active_run_id: "run-active",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "tool-active-session",
               latest_event_seq: 4,
@@ -579,6 +594,7 @@ test("loadHistory treats backgrounded runtime as non-foreground", async () => {
               },
             ],
             active_run_id: "run-bg",
+            context_budget: CONTEXT_BUDGET,
             runtime: {
               session_id: "bg-session",
               latest_event_seq: 4,

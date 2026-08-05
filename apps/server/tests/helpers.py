@@ -15,7 +15,7 @@ from arden.tools.core.registry import ToolRegistry
 from arden.tools.executor import ToolExecutor
 
 
-def make_text_response(content: str, model: str = "test-model") -> CompletionResponse:
+def make_text_response(content: str, model: str = "openai-codex/gpt-5.6-sol") -> CompletionResponse:
     return CompletionResponse(
         choices=[
             Choice(
@@ -29,7 +29,7 @@ def make_text_response(content: str, model: str = "test-model") -> CompletionRes
 
 
 def make_tool_response(
-    tool_name: str, arguments: dict, call_id: str | None = None, model: str = "test-model"
+    tool_name: str, arguments: dict, call_id: str | None = None, model: str = "openai-codex/gpt-5.6-sol"
 ) -> CompletionResponse:
     return CompletionResponse(
         choices=[

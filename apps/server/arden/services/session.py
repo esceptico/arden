@@ -10,6 +10,7 @@ from arden.core.compactor import compact_messages, compactable_range
 from arden.core.tool_result_files import clone_result_files, purge_session_results, rewrite_result_paths
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import SessionActivityEvent, SessionCreatedEvent, SSEEvent
+from arden.llm.models import get_model
 from arden.logging import get_logger
 from arden.settings import ARDEN_DIR
 
@@ -607,6 +608,8 @@ class SessionService:
         return await self.store.update_session_name_if_empty(session_id, name)
 
     async def update_chat_model(self, session_id: str, chat_model: str | None) -> SessionData | None:
+        if chat_model is not None:
+            get_model(chat_model)
         data = await self.store.load_session(session_id)
         if data is None:
             return None

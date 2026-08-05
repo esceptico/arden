@@ -5,10 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from arden.agent import Role
 from arden.areas.triage import TriageDecision, triage_chat
 from arden.constants import (
-    COMPRESSION_THRESHOLD,
     COMPRESSION_TOKEN_HEADROOM,
     HISTORY_MESSAGE_LIMIT,
-    MAX_MESSAGES,
 )
 from arden.context.models import SessionState
 from arden.core.compactor import is_handoff_message, token_compaction_budget
@@ -344,36 +342,34 @@ async def _triage_candidates(svc: SessionService) -> list[dict]:
 
 
 def _context_budget_snapshot(
-    state: SessionState,
+    state: SessionState | None,
     runtime: Runtime,
     *,
     input_tokens: int,
-    message_count: int | None,
+    message_count: int,
 ) -> ContextBudgetResponse:
-    config = getattr(runtime, "config", None)
-    model = state.chat_model or getattr(config, "chat_model", None)
-    threshold = getattr(config, "compression_threshold", COMPRESSION_THRESHOLD)
-    message_limit = getattr(config, "max_messages", MAX_MESSAGES)
-    hard_limit = None
-    compaction_trigger = None
-    if model:
-        try:
-            budget = token_compaction_budget(
-                model,
-                threshold=threshold,
-                token_headroom=COMPRESSION_TOKEN_HEADROOM,
-            )
-        except ValueError:
-            pass
-        else:
-            hard_limit = budget.hard_limit
-            compaction_trigger = budget.compaction_trigger
+    config = runtime.config
+    model = (state.chat_model if state is not None else None) or config.chat_model
+    if not model:
+        raise RuntimeError("No chat model configured")
+    try:
+        budget = token_compaction_budget(
+            model,
+            threshold=config.compression_threshold,
+            token_headroom=COMPRESSION_TOKEN_HEADROOM,
+        )
+    except ValueError as exc:
+        if state is not None and state.chat_model is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Session model {model!r} is not registered. Select another model.",
+            ) from exc
+        raise RuntimeError(f"Configured default chat model {model!r} is not registered") from exc
     return ContextBudgetResponse(
         model=model,
-        uses_default_model=state.chat_model is None,
-        hard_limit=hard_limit,
-        compaction_trigger=compaction_trigger,
-        message_limit=message_limit,
+        hard_limit=budget.hard_limit,
+        compaction_trigger=budget.compaction_trigger,
+        message_limit=config.max_messages,
         input_tokens=input_tokens,
         message_count=message_count,
     )
@@ -408,6 +404,12 @@ async def get_session_history(
                 "queued_messages": [],
             },
             "page": {"has_more_before": False, "has_more_after": False},
+            "context_budget": _context_budget_snapshot(
+                None,
+                runtime,
+                input_tokens=0,
+                message_count=0,
+            ).model_dump(),
         }
 
     # Runtime snapshot: durable run state + event cursor. The desktop renders
@@ -524,13 +526,6 @@ async def get_session_history(
             "has_more_after": page["has_more_after"],
             "before": page["before"],
             "after": page["after"],
-        },
-        # Snapshot of the session's budget-relevant counters so the desktop
-        # can populate the BudgetDial immediately on session open instead of
-        # waiting for the next run to finish and emit RunFinishedEvent.
-        "usage": {
-            "last_input_tokens": header.last_input_tokens or 0,
-            "message_count": header.active_message_count,
         },
         "context_budget": _context_budget_snapshot(
             header.state,
@@ -890,7 +885,10 @@ async def update_session_model(
     runs: RunRegistry = Depends(require_run_registry),
     runtime: Runtime = Depends(get_runtime),
 ):
-    data = await svc.update_chat_model(session_id, req.chat_model)
+    try:
+        data = await svc.update_chat_model(session_id, req.chat_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not data:
         raise HTTPException(status_code=404, detail="Session not found")
     runs.sync_session_chat_model(session_id, req.chat_model)

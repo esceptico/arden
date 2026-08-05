@@ -5,6 +5,14 @@ import { archiveArea, archiveSession, goToNewSessionHome } from "@/actions/sessi
 import { getState, setState } from "@/stores";
 
 const requests: Array<{ path: string; method: string; body?: string }> = [];
+const CONTEXT_BUDGET = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
 let failCreation = false;
 let failHistory = false;
 let delayedAreaId: string | null | undefined;
@@ -59,7 +67,7 @@ beforeEach(() => {
         }
         if (request.path.startsWith("/session/history")) {
           if (failHistory) throw new Error("history failed");
-          return response({ messages: [], active_run_id: null });
+          return response({ messages: [], active_run_id: null, context_budget: CONTEXT_BUDGET });
         }
         if (request.path === "/chat/message") return response({ run_id: "run-1" });
         return response(null);

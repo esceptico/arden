@@ -94,7 +94,7 @@ export async function updateSessionModelApi(
   config: AppConfig,
   sessionId: string,
   chatModel: string | null,
-): Promise<{ session_id: string; chat_model: string | null; context_budget?: ContextBudgetSnapshot }> {
+): Promise<{ session_id: string; chat_model: string | null; context_budget: ContextBudgetSnapshot }> {
   return apiWithConfig(config, `/sessions/${encodeURIComponent(sessionId)}/model`, {
     method: "PUT",
     body: JSON.stringify({ chat_model: chatModel }),

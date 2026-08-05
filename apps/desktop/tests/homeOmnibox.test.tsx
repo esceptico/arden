@@ -8,6 +8,14 @@ import { getState, setState } from "@/stores";
 
 let root: Root | null = null;
 const requests: { path: string; method: string; body?: string }[] = [];
+const CONTEXT_BUDGET = {
+  model: "openai-codex/gpt-5.6-sol",
+  hard_limit: 372_000,
+  compaction_trigger: 282_720,
+  message_limit: 120,
+  input_tokens: 0,
+  message_count: 0,
+};
 const originalDesktop = window.ardenDesktop;
 
 function overview(): AreasOverview {
@@ -35,7 +43,9 @@ function installBridge(options: {
           if (options.failSessionCreation) throw new Error("creation failed");
           return response({ session_id: "new-session", started_at: "", last_activity: "", name: null, message_count: 0 });
         }
-        if (request.path.startsWith("/session/history")) return response({ messages: [], active_run_id: null });
+        if (request.path.startsWith("/session/history")) {
+          return response({ messages: [], active_run_id: null, context_budget: CONTEXT_BUDGET });
+        }
         if (request.path.endsWith("/goal")) return response(null);
         if (request.path === "/chat/message") return response({ run_id: "run-1" });
         return response({});

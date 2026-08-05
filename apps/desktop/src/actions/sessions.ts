@@ -111,7 +111,7 @@ export async function updateSessionModelAction(sessionId: string, chatModel: str
       sess.session_id === sessionId ? { ...sess, chat_model: chatModel } : sess,
     ),
   );
-  if (s.currentSessionId === sessionId && response.context_budget) {
+  if (s.currentSessionId === sessionId) {
     s.hydrateUsageSnapshot({
       contextInputTokens: response.context_budget.input_tokens,
       messageCount: response.context_budget.message_count,

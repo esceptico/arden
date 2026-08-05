@@ -359,10 +359,9 @@ export interface UiMessage {
 }
 
 export interface SessionContextBudget {
-  model: string | null;
-  usesDefaultModel: boolean;
-  hardLimit: number | null;
-  compactionTrigger: number | null;
+  model: string;
+  hardLimit: number;
+  compactionTrigger: number;
   messageLimit: number;
 }
 
