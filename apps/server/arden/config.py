@@ -107,7 +107,6 @@ PERSIST_KEYS = frozenset(
         "memory_timezone",
         "timezone",
         "integration_states",
-        "gmail_days",
         "max_depth",
         "model_reasoning_efforts",
         "compression_threshold",
@@ -180,7 +179,6 @@ class Config(BaseSettings):
 
     # Integrations
     integration_states: dict[str, bool] = Field(default_factory=dict)
-    gmail_days: int = 30
 
     # Exa web search
     exa_api_key: str | None = Field(default=None, alias="EXA_API_KEY")

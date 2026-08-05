@@ -1,230 +1,89 @@
-import base64
-import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.header import decode_header as decode_rfc2047
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.utils import parsedate_to_datetime
-from html import unescape
 from pathlib import Path
-from typing import Any
+from threading import Lock, RLock
 
-import markdown
+import httplib2
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-from arden.core.prompts import env
-from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError, IntegrationProviderError
+from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
+from arden.integrations.gmail.compose import compose_email, compose_reply
+from arden.integrations.gmail.errors import raise_gmail_error
+from arden.integrations.gmail.models import (
+    GmailMessage,
+    GmailMessagePage,
+    GmailMessageSummary,
+    GmailMutationReceipt,
+    GmailPageRef,
+    GmailReplySource,
+)
+from arden.integrations.gmail.payloads import (
+    GmailPayloadError,
+    decode_attachment_body,
+    decode_message,
+    decode_message_refs,
+    decode_message_summary,
+    decode_mutation_receipt,
+    decode_profile,
+    decode_reply_source,
+)
 from arden.integrations.google_auth.auth import (
-    SCOPES_ALL,
+    SCOPES_GMAIL_READ,
     SCOPES_GMAIL_SEND,
     get_google_credentials,
     has_scope,
 )
 from arden.logging import get_logger
-from arden.search.types import RawItem
-from arden.settings import ARDEN_DIR
+
+_READ_SCOPES = tuple(SCOPES_GMAIL_READ)
+_SEND_SCOPES = tuple(SCOPES_GMAIL_SEND)
 
 
-@dataclass(frozen=True)
-class SourceItem:
-    identity: str
-    title: str
-    source: str
-    account: str = ""
-    timestamp: datetime | None = None
-    preview: str | None = None
+@dataclass(frozen=True, slots=True)
+class GmailPreparedSend:
+    account_ref: str
+    recipient: str
+    raw_message: str
 
 
-@dataclass(frozen=True)
-class ReadEmailResult:
-    content: str
-    account: str
+@dataclass(frozen=True, slots=True)
+class GmailPreparedReply:
+    account_ref: str
+    recipient: str
+    subject: str | None
+    provider_thread_id: str
+    raw_message: str
 
 
-EMAIL_HTML_TEMPLATE = env.from_string("""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
-            margin: 0;
-            padding: 20px;
-        }
-        table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 16px 0;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px 12px;
-            text-align: left;
-        }
-        th {
-            background: #f5f5f5;
-            font-weight: 600;
-        }
-        pre {
-            background: #f5f5f5;
-            padding: 12px;
-            border-radius: 4px;
-            overflow-x: auto;
-            margin: 16px 0;
-        }
-        code {
-            background: #f5f5f5;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', Consolas, monospace;
-            font-size: 0.9em;
-        }
-        pre code {
-            background: transparent;
-            padding: 0;
-        }
-        h1, h2, h3 {
-            margin-top: 24px;
-            margin-bottom: 12px;
-            color: #111;
-            font-weight: 600;
-        }
-        h1 { font-size: 24px; }
-        h2 { font-size: 20px; }
-        h3 { font-size: 18px; }
-        ul, ol {
-            margin: 12px 0;
-            padding-left: 24px;
-        }
-        li {
-            margin: 4px 0;
-        }
-        p {
-            margin: 12px 0;
-        }
-        a {
-            color: #0066cc;
-            text-decoration: none;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-        strong {
-            font-weight: 600;
-        }
-        blockquote {
-            border-left: 4px solid #ddd;
-            margin: 16px 0;
-            padding-left: 16px;
-            color: #666;
-        }
-    </style>
-</head>
-<body>
-{{ content }}
-</body>
-</html>""")
+class _MetadataBatchResults:
+    def __init__(self) -> None:
+        self.responses: dict[str, object] = {}
+        self.failures: dict[str, Exception] = {}
+
+    def receive(self, request_id: str, response: object, exception: Exception | None) -> None:
+        if exception is not None:
+            self.failures[request_id] = exception
+        else:
+            self.responses[request_id] = response
 
 
-def decode_base64_body(data: str) -> str:
-    try:
-        decoded = base64.urlsafe_b64decode(data)
-        return decoded.decode("utf-8", errors="replace")
-    except Exception:
-        return ""  # Invalid base64 data - return empty string
-
-
-def find_email_parts(part: dict[str, Any]) -> tuple[str, str]:
-    """
-    Recursively extract text/plain and text/html from MIME structure.
-
-    Returns:
-        Tuple of (plain_text, html_text)
-    """
-    plain_content = ""
-    html_content = ""
-    mime_type = part.get("mimeType", "")
-
-    if mime_type.startswith("multipart/"):
-        for sub_part in part.get("parts", []):
-            plain, html = find_email_parts(sub_part)
-            plain_content += plain
-            html_content += html
-    elif mime_type == "text/plain":
-        body = part.get("body", {})
-        if "data" in body:
-            plain_content = decode_base64_body(body["data"])
-    elif mime_type == "text/html":
-        body = part.get("body", {})
-        if "data" in body:
-            html_content = decode_base64_body(body["data"])
-
-    return plain_content, html_content
-
-
-def html_to_plain(html: str) -> str:
-    if not html:
-        return ""
-
-    text = html
-    # Remove script/style blocks
-    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.I)
-    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.I)
-    # Convert br/p to newlines
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-    text = re.sub(r"</p>", "\n", text, flags=re.I)
-    # Strip remaining tags
-    text = re.sub(r"<[^>]+>", "", text)
-    # Unescape HTML entities
-    text = unescape(text)
-    # Normalize whitespace
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def decode_email_header(value: str | None) -> str:
-    """Decode RFC-2047 encoded headers (=?utf-8?Q?...?=)."""
-    if not value:
-        return ""
-
-    parts = decode_rfc2047(value)
-    decoded = []
-    for part, enc in parts:
-        if isinstance(part, bytes):
-            part = part.decode(enc or "utf-8", errors="replace")
-        decoded.append(part)
-    return "".join(decoded).strip()
-
-
-def extract_headers(headers: list[dict]) -> dict[str, str]:
-    """Extract headers into a dict with lowercase keys."""
-    return {h.get("name", "").lower(): h.get("value", "") for h in headers}
-
-
-def parse_email_date(headers: list[dict], fallback_ms: int) -> datetime:
-    """Parse email date from headers or fallback to internalDate."""
-    header_dict = extract_headers(headers)
-    date_str = header_dict.get("date")
-
-    if date_str:
-        try:
-            parsed = parsedate_to_datetime(date_str)
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=UTC)
-            return parsed
-        except Exception:
-            pass
-
-    # Fallback to Gmail's internalDate (milliseconds)
-    try:
-        return datetime.fromtimestamp(fallback_ms / 1000, tz=UTC)
-    except (ValueError, OSError):
-        return datetime.now(tz=UTC)
+def parse_message_ref(message_ref: str) -> tuple[str, str]:
+    account_ref, separator, provider_message_id = message_ref.partition(":")
+    if (
+        not separator
+        or not account_ref
+        or not provider_message_id
+        or account_ref != account_ref.strip()
+        or provider_message_id != provider_message_id.strip()
+        or len(account_ref) > 320
+        or len(provider_message_id) > 512
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in message_ref)
+    ):
+        raise IntegrationOperationError(
+            code="invalid_ref",
+            safe_message="Use the account-qualified message_ref returned by email_search.",
+        )
+    return account_ref, provider_message_id
 
 
 class GmailSource:
@@ -232,351 +91,331 @@ class GmailSource:
 
     def __init__(
         self,
-        token_path: Path | None = None,
-        days_back: int = 30,
+        account_ref: str,
+        token_path: Path,
     ):
-        self.token_path = token_path or (ARDEN_DIR / "gmail_token.json")
-        self.days_back = days_back
+        if not account_ref or account_ref != account_ref.strip():
+            raise ValueError("GmailSource requires an exact non-empty account_ref")
+        self.account_ref = account_ref
+        self.token_path = token_path
 
         self._service = None
         self._creds = None
-        self._emails_cache: dict[str, dict] = {}  # id -> raw email
-        self._email_address: str | None = None
+        self._state_lock = RLock()
+        self._request_lock = Lock()
 
     def _get_credentials(self):
-        if self._creds is None or not self._creds.valid:
-            self._creds = get_google_credentials(self.token_path, scopes=SCOPES_ALL, integration_id="gmail")
-        return self._creds
+        with self._state_lock:
+            if self._creds is None or not self._creds.valid:
+                try:
+                    self._creds = get_google_credentials(
+                        self.token_path,
+                        require_scopes=SCOPES_GMAIL_READ,
+                        integration_id="gmail",
+                    )
+                except IntegrationConnectionError as error:
+                    raise self._connection_error(error) from error
+            return self._creds
 
-    def has_send_scope(self) -> bool:
+    def _connection_error(self, error: IntegrationConnectionError) -> IntegrationConnectionError:
+        return IntegrationConnectionError(
+            integration_id=error.integration_id,
+            reason=error.reason,
+            detail=error.detail,
+            required_scopes=error.required_scopes,
+            retry_safe=error.retry_safe,
+            account_ref=self.account_ref,
+        )
+
+    def require_send_scope(self) -> None:
         creds = self._get_credentials()
         if not has_scope(creds, SCOPES_GMAIL_SEND[0]):
             raise IntegrationConnectionError(
                 integration_id="gmail",
                 reason="scope_required",
                 detail="Gmail authorization is missing permission to send email.",
-                required_scopes=tuple(SCOPES_GMAIL_SEND),
+                required_scopes=_SEND_SCOPES,
                 retry_safe=True,
+                account_ref=self.account_ref,
             )
-        return True
 
     def _get_service(self):
-        if self._service is None:
-            creds = self._get_credentials()
-            self._service = build("gmail", "v1", credentials=creds)
-        return self._service
+        with self._state_lock:
+            if self._service is None:
+                creds = self._get_credentials()
+                try:
+                    self._service = build("gmail", "v1", credentials=creds)
+                except (HttpError, OSError, httplib2.ServerNotFoundError) as exc:
+                    raise_gmail_error(exc, required_scopes=_READ_SCOPES, account_ref=self.account_ref)
+            return self._service
 
-    def get_email_address(self) -> str:
-        if self._email_address is not None:
-            return self._email_address
+    def _execute(self, request, operation: str, *, required_scopes: tuple[str, ...]) -> object:
         try:
-            service = self._get_service()
-            profile = service.users().getProfile(userId="me").execute()
-            self._email_address = profile.get("emailAddress", "")
-            return self._email_address
-        except IntegrationConnectionError:
-            raise
-        except Exception:
-            return ""  # API error fetching profile - return empty email
+            with self._request_lock:
+                return request.execute()
+        except (HttpError, OSError, httplib2.ServerNotFoundError) as exc:
+            _logger.exception("Gmail %s failed", operation)
+            raise_gmail_error(exc, required_scopes=required_scopes, account_ref=self.account_ref)
 
     def verify_connection(self) -> None:
-        self._get_service().users().getProfile(userId="me").execute()
+        observed_account = decode_profile(
+            self._execute(
+                self._get_service().users().getProfile(userId="me"),
+                "profile read",
+                required_scopes=_READ_SCOPES,
+            )
+        )
+        if observed_account.casefold() != self.account_ref.casefold():
+            raise IntegrationConnectionError(
+                integration_id="gmail",
+                reason="auth_required",
+                detail=f"Gmail authorization does not belong to {self.account_ref}.",
+                retry_safe=False,
+                account_ref=self.account_ref,
+            )
 
-    def send(self, to: str, subject: str, body: str, from_email: str | None = None, html: bool = False) -> str:
-        if not to:
+    def prepare_send(
+        self,
+        recipient: str,
+        subject: str,
+        body: str,
+        *,
+        html: bool = False,
+    ) -> GmailPreparedSend:
+        if not recipient:
             raise IntegrationOperationError(
                 code="invalid_ref",
                 safe_message="A recipient email address is required.",
             )
 
-        self.has_send_scope()
+        self.require_send_scope()
+        self._get_service()
 
-        body_text = body or ""
-
-        if html:
-            # Create multipart message with both plain text and HTML
-            message = MIMEMultipart("alternative")
-            message["to"] = to
-            message["subject"] = subject or "(no subject)"
-            if from_email:
-                message["from"] = from_email
-
-            # Add plain text version (strip markdown)
-            plain_part = MIMEText(body_text, "plain")
-            message.attach(plain_part)
-
-            # Convert markdown to HTML
-            html_body = self._markdown_to_html(body_text)
-            html_part = MIMEText(html_body, "html")
-            message.attach(html_part)
-        else:
-            message = MIMEText(body_text)
-            message["to"] = to
-            message["subject"] = subject or "(no subject)"
-            if from_email:
-                message["from"] = from_email
-
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-
-        try:
-            service = self._get_service()
-            sent = (
-                service.users()
-                .messages()
-                .send(
-                    userId="me",
-                    body={"raw": raw},
-                )
-                .execute()
-            )
-            msg_id = sent.get("id", "")
-            return f"Sent email to {to}" + (f" (id: {msg_id})" if msg_id else "")
-        except IntegrationConnectionError:
-            raise
-        except Exception as exc:
-            _logger.exception("Gmail send failed")
-            raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
-
-    def reply(self, message_id: str, body: str, from_email: str | None = None) -> str:
-        """Reply to an existing Gmail message while preserving its RFC and provider thread identity."""
-        self.has_send_scope()
-        try:
-            original = self._get_service().users().messages().get(userId="me", id=message_id, format="full").execute()
-        except IntegrationConnectionError:
-            raise
-        except Exception as exc:
-            _logger.exception("Gmail reply source fetch failed")
-            raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
-        if not original:
-            raise IntegrationOperationError(code="not_found", safe_message=f"Gmail message not found: {message_id}")
-
-        headers = extract_headers(original.get("payload", {}).get("headers", []))
-        recipient = decode_email_header(headers.get("reply-to") or headers.get("from"))
-        if not recipient:
-            raise IntegrationOperationError(
-                code="invalid_ref",
-                safe_message="The original Gmail message has no reply sender.",
-            )
-        subject = decode_email_header(headers.get("subject")) or "(no subject)"
-        if not subject.casefold().startswith("re:"):
-            subject = f"Re: {subject}"
-
-        message = MIMEText(body or "")
-        message["to"] = recipient
-        message["subject"] = subject
-        if from_email:
-            message["from"] = from_email
-        original_message_id = headers.get("message-id", "").strip()
-        if original_message_id:
-            message["In-Reply-To"] = original_message_id
-            references = headers.get("references", "").strip()
-            message["References"] = f"{references} {original_message_id}".strip()
-
-        thread_id = str(original.get("threadId") or "")
-        if not thread_id:
-            raise IntegrationOperationError(
-                code="invalid_ref",
-                safe_message="The original Gmail message has no thread ID.",
-            )
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-        try:
-            sent = (
-                self._get_service()
-                .users()
-                .messages()
-                .send(userId="me", body={"raw": raw, "threadId": thread_id})
-                .execute()
-            )
-            reply_id = sent.get("id", "")
-            return f"Replied to {recipient}" + (f" (id: {reply_id})" if reply_id else "")
-        except IntegrationConnectionError:
-            raise
-        except Exception as exc:
-            _logger.exception("Gmail reply failed")
-            raise IntegrationProviderError(integration_label="Gmail", cause=exc) from exc
-
-    def _markdown_to_html(self, markdown_text: str) -> str:
-        # Convert markdown to HTML with common extensions
-        md = markdown.Markdown(
-            extensions=[
-                "extra",  # tables, fenced code, etc.
-                "nl2br",  # newline to <br>
-                "sane_lists",  # better list handling
-                "codehilite",  # code highlighting
-            ]
-        )
-        content = md.convert(markdown_text)
-
-        return EMAIL_HTML_TEMPLATE.render(content=content)
-
-    def _fetch_message_metadata(self, msg_id: str) -> dict | None:
-        cache_key = f"meta:{msg_id}"
-        if cache_key in self._emails_cache:
-            return self._emails_cache[cache_key]
-
-        try:
-            service = self._get_service()
-            msg = (
-                service.users()
-                .messages()
-                .get(
-                    userId="me",
-                    id=msg_id,
-                    format="metadata",
-                    metadataHeaders=["From", "To", "Subject", "Date"],
-                )
-                .execute()
-            )
-            self._emails_cache[cache_key] = msg
-            return msg
-        except IntegrationConnectionError:
-            raise
-        except Exception:
-            return None  # API error - message not found or permission denied
-
-    def _fetch_message_full(self, msg_id: str) -> dict | None:
-        cache_key = f"full:{msg_id}"
-        if cache_key in self._emails_cache:
-            return self._emails_cache[cache_key]
-
-        try:
-            service = self._get_service()
-            msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
-            self._emails_cache[cache_key] = msg
-            return msg
-        except IntegrationConnectionError:
-            raise
-        except Exception:
-            return None  # API error fetching full message
-
-    def _build_raw_item(self, raw: dict, content: str) -> RawItem:
-        msg_id = raw.get("id", "")
-        payload = raw.get("payload", {})
-        headers = payload.get("headers", [])
-        header_dict = extract_headers(headers)
-
-        internal_date = int(raw.get("internalDate", 0))
-        email_date = parse_email_date(headers, internal_date)
-
-        subject = decode_email_header(header_dict.get("subject", ""))
-        sender = decode_email_header(header_dict.get("from", ""))
-        title = subject if subject else f"Email from {sender}"
-
-        return RawItem(
-            source="gmail",
-            source_id=msg_id,
-            title=title,
-            content=content,
-            created_at=email_date,
-            updated_at=email_date,
-            metadata={
-                "account": self.get_email_address(),
-                "thread_id": raw.get("threadId", ""),
-                "labels": raw.get("labelIds", []),
-                "from": sender,
-                "to": decode_email_header(header_dict.get("to", "")),
-                "subject": subject,
-                "snippet": raw.get("snippet", ""),
-            },
+        return GmailPreparedSend(
+            account_ref=self.account_ref,
+            recipient=recipient,
+            raw_message=compose_email(
+                sender=self.account_ref,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                html=html,
+            ),
         )
 
-    def _parse_metadata(self, raw: dict) -> RawItem:
-        return self._build_raw_item(raw, raw.get("snippet", ""))
+    def send(self, prepared: GmailPreparedSend) -> GmailMutationReceipt:
+        sent = self._execute(
+            self._get_service().users().messages().send(userId="me", body={"raw": prepared.raw_message}),
+            "send",
+            required_scopes=_SEND_SCOPES,
+        )
+        return decode_mutation_receipt(sent, self.account_ref, prepared.recipient, "send")
 
-    def _parse_full_message(self, raw: dict) -> RawItem:
-        payload = raw.get("payload", {})
-        plain_text, html_text = find_email_parts(payload)
-        content = plain_text.strip() if plain_text.strip() else html_to_plain(html_text)
-        if not content:
-            content = raw.get("snippet", "")
-        return self._build_raw_item(raw, content)
+    def prepare_reply(self, provider_message_id: str, body: str) -> GmailPreparedReply:
+        self.require_send_scope()
+        original = self.reply_source(provider_message_id)
 
-    def read(self, source_id: str) -> str | None:
-        msg = self._fetch_message_full(source_id)
-        if not msg:
-            return None
+        return GmailPreparedReply(
+            account_ref=self.account_ref,
+            recipient=original.recipient,
+            subject=original.subject,
+            provider_thread_id=original.provider_thread_id,
+            raw_message=compose_reply(
+                sender=self.account_ref,
+                recipient=original.recipient,
+                subject_header=original.subject_header,
+                body=body,
+                message_id=original.message_id_header,
+                references=original.references_header,
+            ),
+        )
 
-        item = self._parse_full_message(msg)
-
-        # Format nicely
-        meta = item.metadata
-        lines = [
-            f"From: {meta.get('from', '')}",
-            f"To: {meta.get('to', '')}",
-            f"Subject: {meta.get('subject', '')}",
-            f"Date: {item.created_at.isoformat()}",
-            "",
-            item.content,
-        ]
-        return "\n".join(lines)
-
-    def search(self, query: str, limit: int = 50) -> list[RawItem]:
-        """
-        Search emails using Gmail's native search (metadata only).
-
-        Gmail does server-side search - no need to download content.
-
-        Args:
-            query: Gmail search query (same syntax as Gmail search bar)
-            limit: Max results to return
-
-        Returns:
-            List of RawItems with metadata only (snippet as content)
-        """
-        service = self._get_service()
-
-        result = (
-            service.users()
+    def reply_source(self, provider_message_id: str) -> GmailReplySource:
+        original_raw = self._execute(
+            self._get_service()
+            .users()
             .messages()
-            .list(
+            .get(
                 userId="me",
-                q=query,
-                maxResults=limit,
-            )
-            .execute()
+                id=provider_message_id,
+                format="metadata",
+                metadataHeaders=["Reply-To", "From", "Subject", "Message-ID", "References"],
+            ),
+            "reply source read",
+            required_scopes=_READ_SCOPES,
         )
+        source = decode_reply_source(original_raw)
+        if source.provider_message_id != provider_message_id:
+            raise GmailPayloadError("reply source")
+        return source
 
-        items = []
-        for msg_meta in result.get("messages", []):
-            msg = self._fetch_message_metadata(msg_meta["id"])
-            if msg:
-                items.append(self._parse_metadata(msg))
-
-        return items
-
-    def list_recent(self, days: int = 7, limit: int = 50) -> list[SourceItem]:
-        """Get recent emails."""
-        service = self._get_service()
-
-        query = f"newer_than:{days}d"
-        result = (
-            service.users()
+    def reply(self, prepared: GmailPreparedReply) -> GmailMutationReceipt:
+        sent = self._execute(
+            self._get_service()
+            .users()
             .messages()
-            .list(
-                userId="me",
-                q=query,
-                maxResults=limit,
+            .send(userId="me", body={"raw": prepared.raw_message, "threadId": prepared.provider_thread_id}),
+            "reply",
+            required_scopes=_SEND_SCOPES,
+        )
+        receipt = decode_mutation_receipt(sent, self.account_ref, prepared.recipient, "reply")
+        expected_thread_ref = f"{self.account_ref}:{prepared.provider_thread_id}"
+        if receipt.thread_ref != expected_thread_ref:
+            raise IntegrationOperationError(
+                code="invalid_provider_payload",
+                safe_message="Gmail returned the reply in a different thread.",
+                retryable=False,
             )
-            .execute()
+        return receipt
+
+    def _metadata_request(self, provider_message_id: str):
+        return (
+            self._get_service()
+            .users()
+            .messages()
+            .get(
+                userId="me",
+                id=provider_message_id,
+                format="metadata",
+                metadataHeaders=["From", "To", "Reply-To", "Subject"],
+            )
         )
 
-        items = []
-        for msg_meta in result.get("messages", []):
-            msg = self._fetch_message_metadata(msg_meta["id"])
-            if msg:
-                raw_item = self._parse_metadata(msg)
-                items.append(
-                    SourceItem(
-                        identity=raw_item.source_id,
-                        title=raw_item.title,
-                        source=self.name,
-                        account=str(raw_item.metadata.get("account") or ""),
-                        timestamp=raw_item.created_at,
-                        preview=raw_item.metadata.get("snippet"),
+    def _fetch_message_metadata_page(
+        self,
+        provider_message_ids: tuple[str, ...],
+    ) -> tuple[GmailMessageSummary, ...]:
+        if len(provider_message_ids) != len(set(provider_message_ids)):
+            raise GmailPayloadError("message list")
+
+        decoded_messages: dict[str, GmailMessageSummary] = {}
+        for offset in range(0, len(provider_message_ids), 50):
+            message_ids = provider_message_ids[offset : offset + 50]
+            results = _MetadataBatchResults()
+
+            service = self._get_service()
+            batch = service.new_batch_http_request()
+            for message_id in message_ids:
+                batch.add(self._metadata_request(message_id), callback=results.receive, request_id=message_id)
+            self._execute(
+                batch,
+                "message metadata batch",
+                required_scopes=_READ_SCOPES,
+            )
+
+            if results.failures:
+                failure = next(iter(results.failures.values()))
+                if isinstance(failure, (HttpError, OSError, httplib2.ServerNotFoundError)):
+                    raise_gmail_error(
+                        failure,
+                        required_scopes=_READ_SCOPES,
+                        account_ref=self.account_ref,
                     )
-                )
+                raise failure
+            if set(results.responses) != set(message_ids):
+                raise GmailPayloadError("message metadata batch")
 
-        return items
+            for message_id in message_ids:
+                message = decode_message_summary(results.responses[message_id], self.account_ref)
+                if message.ref != f"{self.account_ref}:{message_id}":
+                    raise GmailPayloadError("message metadata batch")
+                decoded_messages[message_id] = message
+
+        return tuple(decoded_messages[message_id] for message_id in provider_message_ids)
+
+    def _fetch_message_full(self, provider_message_id: str) -> GmailMessage:
+        raw = self._execute(
+            self._get_service().users().messages().get(userId="me", id=provider_message_id, format="full"),
+            "message read",
+            required_scopes=_READ_SCOPES,
+        )
+        service = self._get_service()
+
+        def load_attachment(attachment_id: str):
+            request = (
+                service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=provider_message_id, id=attachment_id)
+            )
+            return decode_attachment_body(
+                self._execute(
+                    request,
+                    "message attachment read",
+                    required_scopes=_READ_SCOPES,
+                )
+            )
+
+        message = decode_message(raw, self.account_ref, load_attachment)
+        if message.summary.ref != f"{self.account_ref}:{provider_message_id}":
+            raise GmailPayloadError("message read")
+        return message
+
+    def read(self, provider_message_id: str) -> GmailMessage:
+        return self._fetch_message_full(provider_message_id)
+
+    def search(
+        self,
+        query: str,
+        limit: int = 50,
+        *,
+        page_token: str | None = None,
+    ) -> GmailMessagePage:
+        params: dict[str, object] = {"userId": "me", "q": query, "maxResults": limit}
+        if page_token is not None:
+            params["pageToken"] = page_token
+        raw_page = self._execute(
+            self._get_service().users().messages().list(**params),
+            "message search",
+            required_scopes=_READ_SCOPES,
+        )
+        refs = decode_message_refs(raw_page)
+        if refs.next_page_token is not None and refs.next_page_token == page_token:
+            raise IntegrationOperationError(
+                code="invalid_provider_payload",
+                safe_message="Gmail returned the current page_ref again.",
+                retryable=False,
+            )
+        messages = self._fetch_message_metadata_page(refs.provider_message_ids)
+        return GmailMessagePage(
+            account_ref=self.account_ref,
+            messages=messages,
+            next_page_ref=(
+                GmailPageRef(
+                    account_ref=self.account_ref,
+                    provider_token=refs.next_page_token,
+                    query=query,
+                    days=None,
+                    limit=limit,
+                )
+                if refs.next_page_token is not None
+                else None
+            ),
+        )
+
+    def list_recent(
+        self,
+        days: int = 7,
+        limit: int = 50,
+        *,
+        page_token: str | None = None,
+    ) -> GmailMessagePage:
+        page = self.search(f"newer_than:{days}d", limit=limit, page_token=page_token)
+        return GmailMessagePage(
+            account_ref=page.account_ref,
+            messages=page.messages,
+            next_page_ref=(
+                GmailPageRef(
+                    account_ref=self.account_ref,
+                    provider_token=page.next_page_ref.provider_token,
+                    query=None,
+                    days=days,
+                    limit=limit,
+                )
+                if page.next_page_ref is not None
+                else None
+            ),
+        )
 
 
 _logger = get_logger(__name__)
@@ -587,156 +426,159 @@ class MultiGmailSource:
 
     name = "gmail"
 
-    def __init__(self, token_paths: list[Path], days_back: int):
-        self.sources: list[GmailSource] = []
-        self._errors: dict[str, str] = {}
-        connection_error: IntegrationConnectionError | None = None
+    def __init__(self, account_sources: list[tuple[str, Path]]):
+        self.sources = [
+            GmailSource(account_ref=account_ref, token_path=token_path) for account_ref, token_path in account_sources
+        ]
+        normalized_accounts = [source.account_ref.casefold() for source in self.sources]
+        if len(normalized_accounts) != len(set(normalized_accounts)):
+            raise IntegrationConnectionError(
+                integration_id="gmail",
+                reason="auth_required",
+                detail="Reconnect Gmail: connected account emails must be unique.",
+                retry_safe=True,
+            )
 
-        for token_path in token_paths:
-            try:
-                src = GmailSource(token_path=token_path, days_back=days_back)
-                src._get_credentials()
-                self.sources.append(src)
-            except IntegrationConnectionError as exc:
-                connection_error = exc
-                self._errors[token_path.name] = exc.detail
-            except Exception as e:
-                self._errors[token_path.name] = str(e)
-
-        if not self.sources and connection_error is not None:
-            raise connection_error
-
-        self._days = days_back
-
-    @property
-    def errors(self) -> dict[str, str]:
-        return self._errors
-
-    @property
-    def details(self) -> dict:
-        return {"accounts": self.list_accounts(), "days": self._days}
-
-    def verify_connection(self) -> None:
+    def _require_sources(self) -> None:
         if not self.sources:
             raise IntegrationConnectionError(
                 integration_id="gmail",
                 reason="not_configured",
                 detail="No Gmail account is connected.",
             )
-        last_error: Exception | None = None
+
+    def verify_connection(self) -> None:
+        self._require_sources()
         for source in self.sources:
-            try:
-                source.verify_connection()
-                return
-            except Exception as exc:
-                last_error = exc
-        if last_error is not None:
-            raise last_error
+            source.verify_connection()
+
+    def verify_account(self, account_ref: str) -> None:
+        self._source_for(account_ref).verify_connection()
 
     def list_accounts(self) -> list[str]:
-        accounts: list[str] = []
-        for src in self.sources:
-            email = src.get_email_address()
-            if email:
-                accounts.append(email)
-        return accounts
+        return [source.account_ref for source in self.sources]
 
-    def send_email(self, account: str, to: str, subject: str, body: str, html: bool = False) -> str:
-        if not account:
+    def _source_for(self, account_ref: str | None) -> GmailSource:
+        self._require_sources()
+        if account_ref is None:
+            if len(self.sources) == 1:
+                return self.sources[0]
+            raise IntegrationOperationError(
+                code="ambiguous_ref",
+                safe_message=f"Choose a Gmail account_ref: {', '.join(self.list_accounts())}",
+                retryable=False,
+            )
+        source = next(
+            (candidate for candidate in self.sources if candidate.account_ref == account_ref),
+            None,
+        )
+        if source is None:
             raise IntegrationOperationError(
                 code="invalid_ref",
-                safe_message="A connected Gmail account is required.",
+                safe_message=f"Gmail account not found. Available: {', '.join(self.list_accounts())}",
+                retryable=False,
             )
+        return source
 
-        account_lower = account.lower().strip()
-        for src in self.sources:
-            email = src.get_email_address().lower()
-            if email == account_lower:
-                return src.send(to=to, subject=subject, body=body, from_email=account, html=html)
-
-        accounts = self.list_accounts()
-        if accounts:
-            raise IntegrationOperationError(
-                code="invalid_ref",
-                safe_message=f"Gmail account not found. Available: {', '.join(accounts)}",
-            )
-        raise IntegrationOperationError(
-            code="not_found",
-            safe_message="No Gmail accounts are available.",
+    def prepare_send(
+        self,
+        account_ref: str,
+        recipient: str,
+        subject: str,
+        body: str,
+        html: bool = False,
+    ) -> GmailPreparedSend:
+        source = self._source_for(account_ref)
+        return source.prepare_send(
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            html=html,
         )
 
-    def reply_email(self, message_ref: str, body: str) -> str:
-        account, separator, message_id = message_ref.partition(":")
-        if not separator or not account.strip() or not message_id.strip():
-            raise IntegrationOperationError(
-                code="invalid_ref",
-                safe_message="Use the qualified account:message_id returned by emails or email_read.",
-            )
-        for src in self.sources:
-            source_account = src.get_email_address()
-            if source_account.casefold() == account.strip().casefold():
-                return src.reply(message_id.strip(), body, from_email=source_account)
-        accounts = self.list_accounts()
-        raise IntegrationOperationError(
-            code="invalid_ref",
-            safe_message=(
-                f"Gmail account not found. Available: {', '.join(accounts)}"
-                if accounts
-                else "No Gmail accounts are available."
-            ),
+    def send_email(self, prepared: GmailPreparedSend) -> GmailMutationReceipt:
+        return self._source_for(prepared.account_ref).send(prepared)
+
+    def prepare_reply(self, message_ref: str, body: str) -> GmailPreparedReply:
+        account_ref, provider_message_id = parse_message_ref(message_ref)
+        source = self._source_for(account_ref)
+        return source.prepare_reply(provider_message_id, body)
+
+    def reply_source(self, message_ref: str) -> GmailReplySource:
+        account_ref, provider_message_id = parse_message_ref(message_ref)
+        return self._source_for(account_ref).reply_source(provider_message_id)
+
+    def reply_email(self, prepared: GmailPreparedReply) -> GmailMutationReceipt:
+        return self._source_for(prepared.account_ref).reply(prepared)
+
+    def read(self, message_ref: str) -> GmailMessage:
+        account_ref, provider_message_id = parse_message_ref(message_ref)
+        return self._source_for(account_ref).read(provider_message_id)
+
+    def search(
+        self,
+        query: str,
+        limit: int = 50,
+        *,
+        account_ref: str | None = None,
+        page_ref: GmailPageRef | None = None,
+    ) -> GmailMessagePage:
+        if page_ref is not None:
+            if page_ref.query is None:
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="The Gmail page_ref belongs to a recent-email listing.",
+                    retryable=False,
+                )
+            if query != page_ref.query or limit != page_ref.limit:
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="The Gmail page_ref does not match this search.",
+                    retryable=False,
+                )
+            if account_ref is not None and account_ref != page_ref.account_ref:
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="The Gmail page_ref belongs to a different account_ref.",
+                    retryable=False,
+                )
+            account_ref = page_ref.account_ref
+        return self._source_for(account_ref).search(
+            query,
+            limit=limit,
+            page_token=page_ref.provider_token if page_ref is not None else None,
         )
 
-    def read(self, source_id: str) -> ReadEmailResult | None:
-        account, separator, message_id = source_id.partition(":")
-        if not separator:
-            if len(self.sources) != 1:
-                return None
-            source = self.sources[0]
-            result = source.read(source_id)
-            return ReadEmailResult(content=result, account=source.get_email_address()) if result else None
-        for src in self.sources:
-            if src.get_email_address().lower() != account.lower():
-                continue
-            result = src.read(message_id)
-            if result and not result.startswith("Email not found"):
-                return ReadEmailResult(content=result, account=src.get_email_address())
-        return None
-
-    def _handle_source_error(self, src: GmailSource, e: Exception) -> None:
-        key = src.get_email_address() or src.token_path.name
-        _logger.warning("Gmail failed for %s: %s", key, e)
-        self._errors[key] = str(e)
-
-    def search(self, query: str, limit: int = 50) -> list[RawItem]:
-        items: list[RawItem] = []
-        connection_error: IntegrationConnectionError | None = None
-        per_account = max(limit // len(self.sources), 10) if self.sources else limit
-        for src in self.sources:
-            try:
-                items.extend(src.search(query, limit=per_account))
-            except IntegrationConnectionError as exc:
-                connection_error = exc
-                self._handle_source_error(src, exc)
-            except Exception as e:
-                self._handle_source_error(src, e)
-        if not items and connection_error is not None:
-            raise connection_error
-        items.sort(key=lambda x: x.updated_at, reverse=True)
-        return items[:limit]
-
-    def list_recent(self, days: int = 7, limit: int = 50) -> list[SourceItem]:
-        items: list[SourceItem] = []
-        connection_error: IntegrationConnectionError | None = None
-        per_account = max(limit // len(self.sources), 5) if self.sources else limit
-        for src in self.sources:
-            try:
-                items.extend(src.list_recent(days=days, limit=per_account))
-            except IntegrationConnectionError as exc:
-                connection_error = exc
-                self._handle_source_error(src, exc)
-            except Exception as e:
-                self._handle_source_error(src, e)
-        if not items and connection_error is not None:
-            raise connection_error
-        items.sort(key=lambda x: x.timestamp or datetime.min.replace(tzinfo=UTC), reverse=True)
-        return items[:limit]
+    def list_recent(
+        self,
+        days: int = 7,
+        limit: int = 50,
+        *,
+        account_ref: str | None = None,
+        page_ref: GmailPageRef | None = None,
+    ) -> GmailMessagePage:
+        if page_ref is not None:
+            if page_ref.days is None:
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="The Gmail page_ref belongs to a query search.",
+                    retryable=False,
+                )
+            if days != page_ref.days or limit != page_ref.limit:
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="The Gmail page_ref does not match this recent-email listing.",
+                    retryable=False,
+                )
+            if account_ref is not None and account_ref != page_ref.account_ref:
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="The Gmail page_ref belongs to a different account_ref.",
+                    retryable=False,
+                )
+            account_ref = page_ref.account_ref
+        return self._source_for(account_ref).list_recent(
+            days=days,
+            limit=limit,
+            page_token=page_ref.provider_token if page_ref is not None else None,
+        )

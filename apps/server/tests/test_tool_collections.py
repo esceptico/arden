@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from arden.integrations.calendar.tools import CalendarSearchInput
-from arden.integrations.gmail.tools import EmailSearchInput
+from arden.integrations.gmail.read_tools import EmailSearchInput
 from arden.integrations.slack.read_tools import SlackSearchInput
 from arden.tools.core.collections import format_timestamp, paginate
 from arden.tools.workflow import _render
@@ -35,7 +35,7 @@ def test_collection_inputs_reject_invalid_enums_and_bounds():
     with pytest.raises(ValidationError):
         EmailSearchInput(limit=0)
     with pytest.raises(ValidationError):
-        CalendarSearchInput(limit=101)
+        CalendarSearchInput(limit=51)
 
 
 def test_workflow_result_uses_compact_stable_summary():

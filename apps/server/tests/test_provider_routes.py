@@ -22,7 +22,7 @@ def test_provider_routes_are_registered_once():
     assert "/setup/google/credentials" in paths
     assert "/setup/google/preflight" in paths
     assert "/setup/slack/verify" in paths
-    assert "/gmail/add" in paths
+    assert "/google/{service}/connect" in paths
 
 
 async def test_custom_embedding_only_provider_is_connected(monkeypatch):

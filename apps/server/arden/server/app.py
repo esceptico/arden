@@ -45,7 +45,6 @@ from arden.server.routers.chat import router as chat_router
 from arden.server.routers.context import router as context_router
 from arden.server.routers.dev_runtime import router as dev_runtime_router
 from arden.server.routers.executor import router as executor_router
-from arden.server.routers.gmail import router as gmail_router
 from arden.server.routers.google import router as google_router
 from arden.server.routers.loops import router as loops_router
 from arden.server.routers.mcp import router as mcp_router
@@ -762,7 +761,6 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(TracingMiddleware)
 
 
-app.include_router(gmail_router)
 app.include_router(google_router)
 app.include_router(automation_router)
 app.include_router(chat_router)
