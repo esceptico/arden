@@ -280,6 +280,7 @@ def _policy(
 
 drive_search_tool = tool(
     display_name="Search Google Drive",
+    display_description="Search connected Google Docs and Sheets.",
     description=(
         "Search connected Google Docs and Sheets. Start with a query; optionally select one "
         "connected account. Results include account-qualified file refs. If the result says "
