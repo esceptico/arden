@@ -3,7 +3,7 @@ import { useStore } from "@/stores";
 import { refreshLoops } from "@/actions/loops";
 import { fetchAutomations } from "@/actions/automations";
 import { fetchAreasOverview, fetchAreaDetail } from "@/actions/areas";
-import { applyAppDestination } from "@/actions/navigation";
+import { applyAppDestination, currentDestination } from "@/actions/navigation";
 import { refreshAreas, refreshSessions } from "@/actions/sessions";
 import { parseAutomationEvent, type AutomationEvent } from "@/api/automationEvents";
 import type { AppConfig } from "@/api/core";
@@ -64,7 +64,8 @@ export function applyNavigationRequest(
   event: Extract<AutomationEvent, { type: "navigation_requested" }>,
 ): void {
   const store = useStore.getState();
-  const active = event.origin_session_id === store.currentSessionId;
+  const visible = currentDestination();
+  const active = visible.kind === "session" && visible.session_id === event.origin_session_id;
   const result = active ? applyAppDestination(event.destination) : null;
   if (result?.ok) return;
   store.pushToast({

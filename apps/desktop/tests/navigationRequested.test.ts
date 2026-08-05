@@ -20,7 +20,7 @@ beforeEach(() => {
 afterEach(() => {
   getState().setAreaRecords([]);
   getState().openArea(null);
-  setState({ toasts: [], currentSessionId: null, memoryOpen: false });
+  setState({ toasts: [], currentSessionId: null, memoryOpen: false, automationsOpen: false });
 });
 
 test("the viewed session's request navigates immediately and raises no toast", () => {
@@ -61,6 +61,42 @@ test("a request from another session offers the move as an info toast", () => {
       target: { kind: "destination", destination: { kind: "area", area_id: "ops" } },
     },
   ]);
+});
+
+test("a request from the session retained behind Memory offers the move as a toast", () => {
+  seedArea();
+  setState({ currentSessionId: "s-1", memoryOpen: true });
+
+  applyNavigationRequest({
+    type: "navigation_requested",
+    origin_session_id: "s-1",
+    destination: { kind: "area", area_id: "ops" },
+    label: "Open the Ops area",
+    seq: 10,
+  });
+
+  expect(getState().areas.openAreaKey).toBeNull();
+  expect(getState().memoryOpen).toBeTrue();
+  expect(getState().toasts).toHaveLength(1);
+  expect(getState().toasts[0]?.status).toBe("info");
+});
+
+test("a request from the session retained behind Automations offers the move as a toast", () => {
+  seedArea();
+  setState({ currentSessionId: "s-1", automationsOpen: true });
+
+  applyNavigationRequest({
+    type: "navigation_requested",
+    origin_session_id: "s-1",
+    destination: { kind: "area", area_id: "ops" },
+    label: "Open the Ops area",
+    seq: 11,
+  });
+
+  expect(getState().areas.openAreaKey).toBeNull();
+  expect(getState().automationsOpen).toBeTrue();
+  expect(getState().toasts).toHaveLength(1);
+  expect(getState().toasts[0]?.status).toBe("info");
 });
 
 test("clicking the offered toast applies its destination", async () => {
