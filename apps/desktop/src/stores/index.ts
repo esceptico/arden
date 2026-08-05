@@ -1,9 +1,8 @@
 import { create } from "zustand";
+import { createConversationActions } from "@/stores/conversation-actions";
 import { DEFAULT_CONFIG } from "@/api/core";
-import { isActivityContinuationMessage } from "@/lib/messageVisibility";
-import { isLiveRunStatus } from "@/lib/runStatus";
 import { DEFAULT_SHELL_LAYOUT, toggledSidebarPrefs } from "@/lib/shellOwnership";
-import type { ActivityItem, State, Actions, UiMessage } from "@/stores/types";
+import type { State, Actions, UiMessage } from "@/stores/types";
 import { mergeSourceRefs } from "@/stores/sourceRefs";
 import {
   isValidPrefValue,
@@ -13,18 +12,10 @@ import {
   persistSkipApprovals,
 } from "@/stores/prefs";
 import {
-  blankSessionView,
   initialUsage,
-  normalizeActivityGroups,
-  normalizeCachedSessionState,
-  snapshotSession,
 } from "@/stores/session-cache";
 import {
   createInitialSessionViewState,
-  reduceCachePreviewRestored,
-  reduceHistoryLoadSucceeded,
-  reduceHistoryPageLoading,
-  reduceSessionSelected,
 } from "@/stores/session-view";
 import {
   createAutomationStreamDomainState,
@@ -83,15 +74,10 @@ import {
   reduceApprovalRequested,
   reduceApprovalResolved,
   reduceCancellingQueuedMessagesReset,
-  reduceForegroundRunCleared,
   reduceQueuedMessageAdded,
   reduceQueuedMessageRemoved,
   reduceQueuedMessagesCleared,
-  reduceQueuedMessagesPersisted,
   reduceQueuedMessageStatus,
-  reduceRunCompleted,
-  reduceRunStarted,
-  reduceRunStatus,
 } from "@/stores/run-lifecycle";
 
 // Re-export types so existing `import { X } from "@/stores"` keeps working.
@@ -154,74 +140,6 @@ export {
   SIDEBAR_SNAP_POINTS,
   SIDEBAR_SNAP_THRESHOLD_PX,
 } from "@/stores/prefs";
-
-function mergePagedHistoryMessage(existing: UiMessage | undefined, incoming: UiMessage): UiMessage {
-  if (!existing?.activity || !incoming.activity) return incoming;
-  return {
-    ...incoming,
-    activity: {
-      ...incoming.activity,
-      items: mergePagedActivityItems(existing.activity.items, incoming.activity.items),
-    },
-  };
-}
-
-function mergePagedActivityItems(
-  existingItems: ActivityItem[],
-  incomingItems: ActivityItem[],
-): ActivityItem[] {
-  const items = existingItems.slice();
-  const indexById = new Map(items.map((item, index) => [item.id, index] as const));
-  for (const incoming of incomingItems) {
-    const index = indexById.get(incoming.id);
-    if (index === undefined) {
-      indexById.set(incoming.id, items.length);
-      items.push(incoming);
-      continue;
-    }
-    const existing = items[index];
-    const sourceRefs = mergeSourceRefs(existing.sourceRefs, incoming.sourceRefs);
-    items[index] = {
-      ...existing,
-      ...incoming,
-      ...(sourceRefs === undefined ? {} : { sourceRefs }),
-    };
-  }
-  return items;
-}
-
-function activeRunsFromSessions(sessions: import("@/api/types").SessionListItem[]) {
-  return sessions
-    .filter((session) => session.active_run_id && isLiveRunStatus(session.run_status))
-    .map((session) => ({
-      runId: session.active_run_id,
-      sessionId: session.session_id,
-      status: session.run_status,
-    }));
-}
-
-function inputTokens(usage: {
-  prompt: number;
-  completion: number;
-  total?: number;
-  cache_read?: number;
-  cache_write?: number;
-}): number {
-  return usage.total !== undefined
-    ? Math.max(0, usage.total - usage.completion)
-    : usage.prompt + (usage.cache_read ?? 0) + (usage.cache_write ?? 0);
-}
-
-function activeActivityIdFromMessages(messages: UiMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (isActivityContinuationMessage(message)) continue;
-    return message.role === "activity" && message.activity && !message.activity.done
-      ? message.id
-      : null;
-  }
-  return null;
-}
 
 /** Text of the user's sent messages in the current session, oldest → newest.
  *  Drives the composer's readline-style history recall. Meta/system user
@@ -326,334 +244,7 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({ areas: reduceRecordUpserted(s.areas, area) })),
   archiveAreaRecord: (areaId) =>
     set((s) => ({ areas: reduceRecordArchived(s.areas, areaId) })),
-  setSessions: (sessions) =>
-    set((s) => ({
-      sessions,
-      ...reduceRunStatus(s, { activeRuns: activeRunsFromSessions(sessions) }),
-    })),
-  prependSession: (session) =>
-    set((s) => {
-      // Dedupe by id: the same session can arrive both from bootstrap's
-      // /sessions load and from a session_created SSE event (or a stream
-      // replay), and we must not render two rows for one session.
-      if (s.sessions.some((existing) => existing.session_id === session.session_id)) {
-        return {};
-      }
-      const sessions = [session, ...s.sessions];
-      return {
-        sessions,
-        ...reduceRunStatus(s, { activeRuns: activeRunsFromSessions(sessions) }),
-      };
-    }),
-  patchSession: (session) =>
-    set((s) => {
-      // session_activity delta for a channel that got new content. Merge
-      // over the existing row (preserving poll-maintained runtime fields the
-      // delta omits) and move it to the front — the sidebar renders in array
-      // order, so front = most recent activity.
-      const existing = s.sessions.find((row) => row.session_id === session.session_id);
-      const merged = existing ? { ...existing, ...session } : session;
-      const rest = s.sessions.filter((row) => row.session_id !== session.session_id);
-      const sessions = [merged, ...rest];
-      return {
-        sessions,
-        ...reduceRunStatus(s, { activeRuns: activeRunsFromSessions(sessions) }),
-      };
-    }),
-  syncActiveRuns: (runs) => set((s) => reduceRunStatus(s, { activeRuns: runs })),
-  markRunStarted: (runId, sessionId) =>
-    set((s) => reduceRunStarted(s, { runId, sessionId })),
-  markRunCompleted: (runId, sessionId) =>
-    set((s) => reduceRunCompleted(s, { runId, sessionId })),
-  clearForegroundRun: (runId, sessionId, options) =>
-    set((s) =>
-      reduceForegroundRunCleared(s, {
-        runId,
-        sessionId,
-        clearApprovals: options?.clearApprovals,
-        markBackgrounded: options?.markBackgrounded,
-      }),
-    ),
-  setCurrentSession: (currentSessionId) =>
-    set((s) => {
-      // Navigating to a chat session always closes the area room — a room
-      // stays open across the *current* session but must not silently trail
-      // along underneath a session switch (e.g. opening an Area session from
-      // its Activity inspector while a room is open).
-      const areas = s.areas.openAreaKey ? reduceOpenArea(s.areas, null) : s.areas;
-      let unread = s.unreadDoneSessionIds;
-      if (currentSessionId && unread.has(currentSessionId)) {
-        unread = new Set(unread);
-        unread.delete(currentSessionId);
-      }
-      // Re-selecting the same session is a no-op for view state — the
-      // global slots ARE that session's live state. Touching cache here
-      // would clobber it with a stale snapshot.
-      if (s.currentSessionId === currentSessionId) {
-        const patch: Partial<State> = {};
-        if (unread !== s.unreadDoneSessionIds) patch.unreadDoneSessionIds = unread;
-        if (areas !== s.areas) patch.areas = areas;
-        if (currentSessionId && s.pendingNewChatAreaId !== null) {
-          patch.pendingNewChatAreaId = null;
-        }
-        return patch;
-      }
-      // Snapshot outgoing session into cache so a switch-back can
-      // restore the UI instantly and the SSE replay (with the bus
-      // checkpoint watermark) only fills in what's new.
-      const cache = new Map(s.sessionCache);
-      if (s.currentSessionId) {
-        cache.set(s.currentSessionId, snapshotSession(s));
-      }
-      const restored = currentSessionId ? cache.get(currentSessionId) : undefined;
-      const view = restored ? normalizeCachedSessionState(restored) : blankSessionView();
-      let sessionView = reduceSessionSelected(s.sessionView, currentSessionId);
-      if (currentSessionId && restored) {
-        sessionView = reduceCachePreviewRestored(view.sessionView, currentSessionId);
-      }
-      return {
-        areas,
-        sessionView,
-        currentSessionId: sessionView.currentSessionId,
-        pendingNewChatAreaId: currentSessionId ? null : s.pendingNewChatAreaId,
-        sourceTurnId: null,
-        sourceRefsRevision: s.sourceRefsRevision + 1,
-        sessionCache: cache,
-        messages: view.messages,
-        order: view.order,
-        usage: view.usage,
-        editingId: view.editingId,
-        activeActivityId: view.activeActivityId,
-        currentRunId: view.currentRunId,
-        thinkingRunId: view.thinkingRunId,
-        thinkingStatus: view.thinkingStatus,
-        running: view.running,
-        compacting: view.compacting,
-        sourceFocus: view.sourceFocus,
-        pendingApprovals: view.pendingApprovals,
-        pendingConnections: view.pendingConnections,
-        reviewingApprovalToolId: view.reviewingApprovalToolId,
-        queuedMessages: view.queuedMessages,
-        pendingResume: view.pendingResume,
-        stoppingRunId: view.stoppingRunId,
-        ...(unread !== s.unreadDoneSessionIds ? { unreadDoneSessionIds: unread } : {}),
-      };
-    }),
-  beginNewChatDraft: (pendingNewChatAreaId) =>
-    set((s) => ({
-      pendingNewChatAreaId,
-      pendingNewChatDraftId: s.pendingNewChatDraftId + 1,
-    })),
-
-  setHistory: (messages, page) =>
-    set((s) => {
-      const map = new Map<string, UiMessage>();
-      const order: string[] = [];
-      for (const m of messages) {
-        map.set(m.id, m);
-        order.push(m.id);
-      }
-      const normalized = normalizeActivityGroups(map, order, activeActivityIdFromMessages(messages));
-      const persistedIds = new Set(order);
-      const sessionView = s.currentSessionId
-        ? reduceHistoryLoadSucceeded(s.sessionView, s.currentSessionId, page)
-        : s.sessionView;
-      return {
-        sessionView,
-        messages: normalized.messages,
-        order: normalized.order,
-        activeActivityId: normalized.activeActivityId,
-        sourceTurnId:
-          s.sourceTurnId && !normalized.messages.has(s.sourceTurnId) ? null : s.sourceTurnId,
-        sourceRefsRevision: s.sourceRefsRevision + 1,
-        thinkingRunId: null,
-        thinkingStatus: null,
-        ...reduceQueuedMessagesPersisted(s, persistedIds),
-      };
-    }),
-
-  prependHistory: (messages, page) =>
-    set((s) => {
-      const map = new Map(s.messages);
-      const ids: string[] = [];
-      for (const m of messages) {
-        const existing = map.get(m.id);
-        map.set(m.id, mergePagedHistoryMessage(existing, m));
-        if (!existing) ids.push(m.id);
-      }
-      const sessionView = s.currentSessionId
-        ? reduceHistoryLoadSucceeded(s.sessionView, s.currentSessionId, page, "prepend")
-        : s.sessionView;
-      const order = [...ids, ...s.order];
-      const normalized = normalizeActivityGroups(map, order, s.activeActivityId);
-      return {
-        sessionView,
-        messages: normalized.messages,
-        order: normalized.order,
-        activeActivityId: normalized.activeActivityId,
-        sourceRefsRevision: s.sourceRefsRevision + 1,
-      };
-    }),
-
-  appendHistoryPage: (messages, page, activeActivityId) =>
-    set((s) => {
-      const map = new Map(s.messages);
-      const ids: string[] = [];
-      for (const m of messages) {
-        const existing = map.get(m.id);
-        map.set(m.id, mergePagedHistoryMessage(existing, m));
-        if (!existing) ids.push(m.id);
-      }
-      const sessionView = s.currentSessionId
-        ? reduceHistoryLoadSucceeded(s.sessionView, s.currentSessionId, page, "append")
-        : s.sessionView;
-      const order = [...s.order, ...ids];
-      const normalized = normalizeActivityGroups(map, order, activeActivityId ?? s.activeActivityId);
-      return {
-        sessionView,
-        messages: normalized.messages,
-        order: normalized.order,
-        activeActivityId: normalized.activeActivityId,
-        sourceRefsRevision: s.sourceRefsRevision + 1,
-      };
-    }),
-
-  setHistoryLoading: (direction, loading) =>
-    set((s) => {
-      const sessionView = reduceHistoryPageLoading(s.sessionView, direction, loading);
-      return { sessionView };
-    }),
-
-  appendMessage: (message) =>
-    set((s) => {
-      const messages = new Map(s.messages);
-      messages.set(message.id, message);
-      if (s.messages.has(message.id)) return { messages };
-      return {
-        messages,
-        order: [...s.order, message.id],
-        sourceRefsRevision: s.sourceRefsRevision + 1,
-      };
-    }),
-
-  insertMessageBefore: (message, beforeId) =>
-    set((s) => {
-      const messages = new Map(s.messages);
-      messages.set(message.id, message);
-      if (s.messages.has(message.id)) return { messages };
-
-      const beforeIndex = beforeId ? s.order.indexOf(beforeId) : -1;
-      if (beforeIndex < 0) {
-        return {
-          messages,
-          order: [...s.order, message.id],
-          sourceRefsRevision: s.sourceRefsRevision + 1,
-        };
-      }
-
-      const order = s.order.slice();
-      order.splice(beforeIndex, 0, message.id);
-      return { messages, order, sourceRefsRevision: s.sourceRefsRevision + 1 };
-    }),
-
-  mutateMessage: (id, patch) =>
-    set((s) => {
-      const existing = s.messages.get(id);
-      if (!existing) return s;
-      const messages = new Map(s.messages);
-      messages.set(id, { ...existing, ...patch });
-      return { messages };
-    }),
-
-  upsertTodoList: (message, beforeId = null) =>
-    set((s) => {
-      const existing = s.messages.get(message.id);
-      const messages = new Map(s.messages);
-      messages.set(message.id, existing ? { ...existing, ...message } : message);
-      if (existing) return { messages };
-
-      const beforeIndex = beforeId ? s.order.indexOf(beforeId) : -1;
-      if (beforeIndex < 0) return { messages, order: [...s.order, message.id] };
-
-      const order = s.order.slice();
-      order.splice(beforeIndex, 0, message.id);
-      return { messages, order };
-    }),
-
-  truncateFrom: (id) =>
-    set((s) => {
-      const idx = s.order.indexOf(id);
-      if (idx < 0) {
-        console.warn("[arden] truncateFrom: id not found in order", { id, order: s.order });
-        return s;
-      }
-      const keep = s.order.slice(0, idx);
-      const messages = new Map<string, UiMessage>();
-      for (const k of keep) {
-        const m = s.messages.get(k);
-        if (m) messages.set(k, m);
-      }
-      return {
-        messages,
-        order: keep,
-        sourceTurnId: s.sourceTurnId && !messages.has(s.sourceTurnId) ? null : s.sourceTurnId,
-        sourceRefsRevision: s.sourceRefsRevision + 1,
-      };
-    }),
-
-  setConnected: (connected) => set({ connected }),
-  setServerWarmup: (serverWarmup) => set({ serverWarmup }),
-  setError: (error) => set({ error }),
-  setDraft: (draft) => set({ draft }),
-  setEditingId: (editingId) => set({ editingId }),
-  resetUsage: () =>
-    set((s) => ({ usage: { ...initialUsage, contextBudget: s.usage.contextBudget } })),
-  accumulateUsage: ({ prompt, completion, total, cache_read, cache_write, cost, exclusive_cost, contextInputTokens, messageCount }) =>
-    set((s) => ({
-      usage: {
-        contextInputTokens: contextInputTokens ?? inputTokens({ prompt, completion, total, cache_read, cache_write }),
-        observedPromptTokens: s.usage.observedPromptTokens + prompt,
-        observedCompletionTokens: s.usage.observedCompletionTokens + completion,
-        observedCacheReadTokens: s.usage.observedCacheReadTokens + (cache_read ?? 0),
-        observedCacheWriteTokens: s.usage.observedCacheWriteTokens + (cache_write ?? 0),
-        totalTokens: s.usage.totalTokens + (total ?? prompt + completion + (cache_read ?? 0) + (cache_write ?? 0)),
-        // Child response events are counted live. The terminal event carries
-        // aggregate cost for audit plus direct-run cost for non-duplicating UI.
-        totalCost: s.usage.totalCost + (exclusive_cost ?? cost),
-        messageCount: messageCount ?? s.usage.messageCount,
-        contextBudget: s.usage.contextBudget,
-      },
-    })),
-  updateLiveUsage: ({ prompt, completion, total, cache_read, cache_write, cost, contextInputTokens, messageCount, scope }) =>
-    set((s) => ({
-      usage:
-        scope === "tool"
-          ? {
-              ...s.usage,
-              observedPromptTokens: s.usage.observedPromptTokens + prompt,
-              observedCompletionTokens: s.usage.observedCompletionTokens + completion,
-              observedCacheReadTokens: s.usage.observedCacheReadTokens + (cache_read ?? 0),
-              observedCacheWriteTokens: s.usage.observedCacheWriteTokens + (cache_write ?? 0),
-              totalTokens: s.usage.totalTokens + (total ?? prompt + completion + (cache_read ?? 0) + (cache_write ?? 0)),
-              totalCost: s.usage.totalCost + (cost ?? 0),
-            }
-          : {
-              ...s.usage,
-              contextInputTokens:
-                contextInputTokens
-                ?? inputTokens({ prompt, completion, total, cache_read, cache_write }),
-              messageCount: messageCount ?? s.usage.messageCount,
-            },
-    })),
-  hydrateUsageSnapshot: ({ contextInputTokens, messageCount, contextBudget }) =>
-    set((s) => ({
-      usage: {
-        ...s.usage,
-        contextInputTokens,
-        messageCount,
-        contextBudget: contextBudget === undefined ? s.usage.contextBudget : contextBudget,
-      },
-    })),
+  ...createConversationActions(set),
 
   openSettings: (tab) =>
     set((s) => ({
