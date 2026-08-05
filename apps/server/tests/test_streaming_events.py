@@ -561,16 +561,20 @@ async def test_research_child_reasoning_is_not_emitted_to_parent(monkeypatch):
     async def emit(event):
         emitted.append(event)
 
+    async def persist_child(*_args):
+        return None
+
     executor = make_executor()
     ctx = ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
         io=IOBridge(emit=emit),
+        services={"session": SimpleNamespace(provision_state=persist_child, save=persist_child)},
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "research task",
@@ -641,16 +645,20 @@ async def test_full_subagent_tool_calls_stay_on_child_bus(monkeypatch):
 
         return ChildSession(io=IOBridge(emit=child_emit), finish=_finish, aclose=_aclose)
 
+    async def persist_child(*_args):
+        return None
+
     executor = make_executor({"ping": ping_tool})
     ctx = ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3, child_io_factory=child_io_factory),
         io=IOBridge(emit=parent_emit),
+        services={"session": SimpleNamespace(provision_state=persist_child, save=persist_child)},
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "workflow agent task",

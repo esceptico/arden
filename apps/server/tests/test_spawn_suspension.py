@@ -1,7 +1,4 @@
-"""Tests for durable awaiting: an awaited spawn writes a subagent_result
-run-suspension row, resolves it when the child settles, and a restarted
-parent replaying the spawning tool call picks the recorded outcome up (or
-re-spawns a child that died with the server, bounded)."""
+"""Tests for durable awaited-agent recovery and single-owner settlement."""
 
 import asyncio
 from datetime import UTC, datetime
@@ -15,7 +12,7 @@ from arden.context.models import SessionState
 from arden.core import spawner as spawner_module
 from arden.core.spawner import create_spawn_fn
 from arden.server.state import RunRegistry
-from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
+from arden.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
 from tests.helpers import make_executor
 
 
@@ -52,15 +49,24 @@ def _make_ctx(
     services: dict | None = None,
 ) -> ToolContext:
     executor = make_executor()
+    if services is None:
+        services = {"session": SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())}
     return ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id=run_id, current_depth=0, max_depth=3),
         io=io,
-        services=services or {},
+        services=services,
         background_tasks=bg_registry or BackgroundTaskRegistry(session_id="test"),
         run_registry=run_registry,
     )
+
+
+def _durable_registry(events: list[dict]) -> BackgroundTaskRegistry:
+    async def record_event(**event):
+        events.append(event)
+
+    return BackgroundTaskRegistry(session_id="test", record_event=record_event)
 
 
 def _text_llm(text: str = "done"):
@@ -81,14 +87,66 @@ def _text_llm(text: str = "done"):
 
 
 def _spawn_fn():
-    return create_spawn_fn(executor=make_executor(), model="test-model", max_depth=3, current_depth=0)
+    return create_spawn_fn(executor=make_executor(), model="gpt-5-mini", max_depth=3, current_depth=0)
 
 
 @pytest.mark.asyncio
-async def test_awaited_spawn_records_and_resolves_suspension_on_completion(monkeypatch):
-    monkeypatch.setattr(spawner_module, "llm_client", _text_llm("done"))
+async def test_awaited_spawn_rejects_mismatched_durable_wiring_before_side_effects():
     io, calls = _suspension_io()
     ctx = _make_ctx(io)
+
+    with pytest.raises(RuntimeError, match="agent-run persistence"):
+        await _spawn_fn()(ctx, "research task", system_prompt="sys", tools=[], parent_id="call-research")
+
+    ctx.services["session"].provision_state.assert_not_awaited()
+    assert ctx.background_tasks.list_pending() == []
+    assert calls == {"record": [], "resolve": [], "consume": []}
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawn_propagates_suspension_lookup_failure_before_side_effects():
+    io, calls = _suspension_io()
+
+    async def fail_lookup(**_kwargs):
+        raise RuntimeError("suspension store unavailable")
+
+    io.get_suspension = fail_lookup
+    events: list[dict] = []
+    ctx = _make_ctx(io, bg_registry=_durable_registry(events))
+
+    with pytest.raises(RuntimeError, match="suspension store unavailable"):
+        await _spawn_fn()(ctx, "research task", system_prompt="sys", tools=[], parent_id="call-research")
+
+    ctx.services["session"].provision_state.assert_not_awaited()
+    assert events == []
+    assert calls == {"record": [], "resolve": [], "consume": []}
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawn_rejects_malformed_terminal_suspension():
+    io, calls = _suspension_io(
+        existing={
+            "kind": "subagent_result",
+            "status": "completed",
+            "payload": {"child_run_id": "agent-old", "respawns": 0},
+            "resolution": None,
+        }
+    )
+    ctx = _make_ctx(io, bg_registry=_durable_registry([]))
+
+    with pytest.raises(RuntimeError, match="missing its resolution"):
+        await _spawn_fn()(ctx, "research task", system_prompt="sys", tools=[], parent_id="call-research")
+
+    ctx.services["session"].provision_state.assert_not_awaited()
+    assert calls == {"record": [], "resolve": [], "consume": []}
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawn_records_suspension_and_store_settles_completion(monkeypatch):
+    monkeypatch.setattr(spawner_module, "llm_client", _text_llm("done"))
+    io, calls = _suspension_io()
+    durable_events: list[dict] = []
+    ctx = _make_ctx(io, bg_registry=_durable_registry(durable_events))
 
     result = await _spawn_fn()(
         ctx,
@@ -110,38 +168,23 @@ async def test_awaited_spawn_records_and_resolves_suspension_on_completion(monke
     assert record["payload"]["child_run_id"] == result.child_run_id
     assert record["payload"]["agent_type"] == "research"
     assert record["payload"]["respawns"] == 0
-    assert calls["resolve"] == [
-        {
-            "run_id": "run-1",
-            "suspension_id": "call-research",
-            "status": "completed",
-            "resolution": {"status": "completed", "result": "done"},
-        }
-    ]
+    assert [event["status"] for event in durable_events] == ["started", "completed"]
+    assert durable_events[0]["suspension_id"] == "call-research"
+    assert durable_events[1]["result_text"] == "done"
+    assert calls["resolve"] == []
 
 
 @pytest.mark.asyncio
-async def test_awaited_spawn_resolves_suspension_as_failed_on_salvage(monkeypatch):
+async def test_awaited_spawn_store_settles_explicit_failure(monkeypatch):
     class FailingLLM:
         async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None, prompt_cache_key=None):
             raise RuntimeError("oops")
             yield  # pragma: no cover
 
-        async def complete(self, model, messages, **kwargs):
-            return CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(role="assistant", content="partial", tool_calls=None, reasoning_content=None),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
     monkeypatch.setattr(spawner_module, "llm_client", FailingLLM())
     io, calls = _suspension_io()
-    ctx = _make_ctx(io)
+    durable_events: list[dict] = []
+    ctx = _make_ctx(io, bg_registry=_durable_registry(durable_events))
 
     result = await _spawn_fn()(
         ctx,
@@ -153,13 +196,52 @@ async def test_awaited_spawn_resolves_suspension_as_failed_on_salvage(monkeypatc
     )
 
     assert result.status == "failed"
-    assert [c["status"] for c in calls["resolve"]] == ["failed"]
-    assert calls["resolve"][0]["resolution"]["status"] == "failed"
-    assert calls["resolve"][0]["resolution"]["result"] == result.text
+    assert [event["status"] for event in durable_events] == ["started", "failed"]
+    assert durable_events[-1]["result_text"] == result.text
+    assert calls["resolve"] == []
 
 
 @pytest.mark.asyncio
-async def test_awaited_spawn_resolves_suspension_as_cancelled(monkeypatch):
+async def test_terminal_session_persistence_failure_is_settled_once_as_failed(monkeypatch):
+    monkeypatch.setattr(spawner_module, "llm_client", _text_llm("done"))
+    io, calls = _suspension_io()
+    durable_statuses: list[str] = []
+
+    async def save_child(state, _messages):
+        if state.agent_status != "running":
+            raise RuntimeError("terminal session save failed")
+
+    async def record_event(**event):
+        durable_statuses.append(event["status"])
+
+    services = {
+        "session": SimpleNamespace(
+            provision_state=AsyncMock(),
+            save=AsyncMock(side_effect=save_child),
+        )
+    }
+    ctx = _make_ctx(
+        io,
+        bg_registry=BackgroundTaskRegistry(session_id="test", record_event=record_event),
+        services=services,
+    )
+
+    with pytest.raises(RuntimeError, match="terminal session save failed"):
+        await _spawn_fn()(
+            ctx,
+            "research task",
+            system_prompt="sys",
+            tools=[],
+            parent_id="call-research",
+            timeout=1,
+        )
+
+    assert durable_statuses == ["started", "failed"]
+    assert calls["resolve"] == []
+
+
+@pytest.mark.asyncio
+async def test_awaited_spawn_store_settles_cancelled(monkeypatch):
     class SlowAgent:
         hooks = SimpleNamespace(on_response=None)
 
@@ -168,12 +250,16 @@ async def test_awaited_spawn_resolves_suspension_as_cancelled(monkeypatch):
             await asyncio.sleep(60)
 
     monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: SlowAgent())
-    monkeypatch.setattr(spawner_module, "_salvage_summary", AsyncMock(return_value="Partial summary."))
-
     registry = RunRegistry()
     parent_run = registry.create_run("test")
     io, calls = _suspension_io()
-    ctx = _make_ctx(io, run_registry=registry, run_id=parent_run.run_id)
+    durable_events: list[dict] = []
+    ctx = _make_ctx(
+        io,
+        bg_registry=_durable_registry(durable_events),
+        run_registry=registry,
+        run_id=parent_run.run_id,
+    )
 
     task = asyncio.create_task(
         _spawn_fn()(ctx, "research trace replay", system_prompt="sys", tools=[], parent_id="call-research")
@@ -183,8 +269,69 @@ async def test_awaited_spawn_resolves_suspension_as_cancelled(monkeypatch):
 
     result = await task
     assert result.status == "cancelled"
-    assert [c["status"] for c in calls["resolve"]] == ["cancelled"]
-    assert calls["resolve"][0]["resolution"]["status"] == "cancelled"
+    assert [event["status"] for event in durable_events] == ["started", "cancelled"]
+    assert calls["resolve"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [True, False])
+async def test_cancellation_during_terminal_save_finishes_settlement(monkeypatch, wait):
+    monkeypatch.setattr(spawner_module, "llm_client", _text_llm("done"))
+    terminal_save_started = asyncio.Event()
+    release_terminal_save = asyncio.Event()
+    durable_events: list[dict] = []
+    finished: list[str] = []
+    closed = asyncio.Event()
+
+    async def save_child(state, _messages):
+        if state.agent_status != "running":
+            terminal_save_started.set()
+            await release_terminal_save.wait()
+
+    async def child_io_factory(_params):
+        async def finish(status: str) -> None:
+            finished.append(status)
+
+        async def close() -> None:
+            closed.set()
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=close)
+
+    io, _calls = _suspension_io()
+    services = {"session": SimpleNamespace(provision_state=AsyncMock(), save=save_child)}
+    registry = _durable_registry(durable_events)
+    ctx = _make_ctx(io, bg_registry=registry, services=services)
+    ctx.run.child_io_factory = child_io_factory
+
+    spawn = _spawn_fn()
+    if wait:
+        running_task = asyncio.create_task(
+            spawn(ctx, "research task", system_prompt="sys", tools=[], parent_id="call-research", wait=True)
+        )
+    else:
+        result = await spawn(
+            ctx,
+            "research task",
+            system_prompt="sys",
+            tools=[],
+            parent_id="call-research",
+            wait=False,
+        )
+        running_task = registry.task(result.child_run_id)
+        assert running_task is not None
+
+    await asyncio.wait_for(terminal_save_started.wait(), timeout=1)
+    running_task.cancel()
+    await asyncio.sleep(0)
+    assert not running_task.done()
+    release_terminal_save.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running_task
+
+    assert [event["status"] for event in durable_events] == ["started", "completed"]
+    assert finished == ["completed"]
+    assert closed.is_set()
 
 
 @pytest.mark.asyncio
@@ -206,7 +353,7 @@ async def test_replay_with_resolved_suspension_returns_recorded_result_without_s
             "kind": "subagent_result",
             "status": "completed",
             "resolution": {"status": "completed", "result": "recorded answer"},
-            "payload": {"child_run_id": "agent-old", "child_session_id": "test::abcd1234"},
+            "payload": {"child_run_id": "agent-old", "child_session_id": "test::abcd1234", "respawns": 0},
         }
     )
     session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())
@@ -240,6 +387,7 @@ async def test_replay_with_resolved_suspension_returns_recorded_result_without_s
 @pytest.mark.asyncio
 async def test_replay_with_pending_suspension_respawns_and_increments_counter(monkeypatch):
     monkeypatch.setattr(spawner_module, "llm_client", _text_llm("fresh answer"))
+    durable_events: list[dict] = []
     io, calls = _suspension_io(
         existing={
             "kind": "subagent_result",
@@ -248,7 +396,7 @@ async def test_replay_with_pending_suspension_respawns_and_increments_counter(mo
             "payload": {"child_run_id": "agent-dead", "respawns": 0},
         }
     )
-    ctx = _make_ctx(io)
+    ctx = _make_ctx(io, bg_registry=_durable_registry(durable_events))
 
     result = await _spawn_fn()(
         ctx,
@@ -267,7 +415,8 @@ async def test_replay_with_pending_suspension_respawns_and_increments_counter(mo
     assert len(calls["record"]) == 1
     assert calls["record"][0]["payload"]["respawns"] == 1
     assert calls["record"][0]["payload"]["child_run_id"] == result.child_run_id
-    assert [c["status"] for c in calls["resolve"]] == ["completed"]
+    assert [event["status"] for event in durable_events] == ["started", "completed"]
+    assert calls["resolve"] == []
 
 
 @pytest.mark.asyncio
@@ -286,7 +435,7 @@ async def test_replay_with_pending_suspension_caps_respawns(monkeypatch):
             "payload": {"child_run_id": "agent-dead", "child_session_id": "test::dead", "respawns": 2},
         }
     )
-    bg_registry = BackgroundTaskRegistry(session_id="test")
+    bg_registry = _durable_registry([])
     ctx = _make_ctx(io, bg_registry=bg_registry)
 
     result = await _spawn_fn()(
@@ -311,7 +460,8 @@ async def test_replay_with_pending_suspension_caps_respawns(monkeypatch):
 async def test_workflow_parallel_spawns_get_distinct_suspension_ids(monkeypatch):
     monkeypatch.setattr(spawner_module, "llm_client", _text_llm())
     io, calls = _suspension_io()
-    ctx = _make_ctx(io)
+    durable_events: list[dict] = []
+    ctx = _make_ctx(io, bg_registry=_durable_registry(durable_events))
     spawn = _spawn_fn()
 
     # Workflow fan-out: MANY awaited children share the workflow's one
@@ -337,8 +487,9 @@ async def test_workflow_parallel_spawns_get_distinct_suspension_ids(monkeypatch)
         "call-research",
     ]
     assert len({c["suspension_id"] for c in calls["record"]}) == 3
-    assert [c["suspension_id"] for c in calls["resolve"]] == [
+    assert [event["suspension_id"] for event in durable_events if event["status"] == "started"] == [
         "wf-1:analyst:a1b2",
         "wf-1:analyst:c3d4",
         "call-research",
     ]
+    assert calls["resolve"] == []

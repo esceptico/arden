@@ -69,6 +69,15 @@ class WorkflowStructuredFormatError(RuntimeError):
     """Raised when the formatter LLM fails before returning a response."""
 
 
+class WorkflowAgentFailed(RuntimeError):
+    """Raised when a workflow worker reaches a non-success terminal state."""
+
+    def __init__(self, status: str, result: str):
+        self.status = status
+        self.result = result
+        super().__init__(f"workflow agent ended with status {status}: {result}")
+
+
 class TokenBudget:
     """Read-through view of the run's shared RunBudget, handed to dynamic scripts
     as `budget`. `spent()` re-reads the live shared counter on every call, so a
@@ -94,9 +103,15 @@ class TokenBudget:
 async def _safe(unit: Unit) -> Any:
     try:
         return await (unit() if callable(unit) else unit)
-    except (WorkflowSpawnLimit, WorkflowBudgetExceeded, WorkflowStructuredOutputMissing, WorkflowStructuredFormatError):
-        # Resource guards + the structured-output contract must abort the whole
-        # fan-out, not be swallowed into a None the model reads as a partial fail.
+    except (
+        WorkflowAgentFailed,
+        WorkflowSpawnLimit,
+        WorkflowBudgetExceeded,
+        WorkflowStructuredOutputMissing,
+        WorkflowStructuredFormatError,
+    ):
+        # Resource guards and explicit contract failures abort the whole fan-out;
+        # degrading them to None would hide a known failure from the workflow.
         raise
     except Exception as exc:
         _logger.warning("workflow unit failed: %s", exc)
@@ -108,9 +123,9 @@ class Orchestra:
 
     Combinators mirror the Workflow engine: agent() spawns one subagent and,
     when given a schema, returns a validated formatter result; parallel() fans
-    out with a barrier; pipeline() runs per-item stage chains with no barrier. Failed units
-    degrade to None — asyncio.TaskGroup cancels siblings on the first exception,
-    so every unit is wrapped to swallow errors and keep the rest alive.
+    out with a barrier; pipeline() runs per-item stage chains with no barrier.
+    Unknown unit exceptions degrade to None so independent siblings can finish;
+    explicit worker, budget, and output-contract failures abort the workflow.
     """
 
     def __init__(
@@ -437,6 +452,11 @@ class Orchestra:
                 # replay — never freeze a transient failure into a hole.
                 await self._journal.fail(invocation_id, str(exc))
             raise
+        if spawn.status != "completed":
+            error = WorkflowAgentFailed(spawn.status, spawn.text)
+            if invocation_id is not None:
+                await self._journal.fail(invocation_id, str(error))
+            raise error
         if invocation_id is not None:
             await self._journal.finish(invocation_id, spawn.text)
         return spawn.text, seq

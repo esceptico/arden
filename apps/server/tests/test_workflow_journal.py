@@ -1,12 +1,13 @@
 from types import SimpleNamespace
 
+import pytest
 import pytest_asyncio
 from pydantic import BaseModel
 
 import arden.database as database
 from arden.agent import RunBudget
 from arden.execution import InvocationStatus, InvocationStore
-from arden.orchestra.engine import WORKFLOW_AGENT_PROMPT, Orchestra
+from arden.orchestra.engine import WORKFLOW_AGENT_PROMPT, Orchestra, WorkflowAgentFailed
 from arden.orchestra.journal import WorkflowJournal, spawn_hash
 
 _KEY = "sess-1:call-1:abc123"
@@ -40,7 +41,7 @@ def _ctx(responses: list[str], budget: RunBudget | None = None, structured: dict
         if budget is not None and spend:
             budget.output_tokens += spend
         text = responses[i] if i < len(responses) else responses[-1]
-        return SimpleNamespace(text=text)
+        return SimpleNamespace(text=text, status="completed")
 
     async def format_structured(*, response_format, **kwargs):
         calls["format_i"] += 1
@@ -132,7 +133,7 @@ async def test_failed_journal_record_reruns(store):
     async def failing_spawn(ctx, *, task, **kwargs):
         if boom["raise"]:
             raise RuntimeError("worker crashed")
-        return SimpleNamespace(text="recovered")
+        return SimpleNamespace(text="recovered", status="completed")
 
     o1 = Orchestra.for_ctx(SimpleNamespace(spawn_fn=failing_spawn), journal=_journal(store))
     try:
@@ -154,6 +155,33 @@ async def test_failed_journal_record_reruns(store):
     o3 = Orchestra.for_ctx(ctx3, journal=_journal(store))
     assert await o3.agent("t1") == "recovered"
     assert calls3["i"] == 0
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+async def test_terminal_worker_failure_is_journaled_as_failed_and_reruns(store, status):
+    attempts = {"count": 0}
+
+    async def spawn(ctx, *, task, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return SimpleNamespace(text="worker did not complete", status=status)
+        return SimpleNamespace(text="recovered", status="completed")
+
+    first = Orchestra.for_ctx(SimpleNamespace(spawn_fn=spawn), journal=_journal(store))
+    with pytest.raises(WorkflowAgentFailed) as raised:
+        await first.agent("t1")
+    assert raised.value.status == status
+
+    failed = await store.get(_worker_id(1, "t1"))
+    assert failed is not None and failed.status is InvocationStatus.FAILED
+    assert failed.result_payload == (
+        f'{{"error": "workflow agent ended with status {status}: worker did not complete"}}'
+    )
+
+    retry = Orchestra.for_ctx(SimpleNamespace(spawn_fn=spawn), journal=_journal(store))
+    assert await retry.agent("t1") == "recovered"
+    retried = await store.get(_worker_id(1, "t1", retry=1))
+    assert retried is not None and retried.status is InvocationStatus.SUCCEEDED
 
 
 async def test_formatter_output_journaled_and_replayed(store):

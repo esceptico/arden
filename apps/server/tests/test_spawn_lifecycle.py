@@ -1,9 +1,8 @@
-"""Tests for the spawn-failure salvage path: when a sub-agent's LLM call
-errors mid-run, we summarize the tool results gathered so far instead of
-returning a bare error string."""
+"""Spawn lifecycle, failure, cancellation, and child-session tests."""
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +22,7 @@ from arden.agent import (
     TextEnded,
     TextStarted,
     ToolCall,
+    ToolStarted,
     Usage,
 )
 from arden.agent.types.tools import ToolMeta
@@ -31,12 +31,8 @@ from arden.context.models import AreaContext, SessionState
 from arden.context.store import SessionStore
 from arden.core import spawner as spawner_module
 from arden.core.isolation import IsolationLevel
-from arden.core.spawner import (
-    _clamp_for_salvage,
-    _deterministic_salvage,
-    _salvage_summary,
-    create_spawn_fn,
-)
+from arden.core.spawn_lifecycle import cancel_and_join, collect_failure
+from arden.core.spawner import create_spawn_fn
 from arden.events.sse import (
     BackgroundTaskEvent,
     TaskFinishedEvent,
@@ -55,6 +51,190 @@ from tests.helpers import make_executor, make_text_response
 class ParentTracker:
     def __init__(self, cost: float = 0.0):
         self.cost = cost
+
+
+def _persisted_context(**kwargs) -> ToolContext:
+    kwargs.setdefault(
+        "services",
+        {"session": SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())},
+    )
+    return ToolContext(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_join_preserves_new_caller_cancellation():
+    started = asyncio.Event()
+    child_cancelled = asyncio.Event()
+
+    async def slow_child() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            child_cancelled.set()
+            await asyncio.sleep(60)
+
+    async def caller() -> None:
+        child = asyncio.create_task(slow_child())
+        await started.wait()
+        caller_task = asyncio.current_task()
+
+        async def cancel_caller() -> None:
+            await child_cancelled.wait()
+            caller_task.cancel()
+
+        asyncio.create_task(cancel_caller())
+        await cancel_and_join(child)
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.create_task(caller())
+
+
+@pytest.mark.asyncio
+async def test_collect_failure_does_not_convert_system_exit():
+    async def exit_process() -> None:
+        raise SystemExit(7)
+
+    errors: list[Exception] = []
+    with pytest.raises(SystemExit) as caught:
+        await collect_failure(errors, exit_process())
+
+    assert caught.value.code == 7
+    assert errors == []
+
+
+def _tool_event_agent(*, gate: asyncio.Event | None = None):
+    class ToolEventAgent:
+        def __init__(self) -> None:
+            self.hooks = SimpleNamespace(on_response=None, on_step_finish=None, get_pending_messages=None)
+
+        async def stream(self, _messages):
+            if gate is not None:
+                await gate.wait()
+            yield ToolStarted(tool_id="tool-1", name="inspect", args={}, display_name="Inspect")
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    return ToolEventAgent()
+
+
+@pytest.mark.asyncio
+async def test_parent_stream_failure_propagates_after_one_failed_settlement(monkeypatch):
+    monkeypatch.setattr(spawner_module, "Agent", lambda **_kwargs: _tool_event_agent())
+    emitted = 0
+    statuses: list[str] = []
+
+    async def emit(_event):
+        nonlocal emitted
+        emitted += 1
+        if emitted == 2:
+            raise RuntimeError("parent stream unavailable")
+
+    async def record_event(**event):
+        statuses.append(event["status"])
+
+    executor = make_executor()
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(emit=emit),
+        background_tasks=BackgroundTaskRegistry(session_id="test", record_event=record_event),
+    )
+
+    with pytest.raises(RuntimeError, match="parent stream unavailable"):
+        await create_spawn_fn(executor, "gpt-5-mini", 3, 0)(
+            ctx,
+            "inspect",
+            system_prompt="sys",
+            isolation=IsolationLevel.SHARED,
+        )
+
+    assert statuses == ["started", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_child_stream_failure_propagates_after_one_failed_settlement(monkeypatch):
+    monkeypatch.setattr(spawner_module, "Agent", lambda **_kwargs: _tool_event_agent())
+    child_emits = 0
+    finished: list[str] = []
+    statuses: list[str] = []
+
+    async def child_emit(_event):
+        nonlocal child_emits
+        child_emits += 1
+        if child_emits == 1:
+            raise RuntimeError("child stream unavailable")
+
+    async def child_io_factory(_params):
+        async def finish(status: str) -> None:
+            finished.append(status)
+
+        async def close() -> None:
+            return None
+
+        return ChildSession(io=IOBridge(emit=child_emit), finish=finish, aclose=close)
+
+    async def record_event(**event):
+        statuses.append(event["status"])
+
+    executor = make_executor()
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(
+            run_id="run-1",
+            current_depth=0,
+            max_depth=3,
+            child_io_factory=child_io_factory,
+        ),
+        io=IOBridge(),
+        background_tasks=BackgroundTaskRegistry(session_id="test", record_event=record_event),
+    )
+
+    with pytest.raises(RuntimeError, match="child stream unavailable"):
+        await create_spawn_fn(executor, "gpt-5-mini", 3, 0)(ctx, "inspect", system_prompt="sys")
+
+    assert statuses == ["started", "failed"]
+    assert finished == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_activity_store_failure_settles_detached_child_then_propagates(monkeypatch):
+    gate = asyncio.Event()
+    monkeypatch.setattr(spawner_module, "Agent", lambda **_kwargs: _tool_event_agent(gate=gate))
+    statuses: list[str] = []
+
+    async def record_event(**event):
+        if event["status"] == "activity":
+            raise RuntimeError("activity store unavailable")
+        statuses.append(event["status"])
+
+    async def emit(_event):
+        return None
+
+    executor = make_executor()
+    registry = BackgroundTaskRegistry(session_id="test", record_event=record_event)
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(emit=emit),
+        background_tasks=registry,
+    )
+    result = await create_spawn_fn(executor, "gpt-5-mini", 3, 0)(
+        ctx,
+        "inspect",
+        system_prompt="sys",
+        wait=False,
+    )
+    task = registry.task(result.child_run_id)
+    assert task is not None
+
+    gate.set()
+    with pytest.raises(RuntimeError, match="activity store unavailable"):
+        await task
+
+    assert statuses == ["started", "failed"]
 
 
 @pytest.mark.asyncio
@@ -80,7 +260,7 @@ async def test_spawned_agent_cannot_widen_parent_tool_scope(monkeypatch):
             yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
 
     monkeypatch.setattr(spawner_module, "Agent", FakeAgent)
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3, allowed_tool_names={"allowed"}),
@@ -88,7 +268,7 @@ async def test_spawned_agent_cannot_widen_parent_tool_scope(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     await spawn(ctx, "child task", system_prompt="child prompt", isolation=IsolationLevel.SHARED)
 
     schema_names = {item["function"]["name"] for item in captured["tools"]}
@@ -108,7 +288,7 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: FakeAgent())
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -123,7 +303,7 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
         ),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(ctx, "research task", system_prompt="child prompt", tools=[])
 
     assert result.text == "done"
@@ -132,93 +312,6 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     assert "Name: Arden" in prompt
     assert "Default cwd: /Users/me/src/arden" in prompt
     assert "Instructions:\nUse the repo conventions." in prompt
-
-
-def test_clamp_for_salvage_leaves_short_messages_alone():
-    msg = {"role": "tool", "content": "small"}
-    assert _clamp_for_salvage(msg) is msg
-
-
-def test_clamp_for_salvage_truncates_long_tool_content():
-    long_content = "x" * 10_000
-    out = _clamp_for_salvage({"role": "tool", "content": long_content, "tool_call_id": "abc"})
-    assert len(out["content"]) < 5000
-    assert "[clamped for salvage summary]" in out["content"]
-    assert out["tool_call_id"] == "abc"
-
-
-def test_clamp_for_salvage_skips_user_and_system():
-    long = "x" * 10_000
-    assert _clamp_for_salvage({"role": "user", "content": long})["content"] == long
-    assert _clamp_for_salvage({"role": "system", "content": long})["content"] == long
-
-
-def test_deterministic_salvage_includes_tail_tool_results():
-    msgs = [
-        {"role": "user", "content": "find stuff"},
-        {"role": "assistant", "content": None},
-        {"role": "tool", "content": "first finding"},
-        {"role": "tool", "content": "second finding"},
-    ]
-    out = _deterministic_salvage(msgs, "boom")
-    assert "[partial — sub-agent errored: boom]" in out
-    assert "first finding" in out
-    assert "second finding" in out
-
-
-def test_deterministic_salvage_with_no_tool_results():
-    out = _deterministic_salvage([{"role": "user", "content": "x"}], "boom")
-    assert "(none)" in out
-
-
-@pytest.mark.asyncio
-async def test_salvage_summary_calls_llm_with_clamped_messages(monkeypatch):
-    captured: dict = {}
-
-    class FakeClient:
-        async def complete(self, model, messages, **kwargs):
-            captured["model"] = model
-            captured["messages"] = messages
-            return CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(
-                            role="assistant", content="here is what i found", tool_calls=None, reasoning_content=None
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
-    monkeypatch.setattr(spawner_module, "llm_client", FakeClient())
-
-    summary = await _salvage_summary(
-        model="m",
-        child_messages=[{"role": "tool", "content": "x" * 10_000}],
-        error="boom",
-        task="research X",
-    )
-    assert summary == "here is what i found"
-    # The salvage adds a final user message asking for the summary.
-    assert captured["messages"][-1]["role"] == "user"
-    assert "boom" in captured["messages"][-1]["content"]
-    assert "research X" in captured["messages"][-1]["content"]
-    # The original tool message was clamped.
-    assert "[clamped for salvage summary]" in captured["messages"][0]["content"]
-
-
-@pytest.mark.asyncio
-async def test_salvage_summary_returns_empty_when_llm_also_fails(monkeypatch):
-    class FakeClient:
-        async def complete(self, *_, **__):
-            raise RuntimeError("llm dead")
-
-    monkeypatch.setattr(spawner_module, "llm_client", FakeClient())
-
-    summary = await _salvage_summary("m", [{"role": "tool", "content": "x"}], "boom", "task")
-    assert summary == ""
 
 
 @pytest.mark.asyncio
@@ -244,7 +337,7 @@ async def test_spawn_emits_foreground_task_lifecycle_on_success(monkeypatch):
         emitted.append(event)
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -252,7 +345,7 @@ async def test_spawn_emits_foreground_task_lifecycle_on_success(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "research task",
@@ -310,7 +403,7 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
         executor = make_executor()
         area = await store.create_area(name="Area One")
         parent = SessionState(session_id="parent", started_at=datetime.now(UTC), area_id=area["area_id"])
-        ctx = ToolContext(
+        ctx = _persisted_context(
             session_state=parent,
             registry=executor.registry,
             run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -319,7 +412,7 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
             background_tasks=BackgroundTaskRegistry(session_id="parent"),
         )
 
-        spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+        spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
         result = await spawn(
             ctx,
             "research blockers",
@@ -374,7 +467,7 @@ async def test_spawn_wait_false_returns_running_child_run(monkeypatch):
 
     executor = make_executor()
     bg_registry = BackgroundTaskRegistry(session_id="test")
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -382,7 +475,7 @@ async def test_spawn_wait_false_returns_running_child_run(monkeypatch):
         background_tasks=bg_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "background research",
@@ -441,7 +534,7 @@ async def test_background_spawn_empty_final_is_visible_in_child_messages(monkeyp
     bg_registry = BackgroundTaskRegistry(session_id="parent")
     run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
     run.child_io_factory = factory
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=run,
@@ -450,7 +543,7 @@ async def test_background_spawn_empty_final_is_visible_in_child_messages(monkeyp
         run_registry=RunRegistry(),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "background research",
@@ -465,8 +558,7 @@ async def test_background_spawn_empty_final_is_visible_in_child_messages(monkeyp
     await bg_registry._tasks[result.child_run_id]
 
     child_text = "".join(e.delta for e in child_emitted if isinstance(e, TextMessageContentEvent))
-    assert "[partial — sub-agent returned empty final answer]" in child_text
-    assert "No recoverable tool results were produced." in child_text
+    assert child_text == "Sub-agent returned no final answer."
 
 
 @pytest.mark.asyncio
@@ -530,7 +622,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
 
         executor = make_executor()
         bg_registry = BackgroundTaskRegistry(session_id="parent", record_event=record)
-        ctx = ToolContext(
+        ctx = _persisted_context(
             session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
             registry=executor.registry,
             run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -539,7 +631,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
             background_tasks=bg_registry,
         )
 
-        spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+        spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
         result = await spawn(
             ctx,
             "background research",
@@ -572,58 +664,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
 
 
 @pytest.mark.asyncio
-async def test_foreground_subagent_emits_generated_name_while_running(monkeypatch):
-    emitted = []
-
-    async def emit(event):
-        emitted.append(event)
-
-    async def fake_generate_agent_name(model: str, task: str) -> str:
-        await asyncio.sleep(0)
-        return "Web Release Scout"
-
-    class FakeAgent:
-        async def stream(self, messages):
-            await asyncio.sleep(0.01)
-            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
-
-    monkeypatch.setattr(spawner_module, "generate_agent_name", fake_generate_agent_name)
-    monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: FakeAgent())
-
-    executor = make_executor()
-    ctx = ToolContext(
-        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
-        registry=executor.registry,
-        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
-        io=IOBridge(emit=emit),
-        background_tasks=BackgroundTaskRegistry(session_id="test"),
-    )
-
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
-    result = await spawn(
-        ctx,
-        "do web research",
-        system_prompt="sys",
-        tools=[],
-        parent_id="call-research",
-        timeout=1,
-    )
-
-    assert result.text == "done"
-    task_events = [
-        event for event in emitted if isinstance(event, (TaskStartedEvent, TaskProgressEvent, TaskFinishedEvent))
-    ]
-    assert [event.type.value for event in task_events] == ["task_started", "task_progress", "task_finished"]
-    # task_started carries a distinct slug initially (not empty, not yet the
-    # generated label); task_progress/finished carry the generated label.
-    assert task_events[0].name and task_events[0].name != "Web Release Scout"
-    assert task_events[1].name == "Web Release Scout"
-    assert task_events[1].parent_tool_call_id == "call-research"
-    assert task_events[2].name == "Web Release Scout"
-
-
-@pytest.mark.asyncio
-async def test_foreground_subagent_cancel_returns_partial_summary(monkeypatch):
+async def test_foreground_subagent_cancel_returns_explicit_failure(monkeypatch):
     emitted = []
 
     async def emit(event):
@@ -637,12 +678,11 @@ async def test_foreground_subagent_cancel_returns_partial_summary(monkeypatch):
             await asyncio.sleep(60)
 
     monkeypatch.setattr(spawner_module, "Agent", lambda **kwargs: SlowAgent())
-    monkeypatch.setattr(spawner_module, "_salvage_summary", AsyncMock(return_value="Partial summary."))
 
     executor = make_executor()
     registry = RunRegistry()
     parent_run = registry.create_run("test")
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id=parent_run.run_id, current_depth=0, max_depth=3),
@@ -651,7 +691,7 @@ async def test_foreground_subagent_cancel_returns_partial_summary(monkeypatch):
         run_registry=registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     task = asyncio.create_task(
         spawn(
             ctx,
@@ -667,8 +707,7 @@ async def test_foreground_subagent_cancel_returns_partial_summary(monkeypatch):
     assert result == {"found": True, "cancel_requested": True}
 
     spawn_result = await task
-    assert "partial" in spawn_result.text.lower()
-    assert "Partial summary." in spawn_result.text
+    assert spawn_result.text == "Sub-agent cancelled by user."
     assert any(getattr(event, "status", None) == "cancelled" for event in emitted)
 
 
@@ -736,7 +775,7 @@ async def test_background_agent_drains_steering_message_mid_run(monkeypatch):
     monkeypatch.setattr("arden.core.spawner.ArdenToolExecutor", lambda *_a, **_k: FinderExecutor())
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -744,7 +783,7 @@ async def test_background_agent_drains_steering_message_mid_run(monkeypatch):
         background_tasks=bg_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "background research",
@@ -803,7 +842,7 @@ async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
     parent.status = RunStatus.RUNNING
     run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
     run.child_io_factory = child_io_factory
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=run,
@@ -812,7 +851,7 @@ async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
         run_registry=run_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     try:
         result = await spawn(ctx, "one too many", system_prompt="sys", tools=[], background=True, timeout=1)
         assert result.status == "failed"
@@ -820,10 +859,9 @@ async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
         assert "concurrent" in result.text.lower()
         # No new task was registered.
         assert len(bg_registry.list_pending()) == AGENT_MAX_CONCURRENT
-        assert len(child_sessions) == 1
-        assert finished == [(child_sessions[0], "failed")]
-        assert closed == child_sessions
-        assert run_registry.get_active_run(child_sessions[0]) is None
+        assert child_sessions == []
+        assert finished == []
+        assert closed == []
     finally:
         for task in fillers:
             task.cancel()
@@ -834,7 +872,10 @@ async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
 async def test_spawn_start_failure_closes_acquired_child_session(monkeypatch):
     monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
 
-    async def fail_start(**_event):
+    start_events: list[str] = []
+
+    async def fail_start(**event):
+        start_events.append(event["status"])
         raise RuntimeError("start persistence failed")
 
     child_sessions: list[str] = []
@@ -859,24 +900,392 @@ async def test_spawn_start_failure_closes_acquired_child_session(monkeypatch):
     run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
     run.child_io_factory = child_io_factory
     background_tasks = BackgroundTaskRegistry(session_id="test", record_event=fail_start)
-    ctx = ToolContext(
+    session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=run,
         io=IOBridge(),
+        services={"session": session_service},
         background_tasks=background_tasks,
         run_registry=run_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     with pytest.raises(RuntimeError, match="start persistence failed"):
         await spawn(ctx, "cannot start", system_prompt="sys", tools=[], timeout=1)
 
+    assert start_events == ["started"]
     assert len(child_sessions) == 1
     assert finished == [(child_sessions[0], "failed")]
     assert closed == child_sessions
     assert run_registry.get_active_run(child_sessions[0]) is None
     assert background_tasks.list_pending() == []
+    session_service.provision_state.assert_awaited_once()
+    assert session_service.save.await_args.args[0].agent_status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_spawn_provision_failure_stops_before_llm_and_settles_resources(monkeypatch):
+    class BoomLLM:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("LLM must not run before child session provisioning")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(spawner_module, "llm_client", BoomLLM())
+
+    child_sessions: list[str] = []
+    finished: list[tuple[str, str]] = []
+    closed: list[str] = []
+
+    async def child_io_factory(params):
+        child_sessions.append(params.session_id)
+
+        async def finish(status: str) -> None:
+            finished.append((params.session_id, status))
+
+        async def aclose() -> None:
+            closed.append(params.session_id)
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=aclose)
+
+    session_service = SimpleNamespace(
+        provision_state=AsyncMock(side_effect=RuntimeError("provision failed")),
+        save=AsyncMock(),
+    )
+    executor = make_executor()
+    run_registry = RunRegistry()
+    parent = run_registry.create_run("test", run_id="run-1")
+    parent.status = RunStatus.RUNNING
+    run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
+    background_tasks = BackgroundTaskRegistry(session_id="test")
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        services={"session": session_service},
+        background_tasks=background_tasks,
+        run_registry=run_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    with pytest.raises(RuntimeError, match="provision failed"):
+        await spawn(ctx, "cannot provision", system_prompt="sys", tools=[], timeout=1)
+
+    session_service.provision_state.assert_awaited_once()
+    session_service.save.assert_not_awaited()
+    assert child_sessions == []
+    assert finished == []
+    assert closed == []
+    assert background_tasks.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_spawn_start_failure_chains_cleanup_failures(monkeypatch):
+    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+
+    async def fail_start(**_event):
+        raise RuntimeError("start persistence failed")
+
+    async def child_io_factory(_params):
+        async def finish(_status: str) -> None:
+            raise RuntimeError("finish failed")
+
+        async def aclose() -> None:
+            raise RuntimeError("close failed")
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=aclose)
+
+    session_service = SimpleNamespace(
+        provision_state=AsyncMock(),
+        save=AsyncMock(side_effect=RuntimeError("terminal save failed")),
+    )
+    executor = make_executor()
+    run_registry = RunRegistry()
+    parent = run_registry.create_run("test", run_id="run-1")
+    parent.status = RunStatus.RUNNING
+    run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
+    background_tasks = BackgroundTaskRegistry(session_id="test", record_event=fail_start)
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        services={"session": session_service},
+        background_tasks=background_tasks,
+        run_registry=run_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    with pytest.raises(BaseExceptionGroup) as caught:
+        await spawn(ctx, "cannot settle", system_prompt="sys", tools=[], timeout=1)
+
+    assert [str(error) for error in caught.value.exceptions] == [
+        "start persistence failed",
+        "terminal save failed",
+        "finish failed",
+        "close failed",
+    ]
+    assert background_tasks.list_pending() == []
+    assert run_registry.get_active_run(session_service.provision_state.await_args.args[0].session_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [True, False])
+async def test_terminal_record_failure_does_not_rewrite_outcome(monkeypatch, wait):
+    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+    durable_statuses: list[str] = []
+    finished: list[str] = []
+
+    async def record_event(**event):
+        durable_statuses.append(event["status"])
+        if event["status"] == "completed":
+            raise RuntimeError("terminal record failed")
+
+    async def child_io_factory(_params):
+        async def finish(status: str) -> None:
+            finished.append(status)
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=AsyncMock())
+
+    executor = make_executor()
+    run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
+    background_tasks = BackgroundTaskRegistry(session_id="test", record_event=record_event)
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        background_tasks=background_tasks,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    if wait:
+        with pytest.raises(RuntimeError, match="terminal record failed"):
+            await spawn(ctx, "finish once", system_prompt="sys", tools=[], wait=True, timeout=1)
+    else:
+        result = await spawn(ctx, "finish once", system_prompt="sys", tools=[], wait=False, timeout=1)
+        task = background_tasks.task(result.child_run_id)
+        assert task is not None
+        with pytest.raises(RuntimeError, match="terminal record failed"):
+            await task
+
+    assert durable_statuses == ["started", "completed"]
+    assert finished == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_spawn_final_persistence_failure_cannot_return_success(monkeypatch):
+    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+
+    parent_events = []
+    durable_statuses: list[str] = []
+    child_sessions: list[str] = []
+    finished: list[tuple[str, str]] = []
+    closed: list[str] = []
+
+    async def child_io_factory(params):
+        child_sessions.append(params.session_id)
+
+        async def finish(status: str) -> None:
+            finished.append((params.session_id, status))
+
+        async def aclose() -> None:
+            closed.append(params.session_id)
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=aclose)
+
+    async def emit(event) -> None:
+        parent_events.append(event)
+
+    async def record_event(**event):
+        durable_statuses.append(event["status"])
+
+    async def save_child(state, _messages):
+        if state.agent_status != "running":
+            raise RuntimeError("final persistence failed")
+
+    session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock(side_effect=save_child))
+    executor = make_executor()
+    run_registry = RunRegistry()
+    parent = run_registry.create_run("test", run_id="run-1")
+    parent.status = RunStatus.RUNNING
+    run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
+    background_tasks = BackgroundTaskRegistry(session_id="test", record_event=record_event)
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(emit=emit),
+        services={"session": session_service},
+        background_tasks=background_tasks,
+        run_registry=run_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    with pytest.raises(RuntimeError, match="final persistence failed"):
+        await spawn(ctx, "complete then fail", system_prompt="sys", tools=[], timeout=1)
+
+    session_service.save.assert_awaited()
+    assert finished == [(child_sessions[0], "failed")]
+    assert closed == child_sessions
+    assert run_registry.get_active_run(child_sessions[0]) is None
+    assert background_tasks.list_pending() == []
+    assert durable_statuses == ["started", "failed"]
+    assert [event.status for event in parent_events if isinstance(event, TaskFinishedEvent)] == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_background_final_persistence_failure_is_not_delivered_as_success(monkeypatch):
+    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+
+    async def save_child(state, _messages):
+        if state.agent_status != "running":
+            raise RuntimeError("background final persistence failed")
+
+    session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock(side_effect=save_child))
+    deliver = AsyncMock()
+    durable_statuses: list[str] = []
+
+    async def record_event(**event):
+        durable_statuses.append(event["status"])
+
+    background_tasks = BackgroundTaskRegistry(session_id="test", on_result=deliver, record_event=record_event)
+    executor = make_executor()
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        services={"session": session_service},
+        background_tasks=background_tasks,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    result = await spawn(ctx, "complete in background", system_prompt="sys", tools=[], wait=False, timeout=1)
+    task = background_tasks.task(result.child_run_id)
+    assert task is not None
+    with pytest.raises(RuntimeError, match="background final persistence failed"):
+        await task
+
+    deliver.assert_awaited_once()
+    delivered_messages = deliver.await_args.args[0]
+    assert delivered_messages[0]["background_status"] == "failed"
+    assert durable_statuses == ["started", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_background_registration_failure_never_runs_child(monkeypatch):
+    class BoomLLM:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("child must remain gated until registration succeeds")
+            yield  # pragma: no cover
+
+    class FailingRegisterRegistry(BackgroundTaskRegistry):
+        def register(self, task_id, task, command, *, observe_failure=False):
+            raise RuntimeError("task registration failed")
+
+    monkeypatch.setattr(spawner_module, "llm_client", BoomLLM())
+    durable_statuses: list[str] = []
+    finished: list[str] = []
+    closed = False
+
+    async def record_event(**event):
+        durable_statuses.append(event["status"])
+
+    async def child_io_factory(_params):
+        async def finish(status: str) -> None:
+            finished.append(status)
+
+        async def aclose() -> None:
+            nonlocal closed
+            closed = True
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=aclose)
+
+    session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())
+    registry = FailingRegisterRegistry(session_id="test", record_event=record_event)
+    executor = make_executor()
+    run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        services={"session": session_service},
+        background_tasks=registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    with pytest.raises(RuntimeError, match="task registration failed"):
+        await spawn(ctx, "never run", system_prompt="sys", tools=[], wait=False, timeout=1)
+
+    assert durable_statuses == ["started", "failed"]
+    assert finished == ["failed"]
+    assert closed
+    assert registry.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_detached_registry_observes_task_failure(caplog):
+    async def fail() -> None:
+        raise RuntimeError("detached failure")
+
+    caplog.set_level(logging.ERROR)
+    registry = BackgroundTaskRegistry(session_id="test")
+    task = asyncio.create_task(fail())
+    registry.register("agent-failed", task, command="Agent", observe_failure=True)
+
+    await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0)
+
+    assert "Detached background task agent-failed failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_background_started_emit_failure_never_runs_child(monkeypatch):
+    class BoomLLM:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("child must remain gated until started emission succeeds")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(spawner_module, "llm_client", BoomLLM())
+    durable_statuses: list[str] = []
+    emitted_statuses: list[str] = []
+
+    async def record_event(**event):
+        durable_statuses.append(event["status"])
+
+    async def emit(event) -> None:
+        emitted_statuses.append(event.status)
+        if event.status == "started":
+            raise RuntimeError("started emission failed")
+
+    session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())
+    registry = BackgroundTaskRegistry(session_id="test", record_event=record_event)
+    executor = make_executor()
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(emit=emit),
+        services={"session": session_service},
+        background_tasks=registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    with pytest.raises(RuntimeError, match="started emission failed"):
+        await spawn(ctx, "never run", system_prompt="sys", tools=[], wait=False, timeout=1)
+
+    assert durable_statuses == ["started", "failed"]
+    assert emitted_statuses == ["started"]
+    assert registry.list_pending() == []
 
 
 @pytest.mark.asyncio
@@ -889,7 +1298,7 @@ async def test_spawn_cost_budget_uses_parent_spend(monkeypatch):
     monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -900,16 +1309,14 @@ async def test_spawn_cost_budget_uses_parent_spend(monkeypatch):
 
     spawn = create_spawn_fn(
         executor=executor,
-        model="test-model",
+        model="gpt-5-mini",
         max_depth=3,
         current_depth=0,
         max_cost=1.0,
     )
     result = await spawn(ctx, "research task", system_prompt="sys", tools=[], timeout=1)
 
-    assert result.text == (
-        "[partial — sub-agent returned empty final answer]\nNo recoverable tool results were produced."
-    )
+    assert result.text == "Sub-agent returned no final answer."
 
 
 @pytest.mark.asyncio
@@ -922,7 +1329,7 @@ async def test_spawn_tool_call_budget_is_shared_with_parent(monkeypatch):
     monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3, max_tool_calls=1),
@@ -934,16 +1341,14 @@ async def test_spawn_tool_call_budget_is_shared_with_parent(monkeypatch):
 
     spawn = create_spawn_fn(
         executor=executor,
-        model="test-model",
+        model="gpt-5-mini",
         max_depth=3,
         current_depth=0,
         max_tool_calls=1,
     )
     result = await spawn(ctx, "research task", system_prompt="sys", tools=[], timeout=1)
 
-    assert result.text == (
-        "[partial — sub-agent returned empty final answer]\nNo recoverable tool results were produced."
-    )
+    assert result.text == "Sub-agent returned no final answer."
 
 
 @pytest.mark.asyncio
@@ -956,7 +1361,7 @@ async def test_spawn_wall_time_budget_uses_parent_start(monkeypatch):
     monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3, started_at=0.0),
@@ -966,16 +1371,14 @@ async def test_spawn_wall_time_budget_uses_parent_start(monkeypatch):
 
     spawn = create_spawn_fn(
         executor=executor,
-        model="test-model",
+        model="gpt-5-mini",
         max_depth=3,
         current_depth=0,
         max_wall_time_seconds=0.0,
     )
     result = await spawn(ctx, "research task", system_prompt="sys", tools=[], timeout=1)
 
-    assert result.text == (
-        "[partial — sub-agent returned empty final answer]\nNo recoverable tool results were produced."
-    )
+    assert result.text == "Sub-agent returned no final answer."
 
 
 @pytest.mark.asyncio
@@ -998,7 +1401,7 @@ async def test_background_spawn_rolls_cost_into_parent_tracker(monkeypatch):
     parent_tracker = ParentTracker(cost=0.0)
     executor = make_executor()
     bg_registry = BackgroundTaskRegistry(session_id="test")
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1036,12 +1439,6 @@ async def test_spawn_emits_live_token_usage_for_child_response(monkeypatch):
 
     monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
 
-    async def slow_agent_name(model, task):
-        await asyncio.sleep(2)
-        return "Slow label"
-
-    monkeypatch.setattr(spawner_module, "generate_agent_name", slow_agent_name)
-
     emitted = []
 
     async def emit(event):
@@ -1049,7 +1446,7 @@ async def test_spawn_emits_live_token_usage_for_child_response(monkeypatch):
 
     parent_tracker = ParentTracker(cost=0.0)
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1070,39 +1467,13 @@ async def test_spawn_emits_live_token_usage_for_child_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
-    """End-to-end: the inner agent's LLM call raises, and spawn returns
-    a partial-summary string instead of letting the exception escape."""
-    salvage_text = "Found 3 things before the error."
-
+async def test_spawn_returns_explicit_failure_when_inner_agent_fails(monkeypatch):
     class FakeLLM:
-        def __init__(self):
-            self.complete_calls = 0
-            self.complete_messages = None
-
         async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None, prompt_cache_key=None):
-            # The inner agent's first model call simulates a fatal LLM error.
             raise RuntimeError("oops")
-            yield  # pragma: no cover  # keep generator-typed
+            yield  # pragma: no cover
 
-        async def complete(self, model, messages, **kwargs):
-            self.complete_calls += 1
-            self.complete_messages = messages
-            return CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(
-                            role="assistant", content=salvage_text, tool_calls=None, reasoning_content=None
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
-    fake = FakeLLM()
-    monkeypatch.setattr(spawner_module, "llm_client", fake)
+    monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
 
     emitted = []
 
@@ -1110,7 +1481,7 @@ async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
         emitted.append(event)
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1118,7 +1489,7 @@ async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "research task",
@@ -1128,12 +1499,9 @@ async def test_spawn_returns_salvage_when_inner_agent_fails(monkeypatch):
         timeout=1,
     )
 
-    assert "[partial — sub-agent errored:" in result.text
+    assert result.text == "Sub-agent failed: RuntimeError."
+    assert result.status == "failed"
     assert "oops" not in result.text
-    assert salvage_text in result.text
-    assert fake.complete_calls == 1
-    assert "oops" not in str(fake.complete_messages)
-    assert "RuntimeError" in str(fake.complete_messages)
     task_events = [event for event in emitted if isinstance(event, (TaskStartedEvent, TaskFinishedEvent))]
     assert [event.type.value for event in task_events] == ["task_started", "task_finished"]
     assert task_events[1].status == "failed"
@@ -1177,7 +1545,7 @@ async def test_spawn_uses_reasoning_effort_for_model_override(monkeypatch):
     executor = make_executor()
     run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
     run.child_io_factory = factory
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=run,
@@ -1188,294 +1556,35 @@ async def test_spawn_uses_reasoning_effort_for_model_override(monkeypatch):
 
     spawn = create_spawn_fn(
         executor=executor,
-        model="chat-model",
+        model="gpt-5-mini",
         max_depth=3,
         current_depth=0,
         reasoning_effort="low",
-        model_reasoning_efforts={"research-model": "max"},
+        model_reasoning_efforts={"gpt-5.6-sol": "max"},
     )
     result = await spawn(
         ctx,
         "research task",
         system_prompt="sys",
         tools=[],
-        model_override="research-model",
+        model_override="gpt-5.6-sol",
         parent_id="call",
         timeout=1,
     )
 
     assert result.text == "done"
-    assert captured == {"model": "research-model", "reasoning_effort": "max"}
+    assert captured == {"model": "gpt-5.6-sol", "reasoning_effort": "max"}
 
 
 @pytest.mark.asyncio
-async def test_spawn_salvage_preserves_tool_results_after_loop_progress(monkeypatch):
-    """The real scenario: sub-agent runs several tool calls successfully,
-    then the LLM dies on the next iteration. Salvage must see the tool
-    results that were already accumulated — that's the entire point of
-    the feature (don't throw away ~200 tool calls of paid work)."""
-    captured_salvage_messages: list = []
+async def test_spawn_returns_explicit_failure_for_empty_answer(monkeypatch):
+    class EmptyLLM:
+        async def stream(self, messages, model, tools, **kwargs):
+            yield make_text_response("")
 
-    class FakeLLM:
-        def __init__(self):
-            self.stream_calls = 0
-
-        async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None, prompt_cache_key=None):
-            self.stream_calls += 1
-            if self.stream_calls == 1:
-                # First call: agent decides to invoke a tool. The agent
-                # loop will then dispatch it and append the tool result
-                # to the messages list, before looping back for call 2.
-                yield CompletionResponse(
-                    choices=[
-                        Choice(
-                            message=Message(
-                                role="assistant",
-                                content=None,
-                                tool_calls=[
-                                    ToolCall(
-                                        id="call_1",
-                                        type="function",
-                                        function=FunctionCall(name="finder", arguments="{}"),
-                                    )
-                                ],
-                                reasoning_content=None,
-                            ),
-                            finish_reason="tool_calls",
-                        )
-                    ],
-                    usage=Usage(),
-                    model=model,
-                )
-                return
-            # Second call: simulate a fatal LLM error mid-loop.
-            raise RuntimeError("api blew up")
-
-        async def complete(self, model, messages, **kwargs):
-            captured_salvage_messages.append(messages)
-            return CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(
-                            role="assistant",
-                            content="Recovered: found one thing about apricots.",
-                            tool_calls=None,
-                            reasoning_content=None,
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
-    monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
-
-    class FinderExecutor:
-        async def execute(self, name, args, tool_call_id):
-            return AgentToolResult(content="apricots are good", preview="apricots", is_error=False)
-
-        def get_meta(self, name):
-            return ToolMeta(name="finder", display_name="Finder", kind="tool")
-
-    monkeypatch.setattr("arden.core.spawner.ArdenToolExecutor", lambda *_args, **_kwargs: FinderExecutor())
-
-    child_emitted = []
-
-    async def child_emit(event):
-        child_emitted.append(event)
-
-    async def factory(params):
-        async def _finish(_status):
-            return None
-
-        async def _aclose():
-            return None
-
-        return ChildSession(io=IOBridge(emit=child_emit), finish=_finish, aclose=_aclose)
-
+    monkeypatch.setattr(spawner_module, "llm_client", EmptyLLM())
     executor = make_executor()
-    run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
-    run.child_io_factory = factory
-    ctx = ToolContext(
-        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
-        registry=executor.registry,
-        run=run,
-        io=IOBridge(),
-        background_tasks=BackgroundTaskRegistry(session_id="test"),
-        run_registry=RunRegistry(),
-    )
-
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
-    result = await spawn(
-        ctx,
-        "find things about apricots",
-        system_prompt="sys",
-        tools=[],
-        parent_id="call",
-        timeout=5,
-    )
-
-    assert "[partial — sub-agent errored:" in result.text
-    assert "Recovered: found one thing about apricots." in result.text
-    # Verify the salvage call actually saw the tool result — that's the
-    # whole point. Find the tool message in what we sent to `complete`.
-    salvage_msgs = captured_salvage_messages[0]
-    tool_msgs = [m for m in salvage_msgs if m.get("role") == "tool"]
-    assert tool_msgs, f"no tool messages in salvage payload: {salvage_msgs}"
-    assert any("apricots are good" in (m.get("content") or "") for m in tool_msgs)
-
-
-@pytest.mark.asyncio
-async def test_spawn_salvages_when_inner_agent_returns_empty_final(monkeypatch):
-    captured_salvage_messages: list = []
-
-    class FakeLLM:
-        def __init__(self):
-            self.stream_calls = 0
-
-        async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None, prompt_cache_key=None):
-            self.stream_calls += 1
-            if self.stream_calls == 1:
-                yield CompletionResponse(
-                    choices=[
-                        Choice(
-                            message=Message(
-                                role="assistant",
-                                content=None,
-                                tool_calls=[
-                                    ToolCall(
-                                        id="call_1",
-                                        type="function",
-                                        function=FunctionCall(name="finder", arguments="{}"),
-                                    )
-                                ],
-                                reasoning_content=None,
-                            ),
-                            finish_reason="tool_calls",
-                        )
-                    ],
-                    usage=Usage(),
-                    model=model,
-                )
-                return
-            yield CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(role="assistant", content="", tool_calls=None, reasoning_content=None),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
-        async def complete(self, model, messages, **kwargs):
-            captured_salvage_messages.append(messages)
-            return CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(
-                            role="assistant",
-                            content="Recovered from tool results: apricots are good.",
-                            tool_calls=None,
-                            reasoning_content=None,
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
-    monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
-
-    class FinderExecutor:
-        async def execute(self, name, args, tool_call_id):
-            return AgentToolResult(content="apricots are good", preview="apricots", is_error=False)
-
-        def get_meta(self, name):
-            return ToolMeta(name="finder", display_name="Finder", kind="tool")
-
-    monkeypatch.setattr("arden.core.spawner.ArdenToolExecutor", lambda *_args, **_kwargs: FinderExecutor())
-
-    child_emitted = []
-
-    async def child_emit(event):
-        child_emitted.append(event)
-
-    async def factory(params):
-        async def _finish(_status):
-            return None
-
-        async def _aclose():
-            return None
-
-        return ChildSession(io=IOBridge(emit=child_emit), finish=_finish, aclose=_aclose)
-
-    executor = make_executor()
-    run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
-    run.child_io_factory = factory
-    ctx = ToolContext(
-        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
-        registry=executor.registry,
-        run=run,
-        io=IOBridge(),
-        background_tasks=BackgroundTaskRegistry(session_id="test"),
-        run_registry=RunRegistry(),
-    )
-
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
-    result = await spawn(
-        ctx,
-        "find things about apricots",
-        system_prompt="sys",
-        tools=[],
-        parent_id="call",
-        timeout=5,
-    )
-
-    assert "[partial — sub-agent returned empty final answer]" in result.text
-    assert "Recovered from tool results: apricots are good." in result.text
-    tool_msgs = [m for m in captured_salvage_messages[0] if m.get("role") == "tool"]
-    assert any("apricots are good" in (m.get("content") or "") for m in tool_msgs)
-    child_text = "".join(e.delta for e in child_emitted if isinstance(e, TextMessageContentEvent))
-    assert "Recovered from tool results: apricots are good." in child_text
-
-
-@pytest.mark.asyncio
-async def test_spawn_salvages_on_foreground_timeout(monkeypatch):
-    """If the foreground sub-agent hits the wait_for timeout, we still
-    return a salvage summary instead of a bare timeout error."""
-    import asyncio as _aio
-
-    class FakeLLM:
-        async def stream(self, messages, model, tools, tool_choice=None, reasoning_effort=None, prompt_cache_key=None):
-            # Sleep longer than the spawn timeout to force a TimeoutError.
-            await _aio.sleep(10)
-            yield  # pragma: no cover
-
-        async def complete(self, model, messages, **kwargs):
-            return CompletionResponse(
-                choices=[
-                    Choice(
-                        message=Message(
-                            role="assistant",
-                            content="best-effort summary",
-                            tool_calls=None,
-                            reasoning_content=None,
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=Usage(),
-                model=model,
-            )
-
-    monkeypatch.setattr(spawner_module, "llm_client", FakeLLM())
-
-    executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1483,29 +1592,37 @@ async def test_spawn_salvages_on_foreground_timeout(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="test"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
-    result = await spawn(
-        ctx,
-        "task",
-        system_prompt="sys",
-        tools=[],
-        parent_id="call",
-        timeout=0.1,
+    result = await create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)(
+        ctx, "task", system_prompt="sys", tools=[]
     )
 
-    assert "[partial — sub-agent timed out" in result.text
-    assert "best-effort summary" in result.text
+    assert result.status == "failed"
+    assert result.text == "Sub-agent returned no final answer."
 
 
-def test_clamp_for_salvage_handles_list_typed_content():
-    """List-typed content (multi-part blocks from vision/tool results)
-    must also be clamped — otherwise an oversized blob bypasses the
-    safety net and can re-trigger the same context-length failure."""
-    blocks = [{"type": "text", "text": "a" * 8000}, {"type": "text", "text": "b" * 8000}]
-    out = _clamp_for_salvage({"role": "tool", "content": blocks, "tool_call_id": "x"})
-    assert isinstance(out["content"], str)
-    assert len(out["content"]) < 5000
-    assert "[clamped for salvage summary]" in out["content"]
+@pytest.mark.asyncio
+async def test_spawn_returns_explicit_timeout(monkeypatch):
+    class SlowLLM:
+        async def stream(self, messages, model, tools, **kwargs):
+            await asyncio.sleep(60)
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(spawner_module, "llm_client", SlowLLM())
+    executor = make_executor()
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        background_tasks=BackgroundTaskRegistry(session_id="test"),
+    )
+
+    result = await create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)(
+        ctx, "task", system_prompt="sys", tools=[], timeout=0.01
+    )
+
+    assert result.status == "failed"
+    assert result.text == "Sub-agent timed out after 0.01s."
 
 
 def _single_response_llm():
@@ -1526,12 +1643,13 @@ def _single_response_llm():
 
 
 @pytest.mark.asyncio
-async def test_full_isolation_advertises_child_session_id_without_persistence(monkeypatch):
-    """FULL isolation always advertises child_session_id, decoupled from whether
-    the session row persisted. With no session service at all (as here) the child
-    is never written to disk — but the id is still a valid route, so it must reach
-    the UI or the agent card can't be opened/cleared."""
-    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+async def test_full_isolation_requires_session_persistence_before_execution(monkeypatch):
+    class BoomLLM:
+        async def stream(self, *args, **kwargs):
+            raise AssertionError("LLM must not run without child session persistence")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(spawner_module, "llm_client", BoomLLM())
 
     emitted = []
 
@@ -1544,19 +1662,18 @@ async def test_full_isolation_advertises_child_session_id_without_persistence(mo
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
         io=IOBridge(emit=emit),
+        services={},
         background_tasks=BackgroundTaskRegistry(session_id="parent"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
-    result = await spawn(
-        ctx, "research", system_prompt="sys", tools=[], parent_id="call-x", agent_type="research", timeout=1
-    )
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
+    with pytest.raises(RuntimeError, match="require the session service"):
+        await spawn(
+            ctx, "research", system_prompt="sys", tools=[], parent_id="call-x", agent_type="research", timeout=1
+        )
 
-    assert result.child_session_id
-    assert result.child_session_id.startswith("parent::")
-    task_events = [e for e in emitted if isinstance(e, (TaskStartedEvent, TaskFinishedEvent))]
-    assert task_events
-    assert all(e.child_session_id == result.child_session_id for e in task_events)
+    assert emitted == []
+    assert ctx.background_tasks.list_pending() == []
 
 
 @pytest.mark.asyncio
@@ -1571,7 +1688,7 @@ async def test_shared_isolation_advertises_no_child_session(monkeypatch):
         emitted.append(event)
 
     executor = make_executor()
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1579,7 +1696,7 @@ async def test_shared_isolation_advertises_no_child_session(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="parent"),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "inline subtask",
@@ -1636,7 +1753,7 @@ async def test_full_subagent_streams_to_own_child_bus(monkeypatch):
     executor = make_executor()
     run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
     run.child_io_factory = factory
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=run,
@@ -1645,7 +1762,7 @@ async def test_full_subagent_streams_to_own_child_bus(monkeypatch):
         run_registry=RunRegistry(),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx, "research task", system_prompt="sys", tools=[], parent_id="call-research", agent_type="research", timeout=1
     )
@@ -1690,7 +1807,7 @@ async def test_shared_subagent_does_not_use_child_bus(monkeypatch):
     executor = make_executor()
     run = RunContext(run_id="run-1", current_depth=0, max_depth=3)
     run.child_io_factory = factory
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=run,
@@ -1699,7 +1816,7 @@ async def test_shared_subagent_does_not_use_child_bus(monkeypatch):
         run_registry=RunRegistry(),
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "inline subtask",
@@ -1727,17 +1844,28 @@ async def test_awaited_spawn_records_durable_row_and_terminal_status(monkeypatch
     async def record(**event):
         events.append(event)
 
+    async def no_suspension(**_kwargs):
+        return None
+
+    async def write_suspension(**_kwargs):
+        return None
+
     executor = make_executor()
     bg_registry = BackgroundTaskRegistry(session_id="test", record_event=record)
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
-        io=IOBridge(),
+        io=IOBridge(
+            get_suspension=no_suspension,
+            consume_suspension=write_suspension,
+            record_suspension=write_suspension,
+            resolve_suspension=write_suspension,
+        ),
         background_tasks=bg_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     result = await spawn(
         ctx,
         "research task",
@@ -1774,7 +1902,7 @@ async def test_awaited_spawn_visible_in_registry_while_running(monkeypatch):
 
     executor = make_executor()
     bg_registry = BackgroundTaskRegistry(session_id="test")
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1782,7 +1910,7 @@ async def test_awaited_spawn_visible_in_registry_while_running(monkeypatch):
         background_tasks=bg_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     task = asyncio.create_task(
         spawn(ctx, "slow research", system_prompt="sys", tools=[], parent_id="call-slow", timeout=5)
     )
@@ -1820,7 +1948,7 @@ async def test_awaited_spawns_reserve_uncapped(monkeypatch):
 
     executor = make_executor()
     bg_registry = BackgroundTaskRegistry(session_id="test")
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
@@ -1828,7 +1956,7 @@ async def test_awaited_spawns_reserve_uncapped(monkeypatch):
         background_tasks=bg_registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     count = AGENT_MAX_CONCURRENT + 1
     tasks = [
         asyncio.create_task(spawn(ctx, f"task {i}", system_prompt="sys", tools=[], parent_id=f"call-{i}", timeout=5))
@@ -1865,7 +1993,7 @@ async def test_run_cancel_cascades_to_awaited_child(monkeypatch):
     registry = RunRegistry()
     parent_run = registry.create_run("test")
     bg_registry = registry.get_background_registry("test")
-    ctx = ToolContext(
+    ctx = _persisted_context(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
         run=RunContext(run_id=parent_run.run_id, current_depth=0, max_depth=3),
@@ -1874,7 +2002,7 @@ async def test_run_cancel_cascades_to_awaited_child(monkeypatch):
         run_registry=registry,
     )
 
-    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    spawn = create_spawn_fn(executor=executor, model="gpt-5-mini", max_depth=3, current_depth=0)
     task = asyncio.create_task(spawn(ctx, "long research", system_prompt="sys", tools=[], parent_id="call-research"))
     while not bg_registry._tasks:
         await asyncio.sleep(0)

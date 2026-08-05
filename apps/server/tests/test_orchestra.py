@@ -8,6 +8,7 @@ from arden.orchestra.dynamic import run_script
 from arden.orchestra.engine import (
     Orchestra,
     TokenBudget,
+    WorkflowAgentFailed,
     WorkflowBudgetExceeded,
     WorkflowSpawnLimit,
     WorkflowStructuredOutputMissing,
@@ -29,7 +30,7 @@ def _ctx_with(responses: list[str], budget: RunBudget | None = None, structured=
         i = calls["i"]
         calls["i"] += 1
         text = responses[i] if i < len(responses) else responses[-1]
-        return SimpleNamespace(text=text)
+        return SimpleNamespace(text=text, status="completed")
 
     async def format_structured(*, response_format, **kwargs):
         i = calls["format_i"]
@@ -60,6 +61,32 @@ async def test_agent_returns_text_without_schema():
     ctx, _ = _ctx_with(["hello world"])
     o = Orchestra.for_ctx(ctx)
     assert await o.agent("say hi") == "hello world"
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "interrupted", "running"])
+async def test_agent_rejects_every_non_completed_spawn_status(status):
+    async def spawn_fn(ctx, *, task, **kwargs):
+        return SimpleNamespace(text="provider unavailable", status=status)
+
+    o = Orchestra.for_ctx(SimpleNamespace(spawn_fn=spawn_fn))
+    with pytest.raises(WorkflowAgentFailed) as raised:
+        await o.agent("say hi")
+
+    assert raised.value.status == status
+    assert raised.value.result == "provider unavailable"
+    assert str(raised.value) == f"workflow agent ended with status {status}: provider unavailable"
+
+
+async def test_parallel_propagates_worker_terminal_failure():
+    async def spawn_fn(ctx, *, task, **kwargs):
+        return SimpleNamespace(text="timed out after 60s", status="failed")
+
+    o = Orchestra.for_ctx(SimpleNamespace(spawn_fn=spawn_fn))
+    with pytest.raises(BaseException) as raised:
+        await o.parallel([lambda: o.agent("slow worker")])
+
+    errors = raised.value.exceptions if isinstance(raised.value, BaseExceptionGroup) else [raised.value]
+    assert any(isinstance(error, WorkflowAgentFailed) for error in errors)
 
 
 async def test_agent_returns_structured_output_model():
@@ -103,7 +130,7 @@ async def test_schema_worker_tool_allowlist_is_not_polluted_by_formatter_step():
 
     async def spawn_fn(ctx, *, task, tools=None, **kwargs):
         captured["worker_tools"] = tools
-        return SimpleNamespace(text="worker answer")
+        return SimpleNamespace(text="worker answer", status="completed")
 
     async def format_structured(*, response_format, **kwargs):
         captured["formatted"] = True
@@ -187,7 +214,7 @@ async def test_parallel_spawns_get_unique_lifecycle_ids():
 
     async def spawn_fn(ctx, *, task, lifecycle_id=None, **kwargs):
         seen.append(lifecycle_id)
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx, parent_id="tool-1", workflow_id="wf-1")
@@ -204,7 +231,7 @@ async def test_agent_forwards_tool_name_allowlist():
 
     async def spawn_fn(ctx, *, task, tools=None, **kwargs):
         captured["tools"] = tools
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
@@ -217,7 +244,7 @@ async def test_workflow_agents_exclude_spawn_tools():
 
     async def spawn_fn(ctx, *, task, exclude_tools=None, **kwargs):
         captured["exclude"] = exclude_tools
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx, parent_id="t", workflow_id="w")
@@ -233,7 +260,7 @@ async def test_agent_type_threads_capability_and_persona():
 
     async def spawn_fn(ctx, *, task, scope=None, system_prompt=None, agent_type=None, **kwargs):
         captured.update(scope=scope, system_prompt=system_prompt, agent_type=agent_type)
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
@@ -250,7 +277,7 @@ async def test_builder_agent_type_is_full_capability():
 
     async def spawn_fn(ctx, *, task, scope=None, **kwargs):
         captured["scope"] = scope
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
@@ -270,7 +297,7 @@ async def test_explicit_system_prompt_overrides_persona_but_keeps_capability():
 
     async def spawn_fn(ctx, *, task, system_prompt=None, scope=None, **kwargs):
         captured.update(system_prompt=system_prompt, scope=scope)
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(spawn_fn=spawn_fn)
     o = Orchestra.for_ctx(ctx)
@@ -284,7 +311,7 @@ async def test_agent_type_with_schema_keeps_capability_and_note():
 
     async def spawn_fn(ctx, *, task, system_prompt=None, scope=None, **kwargs):
         captured.update(worker_prompt=system_prompt, worker_scope=scope)
-        return SimpleNamespace(text="worker")
+        return SimpleNamespace(text="worker", status="completed")
 
     async def format_structured(*, response_format, **kwargs):
         captured["formatted"] = True
@@ -404,7 +431,7 @@ async def test_agent_inherits_workflow_model_unless_overridden():
 
     async def spawn_fn(ctx, *, task, model_override=None, **kwargs):
         seen.append(model_override)
-        return SimpleNamespace(text="ok")
+        return SimpleNamespace(text="ok", status="completed")
 
     ctx = SimpleNamespace(
         spawn_fn=spawn_fn,

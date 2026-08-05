@@ -536,7 +536,7 @@ class BackgroundTaskRegistry:
         """Queue a steering message for a running background agent. Returns
         False when no such agent is live (already finished or unknown) or its
         inbox is closed — `task.done()` alone is a lying liveness test: the
-        task stays not-done through post-loop salvage/teardown, seconds after
+        task stays not-done through terminal settlement and teardown, seconds after
         the agent's last step."""
         task = self._tasks.get(task_id)
         if task is None or task.done() or task_id in self._closed_inboxes:
@@ -616,11 +616,31 @@ class BackgroundTaskRegistry:
         block on a detached agent (the MCP research surface)."""
         return self._tasks.get(task_id)
 
-    def register(self, task_id: str, task: asyncio.Task, command: str) -> None:
+    def register(
+        self,
+        task_id: str,
+        task: asyncio.Task,
+        command: str,
+        *,
+        observe_failure: bool = False,
+    ) -> None:
         self._reserved.discard(task_id)
         self._tasks[task_id] = task
         self._commands[task_id] = command
-        task.add_done_callback(lambda _: self._remove(task_id))
+
+        def complete(completed: asyncio.Task) -> None:
+            self._remove(task_id)
+            if not observe_failure or completed.cancelled():
+                return
+            error = completed.exception()
+            if error is not None:
+                _logger.error(
+                    "Detached background task %s failed",
+                    task_id,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(complete)
 
     async def _record(
         self,
@@ -826,8 +846,8 @@ class BackgroundTaskRegistry:
             if child_session_id
             else ""
         )
-        # A non-completed body is mostly salvage debris. Completed work keeps a
-        # much larger head/tail window and an exact durable retrieval pointer.
+        # Failure reports stay short. Completed work keeps a much larger
+        # head/tail window and an exact durable retrieval pointer.
         notify_result = notification_result
         failure_guidance = ""
         if status != "completed":

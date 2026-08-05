@@ -1,6 +1,5 @@
 import asyncio
 from collections.abc import Mapping
-from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from inspect import isawaitable
@@ -29,8 +28,18 @@ from arden.core.compactor import Compactor
 from arden.core.deferred_tools_middleware import DeferredToolsModelRequestMiddleware
 from arden.core.isolation import IsolationLevel
 from arden.core.llm_client import llm_client
-from arden.core.naming import generate_agent_name
 from arden.core.prompts import AREA_BLOCK, TEAM_CHILD_BLOCK
+from arden.core.spawn_lifecycle import (
+    ChildSessionLifecycle,
+    activate_child,
+    append_failure,
+    cancel_and_join,
+    collect_failure,
+    decode_child_suspension,
+    finish_despite_cancellation,
+    raise_failures,
+    run_operations,
+)
 from arden.core.spawn_spec import ParentRef, SpawnSpec, WorkflowRef
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.usage_tracker import UsageTracker
@@ -38,7 +47,6 @@ from arden.events.sse import (
     BackgroundTaskEvent,
     SSEEvent,
     TaskFinishedEvent,
-    TaskProgressEvent,
     TaskStartedEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
@@ -50,7 +58,7 @@ from arden.llm.models import get_model
 from arden.logging import get_logger
 from arden.observability import observed_trace
 from arden.tools.core.base import Tool
-from arden.tools.core.context import ChildIOParams, IOBridge, RunContext, ToolContext
+from arden.tools.core.context import IOBridge, RunContext, ToolContext
 
 # `tools` is already this module's schema-list parameter; alias the filter
 # namespace rather than shadow it.
@@ -117,6 +125,14 @@ class SpawnResult:
         return data
 
 
+class _AgentStreamFailure(Exception):
+    """An exception raised by the child agent itself, not its delivery path."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
 _logger = get_logger(__name__)
 
 _REASONING_EVENTS = (ReasoningBlock, ReasoningStarted, ReasoningDelta, ReasoningEnded)
@@ -141,30 +157,10 @@ _SUPPRESSED_NESTED_SSE = (
     TextMessageEndEvent,
 )
 
-# Salvage tunables — used when the inner agent's LLM call fails and we
-# try to summarize whatever tool results were gathered before the error.
-_SALVAGE_TOOL_CHAR_LIMIT = 4000
-_SALVAGE_MAX_TOKENS = 2000
-_SALVAGE_TAIL_RESULTS = 20
-
 # A resumed parent that finds its awaited child dead (pending suspension +
 # interrupted bg row) re-spawns it — but LLM work costs dollars, so repeated
 # restart crashes must not respawn forever.
 _MAX_SUBAGENT_RESPAWNS = 2
-
-
-async def _suspension_callback(callback, label: str, **kwargs) -> None:
-    """Best-effort durable-suspension write: the in-process await is the
-    behavior, the row is the recovery record — a store hiccup must not fail
-    the spawn itself."""
-    if callback is None:
-        return
-    try:
-        await callback(**kwargs)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _logger.exception("Subagent suspension %s failed", label)
 
 
 def _compactor_with_prompt_context(
@@ -193,117 +189,10 @@ def get_response_cost(response) -> float:
         return 0.0
 
 
-def _clamp_for_salvage(msg: dict) -> dict:
-    """Defensive clamp on tool/assistant content before re-sending to the
-    model for the salvage summary — the original failure may have been
-    triggered by an oversized tool result, and we don't want to fail the
-    salvage pass for the same reason. Handles both plain-string content
-    and the list-of-blocks shape that providers use for tool results
-    with images or structured payloads."""
-    if msg.get("role") not in ("tool", "assistant"):
-        return msg
-    content = msg.get("content")
-    if isinstance(content, str):
-        if len(content) <= _SALVAGE_TOOL_CHAR_LIMIT:
-            return msg
-        head = content[: _SALVAGE_TOOL_CHAR_LIMIT - 60]
-        return {**msg, "content": head + "\n\n[clamped for salvage summary]"}
-    if isinstance(content, list):
-        # Flatten to a string so we never re-emit huge multi-part blocks
-        # to the salvage LLM. Crude but safe.
-        flat = "\n".join(block.get("text", "") if isinstance(block, dict) else str(block) for block in content)
-        if len(flat) <= _SALVAGE_TOOL_CHAR_LIMIT:
-            return {**msg, "content": flat}
-        head = flat[: _SALVAGE_TOOL_CHAR_LIMIT - 60]
-        return {**msg, "content": head + "\n\n[clamped for salvage summary]"}
-    return msg
-
-
-@observed_trace("agent.salvage", tags="agent")
-async def _salvage_summary(model: str, child_messages: list[dict], error: str, task: str) -> str:
-    """Ask the model to summarize what it found before erroring. Returns
-    "" if even this attempt fails (caller falls back to deterministic)."""
-    salvage_messages = [_clamp_for_salvage(m) for m in child_messages]
-    salvage_messages.append(
-        {
-            "role": Role.USER,
-            "content": (
-                f"Your previous step errored: {error}\n\n"
-                f"Original task: {task}\n\n"
-                "Without making any more tool calls, summarize the partial findings "
-                "from the tool results above. Be honest about gaps. The parent agent "
-                "will use this as a partial answer, so make every fact recoverable."
-            ),
-        }
-    )
-    try:
-        response = await llm_client.complete(
-            model=model,
-            messages=salvage_messages,
-            temperature=0.2,
-            max_tokens=_SALVAGE_MAX_TOKENS,
-        )
-        return (response.choices[0].message.content or "").strip()
-    except Exception as e:
-        _logger.warning("Salvage summary call failed: %s", e)
-        return ""
-
-
-def _deterministic_salvage(child_messages: list[dict], error: str) -> str:
-    """Last-resort fallback when the LLM-based salvage also fails: emit a
-    flat list of the tail tool results so the parent at least sees raw
-    evidence of what was gathered."""
-    tool_results: list[str] = []
-    for msg in child_messages:
-        if msg.get("role") != "tool":
-            continue
-        content = (msg.get("content") or "")[:300]
-        tool_results.append(f"- {content}")
-    body = "\n".join(tool_results[-_SALVAGE_TAIL_RESULTS:])
-    return (
-        f"[partial — sub-agent errored: {error}]\n"
-        f"Last {min(len(tool_results), _SALVAGE_TAIL_RESULTS)} tool results before "
-        f"the error:\n{body or '(none)'}"
-    )
-
-
-def _deterministic_cancel_salvage(child_messages: list[dict]) -> str:
-    tool_results: list[str] = []
-    for msg in child_messages:
-        if msg.get("role") not in ("tool", "assistant"):
-            continue
-        content = (msg.get("content") or "")[:300]
-        if content:
-            tool_results.append(f"- {content}")
-    body = "\n".join(tool_results[-_SALVAGE_TAIL_RESULTS:])
-    return (
-        "[partial - sub-agent cancelled]\n"
-        f"Last {min(len(tool_results), _SALVAGE_TAIL_RESULTS)} findings before "
-        f"cancellation:\n{body or '(none)'}"
-    )
-
-
-def _deterministic_empty_salvage(child_messages: list[dict]) -> str:
-    tool_results: list[str] = []
-    for msg in child_messages:
-        if msg.get("role") not in ("tool", "assistant"):
-            continue
-        content = (msg.get("content") or "")[:300]
-        if content:
-            tool_results.append(f"- {content}")
-    if not tool_results:
-        return "[partial — sub-agent returned empty final answer]\nNo recoverable tool results were produced."
-    body = "\n".join(tool_results[-_SALVAGE_TAIL_RESULTS:])
-    return (
-        "[partial — sub-agent returned empty final answer]\n"
-        f"Last {min(len(tool_results), _SALVAGE_TAIL_RESULTS)} recoverable findings:\n{body}"
-    )
-
-
 async def _emit_visible_child_final(child_io: IOBridge | None, text: str) -> None:
     if child_io is None or child_io.emit is None or not text.strip():
         return
-    message_id = f"salvage-{uuid4().hex[:10]}"
+    message_id = f"failure-{uuid4().hex[:10]}"
     await child_io.emit(TextMessageStartEvent(message_id=message_id, role="assistant"))
     await child_io.emit(TextMessageContentEvent(message_id=message_id, delta=text))
     await child_io.emit(TextMessageEndEvent(message_id=message_id, content=text))
@@ -387,68 +276,71 @@ def create_spawn_fn(
         # the rest with fresh lifecycle_ids; the old rows just settle inert.
         suspension_id = (lifecycle_id or parent_id) if should_wait else None
         parent_io = calling_ctx.io
+        registry = calling_ctx.background_tasks
+        suspension_callbacks = (
+            parent_io.get_suspension,
+            parent_io.consume_suspension,
+            parent_io.record_suspension,
+            parent_io.resolve_suspension,
+        )
+        if suspension_id:
+            has_any_suspension_callback = any(callback is not None for callback in suspension_callbacks)
+            has_all_suspension_callbacks = all(callback is not None for callback in suspension_callbacks)
+            has_durable_agent_store = registry.record_event is not None
+            if has_any_suspension_callback != has_all_suspension_callbacks:
+                raise RuntimeError("subagent suspension callbacks must be wired together")
+            if has_all_suspension_callbacks != has_durable_agent_store:
+                raise RuntimeError("subagent suspension and agent-run persistence must be wired together")
         respawns = 0
         if suspension_id and parent_io.get_suspension is not None:
-            try:
-                suspension = await parent_io.get_suspension(
-                    run_id=calling_ctx.run.run_id,
-                    suspension_id=suspension_id,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                suspension = None
-                _logger.exception("Subagent suspension lookup failed")
-            if suspension is not None and suspension.get("kind") == "subagent_result":
-                payload = suspension.get("payload") or {}
-                if suspension.get("status") != "pending":
+            raw_suspension = await parent_io.get_suspension(
+                run_id=calling_ctx.run.run_id,
+                suspension_id=suspension_id,
+            )
+            if raw_suspension is not None:
+                suspension = decode_child_suspension(raw_suspension)
+                if suspension.status != "pending":
                     # A previous process already ran this child to a terminal
                     # state — hand back the recorded outcome without spawning.
-                    await _suspension_callback(
-                        parent_io.consume_suspension,
-                        "consume",
+                    await parent_io.consume_suspension(
                         run_id=calling_ctx.run.run_id,
                         suspension_id=suspension_id,
                     )
-                    resolution = suspension.get("resolution") or {}
+                    result_status, result = suspension.terminal_result()
                     return SpawnResult(
-                        text=str(resolution.get("result") or ""),
-                        child_run_id=str(payload.get("child_run_id") or ""),
-                        child_session_id=payload.get("child_session_id"),
+                        text=result,
+                        child_run_id=suspension.child_run_id,
+                        child_session_id=suspension.child_session_id,
                         parent_tool_call_id=parent_id,
                         agent_type=resolved_agent_type,
                         wait=True,
-                        status=str(resolution.get("status") or "completed"),
+                        status=result_status,
                     )
                 # Pending row on a fresh lookup = the child died with a previous
                 # process (its bg row was marked interrupted at boot). Re-spawn
                 # from this call's arguments — a replayed tool call carries the
                 # same spawn inputs — but bounded, so crash-looping restarts
                 # can't re-buy the same LLM work forever.
-                respawns = int(payload.get("respawns") or 0) + 1
+                respawns = suspension.respawns + 1
                 if respawns > _MAX_SUBAGENT_RESPAWNS:
                     failure = (
                         f"Sub-agent did not survive {_MAX_SUBAGENT_RESPAWNS + 1} attempts across server "
                         "restarts — not respawning again. Re-issue the task explicitly if it still matters."
                     )
-                    await _suspension_callback(
-                        parent_io.resolve_suspension,
-                        "resolve",
+                    await parent_io.resolve_suspension(
                         run_id=calling_ctx.run.run_id,
                         suspension_id=suspension_id,
                         status="failed",
                         resolution={"status": "failed", "result": failure},
                     )
-                    await _suspension_callback(
-                        parent_io.consume_suspension,
-                        "consume",
+                    await parent_io.consume_suspension(
                         run_id=calling_ctx.run.run_id,
                         suspension_id=suspension_id,
                     )
                     return SpawnResult(
                         text=failure,
-                        child_run_id=str(payload.get("child_run_id") or ""),
-                        child_session_id=payload.get("child_session_id"),
+                        child_run_id=suspension.child_run_id,
+                        child_session_id=suspension.child_session_id,
                         parent_tool_call_id=parent_id,
                         agent_type=resolved_agent_type,
                         wait=True,
@@ -553,35 +445,7 @@ def create_spawn_fn(
         # service's child_io_factory) so its session behaves exactly like a
         # normal run — the parent gets only lifecycle events. SHARED subagents
         # have no distinct session, so they keep nesting into the parent's io.
-        child_io: IOBridge | None = None
-        child_io_close = None
-        child_io_finish = None
-        # A FULL child's OWN spawns record through the CHILD session's registry
-        # (provided by the io factory, wired for durable rows + nested result
-        # delivery); everything else keeps sharing the caller's registry.
-        child_background_tasks = calling_ctx.background_tasks
-        if has_child_session and calling_ctx.run.child_io_factory is not None:
-            child_session = await calling_ctx.run.child_io_factory(
-                ChildIOParams(
-                    session_id=child_state.session_id,
-                    run_id=calling_ctx.run.run_id,
-                    pending_approvals=calling_ctx.io.pending_approvals or {},
-                    task_id=child_run_id,
-                    parent_background_tasks=calling_ctx.background_tasks,
-                )
-            )
-            child_io = child_session.io
-            child_io_close = child_session.aclose
-            child_io_finish = child_session.finish
-            if child_session.background_tasks is not None:
-                child_background_tasks = child_session.background_tasks
-            bg_io = child_io
-            if calling_ctx.run_registry is not None:
-                calling_ctx.run_registry.mark_session_active(child_state.session_id, calling_ctx.run.run_id)
-        elif background or silent:
-            bg_io = IOBridge()
-        else:
-            bg_io = calling_ctx.io
+        bg_io = IOBridge() if background or silent else calling_ctx.io
 
         child_ctx = ToolContext(
             session_state=child_state,
@@ -591,7 +455,7 @@ def create_spawn_fn(
             services=calling_ctx.services,
             area=calling_ctx.area,
             ledger=calling_ctx.ledger,
-            background_tasks=child_background_tasks,
+            background_tasks=calling_ctx.background_tasks,
             run_registry=calling_ctx.run_registry,
         )
         child_ctx.spawn_fn = create_spawn_fn(
@@ -628,15 +492,10 @@ def create_spawn_fn(
 
         parent_emit = calling_ctx.io.emit if not silent else None
         lifecycle_task_id = lifecycle_id or parent_id or f"task-{uuid4().hex[:10]}"
-        agent_label_task = (
-            asyncio.create_task(generate_agent_name(child_model, task)) if parent_emit and not background else None
-        )
         task_depth = current_depth + 1
 
         # Sub-agents reuse the parent's compactor so a long-running tool
-        # sweep doesn't blow past the model's context window mid-run. The
-        # salvage path stays as a backstop, but compaction prevents the
-        # underlying failure in the first place.
+        # sweep does not exceed the model's context window mid-run.
         middlewares: tuple = (
             DeferredToolsModelRequestMiddleware(
                 registry=child_registry,
@@ -748,71 +607,53 @@ def create_spawn_fn(
             if workflow_id
             else None,
         )
-        session_service = calling_ctx.services.get("session")
-        child_session_persisted = False
+        task_id = child_run_id
+        label = "Agent"
+        child_lifecycle = ChildSessionLifecycle(
+            parent=calling_ctx,
+            child=child_ctx,
+            state=child_state,
+            messages=child_messages,
+            task_id=task_id,
+            has_child_session=has_child_session,
+        )
 
-        async def _provision_child_session() -> None:
-            nonlocal child_session_persisted
-            if child_session_persisted or child_state.session_id == calling_ctx.session_id:
-                return
-            provision_state = getattr(session_service, "provision_state", None)
-            if provision_state is None:
-                return
-            try:
-                await provision_state(child_state, [])
-                child_session_persisted = True
-            except Exception as exc:
-                _logger.warning("Failed to provision child agent session: %s", exc)
+        async def _abort_unstarted_child(
+            status: str,
+            *,
+            durable_started: bool,
+        ) -> None:
+            registry.release(task_id)
 
-        async def _save_child_session(status: str) -> None:
-            if child_state.session_id == calling_ctx.session_id:
-                return
-            save_child = getattr(session_service, "save", None)
-            if save_child is not None:
-                child_state.agent_status = status
-                try:
-                    await save_child(child_state, child_messages)
-                except Exception as exc:
-                    _logger.warning("Failed to save child agent session: %s", exc)
-            # Close the child session's run framing on a terminal status (once),
-            # independent of message persistence: records the durable run status +
-            # emits RunFinished/RunCancelled on the child bus so the viewed session
-            # collapses from live → done instead of streaming forever.
-            if child_io_finish is not None and status != "running":
-                await child_io_finish(status)
+            async def finalize() -> None:
+                async def record_terminal(terminal_status: str, _persistence_error: Exception | None) -> None:
+                    if durable_started:
+                        await registry.record_finished(task_id=task_id, status=terminal_status)
 
-        async def _save_child_step(_step: int, _response, messages: list[dict]) -> None:
-            if messages is child_messages:
-                await _save_child_session("running")
+                await run_operations(
+                    "unstarted child cleanup failed",
+                    child_lifecycle.settle(
+                        status,
+                        record_terminal,
+                        persist=child_lifecycle.provisioned,
+                    ),
+                )
 
-        async def _teardown_child_io() -> None:
-            if calling_ctx.run_registry is not None and child_io is not None:
-                calling_ctx.run_registry.clear_session_active(child_state.session_id)
-            if child_io_close is not None:
-                await child_io_close()
+            await finish_despite_cancellation(finalize())
 
-        async def _abort_unstarted_child(status: str) -> None:
-            if agent_label_task is not None:
-                if not agent_label_task.done():
-                    agent_label_task.cancel()
-                with suppress(asyncio.CancelledError, Exception):
-                    await agent_label_task
-            try:
-                await _save_child_session(status)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _logger.exception("Failed to settle unstarted child session")
-            try:
-                await _teardown_child_io()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _logger.exception("Failed to close unstarted child session")
-
-        await _provision_child_session()
-        if hasattr(sub_agent, "hooks"):
-            sub_agent.hooks.on_step_finish = _save_child_step
+        async def _raise_start_failure(
+            primary: Exception,
+            status: str,
+            *,
+            durable_started: bool,
+        ) -> None:
+            errors: list[Exception] = []
+            append_failure(errors, primary)
+            await collect_failure(
+                errors,
+                _abort_unstarted_child(status, durable_started=durable_started),
+            )
+            raise_failures("child start failed", errors)
 
         def _foreground_child_events(event) -> tuple[SSEEvent, ...]:
             if isinstance(event, _REASONING_EVENTS):
@@ -841,54 +682,43 @@ def create_spawn_fn(
                 parent_id=None if sse_parent == parent_id else sse_parent,
             )
 
-        stream_failed = False
         tool_call_count = 0
         child_tool_call_ids: list[str] = []
         child_source_refs: list[ToolSourceRef] = []
 
         async def _stream_to(to_events) -> str:
-            nonlocal stream_failed, tool_call_count
+            nonlocal tool_call_count
             text = ""
-            try:
-                async for event in sub_agent.stream(child_messages):
-                    if isinstance(event, Result):
-                        text = event.text
-                        continue
-                    if isinstance(event, ToolStarted) and event.tool_id not in child_tool_call_ids:
+            events = sub_agent.stream(child_messages).__aiter__()
+            while True:
+                try:
+                    event = await anext(events)
+                except StopAsyncIteration:
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    raise _AgentStreamFailure(error) from error
+                if isinstance(event, Result):
+                    text = event.text
+                    continue
+                if isinstance(event, ToolStarted) and event.tool_id not in child_tool_call_ids:
+                    child_tool_call_ids.append(event.tool_id)
+                if isinstance(event, ToolCompleted):
+                    tool_call_count += 1
+                    if event.tool_id not in child_tool_call_ids:
                         child_tool_call_ids.append(event.tool_id)
-                    if isinstance(event, ToolCompleted):
-                        tool_call_count += 1
-                        if event.tool_id not in child_tool_call_ids:
-                            child_tool_call_ids.append(event.tool_id)
-                        child_source_refs.extend(event.source_refs)
-                    if child_io is not None:
-                        for sse in agent_events_to_sse(event):
-                            await child_io.emit(_rebase_for_child(sse))
-                    if parent_emit:
-                        mapped = to_events(event)
-                        if isawaitable(mapped):
-                            mapped = await mapped
-                        for out in mapped:
-                            await parent_emit(out)
-                return text
-            except asyncio.CancelledError:
-                # User-initiated cancel — don't try to salvage, just propagate.
-                raise
-            except Exception as exc:
-                # Fatal LLM/transport error mid-run. Whatever the sub-agent
-                # already gathered in `child_messages` is real work we paid
-                # for; synthesize a summary instead of returning bare error.
-                _logger.warning(
-                    "Sub-agent failed mid-run after %d messages, salvaging: %s",
-                    len(child_messages),
-                    exc,
-                )
-                stream_failed = True
-                failure_label = type(exc).__name__
-                summary = await _salvage_summary(child_model, child_messages, failure_label, task)
-                if summary:
-                    return f"[partial — sub-agent errored: {failure_label}]\n\n{summary}"
-                return _deterministic_salvage(child_messages, failure_label)
+                    child_source_refs.extend(event.source_refs)
+                if child_lifecycle.io is not None:
+                    for sse in agent_events_to_sse(event):
+                        await child_lifecycle.io.emit(_rebase_for_child(sse))
+                if parent_emit:
+                    mapped = to_events(event)
+                    if isawaitable(mapped):
+                        mapped = await mapped
+                    for out in mapped:
+                        await parent_emit(out)
+            return text
 
         def _settle_with(text: str, *, status: str = "completed") -> SpawnResult:
             """Build the final SpawnResult for the caller."""
@@ -906,26 +736,29 @@ def create_spawn_fn(
                 tool_call_ids=tuple(child_tool_call_ids),
             )
 
-        registry = calling_ctx.background_tasks
-        task_id = child_run_id
-        label = "Agent"
-
         # Horizontal fan-out guard: cap concurrent background agents per session
         # so a runaway loop can't spawn unbounded detached agents. Awaited
         # spawns reserve uncapped — bounded by the awaiting parent (workflow
         # fan-out legitimately exceeds the cap) — but still hold a roster slot
         # so the durable row and the cancel cascade cover them.
-        reserved = registry.reserve(
-            task_id,
-            command=label,
-            limit=None if should_wait else AGENT_MAX_CONCURRENT,
-            child_session_id=child_state.session_id if has_child_session else None,
-            parent_run_id=calling_ctx.run.run_id,
-            summary=task_summary,
-            agent_type=resolved_agent_type,
-        )
+        durable_started = False
+        try:
+            reserved = registry.reserve(
+                task_id,
+                command=label,
+                limit=None if should_wait else AGENT_MAX_CONCURRENT,
+                child_session_id=child_state.session_id if has_child_session else None,
+                parent_run_id=calling_ctx.run.run_id,
+                summary=task_summary,
+                agent_type=resolved_agent_type,
+            )
+        except Exception as exc:
+            await _raise_start_failure(
+                exc,
+                "failed",
+                durable_started=False,
+            )
         if not reserved:
-            await _abort_unstarted_child("failed")
             return SpawnResult(
                 text=(
                     f"Not started — already at the limit of {AGENT_MAX_CONCURRENT} concurrent "
@@ -934,6 +767,36 @@ def create_spawn_fn(
                 agent_type=resolved_agent_type,
                 wait=should_wait,
                 status="failed",
+            )
+
+        try:
+            await child_lifecycle.provision()
+            await child_lifecycle.acquire_io()
+            if hasattr(sub_agent, "hooks"):
+                sub_agent.hooks.on_step_finish = child_lifecycle.save_step
+            start_disposition = await registry.record_started(
+                task_id=task_id,
+                command=label,
+                parent_run_id=calling_ctx.run.run_id,
+                parent_tool_call_id=parent_id,
+                suspension_id=suspension_id,
+                child_session_id=child_state.session_id if has_child_session else None,
+                agent_type=resolved_agent_type,
+                wait=should_wait,
+                spawn_spec=spawn_spec.to_json(),
+            )
+            if start_disposition is BackgroundStartDisposition.CANCELLED:
+                raise asyncio.CancelledError
+            durable_started = True
+        except asyncio.CancelledError:
+            registry.release(task_id)
+            await _abort_unstarted_child("cancelled", durable_started=durable_started)
+            raise
+        except Exception as exc:
+            await _raise_start_failure(
+                exc,
+                "failed",
+                durable_started=durable_started,
             )
 
         # Steering channel, both wait modes: the parent (or user) can send
@@ -945,7 +808,7 @@ def create_spawn_fn(
             # the parent's registry (SHARED isolation / no io factory), that
             # roster lists the child itself and its siblings — the parent's
             # team, not this agent's.
-            child_owns_registry = child_background_tasks is not calling_ctx.background_tasks
+            child_owns_registry = child_lifecycle.background_tasks is not calling_ctx.background_tasks
 
             async def _drain_steering() -> list[dict]:
                 batch = registry.drain_injections(task_id)
@@ -953,7 +816,7 @@ def create_spawn_fn(
                     # The child's own roster — its spawns register through the
                     # CHILD session's registry — rendered only when the live
                     # set changed, so it never repeats every step.
-                    roster = child_background_tasks.roster_note_if_changed()
+                    roster = child_lifecycle.background_tasks.roster_note_if_changed()
                     if roster is not None:
                         batch.append(roster)
                 return batch
@@ -966,171 +829,51 @@ def create_spawn_fn(
             undelivered_steering.extend(m.get("content", "") for m in registry.close_inbox(task_id))
 
         async def _execute(to_events) -> tuple[str, str, str]:
-            """The one child execution both wait modes run: stream, timeout +
-            salvage ladder (LLM salvage → deterministic fallback), empty-result
-            salvage, salvage text made visible on the child bus. Returns
-            (status, text, detail). Cancellation propagates to the mode-specific
-            caller — after the inbox is closed."""
-            timed_out = False
+            """Run one child and return its explicit terminal outcome."""
             try:
                 text = await asyncio.wait_for(_stream_to(to_events), timeout=timeout)
-                status = "failed" if stream_failed else "completed"
             except asyncio.CancelledError:
-                _close_inbox()
                 raise
             except TimeoutError:
-                timed_out = True
-                text = ""
-                status = "failed"
-            # The loop will never step again: close the inbox NOW — before the
-            # salvage LLM calls below — so late steering gets a conflict instead
-            # of a false "queued". Anything already queued arrived too late for
-            # the agent and is surfaced with the result.
-            _close_inbox()
-            if timed_out:
-                _logger.warning("Sub-agent %s timed out after %ss, salvaging", task_id, timeout)
-                # Belt-and-suspenders: if the salvage call itself raises, still
-                # emit the deterministic fallback so the terminal path always runs.
-                try:
-                    summary = await _salvage_summary(child_model, child_messages, f"timed out after {timeout}s", task)
-                except Exception as salvage_exc:
-                    _logger.warning("Timeout salvage failed: %s", salvage_exc)
-                    summary = ""
-                text = (
-                    f"[partial — sub-agent timed out after {timeout}s]\n\n{summary}"
-                    if summary
-                    else _deterministic_salvage(child_messages, f"timed out after {timeout}s")
-                )
-            if not text.strip():
-                status = "failed"
-                summary = await _salvage_summary(child_model, child_messages, "completed with empty final answer", task)
-                text = (
-                    f"[partial — sub-agent returned empty final answer]\n\n{summary}"
-                    if summary
-                    else _deterministic_empty_salvage(child_messages)
-                )
-            if status != "completed":
-                await _emit_visible_child_final(child_io, text)
-            return status, text, f"timed out after {timeout}s" if timed_out else status
-
-        try:
-            start_disposition = await registry.record_started(
-                task_id=task_id,
-                command=label,
-                parent_run_id=calling_ctx.run.run_id,
-                parent_tool_call_id=parent_id,
-                suspension_id=suspension_id,
-                child_session_id=child_state.session_id if has_child_session else None,
-                agent_type=resolved_agent_type,
-                wait=should_wait,
-                spawn_spec=spawn_spec.to_json(),
-            )
-        except BaseException as exc:
-            registry.release(task_id)
-            status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
-            await _abort_unstarted_child(status)
-            raise
-
-        if start_disposition is BackgroundStartDisposition.CANCELLED:
-            registry.release(task_id)
-            if agent_label_task is not None and not agent_label_task.done():
-                agent_label_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await agent_label_task
-            await _save_child_session("cancelled")
-            await _teardown_child_io()
-            raise asyncio.CancelledError
+                text = f"Sub-agent timed out after {timeout}s."
+                _logger.warning("Sub-agent %s timed out after %ss", task_id, timeout)
+                status, detail = "failed", f"timed out after {timeout}s"
+            except _AgentStreamFailure as failure:
+                text = f"Sub-agent failed: {type(failure.error).__name__}."
+                _logger.exception("Sub-agent %s failed", task_id)
+                status, detail = "failed", f"execution failed: {type(failure.error).__name__}"
+            else:
+                if text.strip():
+                    status, detail = "completed", "completed"
+                else:
+                    text = "Sub-agent returned no final answer."
+                    status, detail = "failed", "empty final answer"
+            finally:
+                _close_inbox()
+            return status, text, detail
 
         if should_wait:
-            # The in-process await below is still what delivers the result;
-            # this row is what makes the wait durable — a restarted parent run
-            # replays the spawning tool call and picks the outcome (or the
-            # respawn) up from here. No expires_at: the child is bounded by its
-            # own timeout and the row resolves when it settles.
-            if suspension_id:
-                await _suspension_callback(
-                    parent_io.record_suspension,
-                    "record",
-                    run_id=calling_ctx.run.run_id,
-                    session_id=calling_ctx.session_id,
-                    suspension_id=suspension_id,
-                    kind="subagent_result",
-                    payload={
-                        "task": task_summary,
-                        "child_run_id": task_id,
-                        "child_session_id": child_state.session_id if has_child_session else None,
-                        "agent_type": resolved_agent_type,
-                        "respawns": respawns,
-                    },
-                )
-
-            async def _resolve_wait_suspension(status: str, text: str) -> None:
-                if suspension_id is None:
-                    return
-                await _suspension_callback(
-                    parent_io.resolve_suspension,
-                    "resolve",
-                    run_id=calling_ctx.run.run_id,
-                    suspension_id=suspension_id,
-                    status=status,
-                    resolution={"status": status, "result": text},
-                )
-
-            label_update_task: asyncio.Task[None] | None = None
-
-            async def _emit_agent_label_when_ready() -> None:
-                if parent_emit is None or agent_label_task is None:
-                    return
+            if suspension_id and parent_io.record_suspension is not None:
                 try:
-                    agent_label = await agent_label_task
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _logger.debug("Failed to generate sub-agent label", exc_info=True)
-                    return
-                if agent_label and agent_label != "Agent":
-                    child_state.name = agent_label
-                    await _save_child_session("running")
-                    await parent_emit(
-                        TaskProgressEvent(
-                            session_id=calling_ctx.session_id,
-                            run_id=calling_ctx.run.run_id,
-                            task_id=lifecycle_task_id,
-                            parent_tool_call_id=parent_id,
-                            child_run_id=child_run_id,
-                            child_session_id=child_state.session_id if has_child_session else None,
-                            agent_type=resolved_agent_type,
-                            wait=should_wait,
-                            name=agent_label,
-                            status="running",
-                            summary=task_summary,
-                            depth=task_depth,
-                            workflow_id=workflow_id,
-                            phase=phase,
-                        )
+                    await parent_io.record_suspension(
+                        run_id=calling_ctx.run.run_id,
+                        session_id=calling_ctx.session_id,
+                        suspension_id=suspension_id,
+                        kind="subagent_result",
+                        payload={
+                            "task": task_summary,
+                            "child_run_id": task_id,
+                            "child_session_id": child_state.session_id if has_child_session else None,
+                            "agent_type": resolved_agent_type,
+                            "respawns": respawns,
+                        },
                     )
-
-            async def _settle_agent_label_update() -> None:
-                if label_update_task is None:
-                    return
-                if agent_label_task is not None and agent_label_task.done():
-                    with suppress(asyncio.CancelledError):
-                        await label_update_task
-                    return
-                if not label_update_task.done():
-                    label_update_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await label_update_task
-
-            def _current_agent_label() -> str:
-                if agent_label_task is not None and agent_label_task.done() and not agent_label_task.cancelled():
-                    with suppress(Exception):
-                        return agent_label_task.result()
-                return "Agent"
-
-            def _event_agent_label() -> str:
-                agent_label = _current_agent_label()
-                return agent_label if agent_label != "Agent" else agent_slug
+                except asyncio.CancelledError:
+                    registry.release(task_id)
+                    await _abort_unstarted_child("cancelled", durable_started=True)
+                    raise
+                except Exception as exc:
+                    await _raise_start_failure(exc, "failed", durable_started=True)
 
             async def _emit_task_finished(status: str, summary: str) -> None:
                 if not parent_emit:
@@ -1145,7 +888,7 @@ def create_spawn_fn(
                         child_session_id=child_state.session_id if has_child_session else None,
                         agent_type=resolved_agent_type,
                         wait=should_wait,
-                        name=_event_agent_label(),
+                        name=agent_slug,
                         status=status,
                         summary=summary,
                         depth=task_depth,
@@ -1156,103 +899,174 @@ def create_spawn_fn(
                 )
 
             async def _settle_foreground(status: str, text: str, summary: str) -> SpawnResult:
-                await _settle_agent_label_update()
-                await _save_child_session(status)
-                await registry.record_finished(task_id=task_id, status=status, result_text=text)
-                await _resolve_wait_suspension(status, text)
-                await _emit_task_finished(status, summary)
+                async def finalize() -> str:
+                    async def record_terminal(
+                        terminal_status: str,
+                        persistence_error: Exception | None,
+                    ) -> None:
+                        result_text = (
+                            f"Child session persistence failed: {type(persistence_error).__name__}: {persistence_error}"
+                            if persistence_error is not None
+                            else text
+                        )
+                        terminal_operations = []
+                        if terminal_status != "completed":
+                            terminal_operations.append(_emit_visible_child_final(child_lifecycle.io, result_text))
+                        terminal_operations.extend(
+                            (
+                                registry.record_finished(
+                                    task_id=task_id,
+                                    status=terminal_status,
+                                    result_text=result_text,
+                                ),
+                                _emit_task_finished(terminal_status, summary),
+                            )
+                        )
+                        await run_operations(
+                            "child terminal record failed",
+                            *terminal_operations,
+                        )
+
+                    return await child_lifecycle.settle(status, record_terminal)
+
+                terminal_status = await finish_despite_cancellation(finalize())
                 if undelivered_steering:
-                    # An awaited result returns in-process — there is no delivery
-                    # channel to carry leftovers, so refusal + log is the contract.
                     _logger.warning(
                         "Awaited sub-agent %s finished with %d undelivered steering message(s)",
                         task_id,
                         len(undelivered_steering),
                     )
-                return _settle_with(text, status=status)
+                return _settle_with(text, status=terminal_status)
+
+            async def _emit_task_started() -> None:
+                if not parent_emit:
+                    return
+                await parent_emit(
+                    TaskStartedEvent(
+                        session_id=calling_ctx.session_id,
+                        run_id=calling_ctx.run.run_id,
+                        task_id=lifecycle_task_id,
+                        parent_tool_call_id=parent_id,
+                        child_run_id=child_run_id,
+                        child_session_id=child_state.session_id if has_child_session else None,
+                        agent_type=resolved_agent_type,
+                        wait=should_wait,
+                        name=agent_slug,
+                        summary=task_summary,
+                        depth=task_depth,
+                        workflow_id=workflow_id,
+                        phase=phase,
+                    )
+                )
 
             async def _run_foreground() -> tuple[str, str, str]:
-                nonlocal label_update_task
-                if parent_emit:
-                    await parent_emit(
-                        TaskStartedEvent(
-                            session_id=calling_ctx.session_id,
-                            run_id=calling_ctx.run.run_id,
-                            task_id=lifecycle_task_id,
-                            parent_tool_call_id=parent_id,
-                            child_run_id=child_run_id,
-                            child_session_id=child_state.session_id if has_child_session else None,
-                            agent_type=resolved_agent_type,
-                            wait=should_wait,
-                            # Name with the slug initially (distinct per agent) instead of the
-                            # placeholder "Agent" — the async-generated descriptive label
-                            # replaces it via task_progress when ready. Avoids N identical
-                            # generic rows for concurrent sub-agents.
-                            name=agent_slug,
-                            summary=task_summary,
-                            depth=task_depth,
-                            workflow_id=workflow_id,
-                            phase=phase,
-                        )
-                    )
-                if parent_emit is not None and agent_label_task is not None:
-                    label_update_task = asyncio.create_task(_emit_agent_label_when_ready())
-                return await _execute(_noop_child_events if child_io is not None else _foreground_child_events)
+                return await _execute(
+                    _noop_child_events if child_lifecycle.io is not None else _foreground_child_events
+                )
 
-            stream_task = asyncio.create_task(_run_foreground())
-            registry.register(task_id, stream_task, command=label)
+            start_gate = asyncio.Event()
+
+            async def _run_registered_foreground() -> tuple[str, str, str]:
+                await start_gate.wait()
+                return await _run_foreground()
+
+            stream_task = asyncio.create_task(_run_registered_foreground())
             subagent_handle = None
-            if calling_ctx.run_registry is not None:
-                subagent_handle = calling_ctx.run_registry.register_subagent(
-                    calling_ctx.run.run_id,
-                    lifecycle_task_id,
-                    stream_task,
-                )
-            try:
-                status, text, detail = await stream_task
-                return await _settle_foreground(status, text, detail)
-            except asyncio.CancelledError:
-                run_state = (
-                    calling_ctx.run_registry.get_run(calling_ctx.run.run_id)
-                    if calling_ctx.run_registry is not None
-                    else None
-                )
-                if run_state and not run_state.cancelled and subagent_handle and subagent_handle.cancel_requested:
-                    summary = await _salvage_summary(
-                        child_model,
-                        child_messages,
-                        "cancelled by user",
-                        task,
-                    )
-                    text = (
-                        f"[partial - sub-agent cancelled]\n\n{summary}"
-                        if summary
-                        else _deterministic_cancel_salvage(child_messages)
-                    )
-                    await _emit_visible_child_final(child_io, text)
-                    return await _settle_foreground("cancelled", text, "cancelled; partial summary returned")
-                await _settle_agent_label_update()
-                await _save_child_session("cancelled")
-                await registry.record_finished(task_id=task_id, status="cancelled")
-                await _resolve_wait_suspension("cancelled", "")
-                await _emit_task_finished("cancelled", "cancelled")
-                raise
-            finally:
+            subagent_registration_attempted = False
+
+            async def _cleanup_foreground_tasks() -> None:
+                errors: list[Exception] = []
+                if subagent_registration_attempted and calling_ctx.run_registry is not None:
+                    try:
+                        calling_ctx.run_registry.finish_subagent(calling_ctx.run.run_id, lifecycle_task_id)
+                    except Exception as exc:
+                        append_failure(errors, exc)
+                await collect_failure(errors, cancel_and_join(stream_task))
+                raise_failures("child task cleanup failed", errors)
+
+            async def _start_foreground() -> None:
+                nonlocal subagent_handle, subagent_registration_attempted
+                registry.register(task_id, stream_task, command=label)
                 if calling_ctx.run_registry is not None:
-                    calling_ctx.run_registry.finish_subagent(calling_ctx.run.run_id, lifecycle_task_id)
-                await _teardown_child_io()
-                if not stream_task.done():
-                    stream_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await stream_task
-                if label_update_task is not None and not label_update_task.done():
-                    label_update_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await label_update_task
-                if agent_label_task is not None and not agent_label_task.done():
-                    agent_label_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await agent_label_task
+                    subagent_registration_attempted = True
+                    subagent_handle = calling_ctx.run_registry.register_subagent(
+                        calling_ctx.run.run_id,
+                        lifecycle_task_id,
+                        stream_task,
+                    )
+                await _emit_task_started()
+                start_gate.set()
+
+            await activate_child(
+                _start_foreground(),
+                _cleanup_foreground_tasks,
+                lambda status: _abort_unstarted_child(status, durable_started=True),
+            )
+
+            async def _await_foreground_result() -> SpawnResult:
+                try:
+                    status, text, detail = await stream_task
+                except asyncio.CancelledError as cancellation:
+                    run_state = (
+                        calling_ctx.run_registry.get_run(calling_ctx.run.run_id)
+                        if calling_ctx.run_registry is not None
+                        else None
+                    )
+                    if run_state and not run_state.cancelled and subagent_handle and subagent_handle.cancel_requested:
+                        text = "Sub-agent cancelled by user."
+                        return await _settle_foreground(
+                            "cancelled",
+                            text,
+                            "cancelled by user",
+                        )
+                    try:
+                        await _settle_foreground("cancelled", "Sub-agent cancelled.", "cancelled")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as settlement_exc:
+                        raise cancellation from settlement_exc
+                    raise
+                except Exception as execution_exc:
+                    failure_text = f"Sub-agent lifecycle failed: {type(execution_exc).__name__}."
+                    try:
+                        await _settle_foreground(
+                            "failed",
+                            failure_text,
+                            f"execution failed: {type(execution_exc).__name__}",
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as settlement_exc:
+                        raise ExceptionGroup(
+                            "child execution and settlement failed",
+                            [execution_exc, settlement_exc],
+                        )
+                    raise
+                return await _settle_foreground(status, text, detail)
+
+            try:
+                foreground_result = await _await_foreground_result()
+            except asyncio.CancelledError as cancellation:
+                try:
+                    await _cleanup_foreground_tasks()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as cleanup_error:
+                    raise cancellation from cleanup_error
+                raise
+            except Exception as execution_error:
+                try:
+                    await _cleanup_foreground_tasks()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as cleanup_error:
+                    raise ExceptionGroup(
+                        "child execution cleanup failed",
+                        [execution_error, cleanup_error],
+                    )
+                raise
+            await _cleanup_foreground_tasks()
+            return foreground_result
 
         async def _to_bg_events(event):
             if isinstance(event, ToolStarted):
@@ -1279,60 +1093,90 @@ def create_spawn_fn(
             )
 
         async def _run_detached() -> None:
+            execution_error: Exception | None = None
             try:
                 status, result, _detail = await _execute(_to_bg_events)
             except asyncio.CancelledError:
-                status, result = "cancelled", "Cancelled"
-                await _emit_visible_child_final(child_io, result)
-            except Exception as e:
-                # _stream_to salvages its own failures — only exceptions outside
-                # the stream loop land here. A detached task must still deliver.
-                _logger.warning("Background task %s failed: %s", task_id, e)
-                _close_inbox()
-                status, result = "failed", f"Error: {e}"
-                await _emit_visible_child_final(child_io, result)
+                status, result = "cancelled", "Sub-agent cancelled."
+            except Exception as error:
+                _logger.exception("Background task %s lifecycle failed", task_id)
+                status, result = "failed", f"Sub-agent lifecycle failed: {type(error).__name__}."
+                execution_error = error
+
+            async def record_terminal(terminal_status: str, persistence_error: Exception | None) -> None:
+                terminal_result = (
+                    f"Child session persistence failed: {type(persistence_error).__name__}: {persistence_error}"
+                    if persistence_error is not None
+                    else result
+                )
+                terminal_operations = []
+                if terminal_status != "completed":
+                    terminal_operations.append(_emit_visible_child_final(child_lifecycle.io, terminal_result))
+                terminal_operations.append(
+                    registry.deliver_result(
+                        task_id=task_id,
+                        result=terminal_result,
+                        label=label,
+                        status=terminal_status,
+                        emit=parent_emit,
+                        child_session_id=child_state.session_id if has_child_session else None,
+                        parent_tool_call_id=parent_id,
+                        agent_type=resolved_agent_type,
+                        wait=should_wait,
+                        undelivered_steering=undelivered_steering or None,
+                    )
+                )
+                await run_operations(
+                    "background child terminal record failed",
+                    *terminal_operations,
+                )
+
             try:
-                await _save_child_session(status)
-                await registry.deliver_result(
-                    task_id=task_id,
-                    result=result,
-                    label=label,
-                    status=status,
-                    emit=parent_emit,
-                    child_session_id=child_state.session_id if has_child_session else None,
-                    parent_tool_call_id=parent_id,
-                    agent_type=resolved_agent_type,
-                    wait=should_wait,
-                    undelivered_steering=undelivered_steering or None,
-                )
-            except Exception:
-                _logger.exception("Background task %s delivery failed", task_id)
-            finally:
-                # Idempotent terminal frame on the child bus so a viewed background
-                # session collapses live→done even if save/deliver raised above
-                # (foreground does this via _save_child_session; background must too).
-                if child_io_finish is not None:
-                    await child_io_finish(status)
-                await _teardown_child_io()
+                await finish_despite_cancellation(child_lifecycle.settle(status, record_terminal))
+            except asyncio.CancelledError:
+                raise
+            except Exception as settlement_error:
+                if execution_error is not None:
+                    raise ExceptionGroup(
+                        "background child execution and settlement failed",
+                        [execution_error, settlement_error],
+                    )
+                raise
+            if execution_error is not None:
+                raise execution_error
 
-        bg_task = asyncio.create_task(_run_detached())
-        registry.register(task_id, bg_task, command=label)
+        start_gate = asyncio.Event()
 
-        if calling_ctx.io.emit:
-            await calling_ctx.io.emit(
-                BackgroundTaskEvent(
-                    task_id=task_id,
-                    session_id=registry.session_id,
-                    run_id=calling_ctx.run.run_id,
-                    child_run_id=child_run_id,
-                    child_session_id=child_state.session_id if has_child_session else None,
-                    parent_tool_call_id=parent_id,
-                    agent_type=resolved_agent_type,
-                    wait=should_wait,
-                    command=label,
-                    status="started",
+        async def _run_registered_detached() -> None:
+            await start_gate.wait()
+            await _run_detached()
+
+        bg_task = asyncio.create_task(_run_registered_detached())
+
+        async def _start_detached() -> None:
+            registry.register(task_id, bg_task, command=label, observe_failure=True)
+            if calling_ctx.io.emit:
+                await calling_ctx.io.emit(
+                    BackgroundTaskEvent(
+                        task_id=task_id,
+                        session_id=registry.session_id,
+                        run_id=calling_ctx.run.run_id,
+                        child_run_id=child_run_id,
+                        child_session_id=child_state.session_id if has_child_session else None,
+                        parent_tool_call_id=parent_id,
+                        agent_type=resolved_agent_type,
+                        wait=should_wait,
+                        command=label,
+                        status="started",
+                    )
                 )
-            )
+            start_gate.set()
+
+        await activate_child(
+            _start_detached(),
+            lambda: cancel_and_join(bg_task),
+            lambda status: _abort_unstarted_child(status, durable_started=True),
+        )
 
         # Background path returns immediately — the real result is delivered
         # asynchronously via registry.deliver_result. Usage/cost belong to
