@@ -47,7 +47,7 @@ from arden.events.sse import (
     ToolCallStartEvent,
     agent_events_to_sse,
 )
-from arden.server.bus import RECENT_BUFFER_MAX, BusRegistry, SessionBus
+from arden.server.bus import RECENT_BUFFER_MAX, BusRegistry, SessionBus, StreamRecord
 from arden.server.routers.automation import _automation_event_stream
 from arden.server.routers.chat import _event_stream, _keepalive
 from arden.server.state import RunRegistry, RunState, RunStatus
@@ -1033,7 +1033,9 @@ async def test_event_stream_replays_pending_approval():
 async def test_event_stream_replays_durable_pending_approval_without_active_run():
     buses = BusRegistry()
     bus = buses.get_or_create("sess-1")
-    await bus.emit(ApprovalNeededEvent(tool_id="tool-durable", name="file_edit"))
+    event = ApprovalNeededEvent(tool_id="tool-durable", name="file_edit")
+    await bus.emit(event)
+    records = [StreamRecord(seq=1, session_id="sess-1", event=event)]
 
     class PendingStore:
         async def get_latest_session_event_seq(self, session_id: str) -> int:
@@ -1043,7 +1045,7 @@ async def test_event_stream_replays_durable_pending_approval_without_active_run(
             return 0
 
         async def list_session_events(self, session_id: str, *, after_seq: int, limit: int) -> list:
-            return []
+            return [record for record in records if record.seq > after_seq][:limit]
 
         async def list_pending_tool_approvals(self, session_id: str) -> list[dict]:
             return [{"tool_call_id": "tool-durable"}]
@@ -1071,8 +1073,14 @@ async def test_event_stream_replays_durable_pending_approval_without_active_run(
 async def test_event_stream_skips_resolved_approval_replay():
     buses = BusRegistry()
     bus = buses.get_or_create("sess-1")
-    await bus.emit(ApprovalNeededEvent(tool_id="tool-1", name="file_edit"))
-    await bus.emit(ThinkingEvent(status="tail"))
+    approval = ApprovalNeededEvent(tool_id="tool-1", name="file_edit")
+    tail = ThinkingEvent(status="tail")
+    await bus.emit(approval)
+    await bus.emit(tail)
+    records = [
+        StreamRecord(seq=1, session_id="sess-1", event=approval),
+        StreamRecord(seq=2, session_id="sess-1", event=tail),
+    ]
 
     registry = RunRegistry()
     run = registry.create_run("sess-1")
@@ -1089,7 +1097,7 @@ async def test_event_stream_skips_resolved_approval_replay():
             return 0
 
         async def list_session_events(self, session_id: str, *, after_seq: int, limit: int) -> list:
-            return []
+            return [record for record in records if record.seq > after_seq][:limit]
 
         async def list_pending_tool_approvals(self, session_id: str) -> list[dict]:
             return [{"tool_call_id": "tool-1"}]
@@ -1148,15 +1156,15 @@ async def test_event_stream_replays_only_pending_connection():
 async def test_event_stream_replays_durable_pending_connection_without_active_run():
     buses = BusRegistry()
     bus = buses.get_or_create("sess-1")
-    await bus.emit(
-        ConnectionNeededEvent(
-            tool_id="tool-durable-connection",
-            integration_id="gmail",
-            connection_id="google",
-            label="Gmail",
-            capability="Read email",
-        )
+    event = ConnectionNeededEvent(
+        tool_id="tool-durable-connection",
+        integration_id="gmail",
+        connection_id="google",
+        label="Gmail",
+        capability="Read email",
     )
+    await bus.emit(event)
+    records = [StreamRecord(seq=1, session_id="sess-1", event=event)]
 
     class PendingStore:
         async def get_latest_session_event_seq(self, session_id: str) -> int:
@@ -1166,7 +1174,7 @@ async def test_event_stream_replays_durable_pending_connection_without_active_ru
             return 0
 
         async def list_session_events(self, session_id: str, *, after_seq: int, limit: int) -> list:
-            return []
+            return [record for record in records if record.seq > after_seq][:limit]
 
         async def list_pending_integration_connections(self, session_id: str) -> list[dict]:
             return [{"tool_call_id": "tool-durable-connection"}]

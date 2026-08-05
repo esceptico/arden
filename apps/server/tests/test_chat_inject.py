@@ -23,7 +23,7 @@ from arden.events.sse import (
 )
 from arden.server.app import _iteration_client_id, app
 from arden.server.bus import BusRegistry, SessionBus, StreamRecord
-from arden.server.deps import get_bus_registry, require_run_registry
+from arden.server.deps import get_bus_registry, require_run_registry, require_session_service
 from arden.server.routers.chat import (
     _effective_after_seq,
     _event_stream,
@@ -735,12 +735,18 @@ async def test_event_stream_stream_false_filters_text_deltas_but_preserves_seque
 def test_chat_events_rejects_negative_after_seq():
     app.dependency_overrides[get_bus_registry] = lambda: BusRegistry()
     app.dependency_overrides[require_run_registry] = lambda: RunRegistry()
+    app.dependency_overrides[require_session_service] = lambda: type(
+        "SessionServiceStub",
+        (),
+        {"store": _EmptyEventStore()},
+    )()
 
     try:
         response = TestClient(app).get("/chat/events/sess-1?after_seq=-1")
     finally:
         app.dependency_overrides.pop(get_bus_registry, None)
         app.dependency_overrides.pop(require_run_registry, None)
+        app.dependency_overrides.pop(require_session_service, None)
 
     assert response.status_code == 422
 

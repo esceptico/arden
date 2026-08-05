@@ -11,7 +11,7 @@ from arden.integrations.base import IntegrationConnectionDescriptor, Integration
 from arden.logging import get_logger
 from arden.server.bus import BusRegistry, StreamRecord
 from arden.server.chat_replay import ChatReplayPlanner, is_replayable_chat_event
-from arden.server.deps import get_bus_registry, require_run_registry
+from arden.server.deps import get_bus_registry, require_run_registry, require_session_service
 from arden.server.middleware import SSEStreamingResponse
 from arden.server.runtime import Runtime, get_runtime
 from arden.server.schemas import (
@@ -29,6 +29,7 @@ from arden.server.sse_stream import keepalive_chunk, live_records, reset_chunk
 from arden.server.sse_stream import replay_records as iter_replay_records
 from arden.server.state import RunRegistry, RunStatus
 from arden.services.chat import ChatIdempotencyConflict, ChatSessionNotFound, submit_chat_message
+from arden.services.session import SessionService
 
 router = APIRouter(tags=["chat"])
 _logger = get_logger(__name__)
@@ -154,10 +155,8 @@ async def chat_events(
     after_seq: Annotated[int | None, Query(ge=0)] = None,
     buses: BusRegistry = Depends(get_bus_registry),
     run_registry: RunRegistry = Depends(require_run_registry),
+    session_service: SessionService = Depends(require_session_service),
 ):
-    runtime = getattr(request.app.state, "runtime", None)
-    session_service = getattr(runtime, "session_service", None)
-    event_store = session_service.store if session_service else None
     effective_after_seq = _effective_after_seq(after_seq, request.headers.get("last-event-id"))
     return SSEStreamingResponse(
         _event_stream(
@@ -166,7 +165,7 @@ async def chat_events(
             run_registry,
             stream=stream,
             after_seq=effective_after_seq,
-            event_store=event_store,
+            event_store=session_service.store,
         ),
         media_type="text/event-stream",
         headers={
@@ -218,15 +217,14 @@ def reconstruct_workflow_events(
 
 
 @router.get("/chat/{session_id}/workflows")
-async def get_session_workflow_events(session_id: str, request: Request):
+async def get_session_workflow_events(
+    session_id: str,
+    session_service: SessionService = Depends(require_session_service),
+):
     """Persisted workflow-domain events for a session, so the client can rehydrate
     its FleetView cards after a reload (the live workflows store is in-memory and
     is otherwise lost when the transcript is rebuilt from history)."""
-    runtime = getattr(request.app.state, "runtime", None)
-    session_service = getattr(runtime, "session_service", None)
-    store = session_service.store if session_service else None
-    if store is None:
-        return {"events": []}
+    store = session_service.store
     records = await store.list_session_events(session_id, after_seq=0, limit=50000)
     # Bound to the transcript checkpoint so rehydration never overlaps the live
     # SSE tail (which re-delivers events beyond the checkpoint on reconnect).

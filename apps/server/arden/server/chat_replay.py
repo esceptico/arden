@@ -33,6 +33,10 @@ class PendingConnectionReplayStore(Protocol):
     async def list_pending_integration_connections(self, session_id: str) -> list[Mapping[str, object]]: ...
 
 
+class ChatReplayUnavailableError(RuntimeError):
+    """The durable state required to replay a chat cannot be verified."""
+
+
 def is_replayable_chat_event(event: SSEEvent) -> bool:
     return event.type not in EPHEMERAL_EVENT_TYPES
 
@@ -114,7 +118,9 @@ class ChatReplayPlanner:
         # not persisted. Only the durable tail reaching the captured live
         # boundary distinguishes a complete replay from a writer still draining.
         if not bounded or bounded[-1].seq != replay_upper_seq:
-            return None
+            raise ChatReplayUnavailableError(
+                f"chat replay for session {self.session_id!r} is incomplete at sequence {replay_upper_seq}"
+            )
         return bounded
 
     async def _filter_records(self, records: list[StreamRecord]) -> tuple[StreamRecord, ...]:
@@ -138,11 +144,11 @@ class ChatReplayPlanner:
             return not future.done()
 
         if self._durable_pending_approval_ids is None:
-            rows = (
-                await self.event_store.list_pending_tool_approvals(self.session_id)
-                if isinstance(self.event_store, PendingApprovalReplayStore)
-                else []
-            )
+            if not isinstance(self.event_store, PendingApprovalReplayStore):
+                raise ChatReplayUnavailableError(
+                    f"chat replay store cannot verify pending approvals for session {self.session_id!r}"
+                )
+            rows = await self.event_store.list_pending_tool_approvals(self.session_id)
             self._durable_pending_approval_ids = self._pending_ids(rows)
         return tool_id in self._durable_pending_approval_ids
 
@@ -153,11 +159,11 @@ class ChatReplayPlanner:
             return not future.done()
 
         if self._durable_pending_connection_ids is None:
-            rows = (
-                await self.event_store.list_pending_integration_connections(self.session_id)
-                if isinstance(self.event_store, PendingConnectionReplayStore)
-                else []
-            )
+            if not isinstance(self.event_store, PendingConnectionReplayStore):
+                raise ChatReplayUnavailableError(
+                    f"chat replay store cannot verify pending connections for session {self.session_id!r}"
+                )
+            rows = await self.event_store.list_pending_integration_connections(self.session_id)
             self._durable_pending_connection_ids = self._pending_ids(rows)
         return tool_id in self._durable_pending_connection_ids
 
