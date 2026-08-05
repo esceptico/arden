@@ -1,5 +1,7 @@
 from exa_py import Exa
+from requests import RequestException
 
+from arden.integrations.web.exceptions import WebFetchProviderException, WebSearchProviderException
 from arden.integrations.web.types import WebContentResult, WebSearchResult
 
 
@@ -34,11 +36,14 @@ class ExaWebSource:
         if category:
             search_params["category"] = category
 
-        result = client.search_and_contents(
-            **search_params,
-            highlights={"num_sentences": 2, "highlights_per_url": 3, "query": query},
-            summary={"query": f"Key information about: {query}"},
-        )
+        try:
+            result = client.search_and_contents(
+                **search_params,
+                highlights={"num_sentences": 2, "highlights_per_url": 3, "query": query},
+                summary={"query": f"Key information about: {query}"},
+            )
+        except (RequestException, ValueError) as error:
+            raise WebSearchProviderException("The web provider request failed.") from error
 
         return [
             WebSearchResult(
@@ -53,7 +58,10 @@ class ExaWebSource:
 
     def get_contents(self, urls: list[str]) -> list[WebContentResult]:
         client = self._get_client()
-        result = client.get_contents(urls, text=True)
+        try:
+            result = client.get_contents(urls, text=True)
+        except (RequestException, ValueError) as error:
+            raise WebFetchProviderException("The web provider request failed.") from error
 
         return [
             WebContentResult(

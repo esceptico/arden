@@ -2,12 +2,11 @@ import logging
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
-import trafilatura
 from lxml import etree, html
 from trafilatura import bare_extraction
 from trafilatura.settings import use_config
 
-from arden.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
+from arden.integrations.web.exceptions import WebFetchProviderException, WebSearchProviderException
 from arden.integrations.web.types import WebContentResult, WebSearchResult
 
 _logger = logging.getLogger(__name__)
@@ -34,6 +33,7 @@ _LITE_RESULT_SNIPPET_XPATH = (
     '/td[contains(concat(" ", normalize-space(@class), " "), " result-snippet ")])'
 )
 _PROVIDER_FAILURE = "Web search is temporarily unavailable."
+_FETCH_FAILURE = "The web page could not be fetched."
 
 
 def _guess_title(url: str) -> str:
@@ -122,40 +122,42 @@ class DDGSWebSource:
             if results:
                 return results
         if completed_request:
-            raise NoSearchResultsException(query)
+            return []
         raise WebSearchProviderException(_PROVIDER_FAILURE)
 
     def get_contents(self, urls: list[str]) -> list[WebContentResult]:
         out: list[WebContentResult] = []
         for url in urls:
             try:
-                downloaded = trafilatura.fetch_url(url, config=_cfg)
-                if not downloaded:
-                    out.append(WebContentResult(title=_guess_title(url), url=url))
-                    continue
-
-                doc = bare_extraction(
-                    downloaded,
-                    url=url,
-                    favor_recall=True,
-                    include_links=True,
-                    with_metadata=True,
-                    config=_cfg,
+                response = httpx.get(
+                    url,
+                    headers=_SEARCH_HEADERS,
+                    timeout=_cfg.getint("DEFAULT", "DOWNLOAD_TIMEOUT"),
+                    follow_redirects=True,
                 )
-                if doc:
-                    title = doc.title or _guess_title(url)
-                    out.append(
-                        WebContentResult(
-                            title=title,
-                            url=url,
-                            text=doc.text or None,
-                            published_date=doc.date,
-                            author=doc.author,
-                        )
-                    )
-                else:
-                    out.append(WebContentResult(title=_guess_title(url), url=url))
-            except Exception as e:
-                _logger.warning("Could not fetch content from %s: %s", url, e)
-                out.append(WebContentResult(title=_guess_title(url), url=url))
+                response.raise_for_status()
+            except httpx.HTTPError as error:
+                raise WebFetchProviderException(_FETCH_FAILURE) from error
+
+            if len(response.content) > _cfg.getint("DEFAULT", "MAX_FILE_SIZE"):
+                raise WebFetchProviderException("The web page exceeds the fetch size limit.", retryable=False)
+            doc = bare_extraction(
+                response.content,
+                url=str(response.url),
+                favor_recall=True,
+                include_links=True,
+                with_metadata=True,
+                config=_cfg,
+            )
+            if doc is None or not doc.text:
+                raise WebFetchProviderException("The web page did not contain readable content.", retryable=False)
+            out.append(
+                WebContentResult(
+                    title=doc.title or _guess_title(str(response.url)),
+                    url=str(response.url),
+                    text=doc.text,
+                    published_date=doc.date,
+                    author=doc.author,
+                )
+            )
         return out

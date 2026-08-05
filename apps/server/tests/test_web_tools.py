@@ -1,4 +1,3 @@
-import hashlib
 from datetime import UTC, datetime
 
 import httpx
@@ -10,9 +9,9 @@ from arden.context.models import SessionState
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.integrations.web import ddgs as ddgs_module
 from arden.integrations.web.ddgs import DDGSWebSource
-from arden.integrations.web.exceptions import NoSearchResultsException, WebSearchProviderException
+from arden.integrations.web.exceptions import WebFetchProviderException, WebSearchProviderException
 from arden.integrations.web.tools import WebFetchInput, WebSearchInput, web_fetch, web_search, web_search_tool
-from arden.integrations.web.types import WebContentResult, WebSearchResult
+from arden.integrations.web.types import InvalidPublicWebUrl, PublicWebUrl, WebContentResult, WebSearchResult
 from arden.tools.core import ToolResult
 from arden.tools.core.context import IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -28,10 +27,12 @@ class FakeWebSource:
         results: list[WebSearchResult] | None = None,
         error: Exception | None = None,
         contents: list[WebContentResult] | None = None,
+        content_error: Exception | None = None,
     ):
         self.results = results or []
         self.error = error
         self.contents = contents or []
+        self.content_error = content_error
 
     def search_with_details(
         self,
@@ -44,6 +45,8 @@ class FakeWebSource:
         return self.results
 
     def get_contents(self, urls: list[str]) -> list[WebContentResult]:
+        if self.content_error:
+            raise self.content_error
         return self.contents
 
 
@@ -216,30 +219,29 @@ async def test_web_search_executor_bounds_long_source_urls_without_losing_exact_
 
 
 @pytest.mark.asyncio
-async def test_web_search_omits_credentials_and_private_url_parameters():
-    source = FakeWebSource(
-        results=[
-            WebSearchResult(title="Credential", url="https://user:password@example.com/private"),
-            WebSearchResult(title="Parameterized", url="https://example.com/item?id=123"),
-        ]
-    )
+async def test_web_search_preserves_exact_query_and_fragment_for_fetch():
+    exact_url = "https://example.com/item?id=123#details"
+    source = FakeWebSource(results=[WebSearchResult(title="Parameterized", url=exact_url)])
 
-    result = await web_search(_execution(source), WebSearchInput(query="private", limit=5))
-    serialized = result.serialized_payload()
+    result = await web_search(_execution(source), WebSearchInput(query="public", limit=5))
 
-    assert "user:password" not in result.content
-    assert "user:password" not in serialized
-    assert "omitted (invalid or credential-bearing URL)" in result.content
-    assert "https://example.com/item" in result.content
-    assert "id=123" not in serialized
-    assert "Query and fragment parameters omitted for privacy" in result.content
+    assert f"URL: {exact_url}" in result.content
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": exact_url,
+            "title": "Parameterized",
+            "url": exact_url,
+        }
+    ]
+    assert WebFetchInput(url=exact_url).url == exact_url
 
 
 @pytest.mark.asyncio
 async def test_web_fetch_self_reports_source_refs():
-    source = FakeWebSource(
-        contents=[WebContentResult(title="Example Page", url="https://example.com/canonical", text="body text")]
-    )
+    canonical_url = "https://example.com/canonical?id=123#content"
+    source = FakeWebSource(contents=[WebContentResult(title="Example Page", url=canonical_url, text="body text")])
     result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/x"))
 
     assert result.is_error is False
@@ -247,9 +249,9 @@ async def test_web_fetch_self_reports_source_refs():
         {
             "provider": "web",
             "kind": "page",
-            "ref": "https://example.com/canonical",
+            "ref": canonical_url,
             "title": "Example Page",
-            "url": "https://example.com/canonical",
+            "url": canonical_url,
         }
     ]
 
@@ -275,107 +277,63 @@ async def test_web_fetch_keeps_clickable_provenance_for_long_public_url():
 
 
 @pytest.mark.asyncio
-async def test_web_search_uses_opaque_identity_for_query_urls_without_persisting_secrets():
-    secret_url = "https://example.com/private?signature=super-secret#download"
-    source = FakeWebSource(results=[WebSearchResult(title="Private result", url=secret_url)])
+async def test_web_fetch_rejects_empty_provider_content():
+    source = FakeWebSource(contents=[WebContentResult(title="Empty", url="https://example.com/x", text="  ")])
 
-    result = await web_search(_execution(source), WebSearchInput(query="private", limit=5))
+    result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/x"))
 
-    expected_ref = f"url-sha256:{hashlib.sha256(secret_url.encode()).hexdigest()}"
-    assert [ref.to_dict() for ref in result.source_refs] == [
-        {
-            "provider": "web",
-            "kind": "page",
-            "ref": expected_ref,
-            "title": "Private result",
-        }
-    ]
-    assert "super-secret" not in result.content
-    assert "super-secret" not in result.serialized_payload()
-    assert "https://example.com/private" in result.content
-    assert "Query and fragment parameters omitted for privacy" in result.content
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "provider_error"
 
 
-@pytest.mark.asyncio
-async def test_web_search_never_persists_unknown_or_camel_case_query_secrets():
-    source = FakeWebSource(
-        results=[
-            WebSearchResult(
-                title="Drive result",
-                url="https://drive.google.com/open?id=doc&resourcekey=TOP_SECRET",
-            ),
-            WebSearchResult(
-                title="OAuth result",
-                url="https://example.com/callback?accessToken=super-secret&state=private-state",
-            ),
-        ]
-    )
-
-    result = await web_search(_execution(source), WebSearchInput(query="private", limit=5))
-    serialized = result.serialized_payload()
-
-    assert "TOP_SECRET" not in serialized
-    assert "super-secret" not in serialized
-    assert "private-state" not in serialized
-    assert "https://drive.google.com/open" in result.content
-    assert "https://example.com/callback" in result.content
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://example.com/file",
+        "https://user:password@example.com/private",
+        " https://example.com/page",
+        "https://example.com/a path",
+        "https://example.com/\ncontrol",
+        "https://example.com/" + "a" * 4_100,
+    ],
+)
+def test_public_web_url_rejects_non_public_or_unfetchable_values(url: str):
+    with pytest.raises(InvalidPublicWebUrl):
+        PublicWebUrl.parse(url)
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_uses_opaque_identity_for_credential_urls_with_generic_title():
-    private_url = "https://user:password@example.com/private"
-    source = FakeWebSource(contents=[WebContentResult(title="   ", url=private_url, text="body text")])
-
-    result = await web_fetch(_execution(source), WebFetchInput(url="https://example.com/request"))
-
-    expected_ref = f"url-sha256:{hashlib.sha256(private_url.encode()).hexdigest()}"
-    assert [ref.to_dict() for ref in result.source_refs] == [
-        {
-            "provider": "web",
-            "kind": "page",
-            "ref": expected_ref,
-            "title": "Web page",
-        }
-    ]
-    assert "user" not in repr(result.source_refs)
-    assert "password" not in repr(result.source_refs)
-
-
-@pytest.mark.asyncio
-async def test_web_search_treats_no_search_results_exception_as_empty_result():
+async def test_web_search_rejects_invalid_provider_url():
     result = await web_search(
-        _execution(FakeWebSource(error=NoSearchResultsException("empty search"))),
-        WebSearchInput(query="too specific query", limit=5),
+        _execution(FakeWebSource(results=[WebSearchResult(title="Bad", url="https://user:pw@example.com/")])),
+        WebSearchInput(query="bad", limit=5),
     )
 
-    assert result.is_error is False
-    assert result.preview == "0 results"
-    assert "No results" in result.content
-    assert "1-3 core keywords" in result.content
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "provider_error"
 
 
 @pytest.mark.asyncio
-async def test_web_search_keeps_provider_exceptions_as_errors_even_if_message_says_no_results():
-    result = await web_search(
-        _execution(FakeWebSource(error=RuntimeError("No results found for query"))),
-        WebSearchInput(query="too specific query", limit=5),
+async def test_web_fetch_rejects_credential_url_before_provider_call():
+    result = await web_fetch(
+        _execution(FakeWebSource()),
+        WebFetchInput(url="https://user:password@example.com/private"),
     )
 
-    assert result.is_error is True
-    assert result.preview == "Search failed"
-    assert result.content == "The web provider request failed."
+    assert result.is_error
+    assert result.outcome is not None and result.outcome.error is not None
+    assert result.outcome.error.code == "invalid_ref"
 
 
 @pytest.mark.asyncio
-async def test_web_search_keeps_real_provider_errors_as_errors():
-    result = await web_search(
-        _execution(FakeWebSource(error=RuntimeError("backend unavailable"))),
-        WebSearchInput(query="normal query", limit=5),
-    )
-
-    assert result.is_error is True
-    assert result.preview == "Search failed"
-    assert result.content == "The web provider request failed."
+async def test_web_search_does_not_hide_untyped_errors():
+    with pytest.raises(RuntimeError, match="programmer error"):
+        await web_search(
+            _execution(FakeWebSource(error=RuntimeError("programmer error"))),
+            WebSearchInput(query="normal query", limit=5),
+        )
 
 
 @pytest.mark.asyncio
@@ -392,6 +350,27 @@ async def test_web_search_sanitizes_provider_failures():
     assert result.preview == "Search failed"
     assert result.content == "Web search is temporarily unavailable."
     assert raw_error not in result.content
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_maps_only_typed_provider_failure():
+    result = await web_fetch(
+        _execution(FakeWebSource(content_error=WebFetchProviderException("Web fetch unavailable."))),
+        WebFetchInput(url="https://example.com/page?x=1#part"),
+    )
+
+    assert result.is_error
+    assert result.preview == "Fetch failed"
+    assert result.content == "Web fetch unavailable."
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_does_not_hide_untyped_errors():
+    with pytest.raises(RuntimeError, match="programmer error"):
+        await web_fetch(
+            _execution(FakeWebSource(content_error=RuntimeError("programmer error"))),
+            WebFetchInput(url="https://example.com/page"),
+        )
 
 
 def test_ddgs_web_source_parses_results_and_removes_redirects(monkeypatch):
@@ -432,15 +411,14 @@ def test_ddgs_web_source_parses_results_and_removes_redirects(monkeypatch):
     assert calls[0][1]["params"] == {"q": "example query"}
 
 
-def test_ddgs_web_source_raises_no_search_results_for_empty_page(monkeypatch):
+def test_ddgs_web_source_returns_empty_results_for_empty_page(monkeypatch):
     monkeypatch.setattr(
         ddgs_module.httpx,
         "get",
         lambda *args, **kwargs: httpx.Response(200, content=b"<html><body>No results.</body></html>"),
     )
 
-    with pytest.raises(NoSearchResultsException):
-        DDGSWebSource().search_with_details("too specific", 5, None)
+    assert DDGSWebSource().search_with_details("too specific", 5, None) == []
 
 
 def test_ddgs_web_source_raises_provider_exception_for_request_failures(monkeypatch):
@@ -503,3 +481,25 @@ def test_ddgs_web_source_falls_back_to_lite_search(monkeypatch):
         "https://html.duckduckgo.com/html/",
         "https://lite.duckduckgo.com/lite/",
     ]
+
+
+def test_ddgs_web_fetch_raises_typed_error_for_http_failure(monkeypatch):
+    def fail(*args, **kwargs):
+        raise httpx.ConnectTimeout("timed out")
+
+    monkeypatch.setattr(ddgs_module.httpx, "get", fail)
+
+    with pytest.raises(WebFetchProviderException, match="could not be fetched"):
+        DDGSWebSource().get_contents(["https://example.com/page"])
+
+
+def test_ddgs_web_fetch_rejects_empty_extraction(monkeypatch):
+    request = httpx.Request("GET", "https://example.com/page")
+    monkeypatch.setattr(
+        ddgs_module.httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(200, content=b"", request=request),
+    )
+
+    with pytest.raises(WebFetchProviderException, match="readable content"):
+        DDGSWebSource().get_contents(["https://example.com/page"])
