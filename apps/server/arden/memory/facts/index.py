@@ -13,18 +13,22 @@ from arden.search.index import ProjectionSearchIndex
 from arden.search.types import RawItem
 
 FACT_SEARCH_SOURCE = "fact"
-_FACT_INDEX_CHECKPOINT_VERSION = 1
+_FACT_INDEX_CHECKPOINT_VERSION = 2
 _logger = get_logger(__name__)
 
 
-def _checkpoint(revision: str | None) -> str:
-    return f"fact-index-v{_FACT_INDEX_CHECKPOINT_VERSION}:{revision or 'none'}"
+type FactIndexStatus = Literal["ready", "fts_only", "degraded", "error", "not_ready"]
+type CheckpointStatus = Literal["ready", "fts_only"]
+
+
+def _checkpoint(revision: str | None, status: CheckpointStatus) -> str:
+    return f"fact-index-v{_FACT_INDEX_CHECKPOINT_VERSION}:{status}:{revision or 'none'}"
 
 
 @dataclass(frozen=True, slots=True)
 class FactIndexState:
     fact_revision: str | None
-    status: Literal["ready", "error", "not_ready"]
+    status: FactIndexStatus
     detail: str | None = None
 
 
@@ -62,7 +66,10 @@ class FactIndexProjection:
                     return None
                 try:
                     revision_hint = await asyncio.to_thread(lambda: self._ledger.current_revision)
-                    if not force and await self._is_current(index, revision_hint):
+                    current_status = None if force else await self._current_status(index, revision_hint)
+                    if current_status is not None:
+                        self._ready_index = index
+                        self._last_state = FactIndexState(revision_hint, current_status)
                         return index
                     await index.clear_projection_checkpoint(FACT_SEARCH_SOURCE)
                     revision = await asyncio.to_thread(lambda: self._ledger.revision)
@@ -103,10 +110,13 @@ class FactIndexProjection:
                             continue
                         self._last_state = FactIndexState(None, "not_ready", "fact revision changed during index sync")
                         return None
-                    if not sync_result.degraded:
-                        await index.set_projection_checkpoint(FACT_SEARCH_SOURCE, _checkpoint(revision))
+                    if sync_result.semantic_status != "degraded":
+                        await index.set_projection_checkpoint(
+                            FACT_SEARCH_SOURCE,
+                            _checkpoint(revision, sync_result.semantic_status),
+                        )
                     self._ready_index = index
-                    self._last_state = FactIndexState(revision, "ready")
+                    self._last_state = FactIndexState(revision, sync_result.semantic_status, sync_result.detail)
                     return index
                 except Exception as error:
                     if attempt == 0 and self._get_search_index() is not index:
@@ -121,15 +131,12 @@ class FactIndexProjection:
             self._last_state = FactIndexState(None, "not_ready", "search index changed during fact sync")
             return None
 
-    async def _is_current(self, index: ProjectionSearchIndex, revision: str | None) -> bool:
-        state = FactIndexState(revision, "ready")
-        if await index.get_projection_checkpoint(FACT_SEARCH_SOURCE) != _checkpoint(revision):
-            return False
-        if self._ready_index is index and self._last_state == state:
-            return True
-        self._ready_index = index
-        self._last_state = state
-        return True
+    async def _current_status(self, index: ProjectionSearchIndex, revision: str | None) -> CheckpointStatus | None:
+        checkpoint = await index.get_projection_checkpoint(FACT_SEARCH_SOURCE)
+        for status in ("ready", "fts_only"):
+            if checkpoint == _checkpoint(revision, status):
+                return status
+        return None
 
     async def ranked_fact_ids(self, query: str, *, limit: int) -> tuple[str, ...] | None:
         """Relevance-ordered fact IDs for a user query, or None when the

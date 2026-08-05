@@ -1,7 +1,8 @@
 import asyncio
 import json
 from collections.abc import Callable
-from typing import NamedTuple, Protocol
+from dataclasses import dataclass
+from typing import Literal, Protocol
 
 from arden.constants import RRF_K
 from arden.database import serialize_embedding
@@ -28,10 +29,12 @@ def item_hash(title: str, content: str) -> str:
     )
 
 
-class SyncResult(NamedTuple):
+@dataclass(frozen=True, slots=True)
+class SyncResult:
     updated: int
     deleted: int
-    degraded: bool = False
+    semantic_status: Literal["ready", "fts_only", "degraded"] = "ready"
+    detail: str | None = None
 
 
 type ProgressCallback = Callable[[int, int], None]
@@ -172,7 +175,8 @@ class SearchIndex:
                 items_to_embed.append(item)
 
             updated = 0
-            degraded = False
+            semantic_status: Literal["ready", "fts_only", "degraded"] = "fts_only" if self.embedder is None else "ready"
+            semantic_detail: str | None = None
             for batch_start in range(0, len(items_to_embed), batch_size):
                 batch = items_to_embed[batch_start : batch_start + batch_size]
                 embeddings = None
@@ -183,7 +187,9 @@ class SearchIndex:
                         embeddings = await self.embedder.embed(texts)
                     except Exception as exc:
                         embedding_error = exc
-                        degraded = True
+                        semantic_status = "degraded"
+                        if semantic_detail is None:
+                            semantic_detail = f"{type(exc).__name__}: {exc}".rstrip(": ")
                         if not raise_on_error:
                             _logger.warning(
                                 "semantic index batch embedding failed; using full-text only",
@@ -210,7 +216,7 @@ class SearchIndex:
                 if embedding_error is not None and raise_on_error:
                     raise embedding_error
 
-            return SyncResult(updated, deleted, degraded)
+            return SyncResult(updated, deleted, semantic_status, semantic_detail)
 
     async def search(
         self,

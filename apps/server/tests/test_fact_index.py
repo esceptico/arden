@@ -164,13 +164,13 @@ async def test_fact_index_rebuilds_after_its_checkpoint_is_cleared(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_fact_index_does_not_checkpoint_degraded_embeddings(tmp_path) -> None:
+async def test_fact_index_reports_degraded_embeddings_without_checkpointing(tmp_path) -> None:
     service = _service(tmp_path)
 
     class _DegradedIndex(_Index):
         async def sync(self, source, items, **kwargs):
             await super().sync(source, items, **kwargs)
-            return SyncResult(len(items), 0, degraded=True)
+            return SyncResult(len(items), 0, semantic_status="degraded", detail="TimeoutError: provider unavailable")
 
     index = _DegradedIndex()
     projection = FactIndexProjection(service.ledger, lambda: index)
@@ -179,6 +179,32 @@ async def test_fact_index_does_not_checkpoint_degraded_embeddings(tmp_path) -> N
     assert await projection.sync() is index
     assert index.sync_calls == 2
     assert index.store.checkpoints == {}
+    assert projection.last_state == FactIndexState(
+        service.ledger.revision,
+        "degraded",
+        "TimeoutError: provider unavailable",
+    )
+
+
+@pytest.mark.asyncio
+async def test_fact_index_checkpoints_explicit_fts_only_mode(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    class _FtsOnlyIndex(_Index):
+        async def sync(self, source, items, **kwargs):
+            await super().sync(source, items, **kwargs)
+            return SyncResult(len(items), 0, semantic_status="fts_only")
+
+    index = _FtsOnlyIndex()
+    projection = FactIndexProjection(service.ledger, lambda: index)
+
+    assert await projection.sync() is index
+    assert projection.last_state == FactIndexState(service.ledger.revision, "fts_only")
+
+    restored = FactIndexProjection(service.ledger, lambda: index)
+    assert await restored.sync() is index
+    assert restored.last_state == FactIndexState(service.ledger.revision, "fts_only")
+    assert index.sync_calls == 1
 
 
 @pytest.mark.asyncio

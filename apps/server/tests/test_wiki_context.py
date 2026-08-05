@@ -474,14 +474,14 @@ async def test_projection_never_checkpoints_a_repeatedly_changing_fact_revision(
 
 
 @pytest.mark.asyncio
-async def test_projection_does_not_checkpoint_degraded_embeddings(tmp_path) -> None:
+async def test_projection_reports_degraded_embeddings_without_checkpointing(tmp_path) -> None:
     wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
     wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"Degraded topic.\n")
 
     class _DegradedIndex(_Index):
         async def sync(self, source, items, **kwargs):
             await super().sync(source, items, **kwargs)
-            return SyncResult(len(items), 0, degraded=True)
+            return SyncResult(len(items), 0, semantic_status="degraded", detail="TimeoutError: provider unavailable")
 
     index = _DegradedIndex()
     projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
@@ -490,6 +490,33 @@ async def test_projection_does_not_checkpoint_degraded_embeddings(tmp_path) -> N
     assert await projection.sync() is index
     assert index.sync_calls == 2
     assert index.store.checkpoints == {}
+    assert projection.last_state == WikiPageIndexState(
+        wiki.repository.head,
+        "degraded",
+        "TimeoutError: provider unavailable",
+    )
+
+
+@pytest.mark.asyncio
+async def test_projection_checkpoints_explicit_fts_only_mode(tmp_path) -> None:
+    wiki = WikiService(ManagedFileRepository(tmp_path / "pages", history_root=tmp_path / "history"))
+    wiki.create_page(page_id="topic", path="topic.md", title="Topic", body=b"FTS-only topic.\n")
+
+    class _FtsOnlyIndex(_Index):
+        async def sync(self, source, items, **kwargs):
+            await super().sync(source, items, **kwargs)
+            return SyncResult(len(items), 0, semantic_status="fts_only")
+
+    index = _FtsOnlyIndex()
+    projection = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+
+    assert await projection.sync() is index
+    assert projection.last_state == WikiPageIndexState(wiki.repository.head, "fts_only")
+
+    restored = WikiPageIndexProjection(wiki, lambda: index, _fact_revision)
+    assert await restored.sync() is index
+    assert restored.last_state == WikiPageIndexState(wiki.repository.head, "fts_only")
+    assert index.sync_calls == 1
 
 
 @pytest.mark.asyncio

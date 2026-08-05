@@ -133,7 +133,8 @@ async def test_sync_keeps_full_text_current_when_embedding_times_out():
 
     assert result.updated == 1
     assert result.deleted == 1
-    assert result.degraded is True
+    assert result.semantic_status == "degraded"
+    assert result.detail == "TimeoutError: embedding timed out"
     assert store.deleted == [("memory", "stale")]
     assert len(store.upserts) == 1
     assert store.upserts[0][4] is None
@@ -227,12 +228,14 @@ async def test_no_embeddings_keeps_fact_and_wiki_keyword_search(tmp_path):
         RawItem("fact", "fact-1", "Fact", "The orbital telescope uses a sunshield.", now, now),
         RawItem("wiki_page", "wiki-1", "Wiki", "The sunshield keeps the telescope cool.", now, now),
     ]
-    await index.sync("fact", [items[0]])
-    await index.sync("wiki_page", [items[1]])
+    fact_sync = await index.sync("fact", [items[0]])
+    wiki_sync = await index.sync("wiki_page", [items[1]])
 
     results = await index.search("sunshield", sources=["fact", "wiki_page"])
 
     assert {result.source_id for result in results} == {"fact-1", "wiki-1"}
+    assert fact_sync.semantic_status == "fts_only"
+    assert wiki_sync.semantic_status == "fts_only"
     assert await store.get_stats() == {"fact": 1, "wiki_page": 1}
     await conn.close()
 
