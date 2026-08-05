@@ -159,7 +159,6 @@ function area(area_id: string, name: string): Area {
     updated_at: "2026-01-01T00:00:00Z",
     default_cwd: null,
     instructions: null,
-    knowledge_scope: `area:${area_id}`,
     page_path: null,
     autonomy: null,
     attention: "ambient",

@@ -701,11 +701,11 @@ def _area_context_from_record(area: dict | None) -> AreaContext | None:
         return None
     return AreaContext(
         area_id=area["area_id"],
+        area_ref=area["area_ref"],
         name=area["name"],
         page_path=area.get("page_path"),
         default_cwd=area.get("default_cwd"),
         instructions=area.get("instructions"),
-        knowledge_scope=area.get("knowledge_scope"),
     )
 
 

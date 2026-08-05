@@ -11,7 +11,6 @@ const areas: Area[] = [
     updated_at: "2026-01-01T00:00:00Z",
     default_cwd: "/repo",
     instructions: "Keep it small.",
-    knowledge_scope: "area:p1",
     archived_at: null,
   },
   {
@@ -21,7 +20,6 @@ const areas: Area[] = [
     updated_at: "2026-01-01T00:00:00Z",
     default_cwd: null,
     instructions: null,
-    knowledge_scope: "area:p2",
     archived_at: null,
   },
 ];

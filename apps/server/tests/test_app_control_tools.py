@@ -20,12 +20,14 @@ from arden.events.sse import EventType, SSEEvent
 from arden.tools.app_control import (
     AppOpenInput,
     AppRequestAttentionInput,
+    AreaListInput,
     SessionArchiveInput,
     SessionRenameInput,
     SessionSendMessageInput,
     app_open,
     app_request_attention,
     approve_session_send_message,
+    area_list,
     session_archive,
     session_archive_tool,
     session_rename,
@@ -82,8 +84,21 @@ class _StubSessionService:
     async def get_area(self, area_id: str | None) -> dict | None:
         return {"area_id": area_id} if area_id in self._areas else None
 
+    async def get_area_by_ref(self, area_ref: str) -> dict | None:
+        for area_id in self._areas:
+            if area_ref == self._area_ref(area_id):
+                return {"area_id": area_id, "area_ref": area_ref, "name": area_id.title()}
+        return None
+
     async def list_areas(self) -> list[dict]:
-        return [{"area_id": area_id} for area_id in self._areas]
+        return [
+            {"area_id": area_id, "area_ref": self._area_ref(area_id), "name": area_id.title()}
+            for area_id in self._areas
+        ]
+
+    @staticmethod
+    def _area_ref(area_id: str) -> str:
+        return f"{area_id.removeprefix('area_internal_')}~111111"
 
 
 class _StubAutomationService:
@@ -479,7 +494,7 @@ async def test_open_in_app_emits_navigation_requested_with_origin_session():
 
     result = await app_open(
         execution,
-        AppOpenInput(destination={"kind": "area", "area_id": "ops"}, label="Open the Ops area"),
+        AppOpenInput(destination={"kind": "area", "area_ref": "ops~111111"}, label="Open the Ops area"),
     )
 
     assert not result.is_error
@@ -519,13 +534,23 @@ async def test_open_in_app_refuses_an_unknown_area():
 
     result = await app_open(
         execution,
-        AppOpenInput(destination={"kind": "area", "area_id": "finance"}, label="Open the Finance area"),
+        AppOpenInput(destination={"kind": "area", "area_ref": "finance~111111"}, label="Open the Finance area"),
     )
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
-    assert "ops" in result.content
+    assert "ops~111111" in result.content
     assert not app_control.emitted
+
+
+@pytest.mark.asyncio
+async def test_area_list_exposes_refs_without_internal_ids():
+    execution, _, _ = _make_execution(areas=["area_internal_ops"])
+
+    result = await area_list(execution, AreaListInput())
+
+    assert "ops~111111" in result.content
+    assert "area_internal_ops" not in result.content
 
 
 @pytest.mark.asyncio
@@ -588,6 +613,16 @@ def test_open_in_app_rejects_internal_automation_id_field():
             {
                 "destination": {"kind": "automation", "task_id": "internal-digest-id"},
                 "label": "Review the digest",
+            }
+        )
+
+
+def test_open_in_app_rejects_internal_area_id_field():
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AppOpenInput.model_validate(
+            {
+                "destination": {"kind": "area", "area_id": "area_internal_ops"},
+                "label": "Open Ops",
             }
         )
 

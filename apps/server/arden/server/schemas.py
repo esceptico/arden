@@ -501,7 +501,6 @@ class AreaResponse(BaseModel):
     name: str
     default_cwd: str | None = None
     instructions: str | None = None
-    knowledge_scope: str
     page_path: str | None = None
     page_id: str | None = None
     autonomy: str | None = None
@@ -514,19 +513,21 @@ class AreaResponse(BaseModel):
 
 
 class CreateAreaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., min_length=1, max_length=200)
     default_cwd: str | None = Field(default=None, max_length=1_000)
     instructions: str | None = Field(default=None, max_length=20_000)
-    knowledge_scope: str | None = Field(default=None, max_length=500)
     # Attaching a page grows the area's capabilities (observe agent implied).
     page_path: str | None = Field(default=None, max_length=1_000)
 
 
 class UpdateAreaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     default_cwd: str | None = Field(default=None, max_length=1_000)
     instructions: str | None = Field(default=None, max_length=20_000)
-    knowledge_scope: str | None = Field(default=None, max_length=500)
     page_path: str | None = Field(default=None, max_length=1_000)
     autonomy: str | None = Field(default=None, max_length=20)
     attention: Literal["dormant", "ambient", "active"] | None = None

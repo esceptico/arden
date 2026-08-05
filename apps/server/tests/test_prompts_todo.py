@@ -1,3 +1,4 @@
+from arden.context.models import AreaContext
 from arden.core.prompts import build_system_blocks
 
 
@@ -50,3 +51,23 @@ def test_build_system_blocks_records_deterministic_context_manifest():
     assert memory.selection_reason == "activated for this session"
     assert memory.size_bytes == len(b"## WIKI CONTEXT\nKnown preference")
     assert [entry.context_id for entry in first] == [entry.context_id for entry in second]
+
+
+def test_area_prompt_and_manifest_expose_public_ref_only():
+    manifest = []
+    blocks = build_system_blocks(
+        source_details={},
+        area_context=AreaContext(
+            area_id="area_internal_health",
+            area_ref="health~111111",
+            name="Health",
+        ),
+        context_manifest=manifest,
+    )
+
+    text = _text(blocks)
+    area_entry = next(entry for entry in manifest if entry.content_type == "area_context")
+    assert "Reference: health~111111" in text
+    assert "area_internal_health" not in text
+    assert "Knowledge scope" not in text
+    assert area_entry.ref == "health~111111"

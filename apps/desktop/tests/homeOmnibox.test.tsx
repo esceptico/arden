@@ -186,7 +186,6 @@ test("an Area-scoped draft names where its first chat will be created", async ()
       name: "Launch",
       default_cwd: null,
       instructions: null,
-      knowledge_scope: "area",
       page_path: null,
       autonomy: "observe",
       attention: "ambient",

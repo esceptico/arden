@@ -78,7 +78,6 @@ async def create_area(request: Request, req: CreateAreaRequest):
             name=req.name,
             default_cwd=req.default_cwd,
             instructions=req.instructions,
-            knowledge_scope=req.knowledge_scope,
             page_path=req.page_path,
             autonomy=None,
         )

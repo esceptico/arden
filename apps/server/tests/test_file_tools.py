@@ -47,7 +47,11 @@ def _make_execution(tool_name: str, *, area_cwd: str | None = None) -> ToolExecu
         run=RunContext(run_id="run-1"),
         io=IOBridge(),
         background_tasks=BackgroundTaskRegistry(session_id="test"),
-        area=(AreaContext(area_id="proj-1", name="Area", default_cwd=area_cwd) if area_cwd else None),
+        area=(
+            AreaContext(area_id="proj-1", area_ref="area~111111", name="Area", default_cwd=area_cwd)
+            if area_cwd
+            else None
+        ),
     )
     return ToolExecution(tool_id="t1", tool_name=tool_name, ctx=ctx)
 
@@ -118,7 +122,14 @@ def test_atomic_compare_and_swap_rejects_stale_revision(tmp_path):
 
 
 def test_area_prompt_tells_agent_to_use_relative_paths():
-    prompt = AREA_BLOCK.render(area=AreaContext(area_id="proj-1", name="Area", default_cwd="/Users/me/src/area"))
+    prompt = AREA_BLOCK.render(
+        area=AreaContext(
+            area_id="proj-1",
+            area_ref="area~111111",
+            name="Area",
+            default_cwd="/Users/me/src/area",
+        )
+    )
 
     assert "Default cwd: /Users/me/src/area" in prompt
     assert "Use relative paths from the default cwd" in prompt

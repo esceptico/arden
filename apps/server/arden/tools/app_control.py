@@ -141,13 +141,24 @@ class ToolAutomationDestination(BaseModel):
     automation_ref: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class ToolAreaDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["area"]
+    area_ref: str = Field(min_length=1, max_length=200)
+
+
+class AreaListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 ToolAppDestination = Annotated[
     HomeDestination
     | SessionDestination
     | SettingsDestination
     | ToolAutomationDestination
     | MemoryDestination
-    | AreaDestination,
+    | ToolAreaDestination,
     Field(discriminator="kind"),
 ]
 
@@ -160,7 +171,7 @@ class AppOpenInput(BaseModel):
             'Where to send the user. One of: {"kind":"home"}, '
             '{"kind":"session","session_id":"..."}, {"kind":"settings","tab":"models"}, '
             '{"kind":"automation","automation_ref":"..."}, {"kind":"memory","path":"..."}, '
-            '{"kind":"area","area_id":"..."}. automation_ref, tab and path may be omitted '
+            '{"kind":"area","area_ref":"..."}. automation_ref, tab and path may be omitted '
             "to open the surface itself; a memory path opens that wiki page."
         )
     )
@@ -188,14 +199,24 @@ async def _unknown_session(execution: ToolExecution, session_id: str) -> ToolRes
     )
 
 
-async def _unknown_area(execution: ToolExecution, area_id: str) -> ToolResult:
+async def _unknown_area(execution: ToolExecution, area_ref: str) -> ToolResult:
     areas = await execution.ctx.services["session"].list_areas()
-    known = ", ".join(str(area["area_id"]) for area in areas) or "none"
+    known = ", ".join(str(area["area_ref"]) for area in areas) or "none"
     return ToolResult.failure(
         code="not_found",
-        message=f"No area {area_id}. Areas: {known}.",
+        message=f"No area {area_ref}. Areas: {known}.",
         preview="Unknown area",
-        recovery_action="Retry with an exact area id.",
+        recovery_action="Call area_list and retry with an exact area_ref.",
+    )
+
+
+async def area_list(execution: ToolExecution, _args: AreaListInput) -> ToolResult:
+    areas = await execution.ctx.services["session"].list_areas()
+    if not areas:
+        return ToolResult(content="No Areas.", preview="0 Areas")
+    return ToolResult(
+        content="\n".join(f"- {area['area_ref']} · {area['name']}" for area in areas),
+        preview=f"{len(areas)} Area{'s' if len(areas) != 1 else ''}",
     )
 
 
@@ -478,9 +499,11 @@ async def _resolve_destination(
         case SessionDestination():
             if await execution.ctx.services["session"].load(destination.session_id) is None:
                 return await _unknown_session(execution, destination.session_id)
-        case AreaDestination():
-            if await execution.ctx.services["session"].get_area(destination.area_id) is None:
-                return await _unknown_area(execution, destination.area_id)
+        case ToolAreaDestination():
+            area = await execution.ctx.services["session"].get_area_by_ref(destination.area_ref)
+            if area is None:
+                return await _unknown_area(execution, destination.area_ref)
+            return AreaDestination(kind="area", area_id=area["area_id"])
         case ToolAutomationDestination(automation_ref=str() as automation_ref):
             svc = execution.ctx.services.get("automation")
             if svc is None:
@@ -711,4 +734,18 @@ app_open_tool = tool(
         idempotent=False,
     ),
     execute=app_open,
+)
+
+area_list_tool = tool(
+    display_name="ListAreas",
+    display_description="List Areas and their stable references.",
+    description="List active Areas by name and stable area_ref. Use the ref with app_open.",
+    input_model=AreaListInput,
+    policy=ToolPolicy(
+        action=ToolAction.READ,
+        scope=ToolScope.INTERNAL,
+        permissions=frozenset({"session"}),
+        deferred=True,
+    ),
+    execute=area_list,
 )

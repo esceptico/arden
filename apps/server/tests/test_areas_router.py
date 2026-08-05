@@ -53,7 +53,6 @@ class _FakeAreaStore:
             "page_path": page_path,
             "page_id": None,
             "autonomy": autonomy,
-            "knowledge_scope": f"area:p{self._n}",
             "created_at": "2026-07-10T00:00:00+00:00",
             "updated_at": "2026-07-10T00:00:00+00:00",
         }
@@ -752,6 +751,16 @@ def test_post_areas_by_name_reuses_existing_area_case_insensitive(client):
     assert body["area_id"] == plain["area_id"]
     assert body["page_path"] == "topics/mats.md"
     assert sum(1 for r in areas._rows.values() if r["name"].casefold() == "mats") == 1
+
+
+def test_area_requests_reject_retired_knowledge_scope(client):
+    c, _, _, o1a, _ = client
+
+    created = c.post("/areas", json={"name": "Health", "knowledge_scope": "area:area_internal_health"})
+    updated = c.patch(f"/areas/{o1a}", json={"knowledge_scope": "area:area_internal_o1a"})
+
+    assert created.status_code == 422
+    assert updated.status_code == 422
 
 
 def test_post_areas_requires_a_name(client):

@@ -21,6 +21,7 @@ from arden.constants import (
     SESSION_HANDOFF_MARKER,
 )
 from arden.context.models import BackgroundStartDisposition, SessionData, SessionHistoryHeader, SessionState
+from arden.core.public_refs import is_public_ref, public_ref
 from arden.core.raw_tool_results import (
     RawToolResultBlob,
     internal_blob_from_data,
@@ -45,7 +46,7 @@ from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 6
+_SESSION_SCHEMA_VERSION = 7
 
 
 class StaleSessionContextError(RuntimeError):
@@ -99,11 +100,11 @@ CREATE INDEX IF NOT EXISTS idx_storage_cleanup_runs_completed
 
 CREATE TABLE IF NOT EXISTS areas (
     area_id TEXT PRIMARY KEY,
+    area_ref TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
     name_key TEXT NOT NULL,
     default_cwds TEXT NOT NULL DEFAULT '[]',
     instructions TEXT,
-    knowledge_scope TEXT,
     page_path TEXT,
     page_id TEXT,
     autonomy TEXT,
@@ -826,10 +827,10 @@ class SessionStore:
     def _area_payload(row: aiosqlite.Row) -> dict:
         return {
             "area_id": row["area_id"],
+            "area_ref": row["area_ref"],
             "name": row["name"],
             "default_cwd": (json.loads(row["default_cwds"] or "[]") or [None])[0],
             "instructions": row["instructions"],
-            "knowledge_scope": row["knowledge_scope"] or f"area:{row['area_id']}",
             "page_path": row["page_path"],
             "page_id": row["page_id"],
             "autonomy": row["autonomy"],
@@ -909,6 +910,14 @@ class SessionStore:
             await self._migrate_active_message_count_schema()
             await self.conn.execute(
                 "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+                ("6",),
+            )
+            await self.conn.commit()
+            version = 6
+        if version == 6:
+            await self._migrate_area_refs_schema()
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
                 (str(_SESSION_SCHEMA_VERSION),),
             )
             await self.conn.commit()
@@ -959,6 +968,8 @@ class SessionStore:
             except Exception:
                 pass
         await self.conn.execute("UPDATE areas SET name_key = lower(trim(name)) WHERE name_key IS NULL OR name_key = ''")
+        await self.conn.commit()
+        await self._migrate_area_refs_schema()
         try:
             await self.conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_active_name_key "
@@ -1010,6 +1021,46 @@ class SessionStore:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(sessions)")
         if rows and "context_generation" not in {row["name"] for row in rows}:
             await self.conn.execute("ALTER TABLE sessions ADD COLUMN context_generation INTEGER NOT NULL DEFAULT 0")
+
+    async def _migrate_area_refs_schema(self) -> None:
+        """Add immutable model-facing Area refs."""
+
+        await self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(areas)")}
+            if "area_ref" not in columns:
+                await self.conn.execute("ALTER TABLE areas ADD COLUMN area_ref TEXT")
+
+            rows = await self.conn.execute_fetchall("SELECT area_id, area_ref, name FROM areas")
+            refs: set[str] = set()
+            for row in rows:
+                area_id = row["area_id"]
+                area_ref = row["area_ref"]
+                if area_ref is None:
+                    area_ref = public_ref(row["name"], area_id, empty_slug="area")
+                    await self.conn.execute(
+                        "UPDATE areas SET area_ref = ? WHERE area_id = ?",
+                        (area_ref, area_id),
+                    )
+                if not isinstance(area_ref, str) or not area_ref or not is_public_ref(area_ref):
+                    raise RuntimeError(f"Area {area_id!r} has an invalid public ref")
+                if area_ref in refs:
+                    raise RuntimeError(f"Area public ref collision: {area_ref}")
+                refs.add(area_ref)
+
+            unique_ref_index = await self.conn.execute_fetchall(
+                "SELECT 1 FROM pragma_index_list('areas') AS indexes "
+                'WHERE indexes."unique" = 1 '
+                "AND (SELECT group_concat(name, ',') FROM pragma_index_info(indexes.name)) = 'area_ref' LIMIT 1"
+            )
+            if not unique_ref_index:
+                await self.conn.execute("CREATE UNIQUE INDEX idx_areas_area_ref ON areas(area_ref)")
+            if "knowledge_scope" in columns:
+                await self.conn.execute("ALTER TABLE areas DROP COLUMN knowledge_scope")
+            await self.conn.commit()
+        except BaseException:
+            await self.conn.rollback()
+            raise
 
     @staticmethod
     def _strict_active_projection(session_id: str, raw_messages: object) -> list[dict]:
@@ -1116,7 +1167,6 @@ class SessionStore:
         name: str,
         default_cwd: str | None = None,
         instructions: str | None = None,
-        knowledge_scope: str | None = None,
         page_path: str | None = None,
         autonomy: str | None = None,
     ) -> dict:
@@ -1128,23 +1178,23 @@ class SessionStore:
         await self._assert_area_name_available(name_key)
         await self._assert_area_page_available(normalized_page_path)
         area_id = f"area_{uuid4().hex[:12]}"
+        area_ref = public_ref(trimmed_name, area_id, empty_slug="area")
         now = datetime.now(UTC).isoformat()
-        scope = (knowledge_scope or "").strip() or f"area:{area_id}"
         await self.conn.execute(
             """
             INSERT INTO areas (
-                area_id, name, name_key, default_cwds, instructions, knowledge_scope,
+                area_id, area_ref, name, name_key, default_cwds, instructions,
                 page_path, page_id, autonomy, created_at, updated_at, archived_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)
             """,
             (
                 area_id,
+                area_ref,
                 trimmed_name,
                 name_key,
                 json.dumps([self._normalize_cwd(default_cwd)] if self._normalize_cwd(default_cwd) else []),
                 instructions.strip() if instructions and instructions.strip() else None,
-                scope,
                 normalized_page_path,
                 autonomy,
                 now,
@@ -1163,6 +1213,13 @@ class SessionStore:
         rows = await self.read_conn.execute_fetchall(
             "SELECT * FROM areas WHERE area_id = ? AND archived_at IS NULL",
             (area_id,),
+        )
+        return self._area_payload(rows[0]) if rows else None
+
+    async def get_area_by_ref(self, area_ref: str) -> dict | None:
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT * FROM areas WHERE area_ref = ? AND archived_at IS NULL",
+            (area_ref,),
         )
         return self._area_payload(rows[0]) if rows else None
 
@@ -1190,7 +1247,6 @@ class SessionStore:
         name: str | object = _AREA_PATCH_UNSET,
         default_cwd: str | object | None = _AREA_PATCH_UNSET,
         instructions: str | object | None = _AREA_PATCH_UNSET,
-        knowledge_scope: str | object | None = _AREA_PATCH_UNSET,
         page_path: str | object | None = _AREA_PATCH_UNSET,
         page_id: str | object | None = _AREA_PATCH_UNSET,
         autonomy: str | object | None = _AREA_PATCH_UNSET,
@@ -1218,10 +1274,6 @@ class SessionStore:
             assignments.append("instructions = ?")
             text = instructions if isinstance(instructions, str) else None
             params.append(text.strip() if text and text.strip() else None)
-        if knowledge_scope is not _AREA_PATCH_UNSET:
-            assignments.append("knowledge_scope = ?")
-            scope = knowledge_scope if isinstance(knowledge_scope, str) else None
-            params.append(scope.strip() if scope and scope.strip() else f"area:{area_id}")
         if page_path is not _AREA_PATCH_UNSET:
             normalized_page_path = self._normalize_area_page_path(page_path if isinstance(page_path, str) else None)
             await self._assert_area_page_available(normalized_page_path, exclude_area_id=area_id)

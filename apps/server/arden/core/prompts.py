@@ -270,10 +270,10 @@ Today is {{ date }} at {{ time }} (user's local time).""")
 
 AREA_BLOCK = env.from_string("""## AREA
 Name: {{ area.name }}
+Reference: {{ area.area_ref }}
 {% if area.default_cwd %}Default cwd: {{ area.default_cwd }}
 Use relative paths from the default cwd in tool arguments and user-facing file references. Use absolute paths only for files outside the default cwd.
 {% endif %}
-Knowledge scope: {{ area.knowledge_scope }}
 {% if area.instructions %}
 Instructions:
 {{ area.instructions }}
@@ -434,7 +434,7 @@ def build_system_blocks(
 
     if area_context:
         blocks.append({"type": "text", "text": AREA_BLOCK.render(area=area_context)})
-        manifest_specs.append(("area_context", "area", str(area_context.area_id), "session load", "session area scope"))
+        manifest_specs.append(("area_context", "area", area_context.area_ref, "session load", "session area scope"))
 
     if area_page_context:
         blocks.append({"type": "text", "text": AREA_PAGE_BLOCK.render(area=area_page_context)})

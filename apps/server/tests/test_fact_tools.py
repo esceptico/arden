@@ -31,7 +31,7 @@ from arden.tools.facts import (
 
 pytestmark = pytest.mark.asyncio
 JULY = datetime(2026, 7, 28, 12, tzinfo=UTC)
-AREA = AreaContext(area_id="project", name="Project")
+AREA = AreaContext(area_id="project", area_ref="project~111111", name="Project")
 _TEST_FACT_IDS: WeakKeyDictionary[FactLedger, dict[str, str]] = WeakKeyDictionary()
 UUID_PATTERN = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b")
 

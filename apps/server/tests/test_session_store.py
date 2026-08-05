@@ -54,10 +54,17 @@ async def test_area_round_trip_and_session_scoping(store: SessionStore):
     )
 
     assert area["area_id"].startswith("area_")
+    assert area["area_ref"].startswith("arden~")
     assert area["name"] == "arden"
     assert area["default_cwd"] == "/Users/me/src/arden"
     assert area["instructions"] == "Prefer small focused changes."
-    assert area["knowledge_scope"] == f"area:{area['area_id']}"
+    assert "knowledge_scope" not in area
+    unique_ref_indexes = await store.conn.execute_fetchall(
+        "SELECT indexes.name FROM pragma_index_list('areas') AS indexes "
+        'WHERE indexes."unique" = 1 '
+        "AND (SELECT group_concat(name, ',') FROM pragma_index_info(indexes.name)) = 'area_ref'"
+    )
+    assert len(unique_ref_indexes) == 1
 
     area_state = _make_state(session_id="area-session", name="Area chat")
     area_state.area_id = area["area_id"]
@@ -105,6 +112,18 @@ async def test_area_round_trip_and_session_scoping(store: SessionStore):
     assert restored is not None
     assert restored["area_id"] == area["area_id"]
     assert await store.get_area(area["area_id"]) is not None
+
+
+@pytest.mark.asyncio
+async def test_area_ref_is_immutable_across_rename(store: SessionStore):
+    created = await store.create_area(name="Health")
+
+    renamed = await store.update_area(created["area_id"], name="Wellbeing")
+
+    assert renamed is not None
+    assert renamed["area_ref"] == created["area_ref"]
+    assert await store.get_area_by_ref(created["area_ref"]) == renamed
+    assert await store.get_area_by_ref(created["area_id"]) is None
 
 
 @pytest.mark.asyncio
@@ -161,6 +180,108 @@ async def test_area_page_has_one_owner_including_archived_areas(store: SessionSt
     assert await store.archive_area(first["area_id"])
     with pytest.raises(ValueError, match="already attached"):
         await store.update_area(second["area_id"], page_path="topics/health.md")
+
+
+async def _legacy_area_store(tmp_path: Path, rows: list[tuple], *, with_ref: bool = False):
+    db = tmp_path / "legacy-area-refs.db"
+    conn = await database.connect(db)
+    ref_column = ", area_ref TEXT" if with_ref else ""
+    await conn.executescript(
+        f"""
+        CREATE TABLE session_store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '6');
+        CREATE TABLE areas (
+            area_id TEXT PRIMARY KEY{ref_column}, name TEXT NOT NULL, name_key TEXT NOT NULL,
+            default_cwds TEXT NOT NULL DEFAULT '[]', instructions TEXT, knowledge_scope TEXT,
+            page_path TEXT, page_id TEXT, autonomy TEXT, attention TEXT, interrupts TEXT,
+            paused_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT
+        );
+        """
+    )
+    columns = (
+        "area_id, area_ref, name, name_key, knowledge_scope, created_at, updated_at"
+        if with_ref
+        else ("area_id, name, name_key, knowledge_scope, created_at, updated_at")
+    )
+    placeholders = ", ".join("?" for _ in rows[0])
+    await conn.executemany(f"INSERT INTO areas ({columns}) VALUES ({placeholders})", rows)
+    await conn.commit()
+    read_conn = await database.connect(db, readonly=True)
+    return db, conn, read_conn, SessionStore(conn, read_conn)
+
+
+@pytest.mark.asyncio
+async def test_schema_v6_backfills_area_refs_without_exposing_legacy_scope(tmp_path: Path):
+    db, conn, read_conn, store = await _legacy_area_store(
+        tmp_path,
+        [
+            ("area_internal_health", "Health", "health", "area:area_internal_health", "now", "now"),
+            ("area_internal_ops", "Ops", "ops", "custom:ops", "now", "now"),
+        ],
+    )
+
+    await store.init_schema()
+    health = await store.get_area("area_internal_health")
+    ops = await store.get_area("area_internal_ops")
+    assert health is not None and ops is not None
+    assert health["area_ref"].startswith("health~")
+    assert "knowledge_scope" not in health
+    assert "knowledge_scope" not in ops
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(areas)")}
+    assert "knowledge_scope" not in columns
+    assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
+        "value"
+    ] == "7"
+
+    original_ref = health["area_ref"]
+    await store.update_area(health["area_id"], name="Wellbeing")
+    await read_conn.close()
+    restarted_read = await database.connect(db, readonly=True)
+    restarted = SessionStore(conn, restarted_read)
+    await restarted.init_schema()
+    assert (await restarted.get_area(health["area_id"]))["area_ref"] == original_ref
+    await restarted_read.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v6_rejects_blank_area_identity_transactionally(tmp_path: Path):
+    _, conn, read_conn, store = await _legacy_area_store(
+        tmp_path,
+        [("area_internal_blank", "", "", None, "now", "now")],
+    )
+
+    with pytest.raises(ValueError, match="must be non-empty"):
+        await store.init_schema()
+
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(areas)")}
+    assert "area_ref" not in columns
+    assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
+        "value"
+    ] == "6"
+    await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v6_rejects_area_ref_collisions(tmp_path: Path):
+    _, conn, read_conn, store = await _legacy_area_store(
+        tmp_path,
+        [
+            ("area_a", "same~111111", "A", "a", None, "now", "now"),
+            ("area_b", "same~111111", "B", "b", None, "now", "now"),
+        ],
+        with_ref=True,
+    )
+
+    with pytest.raises(RuntimeError, match="collision"):
+        await store.init_schema()
+
+    assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
+        "value"
+    ] == "6"
+    await read_conn.close()
+    await conn.close()
 
 
 @pytest.mark.asyncio
@@ -1737,7 +1858,7 @@ async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp
         }
     ]
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "6"
+    assert version[0]["value"] == "7"
 
     await read_conn.close()
     await conn.close()
@@ -1765,7 +1886,7 @@ async def test_schema_v4_adds_context_generation_before_serving_rows(tmp_path: P
     row = (await conn.execute_fetchall("SELECT context_generation FROM sessions WHERE session_id = 'legacy'"))[0]
     assert row["context_generation"] == 0
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "6"
+    assert version[0]["value"] == "7"
 
     await migrated_read.close()
     await conn.close()
@@ -1809,7 +1930,7 @@ async def test_schema_v5_backfills_active_count_and_missing_transcript(tmp_path:
     assert json.loads(row["metadata"]) == {"last_input_tokens": 7}
     assert len(transcript) == 2
     assert all(row["message_id"] for row in transcript)
-    assert version[0]["value"] == "6"
+    assert version[0]["value"] == "7"
 
     await migrated_read.close()
     await conn.close()

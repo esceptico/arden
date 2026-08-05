@@ -44,7 +44,7 @@ export async function createAreaApi(
 export async function updateAreaApi(
   config: AppConfig,
   areaId: string,
-  patch: Partial<Pick<Area, "name" | "default_cwd" | "instructions" | "knowledge_scope">>,
+  patch: Partial<Pick<Area, "name" | "default_cwd" | "instructions">>,
 ): Promise<Area> {
   return apiWithConfig<Area>(config, `/areas/${encodeURIComponent(areaId)}`, {
     method: "PATCH",

@@ -29,7 +29,6 @@ class FakeAreas:
             "interrupts": "asks",
             "default_cwd": values.get("default_cwd"),
             "instructions": values.get("instructions"),
-            "knowledge_scope": values.get("knowledge_scope") or f"area:{area_id}",
         }
         self.rows[area_id] = row
         return dict(row)

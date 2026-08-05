@@ -38,7 +38,7 @@ def execution(
     async def noop_post_commit() -> bool:
         return False
 
-    area = AreaContext(area_id="area_health", name="Health", page_path=page_path)
+    area = AreaContext(area_id="area_health", area_ref="health~111111", name="Health", page_path=page_path)
     ctx = ToolContext(
         session_state=SessionState(session_id="custodian", started_at=datetime.now(UTC), area_id=area.area_id),
         registry=ToolRegistry(),

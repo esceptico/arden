@@ -21,6 +21,7 @@ GROUP_DESCRIPTIONS: dict[str, str] = {
     "wiki": "List and read managed wiki pages; patch exact text; replace full bodies; move/archive pages; inspect links; and publish automation-owned generated regions. Full-body replacement requires wiki_read_page first.",
     "slack": "Search Slack and read channels, DMs, threads, image files, and user profiles. Use for Slack messages, workspace history, coworkers, channels, DMs, threads, screenshots, images, or file IDs.",
     "automation": "Create/list/update/delete/run autonomous scheduled or event-triggered tasks. Use for reminders, recurring checks, scheduled agents, or automation management.",
+    "area": "List Areas and their stable references for app navigation.",
     "loop": "Repeat work in THIS chat on a cadence: loop_create starts one, loop_schedule_wakeup paces it, loop_done ends it.",
     "session": "Create, rename, archive, list, and read chats; search transcripts. Load only when the user explicitly works with sessions as such — creating a chat is never part of a content task like wiki or file edits.",
     "app": "Drive the Arden app itself: assign work to an agent you spawned, raise a needs-you item on the user's Home, or open a place in the UI.",

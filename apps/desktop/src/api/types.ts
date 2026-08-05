@@ -7,7 +7,6 @@ export interface Area {
   name: string;
   default_cwd: string | null;
   instructions: string | null;
-  knowledge_scope: string;
   page_path: string | null;
   autonomy: "observe" | "act" | null;
   attention: "dormant" | "ambient" | "active";

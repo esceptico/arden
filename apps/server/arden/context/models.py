@@ -33,11 +33,11 @@ class SessionState:
 @dataclass(frozen=True)
 class AreaContext:
     area_id: str
+    area_ref: str
     name: str
     page_path: str | None = None
     default_cwd: str | None = None
     instructions: str | None = None
-    knowledge_scope: str | None = None
 
 
 @dataclass

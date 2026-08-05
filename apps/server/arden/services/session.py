@@ -623,7 +623,6 @@ class SessionService:
         name: str,
         default_cwd: str | None = None,
         instructions: str | None = None,
-        knowledge_scope: str | None = None,
         page_path: str | None = None,
         autonomy: str | None = None,
     ) -> dict:
@@ -631,13 +630,15 @@ class SessionService:
             name=name,
             default_cwd=default_cwd,
             instructions=instructions,
-            knowledge_scope=knowledge_scope,
             page_path=page_path,
             autonomy=autonomy,
         )
 
     async def get_area(self, area_id: str | None) -> dict | None:
         return await self.store.get_area(area_id)
+
+    async def get_area_by_ref(self, area_ref: str) -> dict | None:
+        return await self.store.get_area_by_ref(area_ref)
 
     async def find_area_by_name(self, name: str) -> dict | None:
         # Case-insensitive: "MATS" must resolve to an existing "mats" area

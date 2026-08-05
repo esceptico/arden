@@ -77,7 +77,6 @@ const record = (area_id: string, name: string): Area => ({
   name,
   default_cwd: null,
   instructions: null,
-  knowledge_scope: `area:${area_id}`,
   page_path: null,
   autonomy: null,
   attention: "ambient",

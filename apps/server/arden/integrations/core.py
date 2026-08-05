@@ -13,6 +13,7 @@ from arden.tools.app_control import (
     app_followup_task_tool,
     app_open_tool,
     app_request_attention_tool,
+    area_list_tool,
     session_archive_tool,
     session_rename_tool,
     session_send_message_tool,
@@ -196,6 +197,7 @@ AREA = Integration(
     id="_area",
     label="Area",
     tools={
+        "area_list": area_list_tool,
         "area_submit_report": area_submit_report_tool,
         "area_page_read": area_page_read_tool,
         "area_page_patch": area_page_patch_tool,

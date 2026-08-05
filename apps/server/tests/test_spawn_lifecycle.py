@@ -423,10 +423,10 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
         background_tasks=BackgroundTaskRegistry(session_id="test"),
         area=AreaContext(
             area_id="proj-1",
+            area_ref="arden~123456",
             name="Arden",
             default_cwd="/Users/me/src/arden",
             instructions="Use the repo conventions.",
-            knowledge_scope="area:proj-1",
         ),
     )
 
@@ -437,6 +437,8 @@ async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     prompt = captured["messages"][0]["content"]
     assert "## AREA" in prompt
     assert "Name: Arden" in prompt
+    assert "Reference: arden~123456" in prompt
+    assert "proj-1" not in prompt
     assert "Default cwd: /Users/me/src/arden" in prompt
     assert "Instructions:\nUse the repo conventions." in prompt
 
