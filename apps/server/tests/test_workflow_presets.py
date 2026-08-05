@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pytest
 
 from arden.context.models import SessionState
+from arden.core.public_refs import is_public_ref
+from arden.core.tool_result_data import persistable_tool_result_data
 from arden.orchestra.dynamic import run_script
 from arden.skills.registry import SkillRegistry
 from arden.skills.service import BUILTIN_SKILLS_DIR
@@ -188,8 +190,15 @@ async def test_run_workflow_preset_resolves_and_carries_description(registry: Sk
 
     # Detached: the tool returns a receipt immediately …
     assert result.is_error is None or result.is_error is False
-    assert "delivered to this conversation automatically" in result.content
-    assert result.data["workflow_id"].startswith("wf-")
+    assert "final result is delivered here automatically" in result.content
+    workflow_id = result.data["workflow_id"]
+    agent_ref = result.data["agent_ref"]
+    assert workflow_id.startswith("wf-")
+    assert is_public_ref(agent_ref)
+    assert agent_ref in result.content
+    assert workflow_id not in result.content
+    assert persistable_tool_result_data(result.data, result.source_refs) is None
+    assert ctx.background_tasks.task_for_agent_ref(agent_ref) == workflow_id
     started = next(e for e in events if type(e).__name__ == "WorkflowStartedEvent")
     assert started.name == "echo"
     assert started.description == PRESET_DESCRIPTION
@@ -199,6 +208,7 @@ async def test_run_workflow_preset_resolves_and_carries_description(registry: Sk
     finished = next(e for e in events if type(e).__name__ == "WorkflowFinishedEvent")
     assert finished.status == "completed"
     assert len(delivered) == 1
+    assert f'agent_ref="{agent_ref}"' in delivered[0]["content"]
     assert 'status="completed"' in delivered[0]["content"]
     assert "<result>\nhi\n</result>" in delivered[0]["content"]
 
@@ -236,7 +246,9 @@ async def test_run_workflow_cancel_kills_the_orchestra(registry: SkillRegistry, 
     execution = ToolExecution(tool_id="t1", tool_name="workflow", ctx=ctx)
 
     result = await run_workflow(execution, WorkflowInput(name="slow"))
-    workflow_id = result.data["workflow_id"]
+    agent_ref = result.data["agent_ref"]
+    workflow_id = ctx.background_tasks.task_for_agent_ref(agent_ref)
+    assert workflow_id == result.data["workflow_id"]
     task = ctx.background_tasks.task(workflow_id)
     assert task is not None
 

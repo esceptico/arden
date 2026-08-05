@@ -27,13 +27,12 @@ from arden.tools.automation import (
     approve_loop_create,
     automation_create,
     automation_list_runs_tool,
-    automation_result,
     loop_create,
     loop_done,
     loop_schedule_wakeup,
 )
-from arden.tools.core.base import Tool
 from arden.tools.core.background_tasks import BackgroundTaskRegistry
+from arden.tools.core.base import Tool
 from arden.tools.core.context import (
     IOBridge,
     RunContext,
@@ -159,6 +158,10 @@ async def test_list_automation_runs_exposes_trigger_result_and_channel(store_and
     )
 
     assert not result.is_error
+    channel = await svc.session_service.load("sess-1")
+    assert channel is not None
+    channel_ref = channel.state.public_ref
+    assert channel_ref is not None
     assert result.data["entries"] == [
         {
             "automation_ref": create_automation_ref("x", "loop-1"),
@@ -169,9 +172,84 @@ async def test_list_automation_runs_exposes_trigger_result_and_channel(store_and
             "configured_trigger": "every 5m",
             "result": "checked CI",
             "error": None,
-            "channel": "sess-1",
+            "channel_ref": channel_ref,
         }
     ]
+    assert f"channel: {channel_ref}" in result.content
+    assert "sess-1" not in result.content
+    assert [ref.to_dict() for ref in result.source_refs] == [
+        {
+            "provider": "arden",
+            "kind": "session",
+            "ref": channel_ref,
+            "title": "active chat",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_automation_runs_marks_missing_historical_channel_unavailable(store_and_svc):
+    store, svc = store_and_svc
+    started = datetime.now(UTC)
+    run_id = await store.record_run_start("loop-1", started)
+    missing_channel_id = "deleted-channel-internal-id"
+    await store.bind_detached_chat_run(run_id, "loop-1", "run-internal-id", missing_channel_id)
+    await store.settle_run(
+        task_id="loop-1",
+        run_id=run_id,
+        status="completed",
+        result="checked CI",
+        error=None,
+        ended_at=started + timedelta(seconds=1),
+        next_run=None,
+        expected_next_run=None,
+        preserve_external_reschedule=False,
+        preserve_result=False,
+        disable_one_shot=False,
+    )
+
+    result = await automation_list_runs_tool.execute(
+        _execution(svc, loop_task_id=None),
+        since=started - timedelta(minutes=1),
+    )
+
+    assert not result.is_error
+    assert result.data["entries"][0]["channel_ref"] is None
+    assert "channel: unavailable" in result.content
+    assert result.source_refs == ()
+    assert missing_channel_id not in result.content
+    assert missing_channel_id not in str(result.data)
+
+
+@pytest.mark.asyncio
+async def test_list_automation_runs_never_exposes_internal_channel_field(store_and_svc):
+    store, svc = store_and_svc
+    started = datetime.now(UTC)
+    run_id = await store.record_run_start("loop-1", started)
+    await store.settle_run(
+        task_id="loop-1",
+        run_id=run_id,
+        status="completed",
+        result=None,
+        error=None,
+        ended_at=started + timedelta(seconds=1),
+        next_run=None,
+        expected_next_run=None,
+        preserve_external_reschedule=False,
+        preserve_result=False,
+        disable_one_shot=False,
+    )
+
+    result = await automation_list_runs_tool.execute(
+        _execution(svc, loop_task_id=None),
+        since=started - timedelta(minutes=1),
+    )
+
+    entry = result.data["entries"][0]
+    assert "channel" not in entry
+    assert "chat_session_id" not in entry
+    assert "thread_id" not in entry
+    assert "sess-1" not in result.serialized_payload()
 
 
 @pytest.mark.asyncio
@@ -251,6 +329,9 @@ def test_automation_tools_expose_refs_not_internal_ids():
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         AutomationResultInput.model_validate({"task_id": "internal-task-id"})
+    for invalid_ref in ("loop-1", "area:foo", "550e8400-e29b-41d4-a716-446655440000"):
+        with pytest.raises(ValidationError):
+            AutomationResultInput(automation_ref=invalid_ref)
 
     loop_properties = LoopCreateInput.model_json_schema()["properties"]
     assert "parent_automation_ref" in loop_properties
@@ -259,19 +340,17 @@ def test_automation_tools_expose_refs_not_internal_ids():
         LoopCreateInput.model_validate(
             {"prompt": "watch CI", "every": "5m", "parent_automation_id": "internal-task-id"}
         )
+    with pytest.raises(ValidationError):
+        LoopCreateInput(prompt="watch CI", every="5m", parent_automation_ref="loop-1")
+
+    list_runs_schema = AutomationListRunsInput.model_json_schema()["properties"]["limit"]
+    assert list_runs_schema["default"] == 50
+    assert list_runs_schema["maximum"] == 50
 
 
-@pytest.mark.asyncio
-async def test_internal_automation_id_is_not_a_public_ref_alias(store_and_svc):
-    _, svc = store_and_svc
-
-    result = await automation_result(
-        _execution(svc, loop_task_id=None),
-        AutomationResultInput(automation_ref="loop-1"),
-    )
-
-    assert result.is_error
-    assert result.outcome.error.code == "not_found"
+def test_internal_automation_id_is_rejected_at_the_tool_boundary():
+    with pytest.raises(ValidationError):
+        AutomationResultInput(automation_ref="loop-1")
 
 
 def test_create_automation_requires_retry_safe_idempotency():

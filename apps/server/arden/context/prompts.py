@@ -17,21 +17,21 @@ What is the user trying to accomplish RIGHT NOW?
 - Pending follow-ups with who/what/when
 - Unanswered questions
 - Promised actions
-Format: "- [item] (source: note:path, email:id, raw_item:id, or unverified)"
+Format: "- [item] (source: exact wiki path, public/provider ref, URL, or unverified)"
 
 ### Next Actions
 Ordered checklist of what should happen next (3-8 items)
 
 ### Key Facts
 ONLY facts that affect next actions. For each fact:
-- Include source pointer if available: (source: note:path, email:id, raw_item:id)
+- Include an exact source pointer returned by a tool when available
 - If no source, mark as: (unverified)
 
 ### Pointers
-List of identifiers that may need retrieval:
-- note paths referenced
-- raw_item IDs for full content
-- email IDs
+List only exact retrieval handles that remain useful:
+- wiki paths
+- public or provider refs returned by tools
+- URLs and query strings
 - background agent refs; preserve the exact locator as
   `agent_result_read(agent_ref="...", offset=0, limit=4000)`
 
@@ -74,7 +74,7 @@ Preserve:
 - source-backed facts with source pointers or short quotes
 - contradictions and dead ends with what was tried
 - tool/background result pointers, including exact `agent_result_read(agent_ref="...", offset=0, limit=4000)`
-  locators, file paths, URLs, message IDs, and query strings needed for retrieval
+  locators, file paths, URLs, public/provider refs, and query strings needed for retrieval
 
 Rules:
 - Do not turn weak evidence into a firm fact.

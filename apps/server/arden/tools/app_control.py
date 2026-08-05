@@ -51,7 +51,7 @@ class SessionSendMessageInput(BaseModel):
         max_length=20_000,
         description=(
             "What to deliver. To a chat: write it as if the user typed it there — it has "
-            "none of your context, so state the task, the target and any ids in full. "
+            "none of your context, so state the task, target, and exact public or provider refs. "
             "To a running agent: the steering instruction it reads at its next step."
         ),
     )
@@ -61,16 +61,14 @@ class AppFollowupTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_ref: PublicRef = Field(
-        description=(
-            "Exact agent_ref of an agent this session spawned. returned. Must not be the session you are running in."
-        ),
+        description=("Exact agent_ref returned for an agent this session spawned. Must not be the current session."),
     )
     task: str = Field(
         min_length=1,
         max_length=20_000,
         description=(
             "The new task. The agent keeps its session history, but state the goal, "
-            "targets, and any ids in full — it has none of your later context."
+            "targets, and exact public or provider refs — it has none of your later context."
         ),
     )
 
@@ -231,12 +229,12 @@ async def area_list(execution: ToolExecution, _args: AreaListInput) -> ToolResul
     )
 
 
-def _archived_session(session_id: str, recovery_action: str) -> ToolResult:
+def _archived_session(session_ref: str, recovery_action: str) -> ToolResult:
     """An archived session is out of the sidebar, so the user is not watching it.
     Acting on one either lands where nobody looks or drags it back into view."""
     return ToolResult.failure(
         code="conflict",
-        message=f"Session {session_id} is archived — the user does not see it in the sidebar.",
+        message=f"Session {session_ref} is archived — the user does not see it in the sidebar.",
         preview="Archived session",
         recovery_action=recovery_action,
     )

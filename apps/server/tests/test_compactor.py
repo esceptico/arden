@@ -131,7 +131,7 @@ def test_recompaction_preserves_nested_tool_result_refs():
     assert compacted[1]["compaction"]["tool_result_refs"] == ["call-old", "call-shared"]
 
 
-def test_compacted_messages_record_and_retain_background_result_refs():
+def test_compacted_messages_retain_public_background_refs_and_ignore_legacy_ids():
     messages = [
         {"role": "system", "content": "system", "message_id": "sys"},
         {
@@ -141,7 +141,7 @@ def test_compacted_messages_record_and_retain_background_result_refs():
             "compaction": {
                 "kind": "session_handoff",
                 "compaction_id": "compact-old",
-                "background_result_refs": ["agent-old", "agent-shared"],
+                "background_result_refs": ["old-agent~000001", "shared-agent~000002"],
             },
         },
         {
@@ -151,7 +151,7 @@ def test_compacted_messages_record_and_retain_background_result_refs():
                 'status="completed">\n<result>done</result>\n</background_agent_result>'
             ),
             "client_id": "bg:wrong-client-ref:completed",
-            "background_result_ref": "agent-shared",
+            "background_result_ref": "shared-agent~000002",
             "message_id": "bg-shared",
         },
         {
@@ -166,9 +166,8 @@ def test_compacted_messages_record_and_retain_background_result_refs():
     compacted = _build_compacted_messages(messages, 1, 4, "new summary")
 
     assert compacted[1]["compaction"]["background_result_refs"] == [
-        "agent-old",
-        "agent-shared",
-        "agent-legacy",
+        "old-agent~000001",
+        "shared-agent~000002",
     ]
 
 
@@ -179,7 +178,8 @@ def test_compaction_prompts_preserve_exact_background_result_locators():
         RESEARCH_AGENT_COMPACTION_CONTEXT,
     )
 
-    assert all("agent_result_read" in prompt and "task_id" in prompt for prompt in prompts)
+    assert all("agent_result_read" in prompt and "agent_ref" in prompt for prompt in prompts)
+    assert all("raw_item" not in prompt and "email:id" not in prompt for prompt in prompts)
 
 
 def test_compacted_messages_omit_tool_result_refs_when_none():

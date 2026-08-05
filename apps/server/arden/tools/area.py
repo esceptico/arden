@@ -7,6 +7,7 @@ from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus
 from arden.areas.agent import CUSTODIAN_ACTOR_PREFIX, AreaCustodianReport
 from arden.areas.work_store import AreaWorkReportError, AreaWorkStore
 from arden.constants import OFFLOAD_THRESHOLD
+from arden.core.public_refs import PublicRef
 from arden.revisions import RevisionConflictError
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
@@ -42,7 +43,7 @@ class AreaPageWriteInput(BaseModel):
 class AreaAutomationRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    automation_ref: str = Field(min_length=1, max_length=200)
+    automation_ref: PublicRef
 
 
 def _target(execution: ToolExecution):

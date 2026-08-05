@@ -1145,14 +1145,14 @@ async def test_approval_gated_tools_render_the_payload():
     )
     wakeup = await loop_schedule_wakeup_tool.approval_info(execution, delay_seconds=120)
     done = await loop_done_tool.approval_info(execution, reason="The requested condition is satisfied")
-    cancel = await agent_cancel_tool.approval_info(execution, session_id="P::a1")
+    cancel = await agent_cancel_tool.approval_info(execution, agent_ref="agent~abc123")
 
     assert notify is not None
     assert notify.description == "Notify via work-telegram: Build failed"
     assert notify.preview == "The release build failed in the signing step."
     assert wakeup is not None and wakeup.preview == "Delay: 120 seconds"
     assert done is not None and done.preview == "The requested condition is satisfied"
-    assert cancel is not None and cancel.preview == "Agent session: P::a1"
+    assert cancel is not None and cancel.preview == "Agent: agent~abc123"
 
 
 @pytest.mark.asyncio

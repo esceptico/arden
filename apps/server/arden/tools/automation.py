@@ -3,9 +3,11 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from arden.agent.types.tools import ToolSourceRef, canonical_source_title, normalize_source_refs
 from arden.automation.models import Automation
 from arden.automation.triggers import build_trigger
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
+from arden.core.public_refs import PublicRef, is_public_ref
 from arden.events.triggers import EVENT_APPROACHING
 from arden.tools.core import EmptyInput, ToolResult, tool
 from arden.tools.core.collections import format_timestamp
@@ -95,9 +97,11 @@ class AutomationListRunsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     since: AwareDatetime = Field(description="Inclusive ISO timestamp, usually today's local midnight.")
-    automation_ref: str | None = Field(default=None, min_length=1, max_length=200)
+    automation_ref: PublicRef | None = None
     offset: int = Field(default=0, ge=0, le=10_000)
-    limit: int = Field(default=100, ge=1, le=200)
+    # Every visible channel is also a typed source ref. Keep one page within
+    # the shared ToolResult source-ref envelope instead of failing after work.
+    limit: int = Field(default=50, ge=1, le=50)
 
 
 async def _resolve_parent_context(
@@ -224,7 +228,7 @@ class AutomationCreateInput(BaseModel):
         ),
     )
     all_tools: bool = Field(default=False, description=ALL_TOOLS_DESCRIPTION)
-    parent_automation_ref: str | None = Field(
+    parent_automation_ref: PublicRef | None = Field(
         default=None,
         description=(
             "Exact parent ref from automation_list. Defaults to the current loop when "
@@ -266,7 +270,7 @@ class AutomationUpdateInput(BaseModel):
     # ignored, so the model believes it set something it did not.
     model_config = ConfigDict(extra="forbid")
 
-    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
+    automation_ref: PublicRef = Field(description="Exact automation_ref returned by automation_list")
     name: str | None = Field(default=None, description="New name")
     description: str | None = Field(default=None, max_length=220, description="New concise display summary")
     prompt: str | None = Field(default=None, description="New full execution instructions", min_length=1)
@@ -313,17 +317,17 @@ class AutomationUpdateInput(BaseModel):
 
 class AutomationDeleteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
+    automation_ref: PublicRef = Field(description="Exact automation_ref returned by automation_list")
 
 
 class AutomationResultInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
+    automation_ref: PublicRef = Field(description="Exact automation_ref returned by automation_list")
 
 
 class AutomationRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    automation_ref: str = Field(description="Exact automation_ref returned by automation_list")
+    automation_ref: PublicRef = Field(description="Exact automation_ref returned by automation_list")
 
 
 # --- Tools ---
@@ -522,12 +526,43 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
     visible = rows[: args.limit]
     entries = []
     lines = []
+    source_refs: list[ToolSourceRef] = []
+    channel_cache: dict[str, tuple[str, str] | None] = {}
+
+    async def resolve_channel(channel_id: str | None) -> tuple[str, str] | None:
+        if channel_id is None:
+            return None
+        if channel_id in channel_cache:
+            return channel_cache[channel_id]
+        sessions = service.session_service
+        channel = await sessions.load_history_header(channel_id)
+        if channel is None or await sessions.is_archived(channel_id):
+            channel_cache[channel_id] = None
+            return None
+        channel_ref = channel.state.public_ref
+        if channel_ref is None or not is_public_ref(channel_ref):
+            raise RuntimeError("automation channel is missing a valid public_ref")
+        resolved = (channel_ref, channel.state.name or channel_ref)
+        channel_cache[channel_id] = resolved
+        return resolved
+
     for row in visible:
         automation_ref = str(row["automation_ref"])
         automation = automations.get(automation_ref)
         name = _automation_label(automation) if automation is not None else "Deleted automation"
         trigger = _triggers_label(automation.triggers) if automation is not None else "deleted"
-        channel = row.get("chat_session_id") or (automation.thread_id if automation is not None else None)
+        channel_id = row.get("chat_session_id") or (automation.thread_id if automation is not None else None)
+        channel = await resolve_channel(channel_id)
+        channel_ref = channel[0] if channel is not None else None
+        if channel is not None:
+            source_refs.append(
+                ToolSourceRef(
+                    provider="arden",
+                    kind="session",
+                    ref=channel[0],
+                    title=canonical_source_title(channel[1], fallback=channel[0]),
+                )
+            )
         summary = row.get("error") or row.get("result") or ""
         entries.append(
             {
@@ -539,11 +574,11 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
                 "configured_trigger": trigger,
                 "result": row["result"],
                 "error": row["error"],
-                "channel": channel,
+                "channel_ref": channel_ref,
             }
         )
         suffix = f" - {summary[:300]}" if summary else ""
-        channel_text = f" - channel: {channel}" if channel else ""
+        channel_text = f" - channel: {channel_ref}" if channel_ref else " - channel: unavailable"
         lines.append(f"- {row['started_at']} - {name} - {row['status']} - trigger: {trigger}{channel_text}{suffix}")
     if not lines:
         lines.append("No automation runs in this time window.")
@@ -561,6 +596,7 @@ async def automation_list_runs(execution: ToolExecution, args: AutomationListRun
             "has_more": has_more,
             "next_offset": next_offset if has_more else None,
         },
+        source_refs=normalize_source_refs(source_refs),
     )
 
 
@@ -1023,7 +1059,7 @@ class LoopCreateInput(BaseModel):
         description="Optional hard cap in days from creation. After this many days, the loop disables itself on the next fire even if max_iterations hasn't been hit.",
         ge=1,
     )
-    parent_automation_ref: str | None = Field(
+    parent_automation_ref: PublicRef | None = Field(
         default=None,
         description="Exact parent ref from automation_list. Defaults to the calling loop when invoked inside one.",
     )

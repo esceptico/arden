@@ -1134,6 +1134,8 @@ async def test_generated_publisher_requires_the_registered_automation_owner(tmp_
     assert wrong_owner.is_error
     assert wrong_owner.outcome.error.code == "producer_mismatch"
     assert wrong_owner.outcome.error.recovery_action is not None
+    assert "owner" not in wrong_owner.content
+    assert "intruder" not in wrong_owner.content
 
 
 @pytest.mark.asyncio

@@ -1325,10 +1325,7 @@ async def wiki_publish_generated(execution: ToolExecution, args: WikiPublishGene
         if producer_automation_id != automation_id:
             return ToolResult.failure(
                 code="producer_mismatch",
-                message=(
-                    f"Page {record.resource.path} is owned by automation "
-                    f"{producer_automation_id!r}, not {automation_id!r}."
-                ),
+                message=f"Page {record.resource.path} belongs to a different automation.",
                 preview="Different producer owns this page",
                 recovery_action="Run the registered owning automation, or publish to a page owned by this automation.",
             )

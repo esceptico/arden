@@ -218,7 +218,7 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
     ):
         return ToolResult.failure(
             code="conflict",
-            message=f"Workflow id {workflow_id} is already registered.",
+            message="Workflow could not be registered.",
             preview="Workflow conflict",
             recovery_action="Retry the workflow call.",
         )
@@ -348,14 +348,16 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
     bg_registry.register(workflow_id, task, command=label)
 
     content = (
-        f"Started workflow '{title}' ({workflow_id}). It runs detached: progress streams to the "
-        "workflow card, and the final result is delivered to this conversation automatically when "
-        "done — do not poll for it; continue other work or end your turn and wait."
+        f"Started workflow '{title}'. agent_ref: {agent_ref}. It runs detached; progress appears on its card, "
+        "and its final result is delivered here automatically. Do not poll. "
+        f'To stop it, call agent_cancel(agent_ref="{agent_ref}"); otherwise continue or end your turn.'
     )
     return ToolResult(
         content=content,
         preview=f"Workflow started: {title}",
-        data={"workflow": title, "workflow_id": workflow_id},
+        # Tool history persists only allowlisted result metadata; these fields
+        # remain UI/SSE state while content carries the model-facing address.
+        data={"workflow": title, "workflow_id": workflow_id, "agent_ref": agent_ref},
     )
 
 
