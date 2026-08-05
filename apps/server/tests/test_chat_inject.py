@@ -1892,6 +1892,9 @@ async def test_pre_start_cancelled_task_emits_terminal_fallback():
         async def record_chat_run_failed_with_outbox(self, event, **kwargs):
             self.failed_events.append(event)
 
+        async def update_chat_idempotency_key(self, **kwargs):
+            return None
+
     class FakeExecutor:
         def get_tools(self):
             return []
