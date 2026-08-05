@@ -30,9 +30,9 @@ class WikiPageTimestampCache:
             if not missing:
                 self._by_head.move_to_end(head)
                 return {page_id: cached.get(page_id, (None, None)) for page_id in page_ids}
-
-        derived = self._derive(head, missing)
-        with self._lock:
+            # Derivation stays under the same lock so concurrent requests for
+            # one uncached head cannot repeat the complete history walk.
+            derived = self._derive(head, missing)
             cached = self._by_head.setdefault(head, {})
             cached.update(derived)
             self._by_head.move_to_end(head)

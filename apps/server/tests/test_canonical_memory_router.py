@@ -1,8 +1,10 @@
 """Canonical managed-wiki and fact HTTP contracts."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -167,6 +169,35 @@ def test_wiki_page_timestamps_are_cached_by_repository_head(tmp_path: Path, monk
         assert traversed_heads == [first_head, second_head]
         assert [page["page_id"] for page in changed.json()["pages"]] == ["one", "two"]
         assert all(page["created_at"] and page["updated_at"] for page in changed.json()["pages"])
+
+
+def test_concurrent_wiki_page_timestamp_misses_share_one_history_walk(tmp_path: Path, monkeypatch) -> None:
+    with _client(tmp_path) as client:
+        service = client.app.state.runtime.wiki_service
+        service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
+        head = service.repository.head
+        history = service.repository.history
+        started = Event()
+        release = Event()
+        traversals: list[str | None] = []
+
+        def blocking_history(**kwargs):
+            traversals.append(kwargs.get("start"))
+            started.set()
+            if not release.wait(timeout=1):
+                raise TimeoutError("timestamp test did not release history")
+            return history(**kwargs)
+
+        monkeypatch.setattr(service.repository, "history", blocking_history)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(service.page_timestamps, head, {"one"})
+            assert started.wait(timeout=1)
+            second = pool.submit(service.page_timestamps, head, {"one"})
+            release.set()
+
+            assert first.result(timeout=1) == second.result(timeout=1)
+        assert traversals == [head]
 
 
 def test_wiki_page_timestamp_failure_does_not_poison_cache(tmp_path: Path, monkeypatch) -> None:
