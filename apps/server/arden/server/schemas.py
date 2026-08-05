@@ -607,6 +607,18 @@ class MoveSessionAreaRequest(BaseModel):
     area_id: str | None = None
 
 
+class TriageTargetResponse(BaseModel):
+    key: str
+    title: str
+
+
+class TriageDecisionResponse(BaseModel):
+    decision: Literal["move", "create", "none"]
+    target: TriageTargetResponse | None = None
+    new_title: str | None = None
+    rationale: str = ""
+
+
 class CompactRequest(BaseModel):
     session_id: str | None = None
 

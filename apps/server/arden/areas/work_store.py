@@ -542,7 +542,7 @@ class AreaWorkStore:
                 index,
                 draft.event_type,
                 draft.summary,
-                json.dumps(draft.source_refs),
+                json.dumps(draft.model_dump(mode="json")["source_refs"]),
                 now,
             ),
         )
@@ -572,5 +572,5 @@ class AreaWorkStore:
     @staticmethod
     def _event(row: aiosqlite.Row) -> AreaWorkEvent:
         data = dict(row)
-        data["source_refs"] = json.loads(data["source_refs"] or "[]")
+        data["source_refs"] = json.loads(data["source_refs"])
         return AreaWorkEvent.model_validate(data)

@@ -338,7 +338,14 @@ def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:
                 run_ref="run:r1",
                 event_type="progress",
                 summary="Found an available appointment",
-                source_refs=["session:s1"],
+                source_refs=[
+                    {
+                        "provider": "arden",
+                        "kind": "session",
+                        "ref": "health-chat~abc123",
+                        "title": "Health chat",
+                    }
+                ],
                 created_at="2026-07-10T01:00:00+00:00",
             )
         ],
@@ -352,6 +359,14 @@ def test_work_context_uses_report_keys_instead_of_internal_ids() -> None:
     assert payload["work_items"][0]["outcome_key"] == "labs-normal"
     assert payload["recent_evidence"][0]["target_type"] == "work"
     assert payload["recent_evidence"][0]["target_key"] == "book-labs"
+    assert payload["recent_evidence"][0]["source_refs"] == [
+        {
+            "provider": "arden",
+            "kind": "session",
+            "ref": "health-chat~abc123",
+            "title": "Health chat",
+        }
+    ]
     assert "area_id" not in text
     assert "item_id" not in text
     assert "outcome_id" not in text

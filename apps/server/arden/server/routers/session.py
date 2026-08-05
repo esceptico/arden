@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from arden.agent import Role
 from arden.agent.types.llm import provider_tool_calls_from_history
-from arden.areas.triage import TriageDecision, triage_chat
+from arden.areas.triage import TriageDecision, TriageTarget, triage_chat
 from arden.constants import (
     COMPRESSION_TOKEN_HEADROOM,
     HISTORY_MESSAGE_LIMIT,
@@ -35,6 +35,8 @@ from arden.server.schemas import (
     SetSessionAutoRequest,
     SetSessionGoalRequest,
     SetTodoOverrideRequest,
+    TriageDecisionResponse,
+    TriageTargetResponse,
     TurnInspectorResponse,
     UpdateSessionGoalRequest,
     UpdateSessionModelRequest,
@@ -326,10 +328,29 @@ async def _require_area(svc: SessionService, area_id: str | None) -> dict | None
     return area
 
 
-async def _triage_candidates(svc: SessionService) -> list[dict]:
-    """The homes a chat can be filed into: every container (areas and
-    areas are one concept, keyed by area_id)."""
-    return [{"key": p["area_id"], "title": p.get("name", "")} for p in await svc.list_areas()]
+async def _triage_candidates(svc: SessionService) -> list[TriageTarget]:
+    return [TriageTarget(area_ref=area["area_ref"], title=area["name"]) for area in await svc.list_areas()]
+
+
+async def _triage_response(svc: SessionService, decision: TriageDecision) -> TriageDecisionResponse:
+    if decision.decision == "move":
+        if decision.target is None:
+            raise RuntimeError("validated move decision is missing its target")
+        area = await svc.get_area_by_ref(decision.target.area_ref)
+        if area is None:
+            raise HTTPException(status_code=409, detail="Triage target is no longer available")
+        return TriageDecisionResponse(
+            decision="move",
+            target=TriageTargetResponse(key=area["area_id"], title=area["name"]),
+            rationale=decision.rationale,
+        )
+    if decision.decision == "create":
+        return TriageDecisionResponse(
+            decision="create",
+            new_title=decision.new_title,
+            rationale=decision.rationale,
+        )
+    return TriageDecisionResponse(decision="none", rationale=decision.rationale)
 
 
 def _context_budget_snapshot(
@@ -916,7 +937,7 @@ async def move_session_to_area(
     return {"session_id": session_id, "area_id": req.area_id}
 
 
-@router.post("/sessions/{session_id}/triage", response_model=TriageDecision)
+@router.post("/sessions/{session_id}/triage", response_model=TriageDecisionResponse)
 @observed_trace("session.triage", tags="session")
 async def triage_session(
     session_id: str,
@@ -931,16 +952,17 @@ async def triage_session(
         raise HTTPException(status_code=404, detail="Session not found")
     transcript = _goal_proposal_context(data.messages)
     if not transcript:
-        return TriageDecision(decision="none")
+        return TriageDecisionResponse(decision="none")
     client, model, reasoning_effort = runtime.auxiliary_completion()
     candidates = await _triage_candidates(svc)
-    return await triage_chat(
+    decision = await triage_chat(
         transcript=transcript,
         candidates=candidates,
         client=client,
         model=model,
         reasoning_effort=reasoning_effort,
     )
+    return await _triage_response(svc, decision)
 
 
 @router.post("/sessions/{session_id}/auto")

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 import arden.database as database
 from arden.areas.agent import AreaCustodianReport
@@ -144,7 +145,14 @@ async def test_brief_caps_recent_completions_and_selects_one_active_item_per_are
                 "target_key": target.stable_key,
                 "event_type": "completed",
                 "summary": "Finished the health action",
-                "source_refs": ["session:proof"],
+                "source_refs": [
+                    {
+                        "provider": "arden",
+                        "kind": "session",
+                        "ref": "health-chat~abc123",
+                        "title": "Health chat",
+                    }
+                ],
             }
         ],
     )
@@ -216,7 +224,14 @@ def report(**overrides) -> AreaCustodianReport:
                 "target_key": "book-labs",
                 "event_type": "progress",
                 "summary": "Found the correct lab and opening hours",
-                "source_refs": ["https://example.test/lab"],
+                "source_refs": [
+                    {
+                        "provider": "web",
+                        "kind": "page",
+                        "ref": "https://example.test/lab",
+                        "title": "Lab opening hours",
+                    }
+                ],
             }
         ],
     }
@@ -237,6 +252,95 @@ async def test_report_applies_atomically_once_with_evidence(work_env) -> None:
     assert [row.stable_key for row in snapshot.outcomes] == ["labs-normal"]
     assert [row.stable_key for row in snapshot.work_items] == ["book-labs"]
     assert [row.summary for row in snapshot.events] == ["Found the correct lab and opening hours"]
+    assert snapshot.events[0].model_dump(mode="json")["source_refs"] == [
+        {
+            "provider": "web",
+            "kind": "page",
+            "ref": "https://example.test/lab",
+            "title": "Lab opening hours",
+        }
+    ]
+
+
+@pytest.mark.parametrize("raw_ref", ["session:s1", "area_health", "task:42", "internal:42"])
+def test_evidence_rejects_raw_internal_identifiers(raw_ref: str) -> None:
+    with pytest.raises(ValidationError):
+        report(
+            evidence=[
+                {
+                    "target_type": "area",
+                    "event_type": "progress",
+                    "summary": "Found supporting evidence",
+                    "source_refs": [raw_ref],
+                }
+            ]
+        )
+
+
+@pytest.mark.parametrize("missing_field", ["provider", "kind", "ref", "title"])
+def test_evidence_rejects_partial_provider_references(missing_field: str) -> None:
+    source_ref = {
+        "provider": "web",
+        "kind": "page",
+        "ref": "https://example.test/evidence",
+        "title": "Evidence",
+    }
+    source_ref.pop(missing_field)
+
+    with pytest.raises(ValidationError):
+        report(
+            evidence=[
+                {
+                    "target_type": "area",
+                    "event_type": "progress",
+                    "summary": "Found supporting evidence",
+                    "source_refs": [source_ref],
+                }
+            ]
+        )
+
+
+@pytest.mark.parametrize("raw_ref", ["session:s1", "area_health", "task:42", "internal:42"])
+def test_arden_evidence_requires_public_references(raw_ref: str) -> None:
+    with pytest.raises(ValidationError):
+        report(
+            evidence=[
+                {
+                    "target_type": "area",
+                    "event_type": "progress",
+                    "summary": "Found supporting evidence",
+                    "source_refs": [
+                        {
+                            "provider": "arden",
+                            "kind": "session",
+                            "ref": raw_ref,
+                            "title": "Health chat",
+                        }
+                    ],
+                }
+            ]
+        )
+
+
+def test_evidence_rejects_whitespace_instead_of_normalizing_it() -> None:
+    with pytest.raises(ValidationError):
+        report(
+            evidence=[
+                {
+                    "target_type": "area",
+                    "event_type": "progress",
+                    "summary": "Found supporting evidence",
+                    "source_refs": [
+                        {
+                            "provider": "web",
+                            "kind": "page",
+                            "ref": " https://example.test/evidence",
+                            "title": "Evidence",
+                        }
+                    ],
+                }
+            ]
+        )
 
 
 @pytest.mark.asyncio
@@ -332,7 +436,14 @@ async def test_report_ignores_exact_noop_update_to_terminal_work_item(work_env) 
                 "target_key": completed.stable_key,
                 "event_type": "completed",
                 "summary": "The WATCHING section remains complete",
-                "source_refs": ["area_page_read:topics/health.md"],
+                "source_refs": [
+                    {
+                        "provider": "memory",
+                        "kind": "wiki_page",
+                        "ref": "topics/health.md",
+                        "title": "Health",
+                    }
+                ],
             }
         ],
     )

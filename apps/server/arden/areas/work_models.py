@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from arden.areas.display_contract import (
     DISPLAY_LINE_PATTERN,
@@ -9,12 +9,50 @@ from arden.areas.display_contract import (
     SUCCESS_CRITERIA_MAX_CHARS,
     WORK_TEXT_MAX_CHARS,
 )
+from arden.core.public_refs import PublicRef
 
 OutcomeStatus = Literal["active", "paused", "completed", "cancelled"]
 OutcomeSource = Literal["inferred", "user", "migration"]
 WorkKind = Literal["loop", "action", "blocker"]
 WorkStatus = Literal["active", "in_progress", "completed", "cancelled"]
 WorkOwner = Literal["custodian", "user", "external"]
+
+
+class _EvidenceSourceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    kind: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    ref: str = Field(min_length=1, max_length=4096, pattern=DISPLAY_LINE_PATTERN)
+    title: str = Field(min_length=1, max_length=256, pattern=DISPLAY_LINE_PATTERN)
+
+    @field_validator("ref", "title")
+    @classmethod
+    def reject_surrounding_whitespace(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("evidence reference fields must not have surrounding whitespace")
+        return value
+
+
+class ArdenEvidenceSourceRef(_EvidenceSourceRef):
+    provider: Literal["arden"]
+    ref: PublicRef
+
+
+class ProviderEvidenceSourceRef(_EvidenceSourceRef):
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+
+    @field_validator("provider")
+    @classmethod
+    def reject_arden_provider(cls, value: str) -> str:
+        if value == "arden":
+            raise ValueError("Arden evidence must use an Arden public reference")
+        return value
+
+
+EvidenceSourceRef = Annotated[
+    ArdenEvidenceSourceRef | ProviderEvidenceSourceRef,
+    Field(union_mode="left_to_right"),
+]
 
 
 class AreaOutcome(BaseModel):
@@ -55,7 +93,7 @@ class AreaWorkEvent(BaseModel):
     run_ref: str | None
     event_type: str
     summary: str
-    source_refs: list[str]
+    source_refs: list[EvidenceSourceRef]
     created_at: str
 
 
@@ -133,7 +171,7 @@ class EvidenceDraft(BaseModel):
         max_length=EVIDENCE_SUMMARY_MAX_CHARS,
         pattern=DISPLAY_LINE_PATTERN,
     )
-    source_refs: list[str] = Field(default_factory=list, max_length=20)
+    source_refs: list[EvidenceSourceRef] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_target(self):

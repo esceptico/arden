@@ -197,7 +197,7 @@ def render_work_context(snapshot: AreaWorkSnapshot) -> str:
                 "target_key": target_key,
                 "event_type": row.event_type,
                 "summary": row.summary,
-                "source_refs": row.source_refs,
+                "source_refs": [source.model_dump(mode="json") for source in row.source_refs],
                 "created_at": row.created_at,
             }
         )
