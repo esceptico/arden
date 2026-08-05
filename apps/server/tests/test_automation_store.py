@@ -185,6 +185,16 @@ async def test_run_history_records_start_then_finish(automation_store: Automatio
     assert len(runs) == 1
     assert runs[0]["status"] == "running"
     assert runs[0]["ended_at"] is None
+    assert runs[0]["chat_session_id"] is None
+
+    await automation_store.bind_detached_chat_run(
+        run_id,
+        "task-1",
+        "chat-run-1",
+        "chat-session-1",
+    )
+    runs = await automation_store.list_runs("task-1")
+    assert runs[0]["chat_session_id"] == "chat-session-1"
 
     await _finish_run(
         automation_store,

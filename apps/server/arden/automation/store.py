@@ -16,6 +16,24 @@ def _parse_dt(raw: str | None) -> datetime | None:
     return datetime.fromisoformat(raw) if raw else None
 
 
+_AUTOMATION_RUN_FIELDS = (
+    "id",
+    "task_id",
+    "chat_run_id",
+    "chat_session_id",
+    "started_at",
+    "ended_at",
+    "status",
+    "result",
+    "error",
+)
+
+
+def _automation_run_dict(row: aiosqlite.Row) -> dict[str, object]:
+    """Project one persisted run without silently dropping channel identity."""
+    return {field: row[field] for field in _AUTOMATION_RUN_FIELDS}
+
+
 _CONTROL_BYTES = ("\x1f", "\x00")
 
 
@@ -1764,18 +1782,7 @@ class AutomationStore:
         """Newest run per task in one query — the overview hydration path."""
         cursor = await self.conn.execute(_SQL_LATEST_RUNS)
         rows = await cursor.fetchall()
-        return {
-            row["task_id"]: {
-                "id": row["id"],
-                "task_id": row["task_id"],
-                "started_at": row["started_at"],
-                "ended_at": row["ended_at"],
-                "status": row["status"],
-                "result": row["result"],
-                "error": row["error"],
-            }
-            for row in rows
-        }
+        return {row["task_id"]: _automation_run_dict(row) for row in rows}
 
     async def latest_completed_runs(self, task_ids: tuple[str, ...]) -> dict[str, datetime]:
         """Latest successfully completed run per requested task."""
@@ -1803,18 +1810,7 @@ class AutomationStore:
     async def list_runs(self, task_id: str, limit: int = 20) -> list[dict]:
         cursor = await self.conn.execute(_SQL_LIST_RUNS, (task_id, limit))
         rows = await cursor.fetchall()
-        return [
-            {
-                "id": row["id"],
-                "task_id": row["task_id"],
-                "started_at": row["started_at"],
-                "ended_at": row["ended_at"],
-                "status": row["status"],
-                "result": row["result"],
-                "error": row["error"],
-            }
-            for row in rows
-        ]
+        return [_automation_run_dict(row) for row in rows]
 
     async def list_runs_since(
         self,
@@ -1844,7 +1840,7 @@ class AutomationStore:
             """,
             tuple(params),
         )
-        return [dict(row) for row in rows]
+        return [_automation_run_dict(row) for row in rows]
 
     async def delete(self, task_id: str) -> bool:
         async with self._idempotency_lock:

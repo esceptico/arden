@@ -162,6 +162,7 @@ export function AutomationDetail({
   onDeleted,
   onDirtyChange,
   onOpenRun,
+  onOpenRunChannel,
   onOpenTrigger,
   onOpenChannel,
   openLatestRun = false,
@@ -174,6 +175,7 @@ export function AutomationDetail({
   onDeleted?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   onOpenRun?: (run: AutomationRun, runTitle: string) => void;
+  onOpenRunChannel?: (sessionId: string) => void;
   onOpenTrigger?: () => void;
   onOpenChannel?: (sessionId: string) => void;
   /** Deep-link intent from activity rows: show the latest result on arrival. */
@@ -414,34 +416,54 @@ export function AutomationDetail({
   };
 
   const openRunContextMenu = useCallback((run: AutomationRun, runTitle: string, position: ContextMenuPosition) => {
-    if (!onOpenRun) return;
+    if (!onOpenRun && !(run.chat_session_id && onOpenRunChannel)) return;
     setRunContextMenu({ run, runTitle, ...position });
-  }, [onOpenRun]);
+  }, [onOpenRun, onOpenRunChannel]);
 
   const openRunResult = useCallback((run: AutomationRun, runTitle: string) => {
     setTriggerDraft(null);
     onOpenRun?.(run, runTitle);
   }, [onOpenRun]);
 
-  /* Activity-row deep link: once runs land, surface the newest result
-   *  instead of stopping at the settings detail. */
+  const openRunDestination = useCallback((run: AutomationRun, runTitle: string) => {
+    if (run.chat_session_id && onOpenRunChannel) {
+      onOpenRunChannel(run.chat_session_id);
+      return;
+    }
+    openRunResult(run, runTitle);
+  }, [onOpenRunChannel, openRunResult]);
+
+  /* Activity-row deep link: once runs land, open the newest run's exact
+   * channel when it has one, otherwise retain the result fallback. */
   useEffect(() => {
     if (!openLatestRun || runs === null) return;
     onLatestRunConsumed?.();
     const run = runs[0];
     if (!run) return;
     const stamp = runStampParts(run.started_at);
-    openRunResult(run, `${stamp.day} ${stamp.time}`.trim());
-  }, [onLatestRunConsumed, openLatestRun, openRunResult, runs]);
+    openRunDestination(run, `${stamp.day} ${stamp.time}`.trim());
+  }, [onLatestRunConsumed, openLatestRun, openRunDestination, runs]);
 
   const runContextEntries = useMemo<ContextMenuEntry[]>(() => {
-    if (!runContextMenu || !onOpenRun) return [];
-    return [{
-      id: "open-result",
-      label: "Open result",
-      onSelect: () => openRunResult(runContextMenu.run, runContextMenu.runTitle),
-    }];
-  }, [onOpenRun, openRunResult, runContextMenu]);
+    if (!runContextMenu) return [];
+    const entries: ContextMenuEntry[] = [];
+    const sessionId = runContextMenu.run.chat_session_id;
+    if (sessionId && onOpenRunChannel) {
+      entries.push({
+        id: "open-channel",
+        label: "Open channel",
+        onSelect: () => onOpenRunChannel(sessionId),
+      });
+    }
+    if (onOpenRun) {
+      entries.push({
+        id: "open-result",
+        label: "Open result",
+        onSelect: () => openRunResult(runContextMenu.run, runContextMenu.runTitle),
+      });
+    }
+    return entries;
+  }, [onOpenRun, onOpenRunChannel, openRunResult, runContextMenu]);
 
   return (
     <article className="automation-detail" aria-labelledby="automation-detail-title">
@@ -588,7 +610,7 @@ export function AutomationDetail({
 
         {automation && (
           <section className="automation-detail__section">
-            <SectionHeading meta="open a result">Recent runs</SectionHeading>
+            <SectionHeading meta="open a channel or result">Recent runs</SectionHeading>
             <TabPanels value={ledgerKey} direction={-1} axis="y">
               {runs === null ? (
                 <div className="automation-detail__run-skeletons" aria-label="Loading recent runs">
@@ -619,8 +641,8 @@ export function AutomationDetail({
                         data-status={status}
                         data-run-peek-owner
                         aria-label={`${stamp.day} ${stamp.time}: ${status}. ${runSummary(run)}`}
-                        onClick={() => openRunResult(run, runTitle)}
-                        onContextMenu={onOpenRun ? (event) => {
+                        onClick={() => openRunDestination(run, runTitle)}
+                        onContextMenu={onOpenRun || (run.chat_session_id && onOpenRunChannel) ? (event) => {
                           event.preventDefault();
                           openRunContextMenu(run, runTitle, {
                             x: event.clientX,
@@ -629,7 +651,7 @@ export function AutomationDetail({
                             source: "pointer",
                           });
                         } : undefined}
-                        onKeyDown={onOpenRun ? (event) => {
+                        onKeyDown={onOpenRun || (run.chat_session_id && onOpenRunChannel) ? (event) => {
                           if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
                           event.preventDefault();
                           const rect = event.currentTarget.getBoundingClientRect();

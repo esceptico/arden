@@ -484,6 +484,7 @@ export function AutomationsModal() {
               }}
               onDirtyChange={setDetailDirty}
               onOpenChannel={(sessionId) => requestIntent({ kind: "channel", sessionId })}
+              onOpenRunChannel={(sessionId) => requestIntent({ kind: "channel", sessionId })}
               onOpenRun={(run, runTitle) => setRunPeek({ run, runTitle })}
               onOpenTrigger={() => setRunPeek(null)}
               openLatestRun={openLatestRun}

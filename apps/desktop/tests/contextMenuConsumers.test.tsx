@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { Automation } from "@/api/types";
+import type { Automation, AutomationRun } from "@/api/types";
 import type { MemoryArtifactSummary } from "@/features/memory/lib/notebookTypes";
 import { duplicateAutomationPayload } from "@/actions/automations";
 import { AutomationDetail } from "@/features/automations/components/AutomationDetail";
@@ -44,6 +44,8 @@ const automation: Automation = {
   task_id: "daily-brief",
   name: "Daily brief",
   description: "Summarize the day.",
+  description_source: "manual",
+  prompt: "Summarize the day.",
   model: null,
   triggers: [{ type: "time", at: "09:00", days: "daily" }],
   enabled: true,
@@ -385,9 +387,102 @@ test("Draft creation retries keep one idempotency key", async () => {
   }
 });
 
-test("Run menus expose the real result peek and do not claim a missing deep link", () => {
+test("Automation runs open their exact channel and keep result fallback", async () => {
+  const previousDesktop = window.ardenDesktop;
+  const requestPaths: string[] = [];
+  const runs: AutomationRun[] = [
+    {
+      id: 2,
+      task_id: automation.task_id,
+      chat_session_id: "channel-session-2",
+      started_at: "2026-07-24T10:00:00Z",
+      ended_at: "2026-07-24T10:01:00Z",
+      status: "completed",
+      result: "Linked result",
+      error: null,
+    },
+    {
+      id: 1,
+      task_id: automation.task_id,
+      chat_session_id: null,
+      started_at: "2026-07-24T09:00:00Z",
+      ended_at: "2026-07-24T09:01:00Z",
+      status: "completed",
+      result: "Builtin result",
+      error: null,
+    },
+  ];
+  window.ardenDesktop = {
+    api: {
+      request: async (_config, request) => {
+        requestPaths.push(request.path);
+        if (request.path === `/automations/${automation.task_id}/runs?limit=30`) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            contentType: "application/json",
+            data: { runs },
+            text: "",
+          };
+        }
+        throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+      },
+    },
+  } as unknown as NonNullable<Window["ardenDesktop"]>;
+
+  const openedChannels: string[] = [];
+  const openedResults: number[] = [];
+  let latestRunConsumed = 0;
+  try {
+    const { app, render } = mount();
+    await render(
+      <AutomationDetail
+        seed={{ kind: "existing", automation }}
+        onClose={() => {}}
+        onCreated={() => {}}
+        onOpenRunChannel={(sessionId) => openedChannels.push(sessionId)}
+        onOpenRun={(run) => openedResults.push(run.id)}
+        openLatestRun
+        onLatestRunConsumed={() => { latestRunConsumed += 1; }}
+      />,
+    );
+    for (
+      let attempt = 0;
+      attempt < 80 && app.querySelectorAll(".automation-detail__run").length < 2;
+      attempt += 1
+    ) {
+      await act(async () => Bun.sleep(10));
+    }
+
+    const rows = app.querySelectorAll<HTMLButtonElement>(".automation-detail__run");
+    expect(requestPaths).toContain(`/automations/${automation.task_id}/runs?limit=30`);
+    expect(rows).toHaveLength(2);
+    await act(async () => rows[0]?.click());
+    await act(async () => rows[1]?.click());
+    expect(latestRunConsumed).toBe(1);
+    expect(openedChannels).toEqual(["channel-session-2", "channel-session-2"]);
+    expect(openedResults).toEqual([1]);
+
+    rows[0]?.focus();
+    await act(async () => openContextMenu(rows[0]!));
+    const menu = app.querySelector<HTMLElement>('[role="menu"]')!;
+    expect(Array.from(menu.querySelectorAll('[role="menuitem"]'), (item) => item.textContent)).toEqual([
+      "Open channel",
+      "Open result",
+    ]);
+    await act(async () => menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]?.click());
+    expect(openedResults).toEqual([1, 2]);
+  } finally {
+    if (previousDesktop) window.ardenDesktop = previousDesktop;
+    else delete window.ardenDesktop;
+  }
+});
+
+test("Run menus do not claim a copyable deep link", () => {
   const detail = read("../src/features/automations/components/AutomationDetail.tsx");
   expect(detail).toContain('label: "Open result"');
+  expect(detail).toContain('label: "Open channel"');
   expect(detail).toContain("openRunContextMenu");
   expect(detail).not.toContain("Copy run link");
 });

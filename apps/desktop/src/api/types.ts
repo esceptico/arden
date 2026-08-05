@@ -382,6 +382,7 @@ export type UpdateAutomationPayload = Partial<
 export interface AutomationRun {
   id: number;
   task_id: string;
+  chat_session_id: string | null;
   started_at: string;
   ended_at: string | null;
   status: string;
