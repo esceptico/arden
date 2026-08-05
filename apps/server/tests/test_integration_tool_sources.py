@@ -213,6 +213,7 @@ async def test_calendar_create_maps_provider_failure_to_typed_result(tmp_path):
         CalendarCreateEventInput(
             summary="Review",
             start="2026-07-20T09:00:00+04:00",
+            account="me@example.test",
             idempotency_key="calendar-review-1",
         ),
     )

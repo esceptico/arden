@@ -39,6 +39,14 @@ def test_external_mutation_inputs_require_idempotency_keys():
     assert all(model.model_fields["idempotency_key"].is_required() for model in input_models)
 
 
+def test_calendar_mutations_require_exact_external_refs():
+    assert CalendarCreateEventInput.model_fields["account"].is_required()
+    assert "event_ref" in CalendarEditEventInput.model_fields
+    assert "event_id" not in CalendarEditEventInput.model_fields
+    assert "event_ref" in CalendarDeleteEventInput.model_fields
+    assert "event_id" not in CalendarDeleteEventInput.model_fields
+
+
 @pytest.mark.asyncio
 async def test_idempotency_ledger_replays_completed_receipt_without_duplicate_call(tmp_path):
     ledger = IdempotencyLedger(tmp_path / "idempotency.sqlite3")

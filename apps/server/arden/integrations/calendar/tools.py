@@ -20,7 +20,7 @@ Without query: lists events by time range. Use days_forward/days_back to control
 With query: searches events by name, attendee, or description. Use specific keywords.
 
 Returns event times, titles, and account-qualified references. Copy the full
-`account:event_id` reference into edit/delete operations."""
+`account:event_ref` value into edit/delete operations."""
 
 CREATE_CALENDAR_EVENT_DESCRIPTION = """Create a new calendar event.
 
@@ -33,7 +33,7 @@ Use calendar_search() or calendar_search(query) first, then copy the full accoun
 Only provide the fields you want to change - others remain unchanged.
 Requires user approval before editing."""
 
-DELETE_CALENDAR_EVENT_DESCRIPTION = """Delete a calendar event by ID.
+DELETE_CALENDAR_EVENT_DESCRIPTION = """Delete a calendar event.
 
 Use calendar_search() or calendar_search(query) first, then copy the full account-qualified event reference.
 Requires user approval before deleting."""
@@ -57,11 +57,9 @@ def _parse_datetime(value: str) -> datetime | None:
         return None
     try:
         dt = datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            dt = dt.astimezone()  # naive → local timezone
-        return dt
-    except Exception:
+    except ValueError:
         return None
+    return dt if dt.tzinfo is not None and dt.utcoffset() is not None else None
 
 
 def _format_events(events: list) -> str:
@@ -172,7 +170,7 @@ async def calendar_search(execution: ToolExecution, args: CalendarSearchInput) -
 
 class CalendarCreateEventInput(BaseModel):
     summary: str = Field(description="Event title/summary")
-    start: str = Field(description="Start time in ISO format (e.g., '2024-01-15T14:00:00')")
+    start: str = Field(description="Start time in ISO format with UTC offset (e.g., '2024-01-15T14:00:00+00:00')")
     end: str | None = Field(
         default=None, description="End time in ISO format (optional, defaults to 1 hour after start)"
     )
@@ -180,7 +178,7 @@ class CalendarCreateEventInput(BaseModel):
     location: str | None = Field(default=None, description="Event location (optional)")
     attendees: str | None = Field(default=None, description="Comma-separated email addresses of attendees (optional)")
     all_day: bool = Field(default=False, description="Whether this is an all-day event (optional)")
-    account: str | None = Field(default=None, description="Calendar account email (optional if only one account)")
+    account: str = Field(min_length=3, description="Exact Calendar account email")
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
@@ -218,7 +216,7 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
         source = execution.ctx.get_client("calendar", MultiCalendarSource)
         try:
             result = source.create_event(
-                account=args.account or "",
+                account=args.account,
                 summary=args.summary,
                 start=start_dt,
                 end=end_dt,
@@ -231,7 +229,7 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
             return operation_error_result(error, preview="Create failed")
         match = re.search(r"\(id: ([^)]+)\)", result)
         event_ref = match.group(1) if match else None
-        if event_ref and args.account:
+        if event_ref:
             event_ref = qualify_event_ref(args.account, event_ref)
         return mutation_result(
             content=result,
@@ -246,7 +244,7 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
 
     return await execute_idempotent(
         execution,
-        namespace=f"calendar:create:{args.account or 'default'}",
+        namespace=f"calendar:create:{args.account.casefold()}",
         idempotency_key=args.idempotency_key,
         payload=args.model_dump(exclude={"idempotency_key"}),
         invoke=invoke,
@@ -254,7 +252,7 @@ async def calendar_create_event(execution: ToolExecution, args: CalendarCreateEv
 
 
 class CalendarEditEventInput(BaseModel):
-    event_id: str = Field(description="Full account:event_id reference returned by calendar_search")
+    event_ref: str = Field(description="Full account-qualified reference returned by calendar_search")
     summary: str | None = Field(default=None, description="New event title (optional)")
     start: str | None = Field(default=None, description="New start time in ISO format (optional)")
     end: str | None = Field(default=None, description="New end time in ISO format (optional)")
@@ -277,7 +275,7 @@ async def approve_calendar_edit_event(execution: ToolExecution, args: CalendarEd
     if args.location:
         changes.append(f"Location: {args.location}")
     return ApprovalInfo(
-        description=args.event_id,
+        description=args.event_ref,
         preview="\n".join(changes) if changes else "No changes",
         diff=None,
     )
@@ -288,7 +286,7 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
     if args.start and not start_dt:
         return ToolResult.failure(
             code="invalid_ref",
-            message=f"Invalid start time: {args.start}. Use ISO format: 2024-01-15T14:00:00",
+            message=f"Invalid start time: {args.start}. Use ISO format: 2024-01-15T14:00:00+00:00",
             preview="Invalid start",
             recovery_action="Retry with an ISO-8601 timestamp including a UTC offset.",
         )
@@ -297,7 +295,7 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
     if args.end and not end_dt:
         return ToolResult.failure(
             code="invalid_ref",
-            message=f"Invalid end time: {args.end}. Use ISO format: 2024-01-15T15:00:00",
+            message=f"Invalid end time: {args.end}. Use ISO format: 2024-01-15T15:00:00+00:00",
             preview="Invalid end",
             recovery_action="Retry with an ISO-8601 timestamp including a UTC offset.",
         )
@@ -308,7 +306,7 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
         source = execution.ctx.get_client("calendar", MultiCalendarSource)
         try:
             result = source.update_event(
-                event_id=args.event_id,
+                event_id=args.event_ref,
                 summary=args.summary,
                 start=start_dt,
                 end=end_dt,
@@ -322,11 +320,11 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
             content=result,
             preview="Updated",
             operation="update",
-            target=args.event_id,
+            target=args.event_ref,
             receipt=args.idempotency_key,
-            before_ref=args.event_id,
-            after_ref=args.event_id,
-            observed=f"Calendar acknowledged update of {args.event_id}",
+            before_ref=args.event_ref,
+            after_ref=args.event_ref,
+            observed=f"Calendar acknowledged update of {args.event_ref}",
         )
 
     return await execute_idempotent(
@@ -339,7 +337,7 @@ async def calendar_edit_event(execution: ToolExecution, args: CalendarEditEventI
 
 
 class CalendarDeleteEventInput(BaseModel):
-    event_id: str = Field(description="Full account:event_id reference returned by calendar_search")
+    event_ref: str = Field(description="Full account-qualified reference returned by calendar_search")
     idempotency_key: str = Field(min_length=8, max_length=200)
 
 
@@ -348,8 +346,8 @@ async def approve_calendar_delete_event(
 ) -> ApprovalInfo | None:
     return ApprovalInfo(
         description="Delete calendar event",
-        preview=f"Event ref: {args.event_id}",
-        diff=f"- calendar event {args.event_id}",
+        preview=f"Event ref: {args.event_ref}",
+        diff=f"- calendar event {args.event_ref}",
     )
 
 
@@ -357,18 +355,18 @@ async def calendar_delete_event(execution: ToolExecution, args: CalendarDeleteEv
     async def invoke() -> ToolResult:
         source = execution.ctx.get_client("calendar", MultiCalendarSource)
         try:
-            result = source.delete_event(args.event_id)
+            result = source.delete_event(args.event_ref)
         except IntegrationOperationError as error:
             return operation_error_result(error, preview="Delete failed")
         return mutation_result(
             content=result,
             preview="Deleted",
             operation="delete",
-            target=args.event_id,
+            target=args.event_ref,
             receipt=args.idempotency_key,
-            before_ref=args.event_id,
+            before_ref=args.event_ref,
             after_ref="absent",
-            observed=f"Calendar acknowledged deletion of {args.event_id}",
+            observed=f"Calendar acknowledged deletion of {args.event_ref}",
         )
 
     return await execute_idempotent(

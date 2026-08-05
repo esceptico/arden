@@ -476,30 +476,26 @@ class MultiCalendarSource:
 
     def _collect(self, fn: Callable[[GoogleCalendar], list[RawItem]], limit: int) -> list[RawItem]:
         items: list[RawItem] = []
-        connection_error: IntegrationConnectionError | None = None
         for src in self.sources:
+            account = _require_account_identity(src)
             try:
-                account = _require_account_identity(src)
-                for item in fn(src):
-                    items.append(
-                        replace(
-                            item,
-                            source_id=qualify_event_ref(account, item.source_id),
-                            metadata={**item.metadata, "account": account},
-                        )
+                account_items = fn(src)
+            except RefreshError as exc:
+                src.auth_error = str(exc)
+                raise IntegrationConnectionError(
+                    integration_id="calendar",
+                    reason="auth_required",
+                    detail=f"Calendar authentication failed for {account}. Reconnect that account.",
+                    retry_safe=True,
+                ) from exc
+            for item in account_items:
+                items.append(
+                    replace(
+                        item,
+                        source_id=qualify_event_ref(account, item.source_id),
+                        metadata={**item.metadata, "account": account},
                     )
-            except RefreshError as e:
-                key = src.get_email_address() or src.token_path.name
-                _logger.warning("Calendar auth failed for %s: %s", key, e)
-                src.auth_error = str(e)
-            except IntegrationConnectionError as exc:
-                connection_error = exc
-                src.auth_error = exc.detail
-            except Exception as e:
-                key = src.get_email_address() or src.token_path.name
-                _logger.warning("Calendar failed for %s: %s", key, e)
-        if not items and connection_error is not None:
-            raise connection_error
+                )
         items.sort(key=lambda x: x.metadata.get("start", ""))
         return items[:limit]
 
@@ -523,36 +519,15 @@ class MultiCalendarSource:
         all_day: bool = False,
     ) -> str:
         if not account:
-            # Default to first available calendar
-            connection_error: IntegrationConnectionError | None = None
-            for source in self.sources:
-                try:
-                    source_account = _require_account_identity(source)
-                except IntegrationConnectionError as exc:
-                    connection_error = exc
-                    source.auth_error = exc.detail
-                    continue
-                result = source.create_event(
-                    summary=summary,
-                    start=start,
-                    end=end,
-                    description=description,
-                    location=location,
-                    attendees=attendees,
-                    all_day=all_day,
-                )
-                return _qualify_calendar_result(result, source_account)
-            if connection_error is not None:
-                raise connection_error
             raise IntegrationOperationError(
-                code="not_found",
-                safe_message="No Calendar accounts are available.",
+                code="invalid_ref",
+                safe_message="Calendar create requires an exact account email.",
             )
 
-        account_lower = account.lower().strip()
+        account_key = account.strip().casefold()
         for src in self.sources:
-            email = src.get_email_address().lower()
-            if email == account_lower:
+            source_account = _require_account_identity(src)
+            if source_account.casefold() == account_key:
                 result = src.create_event(
                     summary=summary,
                     start=start,
@@ -562,7 +537,7 @@ class MultiCalendarSource:
                     attendees=attendees,
                     all_day=all_day,
                 )
-                return _qualify_calendar_result(result, email)
+                return _qualify_calendar_result(result, source_account)
 
         accounts = self.list_accounts()
         if accounts:
@@ -604,10 +579,7 @@ class MultiCalendarSource:
 
     def _resolve_event_ref(self, event_ref: str) -> tuple[GoogleCalendar, str]:
         account, separator, event_id = event_ref.partition(":")
-        if not separator:
-            if len(self.sources) == 1:
-                _require_account_identity(self.sources[0])
-                return self.sources[0], event_ref
+        if not separator or "@" not in account or not event_id:
             raise IntegrationOperationError(
                 code="invalid_ref",
                 safe_message="Calendar event references must be account-qualified.",
@@ -623,10 +595,6 @@ class MultiCalendarSource:
             identified_sources += 1
             if source_account.casefold() == account.casefold():
                 return source, event_id
-        if len(self.sources) == 1 and "@" not in account:
-            if connection_error is not None:
-                raise connection_error
-            return self.sources[0], event_ref
         if identified_sources == 0 and connection_error is not None:
             raise connection_error
         raise IntegrationOperationError(
