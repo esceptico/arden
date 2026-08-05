@@ -330,8 +330,9 @@ function readSnapshot(target) {
 function revisionOrAbsent(target) {
   try {
     return readSnapshot(target).sha256;
-  } catch {
-    return "absent";
+  } catch (error) {
+    if (isMissingError(error)) return "absent";
+    throw error;
   }
 }
 
@@ -470,7 +471,8 @@ async function readFile(args, { context } = {}) {
   // Offloaded tool-result files with default params get capped so the agent
   // does not read the entire offloaded result back into context.
   const offloadDir = context?.offload_dir;
-  const isOffloaded = Boolean(offloadDir) && target.startsWith(offloadDir);
+  const offloadRoot = typeof offloadDir === "string" && offloadDir ? resolvePath(offloadDir, cwd) : null;
+  const isOffloaded = offloadRoot !== null && isWithinPath(target, offloadRoot);
   if (isOffloaded && offset === DEFAULT_OFFSET && limit === DEFAULT_LINE_LIMIT) {
     limit = OFFLOAD_READ_LIMIT;
   }

@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { runBash, readFile, listFiles, findFiles, searchText, writeFile, editFile } = require("../electron/executor-tools.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const fsSync = require("node:fs");
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "arden-executor-test-"));
@@ -54,6 +56,30 @@ describe("read_file handler", () => {
     const result = await readFile({ path: file }, { context: { offload_dir: offloadDir } });
     expect(result.payload.content).toContain("[300 lines, showing 1-100]");
     expect(result.payload.source_refs).toBeUndefined();
+  });
+
+  test("does not classify a sibling or escaped path as an offloaded result", async () => {
+    const dir = tempDir();
+    const offloadDir = join(dir, "results");
+    const siblingDir = join(dir, "results-other");
+    mkdirSync(offloadDir);
+    mkdirSync(siblingDir);
+    const sibling = join(siblingDir, "sibling.txt");
+    const escaped = join(dir, "escaped.txt");
+    const content = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
+    writeFileSync(sibling, content);
+    writeFileSync(escaped, content);
+
+    const siblingResult = await readFile({ path: sibling }, { context: { offload_dir: offloadDir } });
+    const escapedResult = await readFile(
+      { path: join(offloadDir, "..", "escaped.txt") },
+      { context: { offload_dir: offloadDir } },
+    );
+
+    for (const result of [siblingResult, escapedResult]) {
+      expect(result.payload.content).toContain("[300 lines]");
+      expect(result.payload.source_refs[0].provider).toBe("filesystem");
+    }
   });
 
   test("missing file and directory are typed failures", async () => {
@@ -309,6 +335,36 @@ describe("write_file handler", () => {
     const conflicted = await writeFile({ path: file, content: "version C\n" }, { context });
     expect(conflicted.errorCode).toBe("write_conflict");
     expect(readFileSync(file, "utf8")).toBe("version B\n");
+  });
+
+  test("reports an unreadable CAS recheck instead of treating the file as absent", async () => {
+    const dir = tempDir();
+    const file = join(dir, "note.txt");
+    writeFileSync(file, "version A\n");
+    const read = await readFile({ path: file });
+    const observation = read.payload.observations[0];
+    const originalReadFileSync = fsSync.readFileSync;
+    let reads = 0;
+    fsSync.readFileSync = (...args: Parameters<typeof originalReadFileSync>) => {
+      reads += 1;
+      if (reads === 2) {
+        const error = new Error("permission denied") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      return originalReadFileSync(...args);
+    };
+
+    try {
+      const result = await writeFile(
+        { path: file, content: "version B\n" },
+        { context: { resource_observations: { [observation.id]: observation } } },
+      );
+      expect(result.errorCode).toBe("permission_denied");
+      expect(readFileSync(file, "utf8")).toBe("version A\n");
+    } finally {
+      fsSync.readFileSync = originalReadFileSync;
+    }
   });
 
   test("identical content short-circuits as unchanged", async () => {
