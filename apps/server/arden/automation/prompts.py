@@ -12,11 +12,11 @@ _AUTONOMOUS_RUN_RULES = (
     "When a create or move reports a created or restored README, read it immediately and replace bootstrap text "
     "with the exact purpose, producer, consumers, boundaries, and retention before finishing. "
     "Explicitly list or read every named wiki input before using it. "
-    "Return only the final output — no preamble, no narration, no thinking out loud. "
 )
 
 AUTOMATION_SUFFIX = (
-    _AUTONOMOUS_RUN_RULES + "Do not create new automations or ask for confirmation. "
+    _AUTONOMOUS_RUN_RULES + "Return only the final output — no preamble, no narration, no thinking out loud. "
+    "Do not create new automations or ask for confirmation. "
     "If the user asked to be notified, told, or written to — use the notify tool. " + UNTRUSTED_DATA_RULE
 )
 
@@ -24,7 +24,11 @@ AUTOMATION_SUFFIX = (
 # approval is their designed output, and an `act` custodian creates the child
 # automations that carry out the work. The blanket automation prohibitions
 # would forbid exactly the behaviour their report schema grades them on.
-CUSTODIAN_SUFFIX = _AUTONOMOUS_RUN_RULES + UNTRUSTED_DATA_RULE
+CUSTODIAN_SUFFIX = (
+    _AUTONOMOUS_RUN_RULES
+    + "A successful area_submit_report call ends the run; do not emit prose beside that final call. "
+    + UNTRUSTED_DATA_RULE
+)
 
 AUTOMATION_PROMPT = _env.from_string("""{{ prompt }}
 {% if context %}

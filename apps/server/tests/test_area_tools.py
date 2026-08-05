@@ -18,6 +18,7 @@ from arden.tools.area import (
     area_page_write,
     area_run_automation,
     area_submit_report,
+    area_submit_report_tool,
 )
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
@@ -409,7 +410,9 @@ async def test_area_report_is_committed_inside_the_trusted_custodian_run(tmp_pat
     result = await area_submit_report(run, report())
 
     assert not result.is_error
-    assert result.data == {"accepted": True}
+    assert result.content == report().report
+    assert result.data == {"accepted": True, "applied": True}
+    assert area_submit_report_tool.ends_turn is True
     assert work.calls == [("area_health", "run:run-1", report())]
 
 

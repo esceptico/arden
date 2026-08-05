@@ -39,6 +39,7 @@ from arden.agent.types.llm import (
     ToolCallStreamDelta,
 )
 from arden.agent.types.stop import StopReason
+from arden.agent.types.tool_call import PendingToolCall
 from arden.agent.types.tool_choice import ToolChoice, ToolChoiceMode
 from arden.agent.types.tools import ToolOutcome, ToolOutcomeStatus, ToolResult
 from arden.agent.types.usage import Usage
@@ -187,16 +188,32 @@ class Agent:
                 ]
                 missing_ids = {call.tool_call.id for call in incomplete_step.pending_calls}
                 missing_raw_calls = [call for call in incomplete_step.raw_tool_calls if call.id in missing_ids]
-                self._record_tool_calls(len(calls_to_execute))
+                rejection = self._tool_batch_rejection(incomplete_step.pending_calls)
+                if rejection is None:
+                    self._record_tool_calls(len(calls_to_execute))
+                completions: list[ToolCompleted] = []
                 async for event in dispatch_tools(
                     self._runner,
                     messages,
                     calls_to_execute,
                     missing_raw_calls,
                     recovered_results=recovered,
+                    rejection=rejection,
                 ):
+                    if isinstance(event, ToolCompleted):
+                        completions.append(event)
                     yield event
                 step = 1
+                if rejection is None:
+                    terminal_text = self._recovered_terminal_text(
+                        incomplete_step.pending_calls, recovered
+                    ) or self._terminal_completion_text(completions)
+                    if terminal_text:
+                        if self.hooks.on_step_finish:
+                            await self.hooks.on_step_finish(step, self._last_response, messages)
+                        result_text = terminal_text
+                        yield self._result(result_text, StopReason.END_TURN, step)
+                        return
 
             while True:
                 await self._drain_pending(messages)
@@ -284,18 +301,8 @@ class Agent:
                     for provider_call in response_message.provider_tool_calls or []:
                         loaded_names.update(_provider_loaded_tool_names(provider_call) & deferred_names)
                     self._executor.mark_provider_loaded_tools(loaded_names)
-                if len(calls) > self.max_tool_calls_per_step:
-                    rejection = ToolResult.failure(
-                        code="tool_fanout_limit_exceeded",
-                        message=(
-                            f"Tool batch rejected: {len(calls)} calls exceeds the per-step limit of "
-                            f"{self.max_tool_calls_per_step}. Regroup the work into smaller batches."
-                        ),
-                        preview="Tool batch rejected",
-                        recovery_action=(
-                            f"Retry with at most {self.max_tool_calls_per_step} tool calls in one model step."
-                        ),
-                    )
+                rejection = self._tool_batch_rejection(calls)
+                if rejection is not None:
                     completions: list[ToolCompleted] = []
                     async for event in dispatch_tools(
                         self._runner,
@@ -331,6 +338,15 @@ class Agent:
                     if isinstance(event, ToolStarted) and event.tool_id in streamed_tool_input_ids:
                         continue
                     yield event
+
+                terminal_text = self._terminal_completion_text(completions)
+                if terminal_text:
+                    step += 1
+                    if self.hooks.on_step_finish:
+                        await self.hooks.on_step_finish(step, self._last_response, messages)
+                    result_text = terminal_text
+                    yield self._result(result_text, StopReason.END_TURN, step)
+                    return
 
                 no_progress_steps = self._next_no_progress_count(no_progress_steps, completions)
                 if no_progress_steps >= AGENT_MAX_NO_PROGRESS_STEPS:
@@ -463,6 +479,47 @@ class Agent:
             for event in completions
         )
         return current + 1 if failed_without_retry else 0
+
+    def _tool_batch_rejection(self, calls: list[PendingToolCall]) -> ToolResult | None:
+        if len(calls) > self.max_tool_calls_per_step:
+            return ToolResult.failure(
+                code="tool_fanout_limit_exceeded",
+                message=(
+                    f"Tool batch rejected: {len(calls)} calls exceeds the per-step limit of "
+                    f"{self.max_tool_calls_per_step}. Regroup the work into smaller batches."
+                ),
+                preview="Tool batch rejected",
+                recovery_action=f"Retry with at most {self.max_tool_calls_per_step} tool calls in one model step.",
+            )
+        if len(calls) > 1 and any(
+            (meta := self._executor.get_meta(call.name)) is not None and meta.ends_turn for call in calls
+        ):
+            return ToolResult.failure(
+                code="terminal_tool_mixed_batch",
+                message="A turn-ending tool must be the only tool call in its model step.",
+                preview="Tool batch rejected",
+                recovery_action="Finish other tool work first, then call the turn-ending tool by itself.",
+            )
+        return None
+
+    @staticmethod
+    def _terminal_completion_text(completions: list[ToolCompleted]) -> str:
+        terminal = next((event for event in completions if event.ends_turn and not event.is_error), None)
+        return (terminal.result.strip() or terminal.preview.strip()) if terminal is not None else ""
+
+    def _recovered_terminal_text(
+        self,
+        calls: list[PendingToolCall],
+        recovered: dict[str, ToolResult],
+    ) -> str:
+        for call in calls:
+            meta = self._executor.get_meta(call.name)
+            result = recovered.get(call.tool_call.id)
+            if meta is None or not meta.ends_turn or result is None or result.is_error:
+                continue
+            if text := result.content.strip() or result.preview.strip():
+                return text
+        return ""
 
     def _append_budget_denials(self, messages: list[dict], tool_calls, reason: StopReason) -> None:
         content = self._budget_denial_content(reason)

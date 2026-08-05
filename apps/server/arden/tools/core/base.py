@@ -21,6 +21,9 @@ class Tool(ABC):
     # marks tools that internally spawn a sub-agent (research, etc.) so
     # the chat can render them as agent cards instead of plain rows.
     kind: str = "tool"
+    # A successful call is itself the run's final answer. Failed calls remain
+    # in the loop so the model can recover.
+    ends_turn: bool = False
 
     async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | ApprovalWaived | None:
         return None

@@ -2,6 +2,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from arden.areas.display_contract import (
+    DISPLAY_LINE_PATTERN,
+    OUTCOME_TITLE_MAX_CHARS,
+    SUCCESS_CRITERIA_MAX_CHARS,
+    WORK_TEXT_MAX_CHARS,
+)
 from arden.core.content import ContextContent, ContextManifestEntry
 from arden.tools.core.types import ToolOverrideDecision
 from arden.tools.scopes import SettableScopeKey
@@ -536,23 +542,39 @@ AreaWorkKey = Annotated[
 
 
 class CreateAreaOutcomeRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     key: AreaWorkKey
-    title: str = Field(min_length=1, max_length=300)
-    success_criteria: str = Field(min_length=1, max_length=2_000)
+    title: str = Field(min_length=1, max_length=OUTCOME_TITLE_MAX_CHARS, pattern=DISPLAY_LINE_PATTERN)
+    success_criteria: str = Field(min_length=1, max_length=SUCCESS_CRITERIA_MAX_CHARS)
     priority: int = Field(ge=1, le=5)
 
 
 class UpdateAreaOutcomeRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     expected_updated_at: str
-    title: str | None = Field(default=None, min_length=1, max_length=300)
-    success_criteria: str | None = Field(default=None, min_length=1, max_length=2_000)
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=OUTCOME_TITLE_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+    )
+    success_criteria: str | None = Field(default=None, min_length=1, max_length=SUCCESS_CRITERIA_MAX_CHARS)
     priority: int | None = Field(default=None, ge=1, le=5)
     status: Literal["active", "paused", "completed", "cancelled"] | None = None
 
 
 class UpdateAreaWorkItemRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     expected_updated_at: str
-    text: str | None = Field(default=None, min_length=1, max_length=2_000)
+    text: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=WORK_TEXT_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+    )
     status: Literal["active", "in_progress", "completed", "cancelled"] | None = None
     owner: Literal["custodian", "user", "external"] | None = None
     due_at: str | None = None

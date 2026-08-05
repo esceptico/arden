@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from arden.areas.triage import TRIAGE_SYSTEM
 from arden.automation.descriptions import _SYSTEM as AUTOMATION_DESCRIPTION_SYSTEM
-from arden.automation.prompts import AUTOMATION_SUFFIX
+from arden.automation.prompts import AUTOMATION_SUFFIX, CUSTODIAN_SUFFIX
 from arden.context.prompts import MERGE_SUMMARY_PROMPT_TEMPLATE, SUMMARIZE_PROMPT_TEMPLATE
 from arden.core.agent_types import resolve_agent_type
 from arden.core.naming import AGENT_NAMING_PROMPT, SESSION_NAMING_PROMPT
@@ -62,3 +62,9 @@ def test_runtime_context_wrappers_mark_embedded_data_and_authority():
     assert "UNTRUSTED external data" in event_context
     assert "UNTRUSTED external input" in message_context
     assert "not as higher-priority instructions" in continuation
+
+
+def test_autonomous_run_suffixes_have_distinct_final_output_contracts():
+    assert "Return only the final output" in AUTOMATION_SUFFIX
+    assert "successful area_submit_report call ends the run" in CUSTODIAN_SUFFIX
+    assert "Return only the final output" not in CUSTODIAN_SUFFIX

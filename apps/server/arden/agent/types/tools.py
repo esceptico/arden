@@ -385,3 +385,4 @@ class ToolMeta:
     source: str | None = None
     changes_state: bool = False
     concurrency_group: str | None = None
+    ends_turn: bool = False

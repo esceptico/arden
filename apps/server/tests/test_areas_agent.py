@@ -18,6 +18,7 @@ from arden.areas.agent import (
 )
 from arden.areas.asks import AskStore
 from arden.areas.models import Area
+from arden.server.schemas import CreateAreaOutcomeRequest, UpdateAreaWorkItemRequest
 from arden.tools.core.scope import ToolFacts, tools
 from arden.tools.core.types import ToolAction
 from arden.tools.scopes import resolve
@@ -34,6 +35,9 @@ def test_instructions_state_contract_and_ask_protocol():
     assert "notify" in text and "question" in text and "review" in text
     assert "salience" in text
     assert "Next check" in text  # self-paced heartbeat protocol
+    assert "Room display copy" in text
+    assert "under 240 characters" in text
+    assert "end the run without another prose response" in text
 
 
 def _nom(asks, report="tended", hours=24.0, reason="routine"):
@@ -72,6 +76,40 @@ def test_nomination_schema_validates_at_the_trust_boundary():
         AreaAskNomination.model_validate(_nom([_draft(str(i), "notify") for i in range(4)]))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("report", "r" * 241),
+        ("report", "line one\nline two"),
+        ("next_check_reason", "n" * 181),
+        ("next_check_reason", "line one\nline two"),
+    ],
+)
+def test_room_status_copy_is_short_and_single_line(field, value):
+    payload = _nom([])
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        AreaAskNomination.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("text", "a" * 161),
+        ("text", "line one\nline two"),
+        ("why_now", "w" * 201),
+        ("what_next", "n" * 201),
+    ],
+)
+def test_room_ask_copy_is_short_and_single_line(field, value):
+    draft = _draft("Review counsel memo", "review")
+    draft[field] = value
+
+    with pytest.raises(ValidationError):
+        AreaAskNomination.model_validate(_nom([draft]))
+
+
 def test_custodian_report_requires_complete_explicit_work_operations():
     report = AreaCustodianReport.model_validate(
         {
@@ -108,6 +146,83 @@ def test_custodian_report_requires_complete_explicit_work_operations():
                 **_nom([]),
                 "work_remaining": True,
                 "outcome_changes": [{"op": "create", "key": "missing-fields"}],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {
+            "outcome_changes": [
+                {
+                    "op": "create",
+                    "key": "long-outcome",
+                    "title": "o" * 161,
+                    "success_criteria": "Receipt exists",
+                    "priority": 3,
+                }
+            ]
+        },
+        {
+            "work_changes": [
+                {
+                    "op": "create",
+                    "key": "long-work",
+                    "kind": "action",
+                    "text": "w" * 281,
+                    "owner": "custodian",
+                }
+            ]
+        },
+        {
+            "evidence": [
+                {
+                    "target_type": "area",
+                    "event_type": "updated",
+                    "summary": "e" * 281,
+                }
+            ]
+        },
+        {
+            "work_changes": [
+                {
+                    "op": "create",
+                    "key": "blank-work",
+                    "kind": "action",
+                    "text": "   ",
+                    "owner": "custodian",
+                }
+            ]
+        },
+    ],
+)
+def test_room_work_copy_is_bounded(change):
+    with pytest.raises(ValidationError):
+        AreaCustodianReport.model_validate(
+            {
+                **_nom([]),
+                "work_remaining": True,
+                **change,
+            }
+        )
+
+
+def test_user_area_mutations_share_the_room_copy_contract():
+    with pytest.raises(ValidationError):
+        CreateAreaOutcomeRequest.model_validate(
+            {
+                "key": "long-title",
+                "title": "o" * 161,
+                "success_criteria": "Receipt exists",
+                "priority": 3,
+            }
+        )
+    with pytest.raises(ValidationError):
+        UpdateAreaWorkItemRequest.model_validate(
+            {
+                "expected_updated_at": "2026-08-05T00:00:00Z",
+                "text": "   ",
             }
         )
 

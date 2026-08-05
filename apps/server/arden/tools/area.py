@@ -355,9 +355,9 @@ async def area_submit_report(execution: ToolExecution, report: AreaCustodianRepo
             recovery_action="Refresh current Area work, correct the report, and retry.",
         )
     return ToolResult(
-        content="Area report accepted. End this run." if applied else "Area report was already accepted. End this run.",
+        content=report.report,
         preview="Area report accepted",
-        data={"accepted": True},
+        data={"accepted": True, "applied": applied},
     )
 
 
@@ -422,4 +422,5 @@ area_submit_report_tool = tool(
         idempotent=True,
     ),
     execute=area_submit_report,
+    ends_turn=True,
 )

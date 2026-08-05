@@ -6,6 +6,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arden.areas.asks import AskStore
+from arden.areas.display_contract import (
+    ASK_DETAIL_MAX_CHARS,
+    ASK_TEXT_MAX_CHARS,
+    DISPLAY_LINE_PATTERN,
+    NEXT_CHECK_REASON_MAX_CHARS,
+    REPORT_MAX_CHARS,
+)
 from arden.areas.models import Area, Ask
 from arden.areas.work_models import AreaWorkSnapshot, EvidenceDraft, OutcomeChange, WorkChange
 from arden.tools.scopes import AREA_REPORT_TOOL_NAME, ScopeKey
@@ -30,18 +37,33 @@ NOTIFY_ASK_TTL_HOURS = 72
 
 
 class AreaAskDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    text: str
+    text: str = Field(
+        min_length=1,
+        max_length=ASK_TEXT_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+        description="Direct one-line decision or update headline shown to the user.",
+    )
     # notify = FYI (no decision, expires quietly); question = blocked on the
     # user's judgment; review = proposed action awaiting approval.
     kind: Literal["notify", "question", "review"]
     # 1 = barely worth the page, 5 = drop everything. Below the threshold the
     # finding stays on the page and never becomes an ask.
     salience: int = Field(ge=1, le=5)
-    why_now: str
-    what_next: str
+    why_now: str = Field(
+        min_length=1,
+        max_length=ASK_DETAIL_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+        description="One concrete sentence explaining why this needs attention now.",
+    )
+    what_next: str = Field(
+        min_length=1,
+        max_length=ASK_DETAIL_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+        description="One concrete sentence describing what happens after the user responds.",
+    )
     # The executable half of a proposal. An observe custodian can never widen
     # its own reach — a spawned child is intersected with the parent's allowlist
     # — so the capability is minted by the user's approval instead: on approve,
@@ -58,15 +80,25 @@ class AreaAskDraft(BaseModel):
 class AreaAskNomination(BaseModel):
     """Findings triaged into asks plus the self-paced next check."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     asks: list[AreaAskDraft] = Field(default_factory=list, max_length=MAX_ASKS_PER_RUN)
     # One line the room shows as "what the agent did this run".
-    report: str
+    report: str = Field(
+        min_length=1,
+        max_length=REPORT_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+        description="One factual sentence naming the result, wait, or blocker from this check.",
+    )
     # Self-paced heartbeat: when to look next (clamped by the area's
     # attention bounds) and the reason the user sees in the room.
     next_check_hours: float = Field(gt=0, le=24 * 14)
-    next_check_reason: str
+    next_check_reason: str = Field(
+        min_length=1,
+        max_length=NEXT_CHECK_REASON_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+        description="One line naming the signal or deadline that makes the next check useful.",
+    )
 
 
 # Progress is the work graph moving: something created, finished, or dropped.
@@ -80,7 +112,12 @@ class AreaCustodianReport(AreaAskNomination):
     evidence: list[EvidenceDraft] = Field(default_factory=list, max_length=30)
     work_remaining: bool
     continuation_minutes: int | None = Field(default=None, ge=5, le=240)
-    continuation_reason: str | None = Field(default=None, min_length=1, max_length=500)
+    continuation_reason: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=NEXT_CHECK_REASON_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+    )
 
     @property
     def made_progress(self) -> bool:
@@ -132,8 +169,14 @@ def area_agent_instructions(area: Area) -> str:
         "Every ask must name the concrete object, why now, and what happens next. "
         "Give it a short stable key reused across runs until that exact decision is resolved. "
         "Score each 1-5 on salience; low-salience findings belong on the page, not in an ask.\n"
-        "Next check: pick when you should genuinely look again and say why in one line "
-        "(a deadline, an expected reply, the artifact you are waiting on)."
+        "Room display copy (schema limits are enforced): report is one factual sentence "
+        "under 240 characters naming the concrete result, wait, or blocker — never a diary "
+        "of tools or process. Ask text is a direct headline; why_now and what_next are one "
+        "concrete sentence each. Work text names one observable action or blocker. Do not "
+        "restate the topic or hedge with vague progress language. Next check: pick when you "
+        "should genuinely look again and name the exact deadline, reply, or artifact signal "
+        "in one line under 180 characters. After the report is accepted, end the run without "
+        "another prose response."
     )
 
 

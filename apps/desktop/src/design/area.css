@@ -1,9 +1,10 @@
 /*
  * Area room
  * ---------
- * The room is deliberately spare: one decision in focus, then the active
- * outcome. Activity, sources, agents, and controls live in the shared Area
- * inspector so this surface does not become a second dashboard.
+ * The room is deliberately spare: one decision in focus, then the latest
+ * check, current work, and outcomes. Activity, sources, agents, and controls
+ * live in the shared Area inspector so this surface does not become a second
+ * dashboard.
  */
 
 .board-area {
@@ -282,10 +283,117 @@
   border-radius: var(--r-panel);
 }
 
+/* Operational state, kept as plain page rows rather than dashboard cards. */
+.board-area-management__checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.board-area-management__checks section { min-width: 0; }
+
+.board-area-management h2,
+.board-area-work > header h2 {
+  margin: 0;
+  color: var(--ink-soft);
+  font: var(--weight-semibold) var(--text-sm)/1.2 var(--sans);
+}
+
+.board-area-management__checks p {
+  min-width: 0;
+  margin: .4375rem 0 0;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font: var(--weight-heading) var(--text-sm)/1.45 var(--sans);
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.board-area-management__checks p strong {
+  display: block;
+  color: var(--ink-soft);
+  font-weight: var(--weight-semibold);
+}
+
+.board-area-management__checks p span { display: block; }
+
+.board-area-work { margin-top: var(--space-5); }
+
+.board-area-work > header {
+  min-height: 1.875rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.board-area-work > header > span {
+  margin-left: auto;
+  color: var(--faint);
+  font: var(--weight-medium) var(--text-2xs)/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-area-work ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-area-work li {
+  min-width: 0;
+  padding: var(--space-2) 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  border-top: 1px solid var(--edge);
+}
+
+.board-area-work li > div { min-width: 0; flex: 1; }
+
+.board-area-work h3 {
+  margin: 0;
+  color: var(--ink-soft);
+  font: var(--weight-semibold) var(--text-sm)/1.4 var(--sans);
+  text-wrap: pretty;
+}
+
+.board-area-work li p {
+  margin: var(--space-1) 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  color: var(--faint);
+  font: var(--weight-medium) var(--text-xs)/1.35 var(--sans);
+}
+
+.board-area-work li p span + span::before {
+  margin-right: var(--space-2);
+  content: "·";
+}
+
+.board-area-work li[data-state="blocked"] p span:first-child { color: var(--bad); }
+
+.board-area-work time {
+  flex: none;
+  color: var(--faint);
+  font: var(--weight-medium) var(--text-xs)/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.board-area-work__zero {
+  margin: .4375rem 0 0;
+  color: var(--muted);
+  font: var(--weight-heading) var(--text-sm)/1.45 var(--sans);
+}
+
 /* Every outcome, not one with a counter hinting at the rest. "0 of 2
    complete" beside a singular heading read as progress through the outcome
    shown, when it was really a tally of outcomes the room never rendered. */
 .board-area-outcomes > header {
+  margin-top: var(--space-5);
   min-height: 1.875rem;
   display: flex;
   align-items: center;
@@ -410,6 +518,7 @@
     --attention-meta-columns: minmax(7ch, 10ch) 1ch 3ch;
   }
   .board-area-reply { right: .875rem; left: .875rem; }
+  .board-area-management__checks { grid-template-columns: 1fr; gap: var(--space-3); }
 }
 
 @media (max-height: 47rem) {

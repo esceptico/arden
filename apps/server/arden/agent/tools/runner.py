@@ -26,6 +26,7 @@ class _ResolvedCall:
     source: str | None = None
     changes_state: bool = False
     concurrency_group: str | None = None
+    ends_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,7 @@ class ToolRunner:
             source=meta.source if meta else None,
             changes_state=meta.changes_state if meta else False,
             concurrency_group=meta.concurrency_group if meta else call.name,
+            ends_turn=meta.ends_turn if meta else False,
         )
 
     async def _run_one(self, rc: _ResolvedCall) -> tuple[ToolResult, int]:
@@ -184,6 +186,7 @@ class ToolRunner:
             model_content=result.model_content,
             source_refs=normalize_source_refs(result.source_refs),
             outcome=result.outcome,
+            ends_turn=rc.ends_turn,
         )
 
     async def reject_all(

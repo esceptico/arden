@@ -262,6 +262,82 @@ async def test_resume_incomplete_tool_step_reuses_completed_call_and_executes_cr
 
 
 @pytest.mark.asyncio
+async def test_resume_recovered_terminal_tool_ends_without_another_model_turn():
+    call = _tc("c1", "submit", {})
+    messages = [
+        *_msgs(),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+            ],
+        },
+    ]
+
+    async def recover(_pending_calls):
+        return {"c1": ToolResult(content="Recovered report.", preview="Report recorded")}
+
+    llm = FakeLLM([])
+    executor = FakeExecutor(
+        {},
+        meta={"submit": ToolMeta(name="submit", display_name="Submit", ends_turn=True)},
+    )
+    agent = _make_agent(llm, executor, hooks=AgentHooks(recover_tool_calls=recover))
+
+    result = await agent.run(messages)
+
+    assert result.text == "Recovered report."
+    assert result.steps == 1
+    assert llm.call_count == 0
+    assert executor.call_log == []
+    assert [(message["tool_call_id"], message["content"]) for message in messages if message["role"] == "tool"] == [
+        ("c1", "Recovered report."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resume_rejected_terminal_batch_does_not_consume_retry_budget():
+    calls = [_tc("c1", "write", {}), _tc("c2", "submit", {})]
+    messages = [
+        *_msgs(),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+                for call in calls
+            ],
+        },
+    ]
+    llm = FakeLLM([_response(tool_calls=[_tc("c3", "submit", {})])])
+    executor = FakeExecutor(
+        {
+            "write": ToolResult(content="changed", preview="Changed"),
+            "submit": ToolResult(content="Report recorded.", preview="Report recorded"),
+        },
+        meta={
+            "write": ToolMeta(name="write", display_name="Write", changes_state=True),
+            "submit": ToolMeta(name="submit", display_name="Submit", ends_turn=True),
+        },
+    )
+    agent = _make_agent(llm, executor, max_tool_calls=1)
+
+    result = await agent.run(messages)
+
+    assert result.text == "Report recorded."
+    assert executor.call_log == [("submit", {})]
+
+
+@pytest.mark.asyncio
 async def test_resume_incomplete_tool_step_keeps_existing_partial_result_without_duplication():
     calls = [_tc("c1", "test", {"x": 1}), _tc("c2", "test", {"x": 2})]
     messages = [
@@ -586,6 +662,100 @@ async def test_multiple_non_mutating_tools_run_concurrently():
     result = await agent.run(_msgs())
     assert result.text == "done"
     assert set(events_order) == {"a_start", "b_start"}
+
+
+@pytest.mark.asyncio
+async def test_successful_terminal_tool_ends_without_another_model_turn():
+    llm = FakeLLM(
+        [
+            _response(tool_calls=[_tc("1", "submit", {})]),
+            _response(text="unreached"),
+        ]
+    )
+    executor = FakeExecutor(
+        {"submit": ToolResult(content="Filed the final exhibits.", preview="Report accepted")},
+        meta={"submit": ToolMeta(name="submit", display_name="Submit", ends_turn=True)},
+    )
+    checkpoints: list[int] = []
+
+    async def checkpoint(step, _response, _messages):
+        checkpoints.append(step)
+
+    agent = _make_agent(llm, executor, hooks=AgentHooks(on_step_finish=checkpoint))
+    result = await agent.run(_msgs())
+
+    assert result.text == "Filed the final exhibits."
+    assert result.stop_reason == StopReason.END_TURN
+    assert result.steps == 1
+    assert llm.call_count == 1
+    assert checkpoints == [1]
+
+
+@pytest.mark.asyncio
+async def test_failed_terminal_tool_stays_in_the_recovery_loop():
+    llm = FakeLLM(
+        [
+            _response(tool_calls=[_tc("1", "submit", {})]),
+            _response(text="Report could not be recorded."),
+        ]
+    )
+    executor = FakeExecutor(
+        {
+            "submit": ToolResult.failure(
+                code="conflict",
+                message="Refresh and retry.",
+                preview="Report rejected",
+            )
+        },
+        meta={"submit": ToolMeta(name="submit", display_name="Submit", ends_turn=True)},
+    )
+
+    result = await _make_agent(llm, executor).run(_msgs())
+
+    assert result.text == "Report could not be recorded."
+    assert llm.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_terminal_tool_uses_its_preview_when_content_is_empty():
+    llm = FakeLLM([_response(tool_calls=[_tc("1", "submit", {})])])
+    executor = FakeExecutor(
+        {"submit": ToolResult(content="", preview="Report recorded")},
+        meta={"submit": ToolMeta(name="submit", display_name="Submit", ends_turn=True)},
+    )
+
+    result = await _make_agent(llm, executor).run(_msgs())
+
+    assert result.text == "Report recorded"
+    assert llm.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_tool_is_rejected_when_mixed_with_another_call():
+    llm = FakeLLM(
+        [
+            _response(tool_calls=[_tc("1", "write", {}), _tc("2", "submit", {})]),
+            _response(tool_calls=[_tc("3", "submit", {})]),
+        ]
+    )
+    executor = FakeExecutor(
+        {
+            "write": ToolResult(content="changed", preview="Changed"),
+            "submit": ToolResult(content="Report recorded.", preview="Report recorded"),
+        },
+        meta={
+            "write": ToolMeta(name="write", display_name="Write", changes_state=True),
+            "submit": ToolMeta(name="submit", display_name="Submit", ends_turn=True),
+        },
+    )
+    messages = _msgs()
+
+    result = await _make_agent(llm, executor).run(messages)
+
+    assert result.text == "Report recorded."
+    assert executor.call_log == [("submit", {})]
+    rejected = [message for message in messages if message["role"] == "tool"][:2]
+    assert all("turn-ending tool must be the only tool call" in message["content"] for message in rejected)
 
 
 @pytest.mark.asyncio

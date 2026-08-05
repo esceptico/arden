@@ -4,6 +4,7 @@ import { useStore } from "@/stores";
 import { fetchAreaDetail, replyToAsk, updateAreaSettings } from "@/actions/areas";
 import { AreaRequestDeck } from "@/features/areas/components/AreaRequestDeck";
 import { AreaPagePeek } from "@/features/areas/components/AreaPagePeek";
+import { AreaManagement } from "@/features/areas/components/AreaManagement";
 import { ATTENTION_CADENCE, AreaSettings } from "@/features/areas/components/AreaSettings";
 import { BlurSwap } from "@/components/ui/BlurSwap";
 import { Button } from "@/components/ui/Button";
@@ -158,9 +159,16 @@ export function AreaRoom({ areaKey }: { areaKey: string }) {
         </section>
 
         <div className="board-area-room-scroll scroll-fade" tabIndex={0} aria-label="Area work and history" data-page-enter-item>
+          <AreaManagement
+            agent={detail.agent}
+            paused={detail.paused}
+            outcomes={detail.work.outcomes}
+            workItems={detail.work.work_items}
+          />
+
           <section className="board-area-outcomes" aria-labelledby="area-outcomes-title">
             <header>
-              <h2 id="area-outcomes-title">What this area is working toward</h2>
+              <h2 id="area-outcomes-title">Outcomes</h2>
               {tally ? <span>{tally}</span> : null}
             </header>
             {outcomes.length ? (

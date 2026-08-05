@@ -104,6 +104,7 @@ class ToolCompleted(AgentEventBase):
     model_content: tuple[ContentBlock, ...] = ()
     source_refs: tuple[ToolSourceRef, ...] = ()
     outcome: ToolOutcome | None = None
+    ends_turn: bool = False
 
 
 @dataclass(frozen=True)

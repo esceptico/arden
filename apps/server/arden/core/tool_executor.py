@@ -489,6 +489,7 @@ class ArdenToolExecutor:
                     source=source,
                     changes_state=tool.policy.action in {ToolAction.DRAFT, ToolAction.WRITE, ToolAction.EXECUTE},
                     concurrency_group=tool.policy.concurrency_group or default_concurrency_group,
+                    ends_turn=tool.ends_turn,
                 )
             else:
                 self._meta_cache[name] = None

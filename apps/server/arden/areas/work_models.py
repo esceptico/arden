@@ -2,6 +2,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from arden.areas.display_contract import (
+    DISPLAY_LINE_PATTERN,
+    EVIDENCE_SUMMARY_MAX_CHARS,
+    OUTCOME_TITLE_MAX_CHARS,
+    SUCCESS_CRITERIA_MAX_CHARS,
+    WORK_TEXT_MAX_CHARS,
+)
+
 OutcomeStatus = Literal["active", "paused", "completed", "cancelled"]
 OutcomeSource = Literal["inferred", "user", "migration"]
 WorkKind = Literal["loop", "action", "blocker"]
@@ -58,12 +66,17 @@ class AreaWorkSnapshot(BaseModel):
 
 
 class OutcomeChange(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     op: Literal["create", "update", "complete", "cancel"]
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    title: str | None = Field(default=None, min_length=1, max_length=300)
-    success_criteria: str | None = Field(default=None, min_length=1, max_length=2_000)
+    title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=OUTCOME_TITLE_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+    )
+    success_criteria: str | None = Field(default=None, min_length=1, max_length=SUCCESS_CRITERIA_MAX_CHARS)
     priority: int | None = Field(default=None, ge=1, le=5)
     expected_updated_at: str | None = None
 
@@ -79,13 +92,18 @@ class OutcomeChange(BaseModel):
 
 
 class WorkChange(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     op: Literal["create", "update", "complete", "cancel"]
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     outcome_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     kind: WorkKind | None = None
-    text: str | None = Field(default=None, min_length=1, max_length=2_000)
+    text: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=WORK_TEXT_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+    )
     owner: WorkOwner | None = None
     due_at: str | None = None
     next_attempt_at: str | None = None
@@ -105,12 +123,16 @@ class WorkChange(BaseModel):
 
 
 class EvidenceDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     target_type: Literal["area", "outcome", "work"]
     target_key: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     event_type: Literal["created", "progress", "completed", "blocked", "updated", "cancelled"]
-    summary: str = Field(min_length=1, max_length=2_000)
+    summary: str = Field(
+        min_length=1,
+        max_length=EVIDENCE_SUMMARY_MAX_CHARS,
+        pattern=DISPLAY_LINE_PATTERN,
+    )
     source_refs: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")

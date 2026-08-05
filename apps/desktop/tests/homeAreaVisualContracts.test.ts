@@ -64,22 +64,26 @@ test("Home swaps verbs, reply, and snooze inside the mock's fixed motion slot", 
   expect(homeCss).toMatch(/\.mission-control__focus-foot > \[data-io-hidden\]\s*\{[^}]*translateY\(3px\);[^}]*blur\(var\(--swap-blur\)\);/s);
 });
 
-test("Area room keeps one focused decision and one current outcome", () => {
+test("Area room keeps one focused decision and a compact management view", () => {
   const room = read("../src/features/areas/components/AreaRoom.tsx");
+  const management = read("../src/features/areas/components/AreaManagement.tsx");
   const css = read("../src/design/area.css");
 
   expect(room).toContain('className="board-area-needs"');
   expect(room).toContain('className="board-area-room-scroll scroll-fade"');
-  // The heading says what an outcome is; the tally counts outcomes, not steps
-  // through the one on screen (which is how "0 of 2 complete" was being read).
-  expect(room).toContain("What this area is working toward");
+  expect(room).toContain("AreaManagement");
+  expect(room).toContain('id="area-outcomes-title">Outcomes');
   expect(room).not.toContain("complete</span>");
+  expect(management).toContain("Latest check");
+  expect(management).toContain("Next check");
+  expect(management).toContain("Current work");
+  expect(management).not.toContain("open_loops");
   expect(room).toContain("AreaRequestDeck");
   expect(room).not.toContain("AreaSettingsButton");
   expect(room).not.toContain("AgentPresence");
   expect(room).not.toContain("OpenLoops");
-  expect(room).not.toContain("AreaWork");
   expect(css).toMatch(/\.board-area-page\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;/);
+  expect(css).toMatch(/\.board-area-management__checks\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
   // Vertical only: `.scroll-fade` masks one axis, so the room must never open
   // a horizontal scroll — sub-pixel rounding alone was enough to let it drag.
   expect(css).toMatch(/\.board-area-room-scroll\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow:\s*clip auto;/);

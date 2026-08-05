@@ -35,6 +35,7 @@ class _FunctionTool(Tool):
         approval: ApprovalHandler | None = None,
         preflight: PreflightHandler | None = None,
         kind: str = "tool",
+        ends_turn: bool = False,
     ):
         self.display_name = display_name
         self.display_description = display_description
@@ -49,6 +50,7 @@ class _FunctionTool(Tool):
         self._approval = approval
         self._preflight = preflight
         self.kind = kind
+        self.ends_turn = ends_turn
 
     async def approval_info(self, execution: ToolExecution, **kwargs: Any) -> ApprovalInfo | ApprovalWaived | None:
         if self._approval is None:
@@ -81,6 +83,7 @@ def tool(
     approval: ApprovalHandler | None = None,
     preflight: PreflightHandler | None = None,
     kind: str = "tool",
+    ends_turn: bool = False,
 ) -> Tool:
     return _FunctionTool(
         description=description,
@@ -92,4 +95,5 @@ def tool(
         approval=approval,
         preflight=preflight,
         kind=kind,
+        ends_turn=ends_turn,
     )
