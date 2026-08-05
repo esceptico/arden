@@ -41,6 +41,14 @@ function page(overrides: Partial<WikiPageFixture> = {}): WikiPageFixture {
   };
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}
+
 afterEach(() => {
   window.ardenDesktop = originalDesktop;
 });
@@ -158,6 +166,125 @@ test("a refreshed page list evicts renamed paths before the next detail read", a
   expect(oldPath).toBeInstanceOf(ApiError);
   expect(oldPath.status).toBe(404);
   expect((await readMemoryArtifactDetail(currentConfig, "topics/renamed.md")).artifact.path).toBe("topics/renamed.md");
+});
+
+test("an older list response cannot replace newer page cache state", async () => {
+  const currentConfig = config();
+  const olderGate = deferred();
+  let listRequests = 0;
+  const source = page({ pageId: "page-source", path: "source.md", title: "Source", metadata: {} });
+  const original = page({ pageId: "page-target", path: "topics/original.md", title: "Target", metadata: {} });
+  const renamed = { ...original, path: "topics/renamed.md", version: "page-target:v2" };
+  const bridge = installCanonicalMemoryBridge({
+    pages: [source, original],
+    links: {
+      "page-source": {
+        outgoing: [{
+          sourcePageId: "page-source",
+          target: "Target",
+          status: "resolved",
+          targetPageId: "page-target",
+        }],
+      },
+    },
+    onRequest: async ({ path }) => {
+      if (path !== "/admin/wiki/pages") return undefined;
+      listRequests += 1;
+      if (listRequests === 1) await olderGate.promise;
+      return undefined;
+    },
+  });
+
+  const older = listMemoryArtifactSummaries(currentConfig);
+  bridge.updatePage(renamed);
+  const newer = await listMemoryArtifactSummaries(currentConfig);
+  expect(newer.artifacts.map((artifact) => artifact.path)).toContain("topics/renamed.md");
+
+  bridge.updatePage(original);
+  olderGate.resolve();
+  const olderResult = await older;
+  expect(olderResult.artifacts.map((artifact) => artifact.path)).toContain("topics/original.md");
+  bridge.updatePage(renamed);
+
+  const links = await getPageLinks(currentConfig, { path: "source.md" });
+  expect(links.outgoing[0]?.resolvedPath).toBe("topics/renamed.md");
+  const listsBeforeDetail = bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  expect(listsBeforeDetail).toBe(2);
+  expect((await readMemoryArtifactDetail(currentConfig, "topics/renamed.md")).artifact.path).toBe("topics/renamed.md");
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(listsBeforeDetail);
+  expect(bridge.requests.at(-1)?.path).toBe("/admin/wiki/pages/page-target");
+});
+
+test("an older detail response cannot restore a path replaced by a newer list", async () => {
+  const currentConfig = config();
+  const detailGate = deferred();
+  let holdDetail = false;
+  const original = page({ metadata: {} });
+  const renamed = { ...original, path: "topics/renamed.md", version: "page-a:v2" };
+  const bridge = installCanonicalMemoryBridge({
+    pages: [original],
+    onRequest: async ({ path }) => {
+      if (path === "/admin/wiki/pages/page-a" && holdDetail) {
+        holdDetail = false;
+        await detailGate.promise;
+      }
+      return undefined;
+    },
+  });
+  await listMemoryArtifactSummaries(currentConfig);
+
+  holdDetail = true;
+  const olderDetail = readMemoryArtifactDetail(currentConfig, original.path);
+  await Promise.resolve();
+  bridge.updatePage(renamed);
+  await listMemoryArtifactSummaries(currentConfig);
+
+  bridge.updatePage(original);
+  detailGate.resolve();
+  expect((await olderDetail).artifact.path).toBe(original.path);
+  bridge.updatePage(renamed);
+
+  const listsBeforeDetail = bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  expect(listsBeforeDetail).toBe(2);
+  expect((await readMemoryArtifactDetail(currentConfig, renamed.path)).artifact.path).toBe(renamed.path);
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(listsBeforeDetail);
+});
+
+test("a newer detail does not suppress unrelated pages from an older full list", async () => {
+  const currentConfig = config();
+  const listGate = deferred();
+  let holdNextList = false;
+  const originalA = page({ metadata: {} });
+  const freshA = { ...originalA, path: "topics/fresh-a.md", version: "page-a:v2" };
+  const originalB = page({ pageId: "page-b", path: "topics/b.md", title: "B", metadata: {} });
+  const renamedB = { ...originalB, path: "topics/renamed-b.md", version: "page-b:v2" };
+  const bridge = installCanonicalMemoryBridge({
+    pages: [originalA, originalB],
+    onRequest: async ({ path }) => {
+      if (path === "/admin/wiki/pages" && holdNextList) {
+        holdNextList = false;
+        await listGate.promise;
+      }
+      return undefined;
+    },
+  });
+  await listMemoryArtifactSummaries(currentConfig);
+
+  holdNextList = true;
+  const fullList = listMemoryArtifactSummaries(currentConfig);
+  await Promise.resolve();
+  bridge.updatePage(freshA);
+  expect((await readMemoryArtifactDetail(currentConfig, originalA.path)).artifact.path).toBe(freshA.path);
+
+  bridge.updatePage(originalA);
+  bridge.updatePage(renamedB);
+  listGate.resolve();
+  expect((await fullList).artifacts.map((artifact) => artifact.path)).toContain(renamedB.path);
+  bridge.updatePage(freshA);
+
+  expect((await readMemoryArtifactDetail(currentConfig, freshA.path)).artifact.path).toBe(freshA.path);
+  expect((await readMemoryArtifactDetail(currentConfig, renamedB.path)).artifact.path).toBe(renamedB.path);
+  expect(bridge.requests.filter(({ path }) => path === "/admin/wiki/pages")).toHaveLength(2);
 });
 
 test("rebuild is a canonical list refresh, not a legacy rebuild command", async () => {

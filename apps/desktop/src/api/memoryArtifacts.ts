@@ -1,4 +1,5 @@
 import { ApiError, type AppConfig } from "@/api/core";
+import { MemoryPageCache, type MemoryPageCacheRead } from "@/api/memoryPageCache";
 import {
   archiveWikiPage,
   FACT_BATCH_LIMIT,
@@ -227,48 +228,11 @@ interface StoredPreview {
   patch: string;
 }
 
-const pageByPath = new Map<string, WikiPageSummary>();
-const pageById = new Map<string, WikiPageSummary>();
+const pageCache = new MemoryPageCache();
 const previews = new Map<string, StoredPreview>();
 
-function configKey(config: AppConfig): string {
-  return `${config.serverUrl}\0${config.apiKey}`;
-}
-
-function pathKey(config: AppConfig, path: string): string {
-  return `${configKey(config)}\0${path}`;
-}
-
-function idKey(config: AppConfig, pageId: string): string {
-  return `${configKey(config)}\0${pageId}`;
-}
-
-function rememberPage(config: AppConfig, page: WikiPageSummary): void {
-  const existing = pageById.get(idKey(config, page.pageId));
-  if (existing && existing.path !== page.path) {
-    pageByPath.delete(pathKey(config, existing.path));
-  }
-  pageByPath.set(pathKey(config, page.path), page);
-  pageById.set(idKey(config, page.pageId), page);
-}
-
-function forgetPage(config: AppConfig, page: WikiPageSummary): void {
-  const key = idKey(config, page.pageId);
-  const current = pageById.get(key);
-  pageByPath.delete(pathKey(config, page.path));
-  if (current) pageByPath.delete(pathKey(config, current.path));
-  pageById.delete(key);
-}
-
-function replacePages(config: AppConfig, pages: WikiPageSummary[]): void {
-  const prefix = `${configKey(config)}\0`;
-  for (const key of pageByPath.keys()) {
-    if (key.startsWith(prefix)) pageByPath.delete(key);
-  }
-  for (const key of pageById.keys()) {
-    if (key.startsWith(prefix)) pageById.delete(key);
-  }
-  pages.forEach((page) => rememberPage(config, page));
+export function invalidateMemoryArtifactCache(config: AppConfig): void {
+  pageCache.invalidate(config);
 }
 
 function canonicalArtifactPath(path: string): string {
@@ -429,17 +393,26 @@ export async function readMemoryArtifactTimeline(
   });
 }
 
-async function loadPages(config: AppConfig, signal?: AbortSignal): Promise<WikiPageSummary[]> {
+async function loadPages(
+  config: AppConfig,
+  signal?: AbortSignal,
+  cacheRead: MemoryPageCacheRead = pageCache.beginRead(config),
+): Promise<WikiPageSummary[]> {
   const pages = await listWikiPages(config, { signal });
-  replacePages(config, pages);
+  pageCache.commitSnapshot(cacheRead, pages, signal);
   return pages;
 }
 
-async function pageForPath(config: AppConfig, rawPath: string, signal?: AbortSignal): Promise<WikiPageSummary> {
+async function pageForPath(
+  config: AppConfig,
+  rawPath: string,
+  signal?: AbortSignal,
+  cacheRead?: MemoryPageCacheRead,
+): Promise<WikiPageSummary> {
   const path = canonicalArtifactPath(rawPath);
-  const cached = pageByPath.get(pathKey(config, path));
+  const cached = pageCache.getByPath(config, path);
   if (cached) return cached;
-  const pages = await loadPages(config, signal);
+  const pages = await loadPages(config, signal, cacheRead ?? pageCache.beginRead(config));
   const page = pages.find((item) => item.path === path);
   if (!page) throw new ApiError({ status: 404, data: { detail: `Unknown wiki page: ${path}` } });
   return page;
@@ -527,9 +500,10 @@ export async function readMemoryArtifactDetail(
   path: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<MemoryArtifactDetailResponse> {
-  const summary = await pageForPath(config, path, options.signal);
+  const cacheRead = pageCache.beginRead(config);
+  const summary = await pageForPath(config, path, options.signal, cacheRead);
   const page = await readWikiPage(config, summary.pageId, { signal: options.signal });
-  rememberPage(config, page);
+  pageCache.commitPage(cacheRead, page, options.signal);
   return artifactDetail(page);
 }
 
@@ -552,9 +526,10 @@ export async function previewPageEdit(
   input: PreviewPageEditInput,
   options: { signal?: AbortSignal } = {},
 ): Promise<PageEditPreview> {
-  const summary = await pageForPath(config, input.path, options.signal);
+  const cacheRead = pageCache.beginRead(config);
+  const summary = await pageForPath(config, input.path, options.signal, cacheRead);
   const page = await readWikiPage(config, summary.pageId, { signal: options.signal });
-  rememberPage(config, page);
+  pageCache.commitPage(cacheRead, page, options.signal);
   if (page.version !== input.baseRevision) throw conflict(page);
   if (page.repositoryHead == null) throw new Error("Wiki page has no repository head");
   const id = crypto.randomUUID();
@@ -600,7 +575,7 @@ export async function applyPageEdit(
     expectedHead: preview.expectedHead,
   });
   previews.delete(input.previewId);
-  rememberPage(config, page);
+  pageCache.commitMutation(config, page);
   return {
     revision: page.version,
     event: {
@@ -642,7 +617,7 @@ export async function archiveMemoryArtifact(
     expectedVersion: page.version,
     expectedHead: page.repositoryHead,
   });
-  forgetPage(config, page);
+  pageCache.commitRemoval(config, page);
 }
 
 export interface RestorePageMaintenanceChangeInput {
@@ -663,7 +638,7 @@ export async function restorePageMaintenanceChange(
     expectedVersion: input.expectedVersion,
     expectedHead: input.expectedHead,
   });
-  rememberPage(config, page);
+  pageCache.commitMutation(config, page);
   return {
     artifact: {
       ...artifactSummary(page),
@@ -730,8 +705,8 @@ function mappedLink(
 ): MemoryLink {
   const source = direction === "outgoing"
     ? current
-    : pageById.get(idKey(config, link.sourcePageId));
-  const resolved = link.targetPageId == null ? null : pageById.get(idKey(config, link.targetPageId));
+    : pageCache.getById(config, link.sourcePageId);
+  const resolved = link.targetPageId == null ? null : pageCache.getById(config, link.targetPageId);
   return {
     sourcePath: source?.path ?? current.path,
     target: link.target,

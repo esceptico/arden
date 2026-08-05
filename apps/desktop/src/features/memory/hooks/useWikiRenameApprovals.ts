@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppConfig } from "@/api/core";
+import { invalidateMemoryArtifactCache } from "@/api/memoryArtifacts";
 import {
   acceptWikiRenameApproval,
   listWikiRenameApprovals,
@@ -104,6 +105,7 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
       setError(null);
       try {
         const result = await requestWikiRenameApproval(config, input);
+        if (result.status === "accepted") invalidateMemoryArtifactCache(config);
         if (!mounted.current) return;
         requestId.current += 1;
         reconciliationRequiredRef.current = false;
@@ -164,6 +166,7 @@ export function useWikiRenameApprovals(config: AppConfig, onResolved: (result: W
       setError(null);
       try {
         const result = decision === "accept" ? await acceptWikiRenameApproval(config, approvalId) : await rejectWikiRenameApproval(config, approvalId);
+        if (result.status === "accepted") invalidateMemoryArtifactCache(config);
         if (!mounted.current) return;
         requestId.current += 1;
         if ((result.status === "pending" || result.status === "applying") && result.approval) {
