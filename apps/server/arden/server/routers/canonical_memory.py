@@ -111,31 +111,6 @@ def _fact_service(request: Request) -> FactService:
     return service
 
 
-def _page_timestamps(
-    service: WikiService,
-    head: str | None,
-    page_ids: set[str],
-) -> dict[str, tuple[datetime | None, datetime | None]]:
-    """Derive page creation/update times from canonical commit history."""
-
-    result: dict[str, list[datetime | None]] = {page_id: [None, None] for page_id in page_ids}
-    if head is None or not page_ids:
-        return dict.fromkeys(page_ids, (None, None))
-    for commit in service.repository.history(start=head):
-        for change in commit.changes:
-            version = change.after or change.before
-            if version is None or version.resource_id not in result:
-                continue
-            times = result[version.resource_id]
-            if times[1] is None:
-                times[1] = commit.timestamp
-            if change.action == "create":
-                times[0] = commit.timestamp
-        if all(created is not None and updated is not None for created, updated in result.values()):
-            break
-    return {page_id: (times[0], times[1]) for page_id, times in result.items()}
-
-
 def _page_json(
     record,
     head: str | None,
@@ -219,7 +194,7 @@ def list_wiki_pages(
     service = _wiki_service(request)
     try:
         snapshot = service.snapshot()
-        timestamps = _page_timestamps(service, snapshot.head, {record.page.page_id for record in snapshot.pages})
+        timestamps = service.page_timestamps(snapshot.head, {record.page.page_id for record in snapshot.pages})
         pages = [
             _page_json(record, snapshot.head, content=False, timestamps=timestamps)
             for record in snapshot.pages
@@ -239,7 +214,7 @@ def read_wiki_page(page_id: str, request: Request) -> dict[str, object]:
             record,
             head,
             content=True,
-            timestamps=_page_timestamps(service, head, {page_id}),
+            timestamps=service.page_timestamps(head, {page_id}),
         )
     except Exception as exc:
         raise _wiki_error(service, page_id, exc) from exc
@@ -270,7 +245,7 @@ async def create_wiki_page(body: WikiCreateRequest, request: Request) -> dict[st
             record,
             head,
             content=True,
-            timestamps=_page_timestamps(service, head, {record.page.page_id}),
+            timestamps=service.page_timestamps(head, {record.page.page_id}),
         )
         if projection_pending:
             result["projection_pending"] = True
@@ -314,7 +289,7 @@ async def update_wiki_page(page_id: str, body: WikiUpdateRequest, request: Reque
             record,
             head,
             content=True,
-            timestamps=_page_timestamps(service, head, {page_id}),
+            timestamps=service.page_timestamps(head, {page_id}),
         )
         if curation_pending:
             result["curation_pending"] = True
@@ -372,7 +347,7 @@ async def restore_wiki_page(page_id: str, body: WikiVersionRequest, request: Req
             record,
             head,
             content=True,
-            timestamps=_page_timestamps(service, head, {page_id}),
+            timestamps=service.page_timestamps(head, {page_id}),
         )
         if projection_pending:
             result["projection_pending"] = True
@@ -419,7 +394,7 @@ async def restore_wiki_maintenance_change(
             record,
             head,
             content=True,
-            timestamps=_page_timestamps(service, head, {page_id}),
+            timestamps=service.page_timestamps(head, {page_id}),
         )
         if projection_pending:
             result["projection_pending"] = True

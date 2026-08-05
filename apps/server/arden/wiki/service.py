@@ -51,6 +51,7 @@ from arden.wiki.models import (
 )
 from arden.wiki.pages import PageValidationError, WikiPage, extract_generated_region, update_generated_region
 from arden.wiki.pages import create_page as build_page
+from arden.wiki.timestamps import PageTimestamps, WikiPageTimestampCache
 from arden.wiki.wikilinks import parse_wikilinks, rewrite_page_targets
 
 __all__ = [
@@ -112,6 +113,7 @@ class WikiService:
 
     def __init__(self, repository: ManagedFileRepository) -> None:
         self.repository = repository
+        self._page_timestamps = WikiPageTimestampCache(repository)
 
     def snapshot(self) -> WikiSnapshot:
         return snapshots.snapshot(self.repository)
@@ -120,6 +122,9 @@ class WikiService:
         return tuple(
             record for record in self.snapshot().pages if include_redirects or record.page.lifecycle == "active"
         )
+
+    def page_timestamps(self, head: str | None, page_ids: set[str]) -> dict[str, PageTimestamps]:
+        return self._page_timestamps.for_pages(head, page_ids)
 
     def readable_pages(self) -> tuple[WikiPageRecord, ...]:
         head = self.repository.current_revision

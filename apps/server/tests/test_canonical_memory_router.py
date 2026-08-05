@@ -13,6 +13,7 @@ from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactPrincipal, FactService
 from arden.revisions import ManagedFileRepository
+from arden.revisions.errors import CorruptRepositoryError
 from arden.server.app import app as server_app
 from arden.server.routers.canonical_memory import facts_router, wiki_router
 from arden.wiki.models import WikiMaintenancePageUpdate
@@ -134,6 +135,96 @@ def test_canonical_routes_are_registered_on_server_app() -> None:
         "/admin/facts/batch",
         "/admin/facts/{fact_id}",
     } <= paths
+
+
+def test_wiki_page_timestamps_are_cached_by_repository_head(tmp_path: Path, monkeypatch) -> None:
+    with _client(tmp_path) as client:
+        service = client.app.state.runtime.wiki_service
+        service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
+        first_head = service.repository.head
+        history = service.repository.history
+        traversed_heads: list[str | None] = []
+
+        def counting_history(**kwargs):
+            traversed_heads.append(kwargs.get("start"))
+            return history(**kwargs)
+
+        monkeypatch.setattr(service.repository, "history", counting_history)
+
+        first = client.get("/admin/wiki/pages")
+        second = client.get("/admin/wiki/pages")
+        assert first.status_code == second.status_code == 200
+        assert first.json() == second.json()
+        assert traversed_heads == [first_head]
+
+        service.create_page(path="two.md", title="Two", page_id="two", expected_head=first_head)
+        second_head = service.repository.head
+        changed = client.get("/admin/wiki/pages")
+        unchanged = client.get("/admin/wiki/pages")
+
+        assert changed.status_code == unchanged.status_code == 200
+        assert changed.json() == unchanged.json()
+        assert traversed_heads == [first_head, second_head]
+        assert [page["page_id"] for page in changed.json()["pages"]] == ["one", "two"]
+        assert all(page["created_at"] and page["updated_at"] for page in changed.json()["pages"])
+
+
+def test_wiki_page_timestamp_failure_does_not_poison_cache(tmp_path: Path, monkeypatch) -> None:
+    with _client(tmp_path) as client:
+        service = client.app.state.runtime.wiki_service
+        service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
+        history = service.repository.history
+        attempts = 0
+
+        def flaky_history(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise CorruptRepositoryError("broken history")
+            return history(**kwargs)
+
+        monkeypatch.setattr(service.repository, "history", flaky_history)
+
+        assert client.get("/admin/wiki/pages").status_code == 503
+        assert client.get("/admin/wiki/pages").status_code == 200
+        assert client.get("/admin/wiki/pages").status_code == 200
+        assert attempts == 2
+
+
+def test_wiki_page_timestamp_cache_retains_only_requested_pages(tmp_path: Path, monkeypatch) -> None:
+    with _client(tmp_path) as client:
+        service = client.app.state.runtime.wiki_service
+        archived = service.create_page(path="archived.md", title="Archived", page_id="archived", expected_head=None)
+        service.archive_page(
+            archived.page.page_id,
+            expected_version=archived.resource.version_id,
+            base_head=service.repository.head,
+        )
+        active = service.create_page(
+            path="active.md",
+            title="Active",
+            page_id="active",
+            expected_head=service.repository.head,
+        )
+        head = service.repository.head
+        history = service.repository.history
+        traversals = 0
+
+        def counting_history(**kwargs):
+            nonlocal traversals
+            traversals += 1
+            return history(**kwargs)
+
+        monkeypatch.setattr(service.repository, "history", counting_history)
+
+        detail = client.get(f"/admin/wiki/pages/{active.page.page_id}")
+        assert detail.status_code == 200
+        assert traversals == 1
+        assert service.page_timestamps(head, {"active"})["active"][0] is not None
+        assert traversals == 1
+
+        assert service.page_timestamps(head, {"archived"})["archived"][0] is not None
+        assert traversals == 2
 
 
 def test_wiki_crud_history_diff_links_and_recursive_metadata(tmp_path: Path) -> None:
