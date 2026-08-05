@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import UTC, datetime
 
 import pytest
@@ -18,6 +17,7 @@ from arden.execution import (
     LeaseStore,
 )
 from arden.execution.backend import ClientExecutionBackend
+from arden.execution.results import DeviceResultEnvelope
 from arden.tools.core.base import ToolResult
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.execution import ExecutionRouter, ToolInvocation
@@ -104,7 +104,7 @@ async def test_client_tool_routes_to_device_and_returns_result(rig):
                     lease.lease_id,
                     invocation_id=command.invocation_id,
                     status=InvocationStatus.SUCCEEDED,
-                    result_payload=json.dumps({"content": "127.0.0.1 localhost", "preview": "Read hosts"}),
+                    result=DeviceResultEnvelope(content="127.0.0.1 localhost", preview="Read hosts"),
                 )
                 return
             await asyncio.sleep(0.01)
@@ -137,17 +137,15 @@ async def test_client_file_discovery_updates_are_carried_to_the_next_device_call
                     lease.lease_id,
                     invocation_id=commands[0].invocation_id,
                     status=InvocationStatus.FAILED,
-                    result_payload=json.dumps(
-                        {
-                            "content": "missing",
-                            "preview": "Not found",
-                            "file_discovery": {
-                                "version": 1,
-                                "observed": [{"path": "/workspace", "kind": "directory"}],
-                                "discovered_roots": [],
-                                "missed_roots": ["/workspace"],
-                            },
-                        }
+                    result=DeviceResultEnvelope(
+                        content="missing",
+                        preview="Not found",
+                        file_discovery={
+                            "version": 1,
+                            "observed": ({"path": "/workspace", "kind": "directory"},),
+                            "discovered_roots": (),
+                            "missed_roots": ("/workspace",),
+                        },
                     ),
                     error_code="not_found",
                 )
@@ -179,7 +177,7 @@ async def test_client_file_discovery_updates_are_carried_to_the_next_device_call
                     lease.lease_id,
                     invocation_id=commands[0].invocation_id,
                     status=InvocationStatus.SUCCEEDED,
-                    result_payload=json.dumps({"content": "ok", "preview": "Read"}),
+                    result=DeviceResultEnvelope(content="ok", preview="Read"),
                 )
                 return
             await asyncio.sleep(0.01)
@@ -209,7 +207,7 @@ async def test_failed_device_result_maps_to_tool_failure(rig):
                     lease.lease_id,
                     invocation_id=commands[0].invocation_id,
                     status=InvocationStatus.FAILED,
-                    result_payload=json.dumps({"content": "Could not read /nope", "preview": "Read failed"}),
+                    result=DeviceResultEnvelope(content="Could not read /nope", preview="Read failed"),
                     error_code="not_found",
                 )
                 return
@@ -245,7 +243,7 @@ async def test_replayed_settled_invocation_returns_recorded_result_without_rerun
     await backend._invocations.complete(
         "call-1",
         status=InvocationStatus.SUCCEEDED,
-        result_payload=json.dumps({"content": "cached body", "preview": "Read"}),
+        result_payload=DeviceResultEnvelope(content="cached body", preview="Read").serialized(),
     )
 
     result = await router.execute(

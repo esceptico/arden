@@ -5,6 +5,7 @@ from arden.execution.commands import ExecutorCommand, ExecutorCommandLog
 from arden.execution.devices import ExecutorDevice, ExecutorDeviceStore
 from arden.execution.leases import ExecutorLease, LeaseStore
 from arden.execution.models import InvocationRecord, InvocationStatus
+from arden.execution.results import DeviceResultEnvelope, validate_device_result
 from arden.execution.store import InvocationStore
 from arden.logging import get_logger
 
@@ -116,7 +117,10 @@ class ExecutorGateway:
             await self.invocations.complete(
                 record.invocation_id,
                 status=status,
-                result_payload=json.dumps({"error": f"orphaned after {cause}"}),
+                result_payload=DeviceResultEnvelope(
+                    content=f"Device execution was orphaned after {cause}.",
+                    preview="Device execution interrupted",
+                ).serialized(),
                 error_code=cause,
             )
         _logger.info("Reconciled %d orphaned tool invocation(s) after restart", len(open_records))
@@ -172,14 +176,15 @@ class ExecutorGateway:
         *,
         invocation_id: str,
         status: InvocationStatus,
-        result_payload: str,
+        result: DeviceResultEnvelope,
         error_code: str | None = None,
     ) -> InvocationRecord:
         await self._require_current_lease(device, lease_id)
+        validate_device_result(status, result, error_code)
         record = await self.invocations.complete(
             invocation_id,
             status=status,
-            result_payload=result_payload,
+            result_payload=result.serialized(),
             error_code=error_code,
         )
         waiter = self._waiters.pop(invocation_id, None)

@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.constants import (
     DEVICE_SKILL_MAX_BODY_BYTES,
@@ -13,6 +13,7 @@ from arden.constants import (
 from arden.execution.devices import ExecutorDevice
 from arden.execution.gateway import ExecutorGateway, StaleLeaseError
 from arden.execution.models import InvocationConflictError, InvocationStatus
+from arden.execution.results import DeviceResultEnvelope
 from arden.server.middleware import SSEStreamingResponse
 from arden.server.runtime import Runtime, get_runtime
 from arden.skills.service import _SKILL_NAME_RE
@@ -160,11 +161,13 @@ async def started(
 
 
 class ResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     lease_id: str
     invocation_id: str
     status: InvocationStatus
-    result_payload: str
-    error_code: str | None = None
+    result: DeviceResultEnvelope
+    error_code: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @router.post("/results")
@@ -179,7 +182,7 @@ async def results(
             body.lease_id,
             invocation_id=body.invocation_id,
             status=body.status,
-            result_payload=body.result_payload,
+            result=body.result,
             error_code=body.error_code,
         )
     except StaleLeaseError:

@@ -2,9 +2,6 @@ import asyncio
 import contextlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict, Field
 
 from arden.constants import OFFLOAD_THRESHOLD
 from arden.core.tool_result_files import RESULTS_BASE
@@ -16,22 +13,6 @@ from arden.tools.core.base import ToolResult
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.execution import ToolInvocation
 from arden.tools.core.types import ToolPlacement
-
-
-class _ObservedFilePath(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    path: str = Field(min_length=1)
-    kind: Literal["file", "directory", "other"]
-
-
-class _FileDiscoveryUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: Literal[1]
-    observed: list[_ObservedFilePath] = Field(default_factory=list)
-    discovered_roots: list[str] = Field(default_factory=list)
-    missed_roots: list[str] = Field(default_factory=list)
 
 
 class ClientExecutionBackend:
@@ -115,17 +96,14 @@ class ClientExecutionBackend:
 
     def _settle(self, record: InvocationRecord, execution: ToolExecution) -> ToolResult:
         payload = result_payload(record)
-        for observation in payload.get("observations") or []:
-            if not isinstance(observation, dict) or not observation.get("id"):
-                continue
+        for observation in payload.observations:
             execution.ctx.run.observe_resource(
-                str(observation["id"]),
-                version=str(observation["version"]) if observation.get("version") is not None else None,
+                observation.id,
+                version=observation.version,
                 container_version=None,
-                content_read=bool(observation.get("content_read")),
+                content_read=observation.content_read,
             )
-        if raw_discovery := payload.get("file_discovery"):
-            discovery = _FileDiscoveryUpdate.model_validate(raw_discovery)
+        if discovery := payload.file_discovery:
             for root in discovery.discovered_roots:
                 execution.ctx.run.reset_file_discovery(root)
             for item in discovery.observed:

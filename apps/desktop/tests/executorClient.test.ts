@@ -171,7 +171,7 @@ describe("executor client", () => {
     expect(started?.body.invocation_id).toBe("inv-2");
     const result = posts.find(p => p.path === "/executor/results");
     expect(result?.body.status).toBe("succeeded");
-    expect(JSON.parse(String(result?.body.result_payload)).content).toBe("contents of /etc/hosts");
+    expect((result?.body.result as { content: string }).content).toBe("contents of /etc/hosts");
     hold.resolve();
   });
 

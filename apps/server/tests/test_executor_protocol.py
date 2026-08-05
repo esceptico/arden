@@ -19,6 +19,7 @@ from arden.execution import (
     LeaseStore,
     StaleLeaseError,
 )
+from arden.execution.results import DeviceResultEnvelope
 from arden.server.app import app
 from arden.settings import hash_api_key
 from arden.skills.device_store import DeviceSkillStore
@@ -97,7 +98,7 @@ async def test_dispatch_execute_result_roundtrip(gateway):
         lease.lease_id,
         invocation_id="inv-1",
         status=InvocationStatus.SUCCEEDED,
-        result_payload='{"content": "file body"}',
+        result=DeviceResultEnvelope(content="file body", preview="Read"),
     )
     assert record.status == InvocationStatus.SUCCEEDED
     assert (await asyncio.wait_for(waiter, 1)).invocation_id == "inv-1"
@@ -148,7 +149,7 @@ async def test_duplicate_result_submission_is_accepted(gateway):
             lease.lease_id,
             invocation_id="inv-1",
             status=InvocationStatus.SUCCEEDED,
-            result_payload='{"content": "ok"}',
+            result=DeviceResultEnvelope(content="ok", preview="Done"),
         )
         assert record.status == InvocationStatus.SUCCEEDED
 
@@ -163,7 +164,7 @@ async def test_conflicting_result_submission_is_rejected(gateway):
         lease.lease_id,
         invocation_id="inv-1",
         status=InvocationStatus.SUCCEEDED,
-        result_payload='{"content": "ok"}',
+        result=DeviceResultEnvelope(content="ok", preview="Done"),
     )
 
     with pytest.raises(InvocationConflictError):
@@ -172,7 +173,8 @@ async def test_conflicting_result_submission_is_rejected(gateway):
             lease.lease_id,
             invocation_id="inv-1",
             status=InvocationStatus.FAILED,
-            result_payload='{"content": "boom"}',
+            result=DeviceResultEnvelope(content="boom", preview="Failed"),
+            error_code="tool_error",
         )
 
 
@@ -192,7 +194,7 @@ async def test_stale_lease_cannot_submit_results(gateway):
             old_lease.lease_id,
             invocation_id="inv-1",
             status=InvocationStatus.SUCCEEDED,
-            result_payload="{}",
+            result=DeviceResultEnvelope(content="ok", preview="Done"),
         )
 
 
@@ -219,7 +221,7 @@ async def test_lease_from_another_device_is_stale(gateway):
             lease_a.lease_id,
             invocation_id="inv-1",
             status=InvocationStatus.SUCCEEDED,
-            result_payload="{}",
+            result=DeviceResultEnvelope(content="ok", preview="Done"),
         )
 
 
@@ -246,7 +248,8 @@ async def test_cancel_flags_invocation_and_appends_command(gateway):
         lease.lease_id,
         invocation_id="inv-1",
         status=InvocationStatus.UNCERTAIN,
-        result_payload='{"content": "interrupted"}',
+        result=DeviceResultEnvelope(content="interrupted", preview="Interrupted"),
+        error_code="cancelled",
     )
     assert done.status == InvocationStatus.UNCERTAIN
 
@@ -371,7 +374,7 @@ def test_result_flow_over_http(http):
             "lease_id": lease_id,
             "invocation_id": "inv-http",
             "status": "succeeded",
-            "result_payload": '{"content": "ok"}',
+            "result": {"content": "ok", "preview": "Done"},
         },
         headers=headers,
     )
@@ -384,7 +387,7 @@ def test_result_flow_over_http(http):
             "lease_id": lease_id,
             "invocation_id": "inv-http",
             "status": "succeeded",
-            "result_payload": '{"content": "ok"}',
+            "result": {"content": "ok", "preview": "Done"},
         },
         headers=headers,
     )
@@ -396,7 +399,8 @@ def test_result_flow_over_http(http):
             "lease_id": lease_id,
             "invocation_id": "inv-http",
             "status": "failed",
-            "result_payload": '{"content": "boom"}',
+            "result": {"content": "boom", "preview": "Failed"},
+            "error_code": "tool_error",
         },
         headers=headers,
     )
@@ -439,7 +443,7 @@ async def test_revoke_fences_lease_and_terminates_stream_ownership(gateway):
             lease.lease_id,
             invocation_id="inv-1",
             status=InvocationStatus.SUCCEEDED,
-            result_payload="{}",
+            result=DeviceResultEnvelope(content="ok", preview="Done"),
         )
     with pytest.raises(StaleLeaseError):
         await gateway.heartbeat(device, lease.lease_id)
@@ -582,5 +586,5 @@ async def test_late_result_for_reconciled_invocation_conflicts(gateway):
             lease.lease_id,
             invocation_id="inv-late",
             status=InvocationStatus.SUCCEEDED,
-            result_payload='{"content": "too late"}',
+            result=DeviceResultEnvelope(content="too late", preview="Done"),
         )

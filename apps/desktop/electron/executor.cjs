@@ -109,7 +109,7 @@ function createExecutorClient({
           lease_id: leaseId,
           invocation_id: invocationId,
           status: statusValue,
-          result_payload: JSON.stringify(payload),
+          result: payload,
           error_code: errorCode ?? null,
         });
         if (response.status === 403) throw new StaleLease();
