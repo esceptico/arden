@@ -65,11 +65,14 @@ class _Index:
 
     async def sync(self, source, items, **_kwargs):
         self.sync_calls += 1
+        deleted = 0
         current_ids = {item.source_id for item in items}
         for source_id in set(self.store.items) - current_ids:
             await self.delete(source, source_id)
+            deleted += 1
         for item in items:
             await self.upsert(source, item.source_id, item.title, item.content, item.metadata)
+        return SyncResult(len(items), deleted)
 
     async def search(self, _query, *, sources, limit):
         assert sources == [WIKI_PAGE_SOURCE]
@@ -454,8 +457,9 @@ async def test_projection_never_checkpoints_a_repeatedly_changing_fact_revision(
 
     class _FactChangingIndex(_Index):
         async def sync(self, source, items, **kwargs):
-            await super().sync(source, items, **kwargs)
+            result = await super().sync(source, items, **kwargs)
             revision["value"] = chr(ord("a") + self.sync_calls) * 64
+            return result
 
     index = _FactChangingIndex()
     projection = WikiPageIndexProjection(wiki, lambda: index, fact_revision)

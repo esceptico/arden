@@ -270,8 +270,8 @@ async def test_runtime_index_status_reports_progress_error_and_concurrent_rebuil
     release = asyncio.Event()
 
     class Projection:
-        async def sync(self, *, progress_callback, **_kwargs):
-            assert "force" not in _kwargs
+        async def sync(self, *, progress_callback, force=False, **_kwargs):
+            assert force is True
             progress_callback(0, 2)
             started.set()
             await release.wait()

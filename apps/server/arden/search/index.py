@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from arden.constants import RRF_K
 from arden.database import serialize_embedding
@@ -35,6 +35,34 @@ class SyncResult(NamedTuple):
 
 
 type ProgressCallback = Callable[[int, int], None]
+
+
+class ProjectionSearchIndex(Protocol):
+    """Search-index boundary used by fact and wiki source projections."""
+
+    async def get_projection_checkpoint(self, source: str) -> str | None: ...
+
+    async def set_projection_checkpoint(self, source: str, checkpoint: str) -> None: ...
+
+    async def clear_projection_checkpoint(self, source: str) -> None: ...
+
+    async def sync(
+        self,
+        source_name: str,
+        items: list[RawItem],
+        progress_callback: ProgressCallback | None = None,
+        batch_size: int = 50,
+        *,
+        force: bool = False,
+        raise_on_error: bool = False,
+    ) -> SyncResult: ...
+
+    async def search(
+        self,
+        query: str,
+        sources: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[SearchResult]: ...
 
 
 class SearchIndex:

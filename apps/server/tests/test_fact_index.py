@@ -46,11 +46,14 @@ class _Index:
 
     async def sync(self, source, items, **_kwargs):
         self.sync_calls += 1
+        deleted = 0
         current_ids = {item.source_id for item in items}
         for source_id in set(self.store.items) - current_ids:
             await self.delete(source, source_id)
+            deleted += 1
         for item in items:
             await self.upsert(source, item.source_id, item.title, item.content, item.metadata)
+        return SyncResult(len(items), deleted)
 
     async def search(self, _query, *, sources, limit):
         assert sources == [FACT_SEARCH_SOURCE]
@@ -184,7 +187,7 @@ async def test_fact_index_never_checkpoints_a_repeatedly_changing_revision(tmp_p
 
     class _ChangingIndex(_Index):
         async def sync(self, source, items, **kwargs):
-            await super().sync(source, items, **kwargs)
+            result = await super().sync(source, items, **kwargs)
             fact_id = f"concurrent-{self.sync_calls}"
             service.ledger.commit(
                 service.ledger.plan(
@@ -204,6 +207,7 @@ async def test_fact_index_never_checkpoints_a_repeatedly_changing_revision(tmp_p
                     reason="change during indexing",
                 )
             )
+            return result
 
     index = _ChangingIndex()
     projection = FactIndexProjection(service.ledger, lambda: index)

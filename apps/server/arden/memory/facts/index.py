@@ -9,6 +9,7 @@ from typing import Literal
 from arden.logging import get_logger
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.models import Fact
+from arden.search.index import ProjectionSearchIndex
 from arden.search.types import RawItem
 
 FACT_SEARCH_SOURCE = "fact"
@@ -30,12 +31,12 @@ class FactIndexState:
 class FactIndexProjection:
     """Keep one replaceable search partition aligned with a fact revision."""
 
-    def __init__(self, ledger: FactLedger, get_search_index: Callable[[], object | None]) -> None:
+    def __init__(self, ledger: FactLedger, get_search_index: Callable[[], ProjectionSearchIndex | None]) -> None:
         self._ledger = ledger
         self._get_search_index = get_search_index
         self._lock = asyncio.Lock()
         self._last_state = FactIndexState(None, "not_ready")
-        self._ready_index: object | None = None
+        self._ready_index: ProjectionSearchIndex | None = None
 
     @property
     def last_state(self) -> FactIndexState:
@@ -47,7 +48,7 @@ class FactIndexProjection:
         force: bool = False,
         progress_callback: Callable[[int, int], None] | None = None,
         raise_on_error: bool = False,
-    ) -> object | None:
+    ) -> ProjectionSearchIndex | None:
         async with self._lock:
             for attempt in range(2):
                 index = self._get_search_index()
@@ -102,7 +103,7 @@ class FactIndexProjection:
                             continue
                         self._last_state = FactIndexState(None, "not_ready", "fact revision changed during index sync")
                         return None
-                    if not getattr(sync_result, "degraded", False):
+                    if not sync_result.degraded:
                         await index.set_projection_checkpoint(FACT_SEARCH_SOURCE, _checkpoint(revision))
                     self._ready_index = index
                     self._last_state = FactIndexState(revision, "ready")
@@ -120,7 +121,7 @@ class FactIndexProjection:
             self._last_state = FactIndexState(None, "not_ready", "search index changed during fact sync")
             return None
 
-    async def _is_current(self, index: object, revision: str | None) -> bool:
+    async def _is_current(self, index: ProjectionSearchIndex, revision: str | None) -> bool:
         state = FactIndexState(revision, "ready")
         if await index.get_projection_checkpoint(FACT_SEARCH_SOURCE) != _checkpoint(revision):
             return False

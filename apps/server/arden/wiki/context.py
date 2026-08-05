@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from arden.search.index import ProjectionSearchIndex
 from arden.search.types import RawItem
 from arden.wiki.changes import role
 from arden.wiki.constants import README_FILENAME
@@ -67,7 +68,7 @@ class WikiPageIndexProjection:
     def __init__(
         self,
         wiki: WikiService,
-        get_search_index: Callable[[], object | None],
+        get_search_index: Callable[[], ProjectionSearchIndex | None],
         fact_revision: Callable[[], Awaitable[str | None]],
         on_state_change: Callable[[WikiPageIndexState], Awaitable[None]] | None = None,
         fact_revision_hint: Callable[[], Awaitable[str | None]] | None = None,
@@ -79,7 +80,7 @@ class WikiPageIndexProjection:
         self._on_state_change = on_state_change
         self._lock = asyncio.Lock()
         self._last_state = WikiPageIndexState(None, "not_ready")
-        self._ready_index: object | None = None
+        self._ready_index: ProjectionSearchIndex | None = None
         self._ready_fact_revision: str | None = None
 
     @property
@@ -95,9 +96,9 @@ class WikiPageIndexProjection:
         progress_callback: Callable[[int, int], None] | None = None,
         raise_on_error: bool = False,
         notify_state_change: bool = True,
-    ) -> object | None:
+    ) -> ProjectionSearchIndex | None:
         changed_state: WikiPageIndexState | None = None
-        result: object | None = None
+        result: ProjectionSearchIndex | None = None
         failure: Exception | None = None
         async with self._lock:
             for attempt in range(2):
@@ -175,7 +176,7 @@ class WikiPageIndexProjection:
 
     async def _sync(
         self,
-        search_index: object,
+        search_index: ProjectionSearchIndex,
         *,
         force: bool,
         progress_callback: Callable[[int, int], None] | None,
@@ -210,7 +211,7 @@ class WikiPageIndexProjection:
             current_wiki_head = self._wiki.repository.head
             current_fact_revision = await self._fact_revision()
             if current_wiki_head == wiki_head and current_fact_revision == fact_revision:
-                if not getattr(sync_result, "degraded", False):
+                if not sync_result.degraded:
                     await search_index.set_projection_checkpoint(
                         WIKI_PAGE_SOURCE,
                         _checkpoint(wiki_head, fact_revision),
@@ -227,7 +228,7 @@ class WikiPageIndexProjection:
 
     async def _is_current(
         self,
-        search_index: object,
+        search_index: ProjectionSearchIndex,
         wiki_head: str | None,
         fact_revision: str | None,
     ) -> bool:

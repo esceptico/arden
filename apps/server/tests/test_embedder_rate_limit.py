@@ -165,12 +165,14 @@ async def test_runtime_rebuild_waits_for_rate_limit_and_finishes_ready(tmp_path,
     item = RawItem("fact", "one", "Fact", "Value", now, now)
 
     class Projection:
-        async def sync(self, *, progress_callback, raise_on_error):
+        async def sync(self, *, progress_callback, raise_on_error, force=False):
+            assert force is True
             await runtime.search_index.sync(
                 "fact",
                 [item],
                 progress_callback=progress_callback,
                 raise_on_error=raise_on_error,
+                force=force,
             )
             return self
 
