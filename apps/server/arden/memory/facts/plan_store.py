@@ -314,6 +314,17 @@ class FactPlanStore:
             )
         return _row(rows[0]) if rows else None
 
+    async def plan_ids_for_owner(self, owner_id: str) -> tuple[str, ...]:
+        """Return storage identities for exact owner-scoped lookup."""
+
+        _required_text("owner_id", owner_id)
+        async with self._lock:
+            rows = await self.conn.execute_fetchall(
+                "SELECT plan_id FROM fact_plans WHERE owner_id = ? ORDER BY created_at, plan_id",
+                (owner_id,),
+            )
+        return tuple(_required_text("plan_id", row["plan_id"]) for row in rows)
+
     async def create_or_reuse(
         self,
         *,

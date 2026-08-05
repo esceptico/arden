@@ -138,6 +138,17 @@ class FactService:
             )
         ).items
 
+    async def visible_facts(self, principal: FactPrincipal) -> tuple[Fact, ...]:
+        """Return one current, owner-filtered snapshot for exact reference lookup."""
+
+        snapshot = await asyncio.to_thread(self.ledger.read_snapshot)
+        return tuple(
+            sorted(
+                (fact for fact in snapshot.facts.values() if principal.can_read(_scope(fact))),
+                key=lambda fact: (fact.created_at, fact.fact_id),
+            )
+        )
+
     async def search_page(
         self,
         principal: FactPrincipal,
