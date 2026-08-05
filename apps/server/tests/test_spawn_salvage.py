@@ -45,7 +45,7 @@ from arden.events.sse import (
     TextMessageContentEvent,
     TokenUsageEvent,
 )
-from arden.server.state import RunRegistry
+from arden.server.state import RunRegistry, RunStatus
 from arden.services.session import SessionService
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
@@ -782,13 +782,34 @@ async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
 
     monkeypatch.setattr(spawner_module, "llm_client", BoomLLM())
 
+    child_sessions: list[str] = []
+    finished: list[tuple[str, str]] = []
+    closed: list[str] = []
+
+    async def child_io_factory(params):
+        child_sessions.append(params.session_id)
+
+        async def finish(status: str) -> None:
+            finished.append((params.session_id, status))
+
+        async def aclose() -> None:
+            closed.append(params.session_id)
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=aclose)
+
     executor = make_executor()
+    run_registry = RunRegistry()
+    parent = run_registry.create_run("test", run_id="run-1")
+    parent.status = RunStatus.RUNNING
+    run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
     ctx = ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=executor.registry,
-        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        run=run,
         io=IOBridge(),
         background_tasks=bg_registry,
+        run_registry=run_registry,
     )
 
     spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
@@ -799,10 +820,63 @@ async def test_background_spawn_rejected_at_concurrency_cap(monkeypatch):
         assert "concurrent" in result.text.lower()
         # No new task was registered.
         assert len(bg_registry.list_pending()) == AGENT_MAX_CONCURRENT
+        assert len(child_sessions) == 1
+        assert finished == [(child_sessions[0], "failed")]
+        assert closed == child_sessions
+        assert run_registry.get_active_run(child_sessions[0]) is None
     finally:
         for task in fillers:
             task.cancel()
         await asyncio.gather(*fillers, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_spawn_start_failure_closes_acquired_child_session(monkeypatch):
+    monkeypatch.setattr(spawner_module, "llm_client", _single_response_llm())
+
+    async def fail_start(**_event):
+        raise RuntimeError("start persistence failed")
+
+    child_sessions: list[str] = []
+    finished: list[tuple[str, str]] = []
+    closed: list[str] = []
+
+    async def child_io_factory(params):
+        child_sessions.append(params.session_id)
+
+        async def finish(status: str) -> None:
+            finished.append((params.session_id, status))
+
+        async def aclose() -> None:
+            closed.append(params.session_id)
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=aclose)
+
+    executor = make_executor()
+    run_registry = RunRegistry()
+    parent = run_registry.create_run("test", run_id="run-1")
+    parent.status = RunStatus.RUNNING
+    run = RunContext(run_id=parent.run_id, current_depth=0, max_depth=3)
+    run.child_io_factory = child_io_factory
+    background_tasks = BackgroundTaskRegistry(session_id="test", record_event=fail_start)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        background_tasks=background_tasks,
+        run_registry=run_registry,
+    )
+
+    spawn = create_spawn_fn(executor=executor, model="test-model", max_depth=3, current_depth=0)
+    with pytest.raises(RuntimeError, match="start persistence failed"):
+        await spawn(ctx, "cannot start", system_prompt="sys", tools=[], timeout=1)
+
+    assert len(child_sessions) == 1
+    assert finished == [(child_sessions[0], "failed")]
+    assert closed == child_sessions
+    assert run_registry.get_active_run(child_sessions[0]) is None
+    assert background_tasks.list_pending() == []
 
 
 @pytest.mark.asyncio

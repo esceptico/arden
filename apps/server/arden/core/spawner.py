@@ -785,6 +785,31 @@ def create_spawn_fn(
             if messages is child_messages:
                 await _save_child_session("running")
 
+        async def _teardown_child_io() -> None:
+            if calling_ctx.run_registry is not None and child_io is not None:
+                calling_ctx.run_registry.clear_session_active(child_state.session_id)
+            if child_io_close is not None:
+                await child_io_close()
+
+        async def _abort_unstarted_child(status: str) -> None:
+            if agent_label_task is not None:
+                if not agent_label_task.done():
+                    agent_label_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await agent_label_task
+            try:
+                await _save_child_session(status)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _logger.exception("Failed to settle unstarted child session")
+            try:
+                await _teardown_child_io()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _logger.exception("Failed to close unstarted child session")
+
         await _provision_child_session()
         if hasattr(sub_agent, "hooks"):
             sub_agent.hooks.on_step_finish = _save_child_step
@@ -900,6 +925,7 @@ def create_spawn_fn(
             agent_type=resolved_agent_type,
         )
         if not reserved:
+            await _abort_unstarted_child("failed")
             return SpawnResult(
                 text=(
                     f"Not started — already at the limit of {AGENT_MAX_CONCURRENT} concurrent "
@@ -987,12 +1013,6 @@ def create_spawn_fn(
                 await _emit_visible_child_final(child_io, text)
             return status, text, f"timed out after {timeout}s" if timed_out else status
 
-        async def _teardown_child_io() -> None:
-            if calling_ctx.run_registry is not None and child_io is not None:
-                calling_ctx.run_registry.clear_session_active(child_state.session_id)
-            if child_io_close is not None:
-                await child_io_close()
-
         try:
             start_disposition = await registry.record_started(
                 task_id=task_id,
@@ -1005,8 +1025,10 @@ def create_spawn_fn(
                 wait=should_wait,
                 spawn_spec=spawn_spec.to_json(),
             )
-        except BaseException:
+        except BaseException as exc:
             registry.release(task_id)
+            status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+            await _abort_unstarted_child(status)
             raise
 
         if start_disposition is BackgroundStartDisposition.CANCELLED:
