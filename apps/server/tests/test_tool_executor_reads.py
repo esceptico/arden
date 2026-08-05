@@ -198,14 +198,21 @@ async def test_duplicate_read_retries_after_post_processing_failure(monkeypatch)
     )
     failures = 0
 
-    def flaky_offload(result: ToolResult, tool_call_id: str) -> ToolResult:
+    original_bound = executor._bound_result_payload
+
+    def flaky_bound(
+        result: ToolResult,
+        tool_call_id: str,
+        *,
+        offload_content: bool = False,
+    ) -> ToolResult:
         nonlocal failures
         if failures == 0:
             failures += 1
             raise RuntimeError("post-processing failed")
-        return result
+        return original_bound(result, tool_call_id, offload_content=offload_content)
 
-    monkeypatch.setattr(executor, "_maybe_offload", flaky_offload)
+    monkeypatch.setattr(executor, "_bound_result_payload", flaky_bound)
 
     with pytest.raises(RuntimeError, match="post-processing failed"):
         await executor.execute("search", {"query": "mcp"}, "call-1")

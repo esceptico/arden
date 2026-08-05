@@ -17,6 +17,7 @@ from arden.agent.types.tools import (
     normalize_source_refs,
 )
 from arden.constants import OFFLOAD_THRESHOLD
+from arden.core.raw_tool_results import RawToolResultBlob
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.core.tool_result_data import persistable_tool_result_data
 from arden.server.bus import BusRegistry
@@ -231,12 +232,52 @@ def test_tool_executor_offload_preserves_source_refs(monkeypatch, tmp_path: Path
     executor = object.__new__(ArdenToolExecutor)
     executor._ctx = SimpleNamespace(session_id="session-1")
     monkeypatch.setattr("arden.core.tool_executor.persist_result", lambda *_args: tmp_path / "call-1.txt")
-    result = ToolResult(content="x" * (OFFLOAD_THRESHOLD + 1), preview="large", source_refs=(_source(),))
+    result = ToolResult(
+        content="x" * (OFFLOAD_THRESHOLD + 1),
+        preview="large",
+        data={
+            "child_agent": {"child_run_id": "child-1", "wait": False},
+            "provenance": {"workspace_ref": "research-1:_provenance.json"},
+            "matches": [{"text": "not continuation metadata"}],
+        },
+        source_refs=(_source(),),
+    )
 
-    offloaded = executor._maybe_offload(result, "call-1")
+    offloaded = executor._bound_result_payload(result, "call-1", offload_content=True)
 
     assert offloaded.source_refs == (_source(),)
+    assert offloaded.data["child_agent"] == result.data["child_agent"]
+    assert offloaded.data["provenance"] == result.data["provenance"]
+    assert "matches" not in offloaded.data
     assert "saved to" in offloaded.content
+
+
+def test_tool_executor_recovery_blob_read_failure_raises(monkeypatch):
+    executor = object.__new__(ArdenToolExecutor)
+    executor._ctx = SimpleNamespace(session_id="session-1")
+    missing_blob = RawToolResultBlob(
+        blob_ref="sha256:missing",
+        blob_path="/missing/tool-result.gz",
+        content_sha256="missing",
+        content_bytes=1,
+        stored_bytes=1,
+    )
+    result = ToolResult(
+        content="x" * (OFFLOAD_THRESHOLD + 1),
+        preview="preview",
+        data=missing_blob.to_internal_data(),
+    )
+
+    def read_missing_blob(*_args, **_kwargs):
+        raise OSError("blob is unavailable")
+
+    monkeypatch.setattr(
+        "arden.core.tool_executor.read_raw_tool_result",
+        read_missing_blob,
+    )
+
+    with pytest.raises(OSError, match="blob is unavailable"):
+        executor._bound_result_payload(result, "call-1")
 
 
 def test_tool_executor_final_bound_limits_adversarial_metadata(monkeypatch, tmp_path: Path):
@@ -399,7 +440,15 @@ async def test_session_history_restores_persisted_source_refs_unchanged():
 
     history = await get_session_history(
         svc=_SessionService(),
-        runtime=SimpleNamespace(run_registry=None, executor=None),
+        runtime=SimpleNamespace(
+            run_registry=None,
+            executor=None,
+            config=SimpleNamespace(
+                chat_model="gpt-5.4-mini",
+                compression_threshold=0.8,
+                max_messages=120,
+            ),
+        ),
         buses=BusRegistry(),
         session_id="session-1",
         limit=50,

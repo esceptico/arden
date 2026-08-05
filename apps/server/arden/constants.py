@@ -112,7 +112,7 @@ SESSION_HANDOFF_MARKER = "[Session State Handoff]"
 #
 # This is the ONE knob that gates tool-result truncation. Tools must not trim their own
 # output without leaving a continuation path. Results above OFFLOAD_THRESHOLD are written
-# to a session-local file (core.tool_result_files) and ArdenToolExecutor._maybe_offload
+# to a session-local file (core.tool_result_files) and ArdenToolExecutor's result boundary
 # returns a head+tail preview pointing at file_read(path=...) so the agent reads more by path.
 ARDEN_TMP_BASE = "/tmp/arden"  # background-task result staging (see context.RESULT_BASE)
 OFFLOAD_THRESHOLD = 50000  # chars — results above this are reduced to a preview + durable file

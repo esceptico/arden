@@ -41,6 +41,7 @@ from arden.tools.executor import ToolExecutor
 LIVE_READ_TOOLS = frozenset({"session_list"})
 AUDIT_PREVIEW_MAX_CHARS = 500
 OFFLOAD_CONTINUATION_FIELDS = frozenset({"has_more", "next_cursor", "next_offset"})
+OFFLOAD_STRUCTURED_CONTINUATION_FIELDS = frozenset({"child_agent", "provenance"})
 OFFLOAD_DATA_SUMMARY_MAX_KEYS = 50
 OFFLOAD_DATA_KEY_MAX_BYTES = 128
 OFFLOAD_OUTCOME_FIELD_MAX_BYTES = 512
@@ -108,10 +109,9 @@ def _bounded_continuation_data(data: dict | None) -> dict[str, Any]:
     bounded: dict[str, Any] = {}
     omitted: set[str] = set()
     existing_omissions = data.get("continuation_fields_omitted")
+    continuation_fields = OFFLOAD_CONTINUATION_FIELDS | OFFLOAD_STRUCTURED_CONTINUATION_FIELDS
     if isinstance(existing_omissions, list | tuple):
-        omitted.update(
-            value for value in existing_omissions if isinstance(value, str) and value in OFFLOAD_CONTINUATION_FIELDS
-        )
+        omitted.update(value for value in existing_omissions if isinstance(value, str) and value in continuation_fields)
     for key in OFFLOAD_CONTINUATION_FIELDS:
         if key not in data:
             continue
@@ -119,6 +119,18 @@ def _bounded_continuation_data(data: dict | None) -> dict[str, Any]:
         if isinstance(value, str) and len(value.encode("utf-8")) > OFFLOAD_CONTINUATION_VALUE_MAX_BYTES:
             omitted.add(key)
         elif isinstance(value, str | int | float | bool) or value is None:
+            bounded[key] = value
+    for key in OFFLOAD_STRUCTURED_CONTINUATION_FIELDS:
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, dict):
+            omitted.add(key)
+            continue
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > OFFLOAD_CONTINUATION_VALUE_MAX_BYTES:
+            omitted.add(key)
+        else:
             bounded[key] = value
     if omitted:
         bounded["continuation_fields_omitted"] = sorted(omitted)
@@ -290,10 +302,11 @@ class ArdenToolExecutor:
                 )
 
             result = self._truncate_result(result, tool.policy.max_result_chars, tool_call_id=tool_call_id)
-            if tool.policy.offload:
-                result = self._maybe_offload(result, tool_call_id)
-            result = self._bound_result_payload(result, tool_call_id)
-            result = result.with_default_outcome()
+            result = self._bound_result_payload(
+                result,
+                tool_call_id,
+                offload_content=tool.policy.offload,
+            )
 
             finish_status = self._audit_status(result)
             finish_preview = result.preview
@@ -495,17 +508,25 @@ class ArdenToolExecutor:
             outcome=result.outcome,
         )
 
-    def _bound_result_payload(self, result: ToolResult, tool_call_id: str) -> ToolResult:
+    def _bound_result_payload(
+        self,
+        result: ToolResult,
+        tool_call_id: str,
+        *,
+        offload_content: bool = False,
+    ) -> ToolResult:
+        """Keep model history bounded while retaining the exact result envelope."""
         result = result.with_default_outcome()
         serialized = result.serialized_payload()
-        if len(serialized.encode("utf-8")) <= OFFLOAD_THRESHOLD:
+        content_offload = offload_content and len(result.content) > OFFLOAD_THRESHOLD
+        if not content_offload and len(serialized.encode("utf-8")) <= OFFLOAD_THRESHOLD:
             return result
 
         exact_serialized = self._exact_serialized_payload(result, serialized)
-        path = persist_result_payload(self._ctx.session_id, tool_call_id, exact_serialized)
+        payload_path = persist_result_payload(self._ctx.session_id, tool_call_id, exact_serialized)
         blob = persist_raw_tool_result(exact_serialized)
         lines = result.content.split("\n")
-        preview, _preview_lines = _bounded_offload_preview(lines)
+        preview, preview_lines = _bounded_offload_preview(lines)
         data: dict[str, Any] = {
             "truncated": True,
             "raw_ref": blob.blob_ref,
@@ -521,11 +542,21 @@ class ArdenToolExecutor:
             )[:OFFLOAD_DATA_SUMMARY_MAX_KEYS]
             if public_keys:
                 data["data_summary"] = {"keys": public_keys}
-        compact = (
-            f"{preview}\n\n"
-            f"[Full tool result payload ({blob.content_bytes} bytes) saved to {path}.]\n"
-            f"Use file_read(path={str(path)!r}, offset=N, limit=M) to retrieve it."
-        )
+        if content_offload:
+            content_path = persist_result(self._ctx.session_id, tool_call_id, result.content)
+            hidden_lines = max(0, len(lines) - preview_lines)
+            compact = (
+                f"{preview}\n\n"
+                f"[Full result ({len(lines)} lines, {hidden_lines} not shown here) saved to {content_path}.]\n"
+                f"Use file_read(path={str(content_path)!r}, offset=N, limit=M) to read more, "
+                f"or file_search_text / bash grep over that file to find specific content."
+            )
+        else:
+            compact = (
+                f"{preview}\n\n"
+                f"[Full tool result payload ({blob.content_bytes} bytes) saved to {payload_path}.]\n"
+                f"Use file_read(path={str(payload_path)!r}, offset=N, limit=M) to retrieve it."
+            )
         compact_result = ToolResult(
             content=compact,
             preview=_truncate_utf8(result.preview, AUDIT_PREVIEW_MAX_CHARS),
@@ -542,7 +573,7 @@ class ArdenToolExecutor:
             return compact_result
         return self._minimal_offloaded_result(
             compact_result,
-            payload_path=path,
+            payload_path=payload_path,
             raw_ref=blob.blob_ref,
             raw_bytes=blob.content_bytes,
             raw_data=blob.to_internal_data(),
@@ -641,10 +672,7 @@ class ArdenToolExecutor:
         raw_blob = internal_blob_from_data(result.data)
         if raw_blob is None:
             return serialized
-        try:
-            raw = read_raw_tool_result(raw_blob.blob_path, compression=raw_blob.compression)
-        except OSError:
-            return serialized
+        raw = read_raw_tool_result(raw_blob.blob_path, compression=raw_blob.compression)
         if ToolResult.from_serialized_payload(raw) is not None:
             return raw
         exact = ToolResult(
@@ -679,36 +707,6 @@ class ArdenToolExecutor:
             else:
                 self._meta_cache[name] = None
         return self._meta_cache[name]
-
-    def _maybe_offload(self, result: ToolResult, tool_call_id: str) -> ToolResult:
-        content = result.content
-        if len(content) <= OFFLOAD_THRESHOLD:
-            return result
-
-        path = persist_result(self._ctx.session_id, tool_call_id, content)
-        exact_payload = result.serialized_payload()
-        persist_result_payload(self._ctx.session_id, tool_call_id, exact_payload)
-        payload_blob = persist_raw_tool_result(exact_payload)
-        data = {**(result.data or {}), **payload_blob.to_internal_data()}
-        lines = content.split("\n")
-        total = len(lines)
-        preview, preview_lines = _bounded_offload_preview(lines)
-        hidden_lines = max(0, total - preview_lines)
-        compact = (
-            f"{preview}\n\n"
-            f"[Full result ({total} lines, {hidden_lines} not shown here) saved to {path}.]\n"
-            f"Use file_read(path={str(path)!r}, offset=N, limit=M) to read more, "
-            f"or file_search_text / bash grep over that file to find specific content."
-        )
-        return ToolResult(
-            content=compact,
-            preview=result.preview,
-            is_error=result.is_error,
-            data=data,
-            model_content=result.model_content,
-            source_refs=result.source_refs,
-            outcome=result.outcome,
-        )
 
 
 def _take_lines(lines: list[str], char_budget: int) -> tuple[str, int]:
