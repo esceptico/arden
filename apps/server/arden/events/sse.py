@@ -390,6 +390,7 @@ class ConnectionNeededEvent(SSEEvent):
     settings_tab: str = "integrations"
     required_scopes: list[str] = field(default_factory=list)
     source: Literal["recovery", "suggestion"] = "suggestion"
+    account_ref: str | None = None
 
 
 @dataclass(frozen=True)
