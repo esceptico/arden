@@ -1,8 +1,6 @@
-import logging
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
-from tenacity import before_sleep_log, retry, stop_after_attempt, wait_exponential
 
 from arden.agent import ToolOutcomeStatus
 from arden.logging import get_logger
@@ -29,16 +27,6 @@ class NotifyInput(BaseModel):
         max_length=50,
         description="Notifier names to use, e.g. ['work-telegram'] (omit to send to all)",
     )
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=2, min=2, max=10),
-    before_sleep=before_sleep_log(_logger, logging.WARNING),
-    reraise=True,
-)
-async def _send_with_retry(notifier: Notifier, subject: str, body: str) -> None:
-    await notifier.send(subject, body)
 
 
 @dataclass
@@ -92,32 +80,33 @@ async def notify(execution: ToolExecution, args: NotifyInput) -> ToolResult:
         )
 
     sent: list[str] = []
-    failed: list[str] = []
+    uncertain: list[str] = []
 
     for notifier in resolved.targets:
         try:
-            await _send_with_retry(notifier, args.subject, args.body)
+            await notifier.send(args.subject, args.body)
             sent.append(notifier.channel)
         except Exception:
-            _logger.exception("Notifier %s failed after retries", notifier.channel)
-            failed.append(notifier.channel)
+            _logger.exception("Notifier %s delivery outcome is uncertain", notifier.channel)
+            uncertain.append(notifier.channel)
 
-    if failed:
+    if uncertain:
         if not sent:
             return ToolResult.failure(
-                code="provider_error",
-                message=f"Notification delivery failed for: {', '.join(failed)}.",
-                preview="Delivery failed",
-                retryable=True,
-                recovery_action="Retry later or choose another configured notifier.",
+                code="mutation_uncertain",
+                message=f"Notification delivery outcome is unknown for: {', '.join(uncertain)}.",
+                preview="Delivery uncertain",
+                status=ToolOutcomeStatus.UNCERTAIN,
+                retryable=False,
+                recovery_action="Inspect the target channels before sending another notification.",
             )
         return ToolResult.failure(
             code="partial_failure",
-            message=f"Sent to: {', '.join(sent)}. Failed: {', '.join(failed)}.",
-            preview=f"Partial ({len(sent)}/{len(sent) + len(failed)})",
+            message=f"Sent to: {', '.join(sent)}. Outcome unknown for: {', '.join(uncertain)}.",
+            preview=f"Partial ({len(sent)}/{len(sent) + len(uncertain)})",
             status=ToolOutcomeStatus.UNCERTAIN,
-            retryable=True,
-            recovery_action="Retry only the failed notifier channels.",
+            retryable=False,
+            recovery_action="Inspect the uncertain channels before sending another notification.",
         )
 
     return ToolResult(

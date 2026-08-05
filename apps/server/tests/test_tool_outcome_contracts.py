@@ -63,17 +63,17 @@ def test_agent_facing_tool_failures_always_include_recovery_guidance():
 
 
 @pytest.mark.asyncio
-async def test_notify_total_delivery_failure_is_typed_failure(monkeypatch):
+async def test_notify_total_delivery_failure_is_typed_failure():
+    attempts = 0
+
     class FailingNotifier:
         channel = "work"
 
         async def send(self, subject: str, body: str) -> None:
+            nonlocal attempts
+            attempts += 1
             raise RuntimeError("provider secret")
 
-    async def send_once(notifier, subject, body):
-        await notifier.send(subject, body)
-
-    monkeypatch.setattr("arden.tools.notify._send_with_retry", send_once)
     result = await notify(
         _execution(services={"notifiers": SimpleNamespace(notifiers={"work": FailingNotifier()})}),
         NotifyInput(subject="Build", body="Failed"),
@@ -81,5 +81,9 @@ async def test_notify_total_delivery_failure_is_typed_failure(monkeypatch):
 
     assert result.is_error
     assert result.outcome is not None and result.outcome.error is not None
-    assert result.outcome.error.code == "provider_error"
+    assert attempts == 1
+    assert result.outcome.status is ToolOutcomeStatus.UNCERTAIN
+    assert result.outcome.error.code == "mutation_uncertain"
+    assert result.outcome.error.retryable is False
+    assert "Inspect the target channels" in result.outcome.error.recovery_action
     assert "provider secret" not in result.content
