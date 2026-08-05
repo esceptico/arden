@@ -402,25 +402,6 @@ class SessionService:
             run_id=run_id,
         )
 
-    async def record_chat_compaction(
-        self,
-        *,
-        compaction_id: str,
-        session_id: str,
-        boundary_seq: int,
-        messages_before: int,
-        messages_after: int,
-        rehydration_state: dict | None = None,
-    ) -> None:
-        await self.store.record_chat_compaction(
-            compaction_id=compaction_id,
-            session_id=session_id,
-            boundary_seq=boundary_seq,
-            messages_before=messages_before,
-            messages_after=messages_after,
-            rehydration_state=rehydration_state,
-        )
-
     async def set_goal(self, session_id: str, objective: str, token_budget: int | None = None) -> dict | None:
         return await self.store.set_goal(session_id, objective, token_budget=token_budget)
 

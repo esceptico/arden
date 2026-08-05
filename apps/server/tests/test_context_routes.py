@@ -44,7 +44,6 @@ class _EmptyEventStore:
 
 class _SessionService:
     saved = False
-    recorded_compactions = 0
 
     def __init__(self):
         self.store = _EmptyEventStore()
@@ -55,9 +54,6 @@ class _SessionService:
 
     async def save(self, *args, **kwargs):
         self.saved = True
-
-    async def record_chat_compaction(self, **_kwargs):
-        self.recorded_compactions += 1
 
     async def list_turns(self, session_id: str, limit: int = 100):
         return [
@@ -177,9 +173,6 @@ def test_manual_compact_bypasses_auto_threshold(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["status"] == "compacted"
-    # The durable summary save records the checkpoint; the HTTP route must not
-    # create a second transport-sequence checkpoint.
-    assert session_service.recorded_compactions == 0
 
 
 def test_manual_compact_noops_when_nothing_compactable_without_spinner_event():

@@ -16,7 +16,7 @@ from arden.context.models import BackgroundStartDisposition, SessionState
 from arden.context.store import SessionDataCorruptionError, SessionStore, StaleSessionContextError
 from arden.core.compactor import _build_compacted_messages
 from arden.core.public_refs import public_ref
-from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
+from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result, read_raw_tool_result
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import ThinkingEvent, ToolCallResultEvent
 from arden.outbox.store import OutboxStore
@@ -1685,11 +1685,15 @@ async def test_large_tool_result_event_spills_raw_content_to_manifest(store: Ses
     assert payload["content_bytes"] == len(raw.encode("utf-8"))
     assert len(rows[0]["event_json"]) < RAW_TOOL_RESULT_INLINE_MAX_BYTES
 
-    manifest = await store.get_tool_result(payload["raw_ref"])
-    assert manifest is not None
+    manifest_rows = await store.read_conn.execute_fetchall(
+        "SELECT session_id, tool_call_id, blob_path, compression FROM tool_results WHERE tool_result_id = ?",
+        (payload["raw_ref"],),
+    )
+    assert len(manifest_rows) == 1
+    manifest = manifest_rows[0]
     assert manifest["session_id"] == "sess-raw"
     assert manifest["tool_call_id"] == "call-raw"
-    assert manifest["content"] == raw
+    assert await asyncio.to_thread(read_raw_tool_result, manifest["blob_path"], compression=manifest["compression"]) == raw
 
     tool_calls = await store.list_tool_calls(run_id="run-1")
     assert tool_calls[0]["result_ref"] == payload["raw_ref"]
@@ -1749,7 +1753,6 @@ async def test_tool_result_manifest_obeys_declared_expiry_and_prunes_durably(sto
     )
     await store.conn.commit()
 
-    assert await store.get_tool_result(tool_result_id) is not None
     assert await store.prune_expired_tool_results(now=future - timedelta(seconds=1)) == 0
     assert content_sha256 in await store.list_tool_result_content_hashes()
 
@@ -1759,7 +1762,6 @@ async def test_tool_result_manifest_obeys_declared_expiry_and_prunes_durably(sto
         (after_expiry.isoformat(), tool_result_id),
     )
     await store.conn.commit()
-    assert await store.get_tool_result(tool_result_id) is None
     assert await store.prune_expired_tool_results(now=after_expiry) == 1
     assert content_sha256 not in await store.list_tool_result_content_hashes()
 
@@ -1780,7 +1782,6 @@ async def test_small_tool_result_event_stays_inline(store: SessionStore):
     payload = json.loads(rows[0]["event_json"])
     assert payload["content"] == "small raw result"
     assert "raw_ref" not in payload
-    assert await store.get_tool_result("missing") is None
 
 
 @pytest.mark.asyncio
@@ -1918,9 +1919,13 @@ async def test_offloaded_tool_result_event_registers_existing_raw_blob(store: Se
     assert "content_sha256" not in payload
     assert RAW_TOOL_RESULT_DATA_KEY not in payload.get("data", {})
 
-    manifest = await store.get_tool_result(payload["raw_ref"])
-    assert manifest is not None
-    assert manifest["content"] == raw
+    manifest_rows = await store.read_conn.execute_fetchall(
+        "SELECT blob_path, compression FROM tool_results WHERE tool_result_id = ?",
+        (payload["raw_ref"],),
+    )
+    assert len(manifest_rows) == 1
+    manifest = manifest_rows[0]
+    assert await asyncio.to_thread(read_raw_tool_result, manifest["blob_path"], compression=manifest["compression"]) == raw
 
     # Replaying the same result under a new transport sequence must reuse the
     # manifest ID instead of emitting a pointer to an INSERT-ignored row.
@@ -2412,28 +2417,6 @@ async def test_branch_rolls_back_when_referenced_background_result_is_missing(
         "SELECT 1 FROM tool_results WHERE session_id = ?",
         (target_state.session_id,),
     )
-
-
-@pytest.mark.asyncio
-async def test_compaction_boundary_round_trip(store: SessionStore):
-    rehydration_state = {"active_plan_ref": "plan:abc", "pending_approval_ids": ["call-1"]}
-    await store.record_chat_compaction(
-        compaction_id="compact-1",
-        session_id="sess-1",
-        boundary_seq=12,
-        messages_before=20,
-        messages_after=5,
-        rehydration_state=rehydration_state,
-    )
-
-    compactions = await store.list_chat_compactions("sess-1")
-
-    assert len(compactions) == 1
-    assert compactions[0]["compaction_id"] == "compact-1"
-    assert compactions[0]["boundary_seq"] == 12
-    assert compactions[0]["messages_before"] == 20
-    assert compactions[0]["messages_after"] == 5
-    assert compactions[0]["rehydration_state"] == rehydration_state
 
 
 @pytest.mark.asyncio

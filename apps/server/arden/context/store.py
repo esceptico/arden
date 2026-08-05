@@ -197,14 +197,6 @@ SQL_ARCHIVE = "UPDATE sessions SET archived_at = ? WHERE session_id = ? AND arch
 SQL_RESTORE = "UPDATE sessions SET archived_at = NULL WHERE session_id = ? AND archived_at IS NOT NULL"
 SQL_DELETE_ARCHIVED = "DELETE FROM sessions WHERE session_id = ? AND archived_at IS NOT NULL"
 
-CHAT_IDEMPOTENCY_TTL_DAYS = 30
-CHAT_IDEMPOTENCY_TERMINAL_STATUSES = ("completed", "cancelled", "error", "failed", "ingested", "interrupted")
-# A real request hash is a SHA-256 hex digest, so this can never collide with
-# one. It lets DELETE win even when it reaches the server before the matching
-# POST has claimed its idempotency key.
-CHAT_IDEMPOTENCY_CANCELLED_TOMBSTONE_HASH = "cancelled-before-submit"
-
-
 class SessionStore:
     def __init__(
         self,
@@ -1378,22 +1370,6 @@ class SessionStore:
         if rows:
             return rows[0]["run_id"]
 
-    async def get_tool_result(self, tool_result_id: str) -> dict | None:
-        now = datetime.now(UTC).isoformat()
-        rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT * FROM tool_results
-            WHERE tool_result_id = ?
-              AND (expires_at IS NULL OR expires_at > ?)
-            """,
-            (tool_result_id, now),
-        )
-        if not rows:
-            return None
-        row = rows[0]
-        content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
-        return tool_result_payload(row, content=content)
-
     async def list_tool_result_content_hashes(self) -> set[str]:
         rows = await self.read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
         # Cold bundles are self-contained, so their original external blobs are
@@ -2361,40 +2337,6 @@ class SessionStore:
             (session_id,),
         )
         return int(rows[0]["latest_seq"] or 0)
-
-    async def record_chat_compaction(
-        self,
-        *,
-        compaction_id: str,
-        session_id: str,
-        boundary_seq: int,
-        messages_before: int,
-        messages_after: int,
-        rehydration_state: dict | None = None,
-    ) -> None:
-        rehydration_state_json = await asyncio.to_thread(
-            lambda: json.dumps(rehydration_state, default=str) if rehydration_state is not None else None
-        )
-        await self.conn.execute(
-            """
-            INSERT INTO chat_compactions (
-                compaction_id, session_id, boundary_seq, messages_before, messages_after,
-                rehydration_state, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(compaction_id) DO NOTHING
-            """,
-            (
-                compaction_id,
-                session_id,
-                boundary_seq,
-                messages_before,
-                messages_after,
-                rehydration_state_json,
-                datetime.now(UTC).isoformat(),
-            ),
-        )
-        await self.conn.commit()
 
     async def list_chat_compactions(self, session_id: str) -> list[dict]:
         rows = await self.read_conn.execute_fetchall(

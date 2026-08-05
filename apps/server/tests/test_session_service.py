@@ -37,9 +37,6 @@ class _FailingStore:
     async def cancel_chat_idempotency_key(self, **kwargs):
         raise RuntimeError("store down")
 
-    async def record_chat_compaction(self, **kwargs):
-        raise RuntimeError("store down")
-
     async def set_goal(self, session_id, objective, *, token_budget=None):
         raise RuntimeError("store down")
 
@@ -135,13 +132,6 @@ async def test_session_service_chat_idempotency_cancellation_propagates_store_fa
 async def test_session_service_metadata_writes_never_turn_store_failures_into_empty_results():
     service = SessionService(_FailingStore())
     calls = (
-        service.record_chat_compaction(
-            compaction_id="compact-1",
-            session_id="sess-1",
-            boundary_seq=1,
-            messages_before=2,
-            messages_after=1,
-        ),
         service.set_goal("sess-1", "ship"),
         service.get_goal("sess-1"),
         service.update_goal("sess-1", objective="ship now"),
