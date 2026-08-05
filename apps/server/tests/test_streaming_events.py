@@ -31,6 +31,7 @@ from arden.events.sse import (
     CompactionFinishedEvent,
     CompactionStartedEvent,
     ConnectionNeededEvent,
+    InputNeededEvent,
     KeepaliveEvent,
     ReasoningMessageContentEvent,
     TaskFinishedEvent,
@@ -1029,6 +1030,44 @@ async def test_event_stream_replays_pending_approval():
 
 
 @pytest.mark.asyncio
+async def test_event_stream_replays_durable_pending_approval_without_active_run():
+    buses = BusRegistry()
+    bus = buses.get_or_create("sess-1")
+    await bus.emit(ApprovalNeededEvent(tool_id="tool-durable", name="file_edit"))
+
+    class PendingStore:
+        async def get_latest_session_event_seq(self, session_id: str) -> int:
+            return 0
+
+        async def get_latest_session_checkpoint_seq(self, session_id: str) -> int:
+            return 0
+
+        async def list_session_events(self, session_id: str, *, after_seq: int, limit: int) -> list:
+            return []
+
+        async def list_pending_tool_approvals(self, session_id: str) -> list[dict]:
+            return [{"tool_call_id": "tool-durable"}]
+
+    stream = _event_stream(
+        "sess-1",
+        buses,
+        RunRegistry(),
+        stream=True,
+        after_seq=0,
+        event_store=PendingStore(),
+    )
+    try:
+        chunk = await anext(stream)
+    finally:
+        await stream.aclose()
+
+    payload = json.loads(chunk.split("data: ", 1)[1].strip())
+    assert payload["type"] == "approval_needed"
+    assert payload["tool_id"] == "tool-durable"
+    assert payload["replay"] is True
+
+
+@pytest.mark.asyncio
 async def test_event_stream_skips_resolved_approval_replay():
     buses = BusRegistry()
     bus = buses.get_or_create("sess-1")
@@ -1103,6 +1142,80 @@ async def test_event_stream_replays_only_pending_connection():
     assert payload["type"] == "connection_needed"
     assert payload["tool_id"] == "tool-connection"
     assert payload["replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_event_stream_replays_durable_pending_connection_without_active_run():
+    buses = BusRegistry()
+    bus = buses.get_or_create("sess-1")
+    await bus.emit(
+        ConnectionNeededEvent(
+            tool_id="tool-durable-connection",
+            integration_id="gmail",
+            connection_id="google",
+            label="Gmail",
+            capability="Read email",
+        )
+    )
+
+    class PendingStore:
+        async def get_latest_session_event_seq(self, session_id: str) -> int:
+            return 0
+
+        async def get_latest_session_checkpoint_seq(self, session_id: str) -> int:
+            return 0
+
+        async def list_session_events(self, session_id: str, *, after_seq: int, limit: int) -> list:
+            return []
+
+        async def list_pending_integration_connections(self, session_id: str) -> list[dict]:
+            return [{"tool_call_id": "tool-durable-connection"}]
+
+    stream = _event_stream(
+        "sess-1",
+        buses,
+        RunRegistry(),
+        stream=True,
+        after_seq=0,
+        event_store=PendingStore(),
+    )
+    try:
+        chunk = await anext(stream)
+    finally:
+        await stream.aclose()
+
+    payload = json.loads(chunk.split("data: ", 1)[1].strip())
+    assert payload["type"] == "connection_needed"
+    assert payload["tool_id"] == "tool-durable-connection"
+    assert payload["replay"] is True
+
+
+@pytest.mark.asyncio
+async def test_event_stream_replays_only_live_pending_input():
+    buses = BusRegistry()
+    bus = buses.get_or_create("sess-1")
+    await bus.emit(InputNeededEvent(tool_id="input-pending", name="form", title="Pending"))
+    await bus.emit(InputNeededEvent(tool_id="input-resolved", name="form", title="Resolved"))
+    await bus.emit(ThinkingEvent(status="tail"))
+
+    registry = RunRegistry()
+    run = registry.create_run("sess-1")
+    run.status = RunStatus.RUNNING
+    run.pending_inputs["input-pending"] = asyncio.get_running_loop().create_future()
+    resolved = asyncio.get_running_loop().create_future()
+    resolved.set_result({"result": "done"})
+    run.pending_inputs["input-resolved"] = resolved
+
+    stream = _event_stream("sess-1", buses, registry, stream=True, after_seq=0)
+    try:
+        chunks = [await anext(stream), await anext(stream)]
+    finally:
+        await stream.aclose()
+
+    payloads = [json.loads(chunk.split("data: ", 1)[1].strip()) for chunk in chunks]
+    assert [payload["type"] for payload in payloads] == ["input_needed", "thinking"]
+    assert payloads[0]["tool_id"] == "input-pending"
+    assert payloads[0]["replay"] is True
 
 
 @pytest.mark.asyncio

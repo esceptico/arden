@@ -6,16 +6,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from arden.events.sse import (
-    EPHEMERAL_EVENT_TYPES,
-    ApprovalNeededEvent,
-    ConnectionNeededEvent,
-    InputNeededEvent,
-    TextMessageContentEvent,
-)
+from arden.events.sse import TextMessageContentEvent
 from arden.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
 from arden.logging import get_logger
 from arden.server.bus import BusRegistry, StreamRecord
+from arden.server.chat_replay import ChatReplayPlanner, is_replayable_chat_event
 from arden.server.deps import get_bus_registry, require_run_registry
 from arden.server.middleware import SSEStreamingResponse
 from arden.server.runtime import Runtime, get_runtime
@@ -97,7 +92,7 @@ async def _event_stream(
 ) -> AsyncGenerator[str]:
     bus = await _bus_for_event_stream(session_id, bus_registry, event_store)
     subscription = bus.subscribe_with_replay(after_seq=after_seq)
-    snapshot, queue = subscription
+    queue = subscription.queue
     # Boundary for durable replay. Because subscribe_with_replay() has no
     # await, no live emit can interleave between subscription and this read.
     # Events emitted after this point arrive on the live queue; replay only
@@ -107,128 +102,29 @@ async def _event_stream(
     def should_emit(event) -> bool:
         return stream or not isinstance(event, TextMessageContentEvent)
 
-    # Catch-up replay (durable + in-memory snapshot) emits only STRUCTURAL
-    # events — never the ephemeral deltas (token text, tool args, reasoning).
-    # A client joining a long/ongoing run must land on the settled current
-    # state, not re-stream thousands of historical deltas (the "full replay of
-    # tool calls" churn). This mirrors what's persisted, so the in-memory
-    # snapshot replay matches the durable DB replay exactly; the live tail
-    # (after replay_upper_seq) still carries full deltas for whatever is
-    # actively streaming right now.
-    def should_replay(event) -> bool:
-        return event.type not in EPHEMERAL_EVENT_TYPES
-
-    durable_pending_approval_ids: set[str] | None = None
-    durable_pending_connection_ids: set[str] | None = None
-
-    async def is_pending_approval(tool_id: str) -> bool:
-        active_run = run_registry.get_active_run(session_id)
-        future = active_run.pending_approvals.get(tool_id) if active_run else None
-        if future is not None:
-            return not future.done()
-
-        nonlocal durable_pending_approval_ids
-        if durable_pending_approval_ids is None:
-            list_pending = getattr(event_store, "list_pending_tool_approvals", None)
-            if list_pending is None:
-                durable_pending_approval_ids = set()
-            else:
-                rows = await list_pending(session_id)
-                durable_pending_approval_ids = {
-                    row["tool_call_id"] for row in rows if isinstance(row.get("tool_call_id"), str)
-                }
-        return tool_id in durable_pending_approval_ids
-
-    def is_pending_input(tool_id: str) -> bool:
-        active_run = run_registry.get_active_run(session_id)
-        future = active_run.pending_inputs.get(tool_id) if active_run else None
-        return future is not None and not future.done()
-
-    async def is_pending_connection(tool_id: str) -> bool:
-        active_run = run_registry.get_active_run(session_id)
-        future = active_run.pending_connections.get(tool_id) if active_run else None
-        if future is not None:
-            return not future.done()
-
-        nonlocal durable_pending_connection_ids
-        if durable_pending_connection_ids is None:
-            list_pending = getattr(event_store, "list_pending_integration_connections", None)
-            if list_pending is None:
-                durable_pending_connection_ids = set()
-            else:
-                rows = await list_pending(session_id)
-                durable_pending_connection_ids = {
-                    row["tool_call_id"] for row in rows if isinstance(row.get("tool_call_id"), str)
-                }
-        return tool_id in durable_pending_connection_ids
-
-    async def filter_replay_records(records: list[StreamRecord]) -> list[StreamRecord]:
-        filtered: list[StreamRecord] = []
-        for record in records:
-            # approval_needed is a UI edge; the canonical state is the live
-            # Future / durable tool_approvals row. Do not replay stale cards.
-            if isinstance(record.event, ApprovalNeededEvent) and not await is_pending_approval(record.event.tool_id):
-                continue
-            # input_needed is a UI edge; the resolved state replays via the
-            # durable TOOL_CALL_RESULT. Do not replay stale input cards.
-            if isinstance(record.event, InputNeededEvent) and not is_pending_input(record.event.tool_id):
-                continue
-            if isinstance(record.event, ConnectionNeededEvent) and not await is_pending_connection(
-                record.event.tool_id
-            ):
-                continue
-            filtered.append(record)
-        return filtered
-
-    async def durable_replay_records() -> list[StreamRecord] | None:
-        if event_store is None or after_seq is None:
-            return None
-        if after_seq >= replay_upper_seq:
-            return []
-        records = await event_store.list_session_events(session_id, after_seq=after_seq, limit=10000)
-        records = [record for record in records if record.seq <= replay_upper_seq]
-        # session_events is a SPARSE ledger: ephemeral deltas (token text, tool
-        # args, reasoning — see EPHEMERAL_EVENT_TYPES) are intentionally NOT
-        # persisted, so seqs are non-contiguous by design. A hole is NOT a gap —
-        # the omitted seqs are transient deltas the client re-derives from the
-        # persisted START/END + result rows. Requiring contiguity here made
-        # nearly every resume return None → a bogus replay_gap reset → a
-        # reload loop. The only real concern is whether the DB has caught up to
-        # the live boundary; if not, fall back to the in-memory buffer/snapshot.
-        if not records or records[-1].seq != replay_upper_seq:
-            return None
-        return records
+    planner = ChatReplayPlanner(
+        session_id=session_id,
+        run_registry=run_registry,
+        event_store=event_store,
+    )
 
     try:
-        if after_seq is not None and after_seq > replay_upper_seq:
-            yield reset_chunk(session_id, "future_cursor", replay_upper_seq)
+        plan = await planner.build(
+            subscription,
+            after_seq=after_seq,
+            replay_upper_seq=replay_upper_seq,
+            checkpoint_seq=bus.checkpoint_seq,
+        )
+        if plan.reset is not None:
+            yield reset_chunk(session_id, plan.reset.reason, plan.reset.seq)
             await asyncio.sleep(0)
-        elif after_seq is not None and after_seq < bus.checkpoint_seq:
-            yield reset_chunk(session_id, "replay_gap", bus.checkpoint_seq)
-            await asyncio.sleep(0)
-            async for chunk in iter_replay_records(
-                session_id,
-                await filter_replay_records(snapshot),
-                should_emit=should_replay,
-            ):
-                yield chunk
-        else:
-            durable_records = await durable_replay_records()
-            if durable_records is None:
-                if subscription.replay_gap and after_seq is not None:
-                    reset_seq = min(max(after_seq + 1, bus.checkpoint_seq), replay_upper_seq)
-                    yield reset_chunk(session_id, "replay_gap", reset_seq)
-                    await asyncio.sleep(0)
-                records_to_replay = snapshot
-            else:
-                records_to_replay = durable_records
 
-            async for chunk in iter_replay_records(
-                session_id,
-                await filter_replay_records(records_to_replay),
-                should_emit=should_replay,
-            ):
-                yield chunk
+        async for chunk in iter_replay_records(
+            session_id,
+            plan.records,
+            should_emit=is_replayable_chat_event,
+        ):
+            yield chunk
 
         async for chunk in live_records(
             bus=bus,
