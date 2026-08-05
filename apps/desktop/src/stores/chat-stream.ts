@@ -4,7 +4,10 @@ import { getState, setState } from "@/stores/index";
 import {
   applyChatEventToTranscript,
 } from "@/stores/transcript-projection";
-import { reduceRunThinking } from "@/stores/run-lifecycle";
+import {
+  reduceRunProgressObserved,
+  reduceRunThinking,
+} from "@/stores/run-lifecycle";
 import {
   backgroundAgentKey,
   normalizeBackgroundAgentStatus,
@@ -237,6 +240,12 @@ function clearReplayMutationDomMarker(): void {
 function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
   const s = getState();
   const ts = event.timestamp ?? Date.now();
+  if (isForegroundRunProgressEvent(event.type)) {
+    setState((state) => reduceRunProgressObserved(state, {
+      runId: "run_id" in event ? event.run_id : null,
+      sessionId: event.session_id,
+    }));
+  }
   const applyTranscriptEvent = (transcriptEvent: ServerEvent): ServerEventEffect | undefined => {
     const result = applyChatEventToTranscript(chatStreamState, transcriptEvent, {
       getProjectionState: () => chatStreamState,
@@ -404,6 +413,18 @@ function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
     default:
       return applyTranscriptEvent(event);
   }
+}
+
+function isForegroundRunProgressEvent(type: ServerEvent["type"]): boolean {
+  return (
+    type === "thinking" ||
+    type === "approval_needed" ||
+    type === "connection_needed" ||
+    type === "token_usage" ||
+    type.startsWith("TEXT_MESSAGE_") ||
+    type.startsWith("REASONING_") ||
+    type.startsWith("TOOL_CALL_")
+  );
 }
 
 function upsertTaskLifecycleAgent(event: TaskLifecycleEvent, updatedAt: number): void {

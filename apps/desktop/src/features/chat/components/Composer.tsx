@@ -22,7 +22,13 @@ import { ComposerImageStrip } from "@/features/chat/components/ComposerImageStri
 import { ComposerToolbar, type ComposerAction } from "@/features/chat/components/ComposerToolbar";
 import { WorkingStrip } from "@/features/chat/components/WorkingStrip";
 import { useListNav } from "@/lib/hooks";
-import { workingLabel } from "@/features/chat/lib/workingLabel";
+import {
+  foregroundRunLabel,
+  selectForegroundApprovalCount,
+  selectForegroundConnectionLabel,
+  selectForegroundConnectionPhase,
+  workingLabelText,
+} from "@/features/chat/lib/foregroundRunStatus";
 import { filterCommands, useCommandList, type CommandEntry } from "@/features/chat/lib/commands";
 import { fileToImageBlock, mentionQueryAt } from "@/features/chat/lib/composerHelpers";
 import {
@@ -41,7 +47,9 @@ export function Composer() {
   const running = useStore((s) => s.running);
   const connected = useStore((s) => s.connected);
   const thinkingIntensity = useStore((s) => s.prefs.thinkingIntensity);
-  const pendingApprovalCount = useStore((s) => s.pendingApprovals.length);
+  const pendingApprovalCount = useStore(selectForegroundApprovalCount);
+  const pendingConnectionLabel = useStore(selectForegroundConnectionLabel);
+  const connectionPhase = useStore(selectForegroundConnectionPhase);
   const editingId = useStore((s) => s.editingId);
   const setEditingId = useStore((s) => s.setEditingId);
   const skipApprovals = useStore((s) => s.skipApprovals);
@@ -132,11 +140,8 @@ export function Composer() {
   // it can name the running tool, hiding it the moment output starts would
   // drop the readout exactly when there is something to read.
   const messages = useStore((s) => s.messages);
-  const currentRunId = useStore((s) => s.currentRunId);
-  const thinkingRunId = useStore((s) => s.thinkingRunId);
   const activeActivityId = useStore((s) => s.activeActivityId);
-  const serverThinking = Boolean(thinkingRunId && (!currentRunId || thinkingRunId === currentRunId));
-  const workingNow = running || serverThinking;
+  const workingNow = running;
   // 350ms threshold — fast replies (cached, small models, short tool
   // chains) shouldn't briefly flash the indicator. If the run finishes
   // within the threshold, workingNow flips false before the timer fires
@@ -152,7 +157,20 @@ export function Composer() {
     return () => window.clearTimeout(id);
   }, [workingNow]);
   const activityMessage = activeActivityId ? messages.get(activeActivityId) : null;
-  const stripLabel = useMemo(() => workingLabel(activityMessage), [activityMessage]);
+  const stripLabel = useMemo(
+    () => foregroundRunLabel({
+      activityMessage,
+      approvalPending: pendingApprovalCount > 0,
+      connectionLabel: pendingConnectionLabel,
+      connectionPhase,
+    }),
+    [
+      activityMessage,
+      connectionPhase,
+      pendingApprovalCount,
+      pendingConnectionLabel,
+    ],
+  );
 
   // The editor DOM is browser-owned while the user types; the store's draft
   // string is the single source of truth everywhere else. Programmatic draft
@@ -328,7 +346,7 @@ export function Composer() {
               only its text toggles. Covers the submit → first-token window;
               ActivityHeader's aria-live takes over once tool activity exists. */}
           <span role="status" className="sr-only">
-            {showWorking ? "Agent is working" : ""}
+            {showWorking ? workingLabelText(stripLabel) : ""}
           </span>
           <AnimatePresence initial={false}>
             {editingId && <ComposerEditingBanner key="editing-banner" onCancel={cancelEdit} />}

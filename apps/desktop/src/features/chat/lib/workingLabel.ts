@@ -8,7 +8,7 @@ export interface WorkingLabel {
   target: string;
 }
 
-const GENERIC: WorkingLabel = { verb: "Working", target: "" };
+const THINKING: WorkingLabel = { verb: "Thinking", target: "" };
 
 /** Title for a single call: the model's own `_display_title` when it wrote
  *  one, else the server's grouping noun over the tool's target, else the
@@ -35,9 +35,9 @@ function labelForItem(item: ActivityItem): WorkingLabel {
 /** The strip reports the call that is *running*, never the last one that
  *  finished: between two tools the agent is thinking, and a strip still
  *  naming the completed read would be stating something untrue. With nothing
- *  ongoing — before the first tool, or in the gap between two — it falls back
- *  to the generic label, which is exactly the no-signal window the strip
- *  exists to cover.
+ *  ongoing — before the first tool, or in the gap between two — the model is
+ *  the active phase, so the fallback is Thinking rather than an unhelpful
+ *  generic Working label.
  *
  *  Only top-level calls are eligible. A workflow or subagent runs its own
  *  tools at depth ≥ 1, and surfacing those puts a nested agent's private step
@@ -47,11 +47,11 @@ function labelForItem(item: ActivityItem): WorkingLabel {
  *  doing. */
 export function workingLabel(activityMessage: UiMessage | null | undefined): WorkingLabel {
   const items = activityMessage?.activity?.items;
-  if (!items?.length) return GENERIC;
+  if (!items?.length) return THINKING;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
     if ((item.depth ?? 0) > 0) continue;
     if (activityItemStatus(item) === "ongoing") return labelForItem(item);
   }
-  return GENERIC;
+  return THINKING;
 }

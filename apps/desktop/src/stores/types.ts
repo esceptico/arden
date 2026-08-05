@@ -514,6 +514,10 @@ export interface State {
   /** Terminal run ids seen locally. Prevents stale status polls from
    *  re-adding a run that the live stream already finished. */
   terminalRunIds: Set<string>;
+  /** First missing roster observation for the current SSE-confirmed run.
+   *  A short grace prevents stale session/status snapshots from flickering
+   *  the foreground lifecycle off before live reconciliation catches up. */
+  runStatusMiss: { runId: string; since: number } | null;
   transportDiagnostics: Record<string, TransportDiagnosticsSnapshot>;
   streamReplaying: boolean;
   /** Center point of the element that triggered the currently-open modal.

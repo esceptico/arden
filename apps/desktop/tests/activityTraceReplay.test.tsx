@@ -104,6 +104,15 @@ test("activity header keeps working state while a run waits between tools", () =
   expect(html).not.toContain("Executed");
 });
 
+test("activity header renders the current truthful run phase", () => {
+  const html = renderToStaticMarkup(
+    <ActivityHeader done={false} count={3} activeCount={0} liveHeading="Awaiting approval" />,
+  );
+
+  expect(html).toContain("Awaiting approval");
+  expect(html).not.toContain("Working");
+});
+
 test("activity header shows stopped state after run cancellation", () => {
   const html = renderToStaticMarkup(
     <ActivityHeader done count={109} activeCount={0} label="Stopped" />,

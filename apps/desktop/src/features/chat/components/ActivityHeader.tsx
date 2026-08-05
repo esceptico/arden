@@ -10,6 +10,7 @@ export function ActivityHeader({
   count,
   activeCount = 0,
   backgrounded = false,
+  liveHeading,
   durationMs,
   motionDisabled,
   onToggle,
@@ -20,6 +21,7 @@ export function ActivityHeader({
   count: number;
   activeCount?: number;
   backgrounded?: boolean;
+  liveHeading?: string;
   durationMs?: number | null;
   motionDisabled?: boolean;
   onToggle?: () => void;
@@ -34,7 +36,7 @@ export function ActivityHeader({
     ? "Backgrounded"
     : settled
       ? turnHeaderLabel(durationMs, label === "Stopped")
-      : "Working";
+      : liveHeading ?? "Working";
   const interactive = !!onToggle;
   const streamReplaying = useStore((s) => s.streamReplaying);
   const suppressMotion = motionDisabled ?? streamReplaying;

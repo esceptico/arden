@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
+import {
+  foregroundRunLabel,
+  workingLabelText,
+  selectForegroundApprovalCount,
+  selectForegroundConnectionLabel,
+} from "@/features/chat/lib/foregroundRunStatus";
 import { workingLabel } from "@/features/chat/lib/workingLabel";
-import type { ActivityItem, UiMessage } from "@/stores";
+import type { ActivityItem, State, UiMessage } from "@/stores";
 
 const message = (items: ActivityItem[]): UiMessage => ({
   id: "m1",
@@ -16,9 +22,9 @@ const call = (over: Partial<ActivityItem>): ActivityItem => ({
   ...over,
 });
 
-test("no activity yet reads as the generic label", () => {
-  expect(workingLabel(null)).toEqual({ verb: "Working", target: "" });
-  expect(workingLabel(message([]))).toEqual({ verb: "Working", target: "" });
+test("no activity yet reports the model phase", () => {
+  expect(workingLabel(null)).toEqual({ verb: "Thinking", target: "" });
+  expect(workingLabel(message([]))).toEqual({ verb: "Thinking", target: "" });
 });
 
 test("an ongoing call is named by the model's own display title", () => {
@@ -34,7 +40,7 @@ test("a finished call is never reported as current", () => {
   const label = workingLabel(message([
     call({ id: "a", status: "executed", displayTitle: "Reading areas.md", result: "ok" }),
   ]));
-  expect(label).toEqual({ verb: "Working", target: "" });
+  expect(label).toEqual({ verb: "Thinking", target: "" });
 });
 
 test("the newest ongoing call wins over an earlier one", () => {
@@ -93,8 +99,53 @@ test("a workflow's nested calls never reach the strip", () => {
   expect(label).toEqual({ verb: "Inspect", target: "updated automation harness" });
 });
 
-test("with only nested calls running, the strip stays generic", () => {
+test("with only nested calls running, the strip reports the parent model phase", () => {
   expect(workingLabel(message([
     call({ status: "ongoing", depth: 2, displayTitle: "Reading areas.md" }),
-  ]))).toEqual({ verb: "Working", target: "" });
+  ]))).toEqual({ verb: "Thinking", target: "" });
+});
+
+test("actionable waits override tool and model phases", () => {
+  const activityMessage = message([
+    call({ status: "ongoing", displayTitle: "Editing chat.css" }),
+  ]);
+
+  expect(foregroundRunLabel({ activityMessage, approvalPending: true })).toEqual({
+    verb: "Awaiting",
+    target: "approval",
+  });
+  expect(foregroundRunLabel({ activityMessage, connectionLabel: "Google Calendar" })).toEqual({
+    verb: "Connect",
+    target: "Google Calendar",
+  });
+});
+
+test("transport loss reports reconnection without exposing provider prose", () => {
+  const label = foregroundRunLabel({ connectionPhase: "reconnecting" });
+  expect(label).toEqual({ verb: "Reconnecting", target: "" });
+  expect(workingLabelText(label)).toBe("Reconnecting");
+  expect(foregroundRunLabel({ connectionPhase: "connecting" })).toEqual(label);
+});
+
+test("wait phases belong only to the active run", () => {
+  const state = {
+    running: true,
+    currentRunId: "run-new",
+    currentSessionId: "session-1",
+    pendingApprovals: [
+      { toolId: "old", toolName: "write", status: "pending", runId: "run-old", sessionId: "session-1" },
+      { toolId: "new", toolName: "send", status: "pending", runId: "run-new", sessionId: "session-1" },
+      { toolId: "other", toolName: "edit", status: "pending", runId: "run-new", sessionId: "session-2" },
+      { toolId: "legacy", toolName: "edit", status: "pending", sessionId: "session-1" },
+    ],
+    pendingConnections: [
+      { runId: "run-old", label: "Old service" },
+      { runId: "run-new", label: "Current service" },
+    ],
+  } as State;
+
+  expect(selectForegroundApprovalCount(state)).toBe(1);
+  expect(selectForegroundConnectionLabel(state)).toBe("Current service");
+
+  expect(selectForegroundApprovalCount({ ...state, currentRunId: null })).toBe(0);
 });

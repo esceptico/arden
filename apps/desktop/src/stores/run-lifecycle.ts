@@ -22,10 +22,13 @@ type RunLifecyclePatch = Partial<
     | "pendingResume"
     | "stoppingRunId"
     | "terminalRunIds"
+    | "runStatusMiss"
     | "activeActivityId"
     | "messages"
   >
 >;
+
+export const RUN_STATUS_MISS_GRACE_MS = 2_500;
 
 export interface RunStatusSnapshot {
   runId?: string | null;
@@ -46,6 +49,17 @@ export function reduceRunStarted(
     state.currentSessionId === null || state.currentSessionId === input.sessionId;
   const activeRunSessionIds = new Set(state.activeRunSessionIds);
   activeRunSessionIds.add(input.sessionId);
+  const pendingApprovals = appliesToCurrentSession
+    ? state.pendingApprovals.filter((approval) => approval.runId === input.runId)
+    : state.pendingApprovals;
+  const pendingConnections = appliesToCurrentSession
+    ? state.pendingConnections.filter((connection) => connection.runId === input.runId)
+    : state.pendingConnections;
+  const reviewingApprovalToolId = pendingApprovals.some(
+    (approval) => approval.toolId === state.reviewingApprovalToolId,
+  )
+    ? state.reviewingApprovalToolId
+    : null;
 
   return {
     running: appliesToCurrentSession ? true : state.running,
@@ -53,6 +67,10 @@ export function reduceRunStarted(
     thinkingRunId: appliesToCurrentSession ? null : state.thinkingRunId,
     thinkingStatus: appliesToCurrentSession ? null : state.thinkingStatus,
     activeRunSessionIds,
+    pendingApprovals,
+    pendingConnections,
+    reviewingApprovalToolId,
+    runStatusMiss: appliesToCurrentSession ? null : state.runStatusMiss,
     pendingResume: null,
     stoppingRunId: input.runId && state.stoppingRunId === input.runId ? null : state.stoppingRunId,
   };
@@ -77,20 +95,34 @@ export function reduceRunThinking(
     activeRunSessionIds,
     thinkingRunId: input.runId,
     thinkingStatus: input.status,
+    runStatusMiss: null,
   };
 }
 
 export function reduceRunOutputObserved(state: State): RunLifecyclePatch {
-  if (!state.thinkingRunId) return {};
+  if (!state.thinkingRunId && !state.runStatusMiss) return {};
   return {
     thinkingRunId: null,
     thinkingStatus: null,
+    runStatusMiss: null,
   };
+}
+
+export function reduceRunProgressObserved(
+  state: State,
+  input: { runId?: string | null; sessionId?: string | null },
+): RunLifecyclePatch {
+  if (!state.runStatusMiss) return {};
+  if (input.sessionId && state.currentSessionId && input.sessionId !== state.currentSessionId) {
+    return {};
+  }
+  if (input.runId && state.currentRunId && input.runId !== state.currentRunId) return {};
+  return { runStatusMiss: null };
 }
 
 export function reduceRunStatus(
   state: State,
-  input: { activeRuns: RunStatusSnapshot[] },
+  input: { activeRuns: RunStatusSnapshot[]; observedAt?: number },
 ): RunLifecyclePatch {
   let terminalRunIds = state.terminalRunIds;
   const activeRuns: RunStatusSnapshot[] = [];
@@ -121,21 +153,42 @@ export function reduceRunStatus(
   const backgroundedCurrentRun = current
     ? null
     : backgroundedRuns.find((run) => matchesCurrentRun(state, run)) ?? null;
+  let runStatusMiss = state.runStatusMiss;
+  let preservingMissingCurrent = false;
   if (
     !current &&
     !terminalCurrentRun &&
     !backgroundedCurrentRun &&
     state.currentSessionId &&
     state.running &&
-    state.currentRunId &&
-    input.activeRuns.length > 0
+    state.currentRunId
+  ) {
+    const observedAt = input.observedAt ?? Date.now();
+    const missingSince = runStatusMiss?.runId === state.currentRunId
+      ? runStatusMiss.since
+      : observedAt;
+    if (observedAt - missingSince < RUN_STATUS_MISS_GRACE_MS) {
+      preservingMissingCurrent = true;
+      runStatusMiss = { runId: state.currentRunId, since: missingSince };
+      activeRunSessionIds.add(state.currentSessionId);
+      current = {
+        runId: state.currentRunId,
+        sessionId: state.currentSessionId,
+        status: "running",
+      };
+    }
+  } else if (current) {
+    runStatusMiss = null;
+  }
+  if (
+    !current &&
+    !terminalCurrentRun &&
+    !backgroundedCurrentRun &&
+    state.currentSessionId &&
+    state.running &&
+    !state.currentRunId
   ) {
     activeRunSessionIds.add(state.currentSessionId);
-    current = {
-      runId: state.currentRunId,
-      sessionId: state.currentSessionId,
-      status: "running",
-    };
   }
   const unreadDoneSessionIds = unreadAfterLiveSetChange(
     state,
@@ -152,7 +205,9 @@ export function reduceRunStatus(
       currentRunId: null,
       thinkingRunId: null,
       thinkingStatus: null,
+      runStatusMiss: null,
       pendingResume: null,
+      ...clearWaitsForRun(state, terminalCurrentRun),
       stoppingRunId:
         terminalCurrentRun.runId && state.stoppingRunId === terminalCurrentRun.runId
           ? null
@@ -170,6 +225,7 @@ export function reduceRunStatus(
       currentRunId: null,
       thinkingRunId: null,
       thinkingStatus: null,
+      runStatusMiss: null,
       pendingResume: null,
       stoppingRunId:
         backgroundedCurrentRun.runId && state.stoppingRunId === backgroundedCurrentRun.runId
@@ -187,8 +243,7 @@ export function reduceRunStatus(
     state.currentSessionId &&
     state.running &&
     state.currentRunId &&
-    !current &&
-    input.activeRuns.length === 0
+    !current
   ) {
     return {
       activeRunSessionIds,
@@ -198,6 +253,7 @@ export function reduceRunStatus(
       currentRunId: null,
       thinkingRunId: null,
       thinkingStatus: null,
+      runStatusMiss: null,
       pendingResume: null,
       stoppingRunId:
         state.stoppingRunId === state.currentRunId ? null : state.stoppingRunId,
@@ -213,6 +269,7 @@ export function reduceRunStatus(
       ? {
           running: true,
           currentRunId: current.runId ?? state.currentRunId,
+          runStatusMiss: preservingMissingCurrent ? runStatusMiss : null,
         }
       : {}),
     ...(terminalRunIds !== state.terminalRunIds ? { terminalRunIds } : {}),
@@ -447,12 +504,14 @@ function reduceForegroundInactiveRun(
   const terminalRunIds = terminal && input.runId
     ? addTerminalRunId(state.terminalRunIds, input.runId)
     : state.terminalRunIds;
+  const clearWaits = terminal || input.clearApprovals;
 
   return {
     running: false,
     currentRunId: null,
     thinkingRunId: null,
     thinkingStatus: null,
+    runStatusMiss: null,
     activeRunSessionIds,
     backgroundedRunSessionIds,
     unreadDoneSessionIds,
@@ -461,11 +520,48 @@ function reduceForegroundInactiveRun(
     stoppingRunId:
       input.runId && state.stoppingRunId === input.runId ? null : state.stoppingRunId,
     ...(terminalRunIds !== state.terminalRunIds ? { terminalRunIds } : {}),
-    ...(input.clearApprovals
-      ? { pendingApprovals: [], reviewingApprovalToolId: null }
+    ...(clearWaits
+      ? clearWaitsForRun(state, input, input.clearApprovals === true)
       : {}),
-    ...((terminal || input.clearApprovals) ? { pendingConnections: [] } : {}),
   };
+}
+
+function clearWaitsForRun(
+  state: State,
+  input: { runId?: string | null; sessionId?: string | null },
+  clearAll = false,
+): Pick<RunLifecyclePatch, "pendingApprovals" | "pendingConnections" | "reviewingApprovalToolId"> {
+  const pendingApprovals = clearAll
+    ? []
+    : state.pendingApprovals.filter((approval) => !approvalBelongsToRun(approval, input));
+  const pendingConnections = clearAll
+    ? []
+    : state.pendingConnections.filter((connection) => !connectionBelongsToRun(connection.runId, input));
+  return {
+    pendingApprovals,
+    pendingConnections,
+    reviewingApprovalToolId: pendingApprovals.some(
+      (approval) => approval.toolId === state.reviewingApprovalToolId,
+    )
+      ? state.reviewingApprovalToolId
+      : null,
+  };
+}
+
+function approvalBelongsToRun(
+  approval: ApprovalState,
+  input: { runId?: string | null; sessionId?: string | null },
+): boolean {
+  if (approval.sessionId && input.sessionId && approval.sessionId !== input.sessionId) return false;
+  return connectionBelongsToRun(approval.runId, input);
+}
+
+function connectionBelongsToRun(
+  waitRunId: string | undefined,
+  input: { runId?: string | null },
+): boolean {
+  if (waitRunId && input.runId) return waitRunId === input.runId;
+  return true;
 }
 
 function clearForegroundSession(

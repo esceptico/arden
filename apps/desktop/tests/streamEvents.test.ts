@@ -19,6 +19,10 @@ import {
 import { childAgentTaskToBackgroundSnapshot } from "@/lib/agentRun";
 import { visibleMessageIds } from "@/lib/messageVisibility";
 import { operationLabel } from "@/features/chat/lib/operationLabel";
+import {
+  foregroundRunLabel,
+  selectForegroundApprovalCount,
+} from "@/features/chat/lib/foregroundRunStatus";
 import { getState, setState } from "@/stores/index";
 import { createBackgroundAgentsDomainState } from "@/stores/background-agent-domain";
 import type { HistoryMessage } from "@/api/chat";
@@ -1514,6 +1518,78 @@ test("thinking event does not resurrect inactive runs", () => {
   expect(getState().running).toBe(false);
   expect(getState().currentRunId).toBeNull();
   expect(getState().thinkingRunId).toBeNull();
+});
+
+test("foreground phase stays live across tool and approval events, then settles once", () => {
+  setState({ currentSessionId: "phase-session" });
+  handleServerEvent({
+    type: "RUN_STARTED",
+    run_id: "phase-run",
+    session_id: "phase-session",
+    seq: 1,
+  });
+  handleServerEvent({
+    type: "thinking",
+    run_id: "phase-run",
+    status: "provider prose is not UI state",
+    session_id: "phase-session",
+    seq: 2,
+  });
+  expect(foregroundRunLabel({}).verb).toBe("Thinking");
+
+  setState({ runStatusMiss: { runId: "phase-run", since: 1_000 } });
+  handleServerEvent({
+    type: "TOOL_CALL_START",
+    tool_call_id: "phase-tool",
+    tool_call_name: "file_search_text",
+    display_name: "SearchText",
+    session_id: "phase-session",
+    seq: 3,
+  });
+  handleServerEvent({
+    type: "TOOL_CALL_ARGS",
+    tool_call_id: "phase-tool",
+    delta: '{"_display_title":"Searching run status","query":"working"}',
+    session_id: "phase-session",
+    seq: 4,
+  });
+  let state = getState();
+  let activityMessage = state.activeActivityId
+    ? state.messages.get(state.activeActivityId)
+    : null;
+  expect(state.runStatusMiss).toBeNull();
+  expect(foregroundRunLabel({ activityMessage })).toEqual({
+    verb: "Searching",
+    target: "run status",
+  });
+
+  handleServerEvent({
+    type: "approval_needed",
+    tool_id: "phase-tool",
+    name: "file_search_text",
+    run_id: "phase-run",
+    session_id: "phase-session",
+    seq: 5,
+  });
+  state = getState();
+  activityMessage = state.activeActivityId
+    ? state.messages.get(state.activeActivityId)
+    : null;
+  expect(foregroundRunLabel({
+    activityMessage,
+    approvalPending: selectForegroundApprovalCount(state) > 0,
+  })).toEqual({ verb: "Awaiting", target: "approval" });
+  expect(state.running).toBe(true);
+
+  handleServerEvent({
+    type: "RUN_FINISHED",
+    run_id: "phase-run",
+    session_id: "phase-session",
+    seq: 6,
+  });
+  expect(getState().running).toBe(false);
+  expect(selectForegroundApprovalCount(getState())).toBe(0);
+  expect(getState().pendingApprovals).toEqual([]);
 });
 
 test("stream_reset clears visible transient activity from the old projection", async () => {

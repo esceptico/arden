@@ -4,8 +4,11 @@ import {
   reduceApprovalRequested,
   reduceRunCompleted,
   reduceRunFailed,
+  reduceRunOutputObserved,
+  reduceRunProgressObserved,
   reduceRunStarted,
   reduceRunStatus,
+  RUN_STATUS_MISS_GRACE_MS,
 } from "@/stores/run-lifecycle";
 
 function lifecycleState(overrides: Partial<State> = {}): State {
@@ -17,11 +20,13 @@ function lifecycleState(overrides: Partial<State> = {}): State {
     backgroundedRunSessionIds: new Set(),
     unreadDoneSessionIds: new Set(),
     pendingApprovals: [],
+    pendingConnections: [],
     reviewingApprovalToolId: null,
     queuedMessages: [],
     pendingResume: null,
     stoppingRunId: null,
     terminalRunIds: new Set(),
+    runStatusMiss: null,
     ...overrides,
   } as State;
 }
@@ -91,21 +96,94 @@ test("terminal status poll clears the current run", () => {
   expect(stale.activeRunSessionIds.has("session-1")).toBe(false);
 });
 
-test("missing current run in status poll clears known active run", () => {
+test("a stale missing snapshot cannot flicker a known active run off", () => {
   const running = lifecycleState({
     running: true,
     currentRunId: "run-1",
     activeRunSessionIds: new Set(["session-1"]),
   });
 
-  const stale = {
+  const firstMiss = {
     ...running,
-    ...reduceRunStatus(running, { activeRuns: [] }),
+    ...reduceRunStatus(running, { activeRuns: [], observedAt: 1_000 }),
   };
 
-  expect(stale.running).toBe(false);
-  expect(stale.currentRunId).toBeNull();
-  expect(stale.activeRunSessionIds.has("session-1")).toBe(false);
+  expect(firstMiss.running).toBe(true);
+  expect(firstMiss.currentRunId).toBe("run-1");
+  expect(firstMiss.activeRunSessionIds.has("session-1")).toBe(true);
+  expect(firstMiss.runStatusMiss).toEqual({ runId: "run-1", since: 1_000 });
+
+  const expired = {
+    ...firstMiss,
+    ...reduceRunStatus(firstMiss, {
+      activeRuns: [],
+      observedAt: 1_000 + RUN_STATUS_MISS_GRACE_MS,
+    }),
+  };
+
+  expect(expired.running).toBe(false);
+  expect(expired.currentRunId).toBeNull();
+  expect(expired.activeRunSessionIds.has("session-1")).toBe(false);
+  expect(expired.runStatusMiss).toBeNull();
+});
+
+test("live output clears a pending roster miss", () => {
+  const missing = lifecycleState({
+    running: true,
+    currentRunId: "run-1",
+    thinkingRunId: "run-1",
+    activeRunSessionIds: new Set(["session-1"]),
+    runStatusMiss: { runId: "run-1", since: 1_000 },
+  });
+
+  const patch = reduceRunOutputObserved(missing);
+
+  expect(patch.runStatusMiss).toBeNull();
+  expect(patch.thinkingRunId).toBeNull();
+});
+
+test("a confirmed roster recovery starts a fresh grace window", () => {
+  const running = lifecycleState({
+    running: true,
+    currentRunId: "run-1",
+    activeRunSessionIds: new Set(["session-1"]),
+  });
+  const firstMiss = {
+    ...running,
+    ...reduceRunStatus(running, { activeRuns: [], observedAt: 1_000 }),
+  };
+  const recovered = {
+    ...firstMiss,
+    ...reduceRunStatus(firstMiss, {
+      activeRuns: [{ runId: "run-1", sessionId: "session-1", status: "running" }],
+      observedAt: 2_000,
+    }),
+  };
+  const secondMiss = {
+    ...recovered,
+    ...reduceRunStatus(recovered, { activeRuns: [], observedAt: 10_000 }),
+  };
+
+  expect(recovered.runStatusMiss).toBeNull();
+  expect(secondMiss.running).toBe(true);
+  expect(secondMiss.runStatusMiss).toEqual({ runId: "run-1", since: 10_000 });
+});
+
+test("run-scoped progress clears only its own pending roster miss", () => {
+  const missing = lifecycleState({
+    running: true,
+    currentRunId: "run-1",
+    runStatusMiss: { runId: "run-1", since: 1_000 },
+  });
+
+  expect(reduceRunProgressObserved(missing, {
+    runId: "run-old",
+    sessionId: "session-1",
+  })).toEqual({});
+  expect(reduceRunProgressObserved(missing, {
+    runId: "run-1",
+    sessionId: "session-1",
+  })).toEqual({ runStatusMiss: null });
 });
 
 test("empty status poll does not clear optimistic run before server run id", () => {
@@ -172,6 +250,46 @@ test("terminal current run preserves server-managed queued messages", () => {
   const patch = reduceRunFailed(running, { runId: "run-1", sessionId: "session-1" });
 
   expect(patch.queuedMessages).toEqual(running.queuedMessages);
+});
+
+test("terminal and next-run transitions discard only stale run waits", () => {
+  const running = lifecycleState({
+    running: true,
+    currentRunId: "run-old",
+    pendingApprovals: [
+      { toolId: "old", toolName: "write", status: "pending", runId: "run-old", sessionId: "session-1" },
+      { toolId: "other", toolName: "send", status: "pending", runId: "run-other", sessionId: "session-2" },
+    ],
+    pendingConnections: [
+      { runId: "run-old", toolId: "old-connection" },
+      { runId: "run-other", toolId: "other-connection" },
+    ] as State["pendingConnections"],
+    reviewingApprovalToolId: "old",
+  });
+
+  const terminal = {
+    ...running,
+    ...reduceRunCompleted(running, { runId: "run-old", sessionId: "session-1" }),
+  };
+  expect(terminal.pendingApprovals.map((approval) => approval.toolId)).toEqual(["other"]);
+  expect(terminal.pendingConnections.map((connection) => connection.toolId)).toEqual([
+    "other-connection",
+  ]);
+  expect(terminal.reviewingApprovalToolId).toBeNull();
+
+  const staleWait = {
+    ...terminal,
+    pendingApprovals: [
+      ...terminal.pendingApprovals,
+      { toolId: "late-old", toolName: "write", status: "pending" as const, runId: "run-old" },
+    ],
+  };
+  const next = {
+    ...staleWait,
+    ...reduceRunStarted(staleWait, { runId: "run-new", sessionId: "session-1" }),
+  };
+  expect(next.pendingApprovals).toEqual([]);
+  expect(next.pendingConnections).toEqual([]);
 });
 
 test("failed run retains queued messages until server ingestion", () => {

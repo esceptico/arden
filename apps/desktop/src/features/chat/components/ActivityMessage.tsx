@@ -10,6 +10,13 @@ import {
   useMessage,
   useSourceFocused,
 } from "@/features/chat/lib/messageShared";
+import {
+  foregroundRunLabel,
+  selectForegroundApprovalCount,
+  selectForegroundConnectionLabel,
+  selectForegroundConnectionPhase,
+  workingLabelText,
+} from "@/features/chat/lib/foregroundRunStatus";
 
 export const ActivityMessage = memo(function ActivityMessage({
   id,
@@ -23,6 +30,11 @@ export const ActivityMessage = memo(function ActivityMessage({
   const [expanded, setExpanded] = useState(() => !message?.activity?.done);
   // Hooks must run unconditionally — keep them above the early return.
   const currentSessionId = useStore((s) => s.currentSessionId);
+  const running = useStore((s) => s.running);
+  const activeActivityId = useStore((s) => s.activeActivityId);
+  const approvalPending = useStore(selectForegroundApprovalCount) > 0;
+  const connectionLabel = useStore(selectForegroundConnectionLabel);
+  const connectionPhase = useStore(selectForegroundConnectionPhase);
   const workflows = useWorkflows(currentSessionId);
   if (!message?.activity || message.activity.items.length === 0) return null;
   const { items, done } = message.activity;
@@ -43,6 +55,14 @@ export const ActivityMessage = memo(function ActivityMessage({
   // A turn whose only activity is lifted cards shows just the cards — no
   // "Running/Worked N calls" tool-call header, no row chrome.
   const onlyCards = rowItems.length === 0 && workflowRows.length + htmlWidgetItems.length > 0;
+  const liveHeading = running && activeActivityId === id
+    ? workingLabelText(foregroundRunLabel({
+        activityMessage: message,
+        approvalPending,
+        connectionLabel,
+        connectionPhase,
+      }))
+    : undefined;
 
   return (
     <article
@@ -63,6 +83,7 @@ export const ActivityMessage = memo(function ActivityMessage({
             count={totalCount}
             activeCount={activeCount}
             backgrounded={!!message.activity.backgrounded}
+            liveHeading={liveHeading}
             motionDisabled={message.suppressEntryMotion}
             onToggle={() => setExpanded((v) => !v)}
             expanded={expanded}
