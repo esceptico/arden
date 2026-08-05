@@ -41,7 +41,7 @@ from arden.tools.wiki import (
     wiki_publish_generated_tool,
     wiki_read_page_tool,
 )
-from arden.wiki.constants import WIKI_POST_COMMIT_SERVICE
+from arden.wiki.constants import WIKI_PAGE_READ_POSTCONDITION, WIKI_POST_COMMIT_SERVICE, wiki_page_read_proof_id
 from arden.wiki.models import GeneratedPageTarget
 from arden.wiki.pages import extract_generated_region
 from arden.wiki.service import WikiAmbiguityError, WikiService
@@ -293,6 +293,11 @@ async def test_repeated_unchanged_full_wiki_read_returns_receipt_until_compactio
     assert second.data["deduplicated"] is True
     assert second.data["content_returned"] is False
     assert "still current and visible" in second.content
+    for result in (first, second):
+        assert result.outcome is not None
+        assert result.outcome.verification is not None
+        assert result.outcome.verification.postcondition == WIKI_PAGE_READ_POSTCONDITION
+        assert result.outcome.verification.observed == wiki_page_read_proof_id("interaction-lab")
 
     execution.ctx.run.downgrade_resource_observations()
     refreshed = await wiki_read_page_tool.execute(execution, path="topics/interaction-lab.md")

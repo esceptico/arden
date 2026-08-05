@@ -1,5 +1,7 @@
 """Stable identities shared by wiki tools and projections."""
 
+from hashlib import sha256
+
 AUTOMATIONS_PATH_PREFIX = "automations/"
 README_FILENAME = "README.md"
 SYSTEM_DIRECTORIES = frozenset({"topics", "daily", "automations", "insights", "projects"})
@@ -9,10 +11,19 @@ WIKI_MAINTENANCE_REVIEW_TOOL_NAME = "wiki_maintenance_review"
 WIKI_POST_COMMIT_SERVICE = "wiki_post_commit"
 WIKI_PROJECTION_CONSUMER_ID = "wiki.projection"
 WIKI_PAGE_OBSERVATION_PREFIX = "wiki:page:"
+WIKI_PAGE_READ_POSTCONDITION = "wiki_page_read"
+WIKI_PAGE_READ_PROOF_PREFIX = "wiki:read:"
 
 
 def wiki_page_observation_id(page_id: str) -> str:
     return WIKI_PAGE_OBSERVATION_PREFIX + page_id
+
+
+def wiki_page_read_proof_id(page_id: str) -> str:
+    """Return a stable, non-addressable token without exposing the page ID."""
+
+    proof_input = f"{WIKI_PAGE_READ_POSTCONDITION}\0{page_id}".encode()
+    return WIKI_PAGE_READ_PROOF_PREFIX + sha256(proof_input).hexdigest()
 
 
 WIKI_HEALTH_RESOURCE_ID = "health"

@@ -7,7 +7,7 @@ from hashlib import sha256
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from arden.agent.types.tools import ToolSourceRef
+from arden.agent.types.tools import ToolOutcome, ToolOutcomeStatus, ToolSourceRef, ToolVerification
 from arden.constants import DAILY_NOTES_AUTOMATION_ID, OFFLOAD_THRESHOLD
 from arden.revisions.errors import RevisionConflictError
 from arden.revisions.models import ResourceState, ResourceVersion
@@ -21,8 +21,10 @@ from arden.wiki.constants import (
     README_FILENAME,
     WIKI_HEALTH_PATH,
     WIKI_HEALTH_RESOURCE_ID,
+    WIKI_PAGE_READ_POSTCONDITION,
     WIKI_POST_COMMIT_SERVICE,
     wiki_page_observation_id,
+    wiki_page_read_proof_id,
 )
 from arden.wiki.models import GeneratedPageTarget, LinkReference, WikiPageRecord, WikiSnapshot
 from arden.wiki.pages import PageValidationError, extract_generated_region, parse_page
@@ -181,6 +183,16 @@ def _page_ref(record: WikiPageRecord) -> ToolSourceRef:
         kind="wiki_page",
         ref=record.resource.path,
         title=record.page.title,
+    )
+
+
+def _page_read_outcome(record: WikiPageRecord) -> ToolOutcome:
+    return ToolOutcome(
+        status=ToolOutcomeStatus.SUCCEEDED,
+        verification=ToolVerification(
+            postcondition=WIKI_PAGE_READ_POSTCONDITION,
+            observed=wiki_page_read_proof_id(record.page.page_id),
+        ),
     )
 
 
@@ -664,6 +676,7 @@ async def wiki_read_page(execution: ToolExecution, args: WikiReadPageInput) -> T
             ),
             preview="Wiki page unchanged",
             source_refs=(_page_ref(record),),
+            outcome=_page_read_outcome(record),
             data={
                 "page": _page_data(record),
                 "content_returned": False,
@@ -674,6 +687,7 @@ async def wiki_read_page(execution: ToolExecution, args: WikiReadPageInput) -> T
         content=content,
         preview=record.page.title,
         source_refs=(_page_ref(record),),
+        outcome=_page_read_outcome(record),
         data={
             "page": _page_data(record),
             "offset": args.offset,

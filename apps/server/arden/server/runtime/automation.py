@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 
 from arden.agent_surface.schedules import compile_schedules_to_automations
@@ -47,13 +47,28 @@ from arden.outbox import AutomationSettled
 from arden.revisions.models import CollectionReport
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.stores import Stores
-from arden.wiki.constants import WIKI_READ_PAGE_TOOL_NAME
+from arden.wiki.constants import (
+    WIKI_PAGE_READ_POSTCONDITION,
+    WIKI_READ_PAGE_TOOL_NAME,
+    wiki_page_read_proof_id,
+)
 from arden.wiki.maintenance.agent import WikiMaintenanceReviewService
 from arden.wiki.maintenance.runner import WikiMaintenance, WikiMaintenanceReviewer
 from arden.wiki.service import WikiService
 
 _logger = get_logger(__name__)
 _WIKI_MAINTENANCE_RETRY_DELAY = timedelta(minutes=1)
+
+
+def _wiki_page_read_proof(call: Mapping[str, object]) -> str | None:
+    outcome = call.get("outcome")
+    if not isinstance(outcome, Mapping) or outcome.get("status") != "succeeded":
+        return None
+    verification = outcome.get("verification")
+    if not isinstance(verification, Mapping) or verification.get("postcondition") != WIKI_PAGE_READ_POSTCONDITION:
+        return None
+    observed = verification.get("observed")
+    return observed if isinstance(observed, str) else None
 
 
 class AutomationRuntime:
@@ -131,21 +146,19 @@ class AutomationRuntime:
         if wiki is None:
             raise RuntimeError("wiki producer completion proof is unavailable")
         snapshot = await asyncio.to_thread(wiki.snapshot)
-        owned_titles = {
-            record.page.title
+        owned_read_proofs = {
+            wiki_page_read_proof_id(record.page.page_id)
             for record in snapshot.pages
             if record.page.metadata.get("producer_automation_id") == automation.task_id
         }
-        if not owned_titles:
+        if not owned_read_proofs:
             raise RuntimeError("wiki producer has no owned page")
         calls = await self.stores.sessions.store.list_tool_calls(run_id=run_id)
-        if any(
-            call["tool_name"] == WIKI_READ_PAGE_TOOL_NAME
-            and call["status"] == "success"
-            and call["result_preview"] in owned_titles
-            for call in calls
-        ):
-            return
+        for call in calls:
+            if call["tool_name"] != WIKI_READ_PAGE_TOOL_NAME or call["status"] != "success":
+                continue
+            if _wiki_page_read_proof(call) in owned_read_proofs:
+                return
         raise RuntimeError("wiki producer finished without successfully reading its owned page")
 
     async def load_areas(self) -> list[Area]:

@@ -15,7 +15,8 @@ from arden.constants import (
     BUILTIN_WIKI_MAINTENANCE_ID,
     DAILY_NOTES_AUTOMATION_ID,
 )
-from arden.events.internal import RunCompleted
+from arden.context.models import SessionState
+from arden.core.tool_executor import ArdenToolExecutor
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.maintenance.runner import (
@@ -35,10 +36,13 @@ from arden.operator.runner import RunResult
 from arden.revisions.models import CollectionReport
 from arden.server.runtime import core as runtime_core
 from arden.server.runtime.core import Runtime
+from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext
 from arden.tools.facts import FACT_SERVICE
+from arden.wiki.constants import WIKI_PAGE_READ_POSTCONDITION, wiki_page_read_proof_id
 from arden.wiki.exceptions import WikiSnapshotChangedError
 from arden.wiki.maintenance.runner import WikiMaintenanceResult
 from arden.wiki.maintenance.store import WikiMaintenanceStore
+from arden.wiki.pages import update_page_title
 
 MIGRATED_AT = datetime(2026, 7, 28, 12, tzinfo=UTC)
 USER_SCOPE = ("user", None)
@@ -307,50 +311,151 @@ async def test_wiki_producer_completion_requires_a_successful_page_read(tmp_path
             reason="seed producer page",
             metadata={"producer_automation_id": "producer"},
         )
-        event = RunCompleted(
-            run_id="producer-run",
-            session_id="producer-session",
-            messages=(),
-            usage=Usage(),
-            result="No rewrite.",
-        )
+
+        async def record_read(
+            run_id: str,
+            *,
+            preview: str,
+            observed: object | None = None,
+            postcondition: object | None = None,
+            outcome_status: str = "succeeded",
+            status: str = "success",
+        ) -> None:
+            await runtime.stores.sessions.store.record_tool_call_started(
+                run_id=run_id,
+                session_id="producer-session",
+                tool_call_id="read-page",
+                tool_name="wiki_read_page",
+                action="read",
+                scope="internal",
+            )
+            outcome: dict[str, object] = {"status": outcome_status}
+            if postcondition is not None or observed is not None:
+                outcome["verification"] = {
+                    "postcondition": postcondition,
+                    "observed": observed,
+                }
+            await runtime.stores.sessions.store.record_tool_call_finished(
+                run_id=run_id,
+                tool_call_id="read-page",
+                status=status,
+                result_preview=preview,
+                outcome=outcome,
+            )
 
         with pytest.raises(RuntimeError, match="without successfully reading"):
-            await runtime.automation._validate_completed_run(_wiki_producer(), event.run_id)
+            await runtime.automation._validate_completed_run(_wiki_producer(), "missing-run")
 
-        await runtime.stores.sessions.store.record_tool_call_started(
-            run_id=event.run_id,
-            session_id=event.session_id,
-            tool_call_id="read-page",
-            tool_name="wiki_read_page",
-            action="read",
-            scope="internal",
-        )
-        await runtime.stores.sessions.store.record_tool_call_finished(
-            run_id=event.run_id,
-            tool_call_id="read-page",
-            status="success",
-            result_preview="Another Page",
+        await record_read("wrong-legacy-run", preview="Another Page")
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), "wrong-legacy-run")
+
+        await record_read(
+            "wrong-semantic-run",
+            preview="Email Updates",
+            observed=wiki_page_read_proof_id("some-other-page"),
+            postcondition=WIKI_PAGE_READ_POSTCONDITION,
         )
         with pytest.raises(RuntimeError, match="owned page"):
-            await runtime.automation._validate_completed_run(_wiki_producer(), event.run_id)
+            await runtime.automation._validate_completed_run(_wiki_producer(), "wrong-semantic-run")
 
-        await runtime.stores.sessions.store.record_tool_call_started(
-            run_id=event.run_id,
-            session_id=event.session_id,
-            tool_call_id="read-owned-page",
-            tool_name="wiki_read_page",
-            action="read",
-            scope="internal",
-        )
-        await runtime.stores.sessions.store.record_tool_call_finished(
-            run_id=event.run_id,
-            tool_call_id="read-owned-page",
-            status="success",
-            result_preview="Email Updates",
-        )
+        await record_read("legacy-owned-run", preview="Email Updates")
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), "legacy-owned-run")
 
-        await runtime.automation._validate_completed_run(_wiki_producer(), event.run_id)
+        await record_read(
+            "wrong-postcondition-run",
+            preview="Email Updates",
+            observed=wiki_page_read_proof_id("feed-email-updates"),
+            postcondition="something_else",
+        )
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), "wrong-postcondition-run")
+
+        await record_read(
+            "missing-observed-run",
+            preview="Email Updates",
+            postcondition=WIKI_PAGE_READ_POSTCONDITION,
+        )
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), "missing-observed-run")
+
+        await record_read(
+            "uncertain-outcome-run",
+            preview="Email Updates",
+            observed=wiki_page_read_proof_id("feed-email-updates"),
+            postcondition=WIKI_PAGE_READ_POSTCONDITION,
+            outcome_status="uncertain",
+        )
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), "uncertain-outcome-run")
+
+        await record_read(
+            "failed-audit-run",
+            preview="Email Updates",
+            observed=wiki_page_read_proof_id("feed-email-updates"),
+            postcondition=WIKI_PAGE_READ_POSTCONDITION,
+            status="error",
+        )
+        with pytest.raises(RuntimeError, match="owned page"):
+            await runtime.automation._validate_completed_run(_wiki_producer(), "failed-audit-run")
+
+        assert runtime.executor is not None
+        observations = {}
+
+        def wiki_executor(run_id: str) -> ArdenToolExecutor:
+            context = ToolContext(
+                session_state=SessionState(session_id="producer-session", started_at=datetime.now(UTC)),
+                registry=runtime.executor.registry,
+                run=RunContext(
+                    run_id=run_id,
+                    automation_id="producer",
+                    _resource_observations=observations,
+                ),
+                io=IOBridge(),
+                services=runtime.tool_services,
+                background_tasks=BackgroundTaskRegistry(session_id="producer-session"),
+            )
+            return ArdenToolExecutor(runtime.executor, context)
+
+        initial = await wiki_executor("initial-read-run").execute(
+            "wiki_read_page",
+            {"path": "automations/email-updates.md"},
+            "initial-read",
+        )
+        deduplicated = await wiki_executor("deduplicated-owned-run").execute(
+            "wiki_read_page",
+            {"path": "automations/email-updates.md"},
+            "deduplicated-read",
+        )
+        assert initial.preview == "Email Updates"
+        assert deduplicated.preview == "Wiki page unchanged"
+        for run_id in ("initial-read-run", "deduplicated-owned-run"):
+            calls = await runtime.stores.sessions.store.list_tool_calls(run_id=run_id)
+            assert calls[0]["outcome"]["verification"] == {
+                "postcondition": WIKI_PAGE_READ_POSTCONDITION,
+                "observed": wiki_page_read_proof_id("feed-email-updates"),
+            }
+        await runtime.automation._validate_completed_run(_wiki_producer(), "deduplicated-owned-run")
+
+        owned = runtime.wiki_service.read_page("feed-email-updates")
+        renamed = runtime.wiki_service.update_page(
+            owned.page.page_id,
+            content=update_page_title(
+                owned.content,
+                expected_page_id=owned.page.page_id,
+                title="Renamed Email Updates",
+            ),
+            expected_version=owned.resource.version_id,
+            expected_head=runtime.wiki_service.repository.head,
+        )
+        runtime.wiki_service.move_page(
+            renamed.page.page_id,
+            new_path="automations/renamed-email-updates.md",
+            expected_version=renamed.resource.version_id,
+            expected_head=runtime.wiki_service.repository.head,
+        )
+        await runtime.automation._validate_completed_run(_wiki_producer(), "deduplicated-owned-run")
     finally:
         await runtime.close()
 
