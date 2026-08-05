@@ -65,42 +65,24 @@ class CalendarMonitor:
         horizon = now + timedelta(minutes=MONITOR_EVENT_APPROACHING_HORIZON_MINUTES)
         events: list[EventApproaching] = []
 
-        try:
-            items = self._source.get_upcoming(days=MONITOR_CALENDAR_DAYS, limit=MONITOR_CALENDAR_LIMIT)
-        except (OSError, ValueError) as e:
-            _logger.warning("Failed to fetch upcoming calendar events: %s", e)
-            return events
-        except Exception:
-            _logger.exception("Unexpected error while polling upcoming calendar events")
-            return events
+        page = self._source.get_upcoming(days=MONITOR_CALENDAR_DAYS, limit=MONITOR_CALENDAR_LIMIT)
 
-        for item in items:
-            start = self._parse_start(item.metadata.get("start"))
-            if start is None or start < now or start > horizon:
+        for item in page.events:
+            start = item.start.astimezone(UTC)
+            if start < now or start > horizon:
                 continue
 
             minutes_until = max(0, int((start - now).total_seconds() / 60))
+            title = item.title or "Untitled event"
             event = EventApproaching(
-                event_id=item.source_id,
-                summary=item.title,
+                event_id=item.event_ref,
+                summary=title,
                 start=start,
                 minutes_until=minutes_until,
-                location=item.metadata.get("location"),
-                attendees=tuple(item.metadata.get("attendees", [])),
+                location=item.location,
+                attendees=item.attendees,
             )
             events.append(event)
-            _logger.info("Event approaching: %s in %d min", item.title, minutes_until)
+            _logger.info("Event approaching: %s in %d min", title, minutes_until)
 
         return events
-
-    @staticmethod
-    def _parse_start(raw_start: str | None) -> datetime | None:
-        if not raw_start:
-            return None
-        try:
-            start = datetime.fromisoformat(raw_start)
-        except ValueError:
-            return None
-        if start.tzinfo is None:
-            return start.replace(tzinfo=UTC)
-        return start.astimezone(UTC)

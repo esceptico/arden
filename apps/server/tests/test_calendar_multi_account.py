@@ -1,10 +1,9 @@
-from arden.integrations.calendar import client as calendar_client
+from arden.integrations.calendar.client import GoogleCalendar
 
 
-def test_calendar_never_falls_back_to_gmail_token(monkeypatch, tmp_path):
-    monkeypatch.setattr(calendar_client, "ARDEN_DIR", tmp_path)
-    (tmp_path / "gmail_token_user@example.com.json").write_text("{}")
+def test_calendar_uses_explicit_account_token(tmp_path):
+    token_path = tmp_path / "calendar_user@example.test.json"
+    source = GoogleCalendar("user@example.test", token_path)
 
-    source = calendar_client.GoogleCalendar()
-
-    assert source.token_path == tmp_path / "calendar_token.json"
+    assert source.account.account_ref == "user@example.test"
+    assert source.token_path == token_path

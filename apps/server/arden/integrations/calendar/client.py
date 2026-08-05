@@ -1,144 +1,43 @@
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from google.auth.exceptions import RefreshError
+import httplib2
+from google.auth.exceptions import GoogleAuthError, RefreshError
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from requests import RequestException
 
 from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError, IntegrationProviderError
-from arden.integrations.google_auth.auth import (
-    SCOPES_CALENDAR,
-    get_google_credentials,
+from arden.integrations.calendar.models import (
+    CalendarAccount,
+    CalendarCreateDraft,
+    CalendarDeleteDraft,
+    CalendarEventPage,
+    CalendarMutationResult,
+    CalendarPageRef,
+    CalendarUpdateDraft,
+    qualify_event_ref,
 )
+from arden.integrations.calendar.payloads import (
+    decode_calendar_account,
+    decode_calendar_event_page,
+    decode_calendar_mutation,
+)
+from arden.integrations.google_auth.accounts import validate_google_account_email
+from arden.integrations.google_auth.auth import SCOPES_CALENDAR, get_google_credentials
 from arden.logging import get_logger
-from arden.search.types import RawItem
-from arden.settings import ARDEN_DIR
+
+_logger = get_logger(__name__)
+_KNOWN_PROVIDER_ERRORS = (HttpError, GoogleAuthError, RequestException, OSError, httplib2.ServerNotFoundError)
 
 
-def qualify_event_ref(account: str, event_id: str) -> str:
-    account = account.strip()
-    event_id = event_id.strip()
-    existing_account, separator, _provider_id = event_id.partition(":")
-    if not account or not event_id or (separator and existing_account.casefold() == account.casefold()):
-        return event_id
-    return f"{account}:{event_id}"
-
-
-def _require_account_identity(source: "GoogleCalendar") -> str:
-    account = source.get_email_address().strip()
-    if account:
-        return account
-    raise IntegrationConnectionError(
-        integration_id="calendar",
-        reason="degraded",
-        detail="Calendar account identity is unavailable. Reconnect the Calendar integration.",
-        retry_safe=True,
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class CalendarMutationResult:
-    event_ref: str
-    summary: str | None = None
-    url: str | None = None
-
-
-def _provider_event_result(event: Mapping[str, Any]) -> CalendarMutationResult:
-    event_ref = event.get("id")
-    if not isinstance(event_ref, str) or not event_ref.strip():
-        raise IntegrationOperationError(
-            code="provider_error",
-            safe_message="Calendar provider response did not include an event reference.",
-        )
-
-    def optional_text(key: str) -> str | None:
-        value = event.get(key)
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise IntegrationOperationError(
-                code="provider_error",
-                safe_message=f"Calendar provider response contained an invalid {key} field.",
-            )
-        return value.strip() or None
-
-    return CalendarMutationResult(
-        event_ref=event_ref.strip(),
-        summary=optional_text("summary"),
-        url=optional_text("htmlLink"),
-    )
-
-
-def parse_event_datetime(value: Mapping[str, Any], field: str) -> datetime:
-    try:
-        if "dateTime" in value:
-            raw = value["dateTime"]
-            if not isinstance(raw, str):
-                raise TypeError
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if "date" in value:
-            raw = value["date"]
-            if not isinstance(raw, str):
-                raise TypeError
-            return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC)
-    except (TypeError, ValueError) as exc:
-        raise IntegrationOperationError(
-            code="provider_error",
-            safe_message=f"Calendar provider returned an invalid event {field} time.",
-        ) from exc
-    raise IntegrationOperationError(
-        code="provider_error",
-        safe_message=f"Calendar provider response omitted the event {field} time.",
-    )
-
-
-def format_event_time(start: datetime | None, end: datetime | None, is_all_day: bool) -> str:
-    if not start:
-        return ""
-
-    if is_all_day:
-        if end and (end - start).days > 1:
-            return f"{start.strftime('%Y-%m-%d')} - {end.strftime('%Y-%m-%d')}"
-        return start.strftime("%Y-%m-%d") + " (all day)"
-
-    local_start = start.astimezone() if start.tzinfo is not None else start
-    date_str = local_start.strftime("%Y-%m-%d")
-    time_str = local_start.strftime("%H:%M")
-    if end:
-        local_end = end.astimezone() if end.tzinfo is not None else end
-        time_str += f" - {local_end.strftime('%H:%M')}"
-    return f"{date_str} {time_str}"
-
-
-def _apply_time_update(
-    event: dict,
-    start: datetime | None,
-    end: datetime | None,
-    all_day: bool | None,
-) -> None:
-    if start is None and all_day is None:
-        return
-
-    is_all_day = all_day if all_day is not None else "date" in event.get("start", {})
-
-    if start is not None:
-        if is_all_day:
-            event["start"] = {"date": start.strftime("%Y-%m-%d")}
-        else:
-            event["start"] = {"dateTime": start.isoformat()}
-
-    if end is not None:
-        if is_all_day:
-            event["end"] = {"date": end.strftime("%Y-%m-%d")}
-        else:
-            event["end"] = {"dateTime": end.isoformat()}
-    elif start is not None:
-        if is_all_day:
-            event["end"] = {"date": (start + timedelta(days=1)).strftime("%Y-%m-%d")}
-        else:
-            event["end"] = {"dateTime": (start + timedelta(hours=1)).isoformat()}
+def _time_payload(value: datetime, *, all_day: bool) -> dict[str, str]:
+    if all_day:
+        return {"date": value.strftime("%Y-%m-%d")}
+    return {"dateTime": value.isoformat()}
 
 
 class GoogleCalendar:
@@ -146,21 +45,17 @@ class GoogleCalendar:
 
     def __init__(
         self,
-        token_path: Path | None = None,
+        account_ref: str,
+        token_path: Path,
         days_back: int = 7,
         days_ahead: int = 30,
     ):
-        if token_path:
-            self.token_path = token_path
-        else:
-            self.token_path = ARDEN_DIR / "calendar_token.json"
-
+        self.account = CalendarAccount(account_ref)
+        self.token_path = token_path
         self.days_back = days_back
         self.days_ahead = days_ahead
-
         self._service = None
         self._creds = None
-        self._email_address: str | None = None
 
     def _get_credentials(self):
         if self._creds is None or not self._creds.valid:
@@ -173,428 +68,373 @@ class GoogleCalendar:
 
     def _get_service(self):
         if self._service is None:
-            creds = self._get_credentials()
-            self._service = build("calendar", "v3", credentials=creds)
+            self._service = build("calendar", "v3", credentials=self._get_credentials())
         return self._service
 
-    def get_email_address(self) -> str:
-        if self._email_address is not None:
-            return self._email_address
+    def _execute(self, request: Any, operation: str) -> object:
         try:
-            service = self._get_service()
-            calendar = service.calendars().get(calendarId="primary").execute()
-            self._email_address = calendar.get("id", "")
-            return self._email_address
-        except IntegrationConnectionError:
+            return request.execute()
+        except (IntegrationConnectionError, IntegrationOperationError):
             raise
-        except IntegrationOperationError:
-            raise
-        except Exception as exc:
-            _logger.exception("Calendar identity lookup failed")
+        except RefreshError as exc:
+            raise IntegrationConnectionError(
+                integration_id="calendar",
+                reason="auth_required",
+                detail=f"Calendar authentication failed for {self.account.account_ref}. Reconnect that account.",
+                retry_safe=True,
+                account_ref=self.account.account_ref,
+            ) from exc
+        except _KNOWN_PROVIDER_ERRORS as exc:
+            _logger.warning("Calendar %s request failed for %s", operation, self.account.account_ref)
             raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
 
     def verify_connection(self) -> None:
-        self._get_service().calendars().get(calendarId="primary").execute()
-
-    def _parse_event(self, event: dict) -> RawItem:
-        event_id = event.get("id", "")
-        if not isinstance(event_id, str) or not event_id.strip():
-            raise IntegrationOperationError(
-                code="provider_error",
-                safe_message="Calendar provider response did not include an event reference.",
+        raw = self._execute(
+            self._get_service().calendars().get(calendarId="primary"),
+            "identity",
+        )
+        provider_account = decode_calendar_account(raw)
+        if provider_account.account_ref.casefold() != self.account.account_ref.casefold():
+            raise IntegrationConnectionError(
+                integration_id="calendar",
+                reason="auth_required",
+                detail=f"Calendar authorization does not belong to {self.account.account_ref}. Reconnect that account.",
+                retry_safe=True,
+                account_ref=self.account.account_ref,
             )
 
-        start_obj = event.get("start", {})
-        end_obj = event.get("end", {})
-        is_all_day = "date" in start_obj
-
-        start = parse_event_datetime(start_obj, "start")
-        end = parse_event_datetime(end_obj, "end")
-
-        # Build title and content
-        summary = event.get("summary", "(No title)")
-        description = event.get("description", "")
-        location = event.get("location", "")
-
-        time_str = format_event_time(start, end, is_all_day)
-
-        content_parts = []
-        if time_str:
-            content_parts.append(f"Time: {time_str}")
-        if location:
-            content_parts.append(f"Location: {location}")
-        if description:
-            content_parts.append(f"\n{description}")
-
-        content = "\n".join(content_parts)
-
-        # Attendees
-        attendees = [a.get("email", "") for a in event.get("attendees", [])]
-
-        created_at = start
-
-        return RawItem(
-            source="calendar",
-            source_id=event_id,
-            title=summary,
-            content=content,
-            created_at=created_at,
-            updated_at=created_at,
-            metadata={
-                "calendar_id": event.get("organizer", {}).get("email", "primary"),
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "is_all_day": is_all_day,
-                "location": location,
-                "status": event.get("status", ""),
-                "attendees": attendees,
-                "html_link": event.get("htmlLink", ""),
-            },
-        )
-
-    def get_upcoming(self, days: int = 7, limit: int = 20) -> list[RawItem]:
-        service = self._get_service()
-
-        now = datetime.now(tz=UTC)
-        time_max = (now + timedelta(days=days)).isoformat()
-
-        events_result = (
-            service.events()
-            .list(
-                calendarId="primary",
-                timeMin=now.isoformat(),
-                timeMax=time_max,
-                maxResults=limit,
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-        )
-
-        events = events_result.get("items", [])
-        return [self._parse_event(e) for e in events]
-
-    def get_past(self, days: int = 7, limit: int = 20) -> list[RawItem]:
-        service = self._get_service()
-
-        now = datetime.now(tz=UTC)
-        time_min = (now - timedelta(days=days)).isoformat()
-
-        events_result = (
-            service.events()
-            .list(
-                calendarId="primary",
-                timeMin=time_min,
-                timeMax=now.isoformat(),
-                maxResults=limit,
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-        )
-
-        events = events_result.get("items", [])
-        return [self._parse_event(e) for e in events]
-
-    def create_event(
+    def _list_events(
         self,
-        summary: str,
-        start: datetime,
-        end: datetime | None = None,
-        description: str = "",
-        location: str = "",
-        attendees: list[str] | None = None,
-        all_day: bool = False,
-    ) -> CalendarMutationResult:
-        service = self._get_service()
-
-        if end is None:
-            end = start + timedelta(hours=1)
-
-        event_body: dict[str, Any] = {
-            "summary": summary,
-        }
-
-        if all_day:
-            event_body["start"] = {"date": start.strftime("%Y-%m-%d")}
-            event_body["end"] = {"date": end.strftime("%Y-%m-%d")}
-        else:
-            event_body["start"] = {"dateTime": start.isoformat()}
-            event_body["end"] = {"dateTime": end.isoformat()}
-
-        if description:
-            event_body["description"] = description
-        if location:
-            event_body["location"] = location
-        if attendees:
-            event_body["attendees"] = [{"email": email} for email in attendees]
-
-        try:
-            event = (
-                service.events()
-                .insert(
-                    calendarId="primary",
-                    body=event_body,
+        *,
+        query: str | None,
+        start_at: datetime,
+        end_at: datetime,
+        limit: int,
+        page_ref: CalendarPageRef | None = None,
+    ) -> CalendarEventPage:
+        if page_ref is not None:
+            if page_ref.account_ref.casefold() != self.account.account_ref.casefold():
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="Calendar page_ref belongs to a different account.",
                 )
-                .execute()
-            )
+            if (
+                page_ref.query != query
+                or page_ref.start_at != start_at
+                or page_ref.end_at != end_at
+                or page_ref.limit != limit
+            ):
+                raise IntegrationOperationError(
+                    code="invalid_ref",
+                    safe_message="Calendar page_ref does not match this exact search window.",
+                )
+        request = self._get_service().events().list(
+            calendarId="primary",
+            timeMin=start_at.isoformat(),
+            timeMax=end_at.isoformat(),
+            maxResults=limit,
+            singleEvents=True,
+            orderBy="startTime",
+            **({"q": query} if query is not None else {}),
+            **({"pageToken": page_ref.provider_token} if page_ref is not None else {}),
+        )
+        page = decode_calendar_event_page(
+            self._execute(request, "event search"),
+            self.account.account_ref,
+            query=query,
+            start_at=start_at,
+            end_at=end_at,
+            limit=limit,
+        )
+        if page_ref is not None and page.next_page_ref is not None:
+            if page.next_page_ref.provider_token == page_ref.provider_token:
+                raise IntegrationOperationError(
+                    code="invalid_response",
+                    safe_message="Calendar returned the current page_ref again.",
+                )
+        return page
 
-            return _provider_event_result(event)
-        except IntegrationConnectionError:
-            raise
-        except IntegrationOperationError:
-            raise
-        except Exception as exc:
-            _logger.exception("Calendar create failed")
-            raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
+    def get_upcoming(
+        self, days: int = 7, limit: int = 20, page_ref: CalendarPageRef | None = None
+    ) -> CalendarEventPage:
+        now = datetime.now(tz=UTC)
+        return self._list_events(
+            query=None,
+            start_at=now,
+            end_at=now + timedelta(days=days),
+            limit=limit,
+            page_ref=page_ref,
+        )
+
+    def get_past(
+        self, days: int = 7, limit: int = 20, page_ref: CalendarPageRef | None = None
+    ) -> CalendarEventPage:
+        now = datetime.now(tz=UTC)
+        return self._list_events(
+            query=None,
+            start_at=now - timedelta(days=days),
+            end_at=now,
+            limit=limit,
+            page_ref=page_ref,
+        )
+
+    def search(
+        self, query: str, limit: int = 20, page_ref: CalendarPageRef | None = None
+    ) -> CalendarEventPage:
+        now = datetime.now(tz=UTC)
+        return self._list_events(
+            query=query,
+            start_at=now - timedelta(days=self.days_back),
+            end_at=now + timedelta(days=self.days_ahead),
+            limit=limit,
+            page_ref=page_ref,
+        )
+
+    def list_window(
+        self,
+        *,
+        days_back: int,
+        days_forward: int,
+        limit: int,
+        page_ref: CalendarPageRef | None = None,
+    ) -> CalendarEventPage:
+        now = datetime.now(tz=UTC)
+        return self._list_events(
+            query=None,
+            start_at=now - timedelta(days=days_back),
+            end_at=now + timedelta(days=days_forward),
+            limit=limit,
+            page_ref=page_ref,
+        )
+
+    def continue_page(self, page_ref: CalendarPageRef) -> CalendarEventPage:
+        return self._list_events(
+            query=page_ref.query,
+            start_at=page_ref.start_at,
+            end_at=page_ref.end_at,
+            limit=page_ref.limit,
+            page_ref=page_ref,
+        )
+
+    def create_event(self, draft: CalendarCreateDraft) -> CalendarMutationResult:
+        event_body: dict[str, Any] = {
+            "summary": draft.summary,
+            "start": _time_payload(draft.start, all_day=draft.all_day),
+            "end": _time_payload(draft.end, all_day=draft.all_day),
+        }
+        if draft.description is not None:
+            event_body["description"] = draft.description
+        if draft.location is not None:
+            event_body["location"] = draft.location
+        if draft.attendees:
+            event_body["attendees"] = [{"email": email} for email in draft.attendees]
+
+        request = self._get_service().events().insert(calendarId="primary", body=event_body)
+        return decode_calendar_mutation(self._execute(request, "event creation"))
 
     def delete_event(self, event_id: str) -> CalendarMutationResult:
-        service = self._get_service()
-
-        try:
-            service.events().delete(
-                calendarId="primary",
-                eventId=event_id,
-            ).execute()
-            return CalendarMutationResult(event_ref=event_id)
-        except IntegrationConnectionError:
-            raise
-        except Exception as exc:
-            _logger.exception("Calendar delete failed")
-            raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
+        request = self._get_service().events().delete(calendarId="primary", eventId=event_id)
+        self._execute(request, "event deletion")
+        return CalendarMutationResult(event_ref=event_id)
 
     def update_event(
         self,
         event_id: str,
-        summary: str | None = None,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        description: str | None = None,
-        location: str | None = None,
-        attendees: list[str] | None = None,
-        all_day: bool | None = None,
+        draft: CalendarUpdateDraft,
     ) -> CalendarMutationResult:
         service = self._get_service()
+        event_body: dict[str, Any] = {}
 
-        try:
-            # Get existing event
-            event = (
-                service.events()
-                .get(
-                    calendarId="primary",
-                    eventId=event_id,
-                )
-                .execute()
+        if "summary" in draft.changed_fields:
+            event_body["summary"] = draft.summary
+        if "description" in draft.changed_fields:
+            event_body["description"] = draft.description
+        if "location" in draft.changed_fields:
+            event_body["location"] = draft.location
+        if "attendees" in draft.changed_fields:
+            event_body["attendees"] = [{"email": email} for email in draft.attendees]
+        if {"start", "end", "all_day"} <= draft.changed_fields:
+            start = cast("datetime", draft.start)
+            end = cast("datetime", draft.end)
+            all_day = cast("bool", draft.all_day)
+            event_body["start"] = _time_payload(start, all_day=all_day)
+            event_body["end"] = _time_payload(end, all_day=all_day)
+
+        request = service.events().patch(calendarId="primary", eventId=event_id, body=event_body)
+        result = decode_calendar_mutation(self._execute(request, "event update"))
+        if result.event_ref != event_id:
+            raise IntegrationOperationError(
+                code="invalid_response",
+                safe_message="Calendar provider returned a receipt for a different event.",
             )
-
-            # Update fields if provided
-            if summary is not None:
-                event["summary"] = summary
-            if description is not None:
-                event["description"] = description
-            if location is not None:
-                event["location"] = location
-            if attendees is not None:
-                event["attendees"] = [{"email": email} for email in attendees]
-
-            # Handle time updates
-            _apply_time_update(event, start, end, all_day)
-
-            # Update the event
-            updated = (
-                service.events()
-                .update(
-                    calendarId="primary",
-                    eventId=event_id,
-                    body=event,
-                )
-                .execute()
-            )
-
-            return _provider_event_result(updated)
-        except IntegrationConnectionError:
-            raise
-        except IntegrationOperationError:
-            raise
-        except Exception as exc:
-            _logger.exception("Calendar update failed")
-            raise IntegrationProviderError(integration_label="Calendar", cause=exc) from exc
-
-    def search(self, query: str, limit: int = 20) -> list[RawItem]:
-        service = self._get_service()
-
-        now = datetime.now(tz=UTC)
-        time_min = (now - timedelta(days=self.days_back)).isoformat()
-        time_max = (now + timedelta(days=self.days_ahead)).isoformat()
-
-        events_result = (
-            service.events()
-            .list(
-                calendarId="primary",
-                timeMin=time_min,
-                timeMax=time_max,
-                maxResults=limit,
-                singleEvents=True,
-                orderBy="startTime",
-                q=query,
-            )
-            .execute()
-        )
-
-        events = events_result.get("items", [])
-        return [self._parse_event(e) for e in events]
-
-
-_logger = get_logger(__name__)
+        return result
 
 
 class MultiCalendarSource:
     name = "calendar"
 
-    def __init__(self, token_paths: list[Path], days_back: int, days_ahead: int):
-        self.sources: list[GoogleCalendar] = []
-        for token_path in token_paths:
-            source = GoogleCalendar(
+    def __init__(
+        self,
+        account_sources: list[tuple[str, Path]],
+        days_back: int,
+        days_ahead: int,
+    ):
+        account_keys = [account_ref.casefold() for account_ref, _token_path in account_sources]
+        if len(account_keys) != len(set(account_keys)):
+            raise IntegrationOperationError(
+                code="configuration_error",
+                safe_message="Calendar account configuration contains a duplicate account.",
+            )
+
+        sources = tuple(
+            GoogleCalendar(
+                account_ref=account_ref,
                 token_path=token_path,
                 days_back=days_back,
                 days_ahead=days_ahead,
             )
+            for account_ref, token_path in account_sources
+        )
+        for source in sources:
             source._get_credentials()
-            self.sources.append(source)
+        self.sources = sources
 
-    def verify_connection(self) -> None:
+    def _require_sources(self) -> None:
         if not self.sources:
             raise IntegrationConnectionError(
                 integration_id="calendar",
                 reason="not_configured",
                 detail="No Google Calendar account is connected.",
             )
+
+    def verify_connection(self) -> None:
+        self._require_sources()
         for source in self.sources:
             source.verify_connection()
 
-    def list_accounts(self) -> list[str]:
-        return [_require_account_identity(source) for source in self.sources]
+    def verify_account(self, account_ref: str) -> None:
+        self._source_for_account(account_ref).verify_connection()
 
-    def _collect(self, fn: Callable[[GoogleCalendar], list[RawItem]], limit: int) -> list[RawItem]:
-        items: list[RawItem] = []
-        for src in self.sources:
-            account = _require_account_identity(src)
-            try:
-                account_items = fn(src)
-            except RefreshError as exc:
-                raise IntegrationConnectionError(
-                    integration_id="calendar",
-                    reason="auth_required",
-                    detail=f"Calendar authentication failed for {account}. Reconnect that account.",
-                    retry_safe=True,
-                ) from exc
-            for item in account_items:
-                items.append(
-                    replace(
-                        item,
-                        source_id=qualify_event_ref(account, item.source_id),
-                        metadata={**item.metadata, "account": account},
-                    )
-                )
-        items.sort(key=lambda x: x.metadata.get("start", ""))
-        return items[:limit]
+    def list_accounts(self) -> tuple[CalendarAccount, ...]:
+        return tuple(source.account for source in self.sources)
 
-    def get_upcoming(self, days: int = 7, limit: int = 20) -> list[RawItem]:
-        per = max(limit // len(self.sources), 5) if self.sources else limit
-        return self._collect(lambda s: s.get_upcoming(days=days, limit=per), limit)
-
-    def get_past(self, days: int = 7, limit: int = 20) -> list[RawItem]:
-        per = max(limit // len(self.sources), 5) if self.sources else limit
-        return self._collect(lambda s: s.get_past(days=days, limit=per), limit)
-
-    def create_event(
+    def _collect(
         self,
-        account: str,
-        summary: str,
-        start: datetime,
-        end: datetime | None = None,
-        description: str = "",
-        location: str = "",
-        attendees: list[str] | None = None,
-        all_day: bool = False,
-    ) -> CalendarMutationResult:
-        if not account:
+        fetch: Callable[[GoogleCalendar], CalendarEventPage],
+        limit: int,
+    ) -> CalendarEventPage:
+        self._require_sources()
+        if len(self.sources) == 1:
+            return fetch(self.sources[0])
+        events = []
+        has_more = False
+        for source in self.sources:
+            page = fetch(source)
+            events.extend(page.events)
+            has_more = has_more or page.has_more
+        events.sort(key=lambda event: event.start)
+        if len(events) > limit:
+            has_more = True
+        return CalendarEventPage(
+            events=tuple(events[:limit]),
+            has_more=has_more,
+        )
+
+    def get_upcoming(
+        self, days: int = 7, limit: int = 20, account_ref: str | None = None
+    ) -> CalendarEventPage:
+        self._require_sources()
+        if account_ref is not None:
+            return self._source_for_account(account_ref).get_upcoming(days=days, limit=limit)
+        per_account = max(limit // len(self.sources), 5)
+        return self._collect(lambda source: source.get_upcoming(days=days, limit=per_account), limit)
+
+    def get_past(self, days: int = 7, limit: int = 20, account_ref: str | None = None) -> CalendarEventPage:
+        self._require_sources()
+        if account_ref is not None:
+            return self._source_for_account(account_ref).get_past(days=days, limit=limit)
+        per_account = max(limit // len(self.sources), 5)
+        return self._collect(lambda source: source.get_past(days=days, limit=per_account), limit)
+
+    def search(
+        self, query: str, limit: int = 20, account_ref: str | None = None
+    ) -> CalendarEventPage:
+        self._require_sources()
+        if account_ref is not None:
+            return self._source_for_account(account_ref).search(query, limit=limit)
+        per_account = max(limit // len(self.sources), 5)
+        return self._collect(lambda source: source.search(query, limit=per_account), limit)
+
+    def list_window(
+        self,
+        *,
+        days_back: int,
+        days_forward: int,
+        limit: int,
+        account_ref: str | None = None,
+    ) -> CalendarEventPage:
+        self._require_sources()
+        if account_ref is not None:
+            return self._source_for_account(account_ref).list_window(
+                days_back=days_back,
+                days_forward=days_forward,
+                limit=limit,
+            )
+        per_account = max(limit // len(self.sources), 5)
+        return self._collect(
+            lambda source: source.list_window(
+                days_back=days_back, days_forward=days_forward, limit=per_account
+            ),
+            limit,
+        )
+
+    def continue_page(self, page_ref: CalendarPageRef) -> CalendarEventPage:
+        self._require_sources()
+        return self._source_for_account(page_ref.account_ref).continue_page(page_ref)
+
+    def create_event(self, draft: CalendarCreateDraft) -> CalendarMutationResult:
+        source = self._source_for_account(draft.account_ref)
+        result = source.create_event(draft)
+        return replace(result, event_ref=qualify_event_ref(source.account.account_ref, result.event_ref))
+
+    def delete_event(self, draft: CalendarDeleteDraft) -> CalendarMutationResult:
+        source, provider_id = self._resolve_event_ref(draft.event_ref)
+        result = source.delete_event(provider_id)
+        return replace(result, event_ref=qualify_event_ref(source.account.account_ref, result.event_ref))
+
+    def update_event(self, draft: CalendarUpdateDraft) -> CalendarMutationResult:
+        source, provider_id = self._resolve_event_ref(draft.event_ref)
+        result = source.update_event(provider_id, draft)
+        return replace(result, event_ref=qualify_event_ref(source.account.account_ref, result.event_ref))
+
+    def _source_for_account(self, account_ref: str) -> GoogleCalendar:
+        if not account_ref:
             raise IntegrationOperationError(
                 code="invalid_ref",
                 safe_message="Calendar create requires an exact account email.",
             )
-
-        account_key = account.strip().casefold()
-        for src in self.sources:
-            source_account = _require_account_identity(src)
-            if source_account.casefold() == account_key:
-                result = src.create_event(
-                    summary=summary,
-                    start=start,
-                    end=end,
-                    description=description,
-                    location=location,
-                    attendees=attendees,
-                    all_day=all_day,
-                )
-                return replace(result, event_ref=qualify_event_ref(source_account, result.event_ref))
-
-        accounts = self.list_accounts()
-        if accounts:
-            raise IntegrationOperationError(
-                code="invalid_ref",
-                safe_message=f"Calendar account not found. Available: {', '.join(accounts)}",
-            )
+        for source in self.sources:
+            if source.account.account_ref.casefold() == account_ref.casefold():
+                return source
+        available = ", ".join(account.account_ref for account in self.list_accounts())
+        detail = f" Available: {available}" if available else ""
         raise IntegrationOperationError(
-            code="not_found",
-            safe_message="No Calendar accounts are available.",
+            code="invalid_ref",
+            safe_message=f"Calendar account not found: {account_ref}.{detail}",
         )
 
-    def delete_event(self, event_id: str) -> CalendarMutationResult:
-        src, provider_id, account = self._resolve_event_ref(event_id)
-        result = src.delete_event(provider_id)
-        return replace(result, event_ref=qualify_event_ref(account, result.event_ref))
-
-    def update_event(
-        self,
-        event_id: str,
-        summary: str | None = None,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        description: str | None = None,
-        location: str | None = None,
-        attendees: list[str] | None = None,
-        all_day: bool | None = None,
-    ) -> CalendarMutationResult:
-        src, provider_id, account = self._resolve_event_ref(event_id)
-        result = src.update_event(
-            event_id=provider_id,
-            summary=summary,
-            start=start,
-            end=end,
-            description=description,
-            location=location,
-            attendees=attendees,
-            all_day=all_day,
-        )
-        return replace(result, event_ref=qualify_event_ref(account, result.event_ref))
-
-    def _resolve_event_ref(self, event_ref: str) -> tuple[GoogleCalendar, str, str]:
-        account, separator, event_id = event_ref.partition(":")
-        if not separator or "@" not in account or not event_id:
+    def _resolve_event_ref(self, event_ref: str) -> tuple[GoogleCalendar, str]:
+        account_ref, separator, provider_ref = event_ref.partition(":")
+        if not separator or not provider_ref:
             raise IntegrationOperationError(
                 code="invalid_ref",
                 safe_message="Calendar event references must be account-qualified.",
             )
-        for source in self.sources:
-            source_account = _require_account_identity(source)
-            if source_account.casefold() == account.casefold():
-                return source, event_id, source_account
-        raise IntegrationOperationError(
-            code="invalid_ref",
-            safe_message=f"Calendar account not found in event reference: {account}",
-        )
-
-    def search(self, query: str, limit: int = 20) -> list[RawItem]:
-        per = max(limit // len(self.sources), 5) if self.sources else limit
-        return self._collect(lambda s: s.search(query, limit=per), limit)
+        try:
+            validate_google_account_email(account_ref)
+        except ValueError as exc:
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="Calendar event references must be account-qualified.",
+            ) from exc
+        return self._source_for_account(account_ref), provider_ref

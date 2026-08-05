@@ -14,10 +14,13 @@ def _build(config: Config) -> MultiCalendarSource | None:
     if not config.integration_enabled("calendar"):
         return None
     store = google_account_store()
-    token_paths = [store.token_path(account, "calendar") for account in store.accounts_for("calendar")]
-    if not token_paths:
+    account_sources = [
+        (account.email, store.token_path(account, "calendar"))
+        for account in store.accounts_for("calendar")
+    ]
+    if not account_sources:
         return None
-    source = MultiCalendarSource(token_paths=token_paths, days_back=7, days_ahead=30)
+    source = MultiCalendarSource(account_sources=account_sources, days_back=7, days_ahead=30)
     return source if source.sources else None
 
 
