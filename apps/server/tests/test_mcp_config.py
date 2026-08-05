@@ -239,6 +239,48 @@ def test_parse_tool_policies():
     assert policy.max_result_chars == 5000
 
 
+def test_parse_tool_policies_rejects_partial_mutation_risk():
+    with pytest.raises(ValueError, match="open_world, idempotent"):
+        parse_server_config(
+            "obsidian",
+            {
+                "transport": "http",
+                "url": "127.0.0.1:8008/mcp",
+                "tool_policies": {
+                    "publish": {
+                        "action": "write",
+                        "scope": "external",
+                        "requires_approval": True,
+                        "destructive": False,
+                    }
+                },
+            },
+        )
+
+
+def test_parse_tool_policies_accepts_complete_mutation_risk():
+    config = parse_server_config(
+        "obsidian",
+        {
+            "transport": "http",
+            "url": "127.0.0.1:8008/mcp",
+            "tool_policies": {
+                "publish": {
+                    "action": "write",
+                    "scope": "external",
+                    "requires_approval": True,
+                    "destructive": False,
+                    "open_world": False,
+                    "idempotent": True,
+                }
+            },
+        },
+    )
+
+    policy = config.tool_policies["publish"]
+    assert (policy.destructive, policy.open_world, policy.idempotent) == (False, False, True)
+
+
 def test_trust_tool_annotations_defaults_to_false():
     config = parse_server_config("obsidian", {"transport": "http", "url": "127.0.0.1:8008/mcp"})
 

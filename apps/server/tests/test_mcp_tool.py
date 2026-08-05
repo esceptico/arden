@@ -110,6 +110,7 @@ def test_mcp_tool_can_infer_read_policy_from_trusted_annotations():
     assert tool.policy.action is ToolAction.READ
     assert tool.policy.scope is ToolScope.EXTERNAL
     assert tool.policy.requires_approval is False
+    assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (False, False, True)
 
 
 def test_mcp_tool_ignores_untrusted_annotations():
@@ -128,7 +129,7 @@ def test_mcp_tool_ignores_untrusted_annotations():
     assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (True, True, False)
 
 
-def test_mcp_tool_applies_standard_defaults_to_partial_mutation_annotations():
+def test_mcp_tool_rejects_partial_mutation_annotations():
     mcp_tool = McpTool(
         name="publish",
         description="Publish a note",
@@ -136,18 +137,16 @@ def test_mcp_tool_applies_standard_defaults_to_partial_mutation_annotations():
         annotations=ToolAnnotations(read_only_hint=False),
     )
 
-    tool = MCPTool(
-        "notes",
-        mcp_tool,
-        FakeMCPSession(CallToolResult(content=[])),
-        trust_annotations=True,
-    )
-
-    assert tool.policy.action is ToolAction.EXECUTE
-    assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (True, True, False)
+    with pytest.raises(ValueError, match="destructiveHint, openWorldHint, idempotentHint"):
+        MCPTool(
+            "notes",
+            mcp_tool,
+            FakeMCPSession(CallToolResult(content=[])),
+            trust_annotations=True,
+        )
 
 
-def test_mcp_tool_completes_partial_explicit_mutation_policy_conservatively():
+def test_mcp_tool_rejects_partial_explicit_mutation_policy():
     mcp_tool = McpTool(name="publish", description="Publish a note", input_schema={"type": "object"})
     partial = ToolPolicy(
         action=ToolAction.WRITE,
@@ -156,14 +155,30 @@ def test_mcp_tool_completes_partial_explicit_mutation_policy_conservatively():
         destructive=False,
     )
 
-    tool = MCPTool(
-        "notes",
-        mcp_tool,
-        FakeMCPSession(CallToolResult(content=[])),
-        policy=partial,
+    with pytest.raises(ValueError, match="open_world, idempotent"):
+        MCPTool(
+            "notes",
+            mcp_tool,
+            FakeMCPSession(CallToolResult(content=[])),
+            policy=partial,
+        )
+
+
+def test_mcp_tool_rejects_non_read_annotations_without_an_explicit_read_only_hint():
+    mcp_tool = McpTool(
+        name="publish",
+        description="Publish a note",
+        input_schema={"type": "object"},
+        annotations=ToolAnnotations(destructive_hint=False, open_world_hint=False, idempotent_hint=True),
     )
 
-    assert (tool.policy.destructive, tool.policy.open_world, tool.policy.idempotent) == (False, True, False)
+    with pytest.raises(ValueError, match="readOnlyHint=false"):
+        MCPTool(
+            "notes",
+            mcp_tool,
+            FakeMCPSession(CallToolResult(content=[])),
+            trust_annotations=True,
+        )
 
 
 def test_mcp_tool_preserves_complete_nested_schema():

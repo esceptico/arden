@@ -3,6 +3,7 @@ from typing import Any, Protocol
 from mcp_types import CallToolResult, ToolAnnotations
 from mcp_types import Tool as McpTool
 
+from arden.mcp.models import validate_mcp_mutation_policy
 from arden.mcp.results import call_tool_result_to_tool_result, mcp_exception_result
 from arden.tools.core.base import Tool, ToolResult
 from arden.tools.core.context import ToolExecution
@@ -38,8 +39,14 @@ class MCPTool(Tool):
         self._server_name = server_name
         self._mcp_tool = mcp_tool
         self._session = session
-        selected_policy = policy or _policy_from_annotations(mcp_tool.annotations, trust_annotations) or self.policy
-        self.policy = _complete_mutation_risk(selected_policy)
+        if policy is not None:
+            selected_policy = policy
+            source = f"MCP tool {server_name!r}/{mcp_tool.name!r} policy"
+        else:
+            annotation_policy = _policy_from_annotations(mcp_tool.annotations, trust_annotations)
+            selected_policy = annotation_policy or self.policy
+            source = f"MCP tool {server_name!r}/{mcp_tool.name!r} trusted annotations"
+        self.policy = validate_mcp_mutation_policy(selected_policy, source=source)
 
     @property
     def name(self) -> str:
@@ -80,39 +87,34 @@ def _policy_from_annotations(annotations: ToolAnnotations | None, trusted: bool)
     if annotations.read_only_hint is True and annotations.destructive_hint is True:
         raise ValueError("Trusted MCP annotations cannot mark a tool as both read-only and destructive")
     if annotations.read_only_hint is True:
-        action = ToolAction.READ
-        requires_approval = False
-    elif annotations.destructive_hint is True:
-        action = ToolAction.WRITE
-        requires_approval = True
-    else:
-        action = ToolAction.EXECUTE
-        requires_approval = True
-    return ToolPolicy(
-        action=action,
-        scope=ToolScope.EXTERNAL,
-        requires_approval=requires_approval,
-        permissions=frozenset({"mcp"}),
-        destructive=(
-            annotations.destructive_hint
-            if annotations.destructive_hint is not None or action is ToolAction.READ
-            else True
-        ),
-        open_world=annotations.open_world_hint if annotations.open_world_hint is not None else True,
-        idempotent=(
-            annotations.idempotent_hint
-            if annotations.idempotent_hint is not None or action is ToolAction.READ
-            else False
-        ),
-    )
+        return ToolPolicy(
+            action=ToolAction.READ,
+            scope=ToolScope.EXTERNAL,
+            requires_approval=False,
+            permissions=frozenset({"mcp"}),
+            destructive=False if annotations.destructive_hint is None else annotations.destructive_hint,
+            open_world=True if annotations.open_world_hint is None else annotations.open_world_hint,
+            idempotent=True if annotations.idempotent_hint is None else annotations.idempotent_hint,
+        )
 
+    if annotations.read_only_hint is not False:
+        raise ValueError("Trusted non-read MCP annotations must explicitly set readOnlyHint=false")
 
-def _complete_mutation_risk(policy: ToolPolicy) -> ToolPolicy:
-    if policy.action is ToolAction.READ:
-        return policy
-    updates = {
-        "destructive": True if policy.destructive is None else policy.destructive,
-        "open_world": True if policy.open_world is None else policy.open_world,
-        "idempotent": False if policy.idempotent is None else policy.idempotent,
+    hints = {
+        "destructiveHint": annotations.destructive_hint,
+        "openWorldHint": annotations.open_world_hint,
+        "idempotentHint": annotations.idempotent_hint,
     }
-    return policy.model_copy(update=updates)
+    missing = [name for name, value in hints.items() if value is None]
+    if missing:
+        raise ValueError(f"Trusted non-read MCP annotations must explicitly set {', '.join(missing)}")
+
+    return ToolPolicy(
+        action=ToolAction.WRITE if annotations.destructive_hint else ToolAction.EXECUTE,
+        scope=ToolScope.EXTERNAL,
+        requires_approval=True,
+        permissions=frozenset({"mcp"}),
+        destructive=annotations.destructive_hint,
+        open_world=annotations.open_world_hint,
+        idempotent=annotations.idempotent_hint,
+    )

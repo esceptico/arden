@@ -1,9 +1,25 @@
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from arden.tools.core.types import ToolPolicy
+from arden.tools.core.types import ToolAction, ToolPolicy
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
+
+
+def validate_mcp_mutation_policy(policy: ToolPolicy, *, source: str) -> ToolPolicy:
+    """Require every non-read MCP policy to declare its mutation risk."""
+
+    if policy.action is ToolAction.READ:
+        return policy
+    risks = {
+        "destructive": policy.destructive,
+        "open_world": policy.open_world,
+        "idempotent": policy.idempotent,
+    }
+    missing = [field for field, value in risks.items() if value is None]
+    if missing:
+        raise ValueError(f"{source} must explicitly set {', '.join(missing)} for a non-read MCP tool")
+    return policy
 
 
 @dataclass(frozen=True)
@@ -83,9 +99,15 @@ def parse_server_config(name: str, raw: dict) -> MCPServerConfig:
         raise ValueError(f"MCP server {name!r}: tool_policies must be an object")
 
     try:
-        tool_policies = {tool_name: ToolPolicy.model_validate(policy) for tool_name, policy in raw_policies.items()}
-    except Exception as e:
-        raise ValueError(f"MCP server {name!r}: invalid tool_policies: {e}") from e
+        tool_policies = {
+            tool_name: validate_mcp_mutation_policy(
+                ToolPolicy.model_validate(policy),
+                source=f"MCP tool policy {tool_name!r}",
+            )
+            for tool_name, policy in raw_policies.items()
+        }
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"MCP server {name!r}: invalid tool_policies: {error}") from error
 
     return MCPServerConfig(
         name=name,
