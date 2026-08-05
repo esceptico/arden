@@ -13,7 +13,7 @@ import arden.database as database
 from arden.agent import ToolResult, Usage
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
 from arden.context.models import BackgroundStartDisposition, SessionState
-from arden.context.store import SessionStore, StaleSessionContextError
+from arden.context.store import SessionDataCorruptionError, SessionStore, StaleSessionContextError
 from arden.core.compactor import _build_compacted_messages
 from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
 from arden.events.internal import RunCompleted, RunFailed
@@ -1737,7 +1737,7 @@ async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp
         }
     ]
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "5"
+    assert version[0]["value"] == "6"
 
     await read_conn.close()
     await conn.close()
@@ -1765,6 +1765,110 @@ async def test_schema_v4_adds_context_generation_before_serving_rows(tmp_path: P
     row = (await conn.execute_fetchall("SELECT context_generation FROM sessions WHERE session_id = 'legacy'"))[0]
     assert row["context_generation"] == 0
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "6"
+
+    await migrated_read.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v5_backfills_active_count_and_missing_transcript(tmp_path: Path):
+    db = tmp_path / "v5-sessions.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    original = SessionStore(conn, read_conn)
+    await original.init_schema()
+    state = _make_state("legacy")
+    await original.save_session(
+        state,
+        [
+            {"role": "user", "content": "kept"},
+            {"role": "assistant", "content": "reply"},
+        ],
+        metadata={"last_input_tokens": 7, "last_message_count": 99},
+    )
+    await conn.execute("DELETE FROM session_messages WHERE session_id = 'legacy'")
+    await conn.execute("DELETE FROM session_turns WHERE session_id = 'legacy'")
+    await read_conn.close()
+    await conn.execute("ALTER TABLE sessions DROP COLUMN active_message_count")
+    await conn.execute("UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version'")
+    await conn.commit()
+
+    migrated_read = await database.connect(db, readonly=True)
+    migrated = SessionStore(conn, migrated_read)
+    await migrated.init_schema()
+
+    row = (
+        await conn.execute_fetchall("SELECT active_message_count, metadata FROM sessions WHERE session_id = 'legacy'")
+    )[0]
+    transcript = await conn.execute_fetchall(
+        "SELECT message_id FROM session_messages WHERE session_id = 'legacy' ORDER BY seq"
+    )
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert row["active_message_count"] == 2
+    assert json.loads(row["metadata"]) == {"last_input_tokens": 7}
+    assert len(transcript) == 2
+    assert all(row["message_id"] for row in transcript)
+    assert version[0]["value"] == "6"
+
+    await migrated_read.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken_projection", ["{broken", "{}"])
+async def test_schema_v5_rejects_invalid_active_projection(tmp_path: Path, broken_projection: str):
+    db = tmp_path / "invalid-v5-sessions.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    original = SessionStore(conn, read_conn)
+    await original.init_schema()
+    await original.save_session(_make_state("broken"), [{"role": "user", "content": "kept"}])
+    await read_conn.close()
+    await conn.execute(
+        "UPDATE sessions SET messages = ? WHERE session_id = 'broken'",
+        (broken_projection,),
+    )
+    await conn.execute("ALTER TABLE sessions DROP COLUMN active_message_count")
+    await conn.execute("UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version'")
+    await conn.commit()
+
+    migrated_read = await database.connect(db, readonly=True)
+    migrated = SessionStore(conn, migrated_read)
+    with pytest.raises(SessionDataCorruptionError, match="messages projection"):
+        await migrated.init_schema()
+
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(sessions)")}
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert "active_message_count" not in columns
+    assert version[0]["value"] == "5"
+
+    await migrated_read.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v5_rejects_invalid_metadata_before_mutation(tmp_path: Path):
+    db = tmp_path / "invalid-v5-metadata.db"
+    conn = await database.connect(db)
+    read_conn = await database.connect(db, readonly=True)
+    original = SessionStore(conn, read_conn)
+    await original.init_schema()
+    await original.save_session(_make_state("broken"), [])
+    await read_conn.close()
+    await conn.execute("UPDATE sessions SET metadata = '{' WHERE session_id = 'broken'")
+    await conn.execute("ALTER TABLE sessions DROP COLUMN active_message_count")
+    await conn.execute("UPDATE session_store_meta SET value = '5' WHERE key = 'schema_version'")
+    await conn.commit()
+
+    migrated_read = await database.connect(db, readonly=True)
+    migrated = SessionStore(conn, migrated_read)
+    with pytest.raises(SessionDataCorruptionError, match="metadata is invalid JSON"):
+        await migrated.init_schema()
+
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(sessions)")}
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert "active_message_count" not in columns
     assert version[0]["value"] == "5"
 
     await migrated_read.close()
@@ -2766,6 +2870,7 @@ async def test_update_progress_upserts_for_brand_new_session(store: SessionStore
     assert loaded is not None
     assert loaded.messages[0]["content"] == "hi"
     assert loaded.messages[0]["client_id"] == "cid-1"
+    assert loaded.active_message_count == 1
 
 
 @pytest.mark.asyncio
@@ -2790,6 +2895,7 @@ async def test_update_progress_keeps_metadata_on_existing_session(store: Session
     assert loaded is not None
     assert loaded.last_input_tokens == 1234
     assert len(loaded.messages) == 2
+    assert loaded.active_message_count == 2
 
 
 @pytest.mark.asyncio
@@ -2968,7 +3074,10 @@ async def test_valid_empty_snapshot_never_resurrects_immutable_transcript(store:
             {"role": "assistant", "content": "old reply", "client_id": "a-1"},
         ],
     )
-    await store.conn.execute("UPDATE sessions SET messages = '[]' WHERE session_id = ?", (state.session_id,))
+    await store.conn.execute(
+        "UPDATE sessions SET messages = '[]', active_message_count = 0 WHERE session_id = ?",
+        (state.session_id,),
+    )
     await store.conn.commit()
 
     loaded = await store.load_session(state.session_id)
@@ -3330,6 +3439,7 @@ async def test_session_service_clear_context_atomically_removes_history_and_chec
 
     loaded = await service.load(state.session_id)
     assert loaded is not None and loaded.messages == []
+    assert loaded.active_message_count == 0
     for table in ("session_messages", "session_turns", "chat_compactions"):
         rows = await store.read_conn.execute_fetchall(
             f"SELECT COUNT(*) AS count FROM {table} WHERE session_id = ?",
@@ -3819,6 +3929,8 @@ async def test_rewind_session_trims_uncompacted_active_future(store: SessionStor
 
     page = await store.list_session_messages("test-session", limit=10)
     assert [row["message_id"] for row in page["messages"]] == ["m-0", "m-1"]
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None and loaded.active_message_count == len(loaded.messages) == 2
 
     turns = await store.list_session_turns("test-session")
     assert [turn["message_start_id"] for turn in turns] == ["m-0", "m-1"]

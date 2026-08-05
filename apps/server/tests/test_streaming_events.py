@@ -1861,7 +1861,7 @@ async def test_run_chat_persists_budget_stop_reason(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_chat_records_canonical_message_count_for_loop(monkeypatch):
+async def test_run_chat_saves_canonical_loop_messages_without_legacy_count_metadata(monkeypatch):
     from arden.services import chat as chat_service
 
     registry = RunRegistry()
@@ -1882,9 +1882,11 @@ async def test_run_chat_records_canonical_message_count_for_loop(monkeypatch):
         def __init__(self):
             self.store = Store()
             self.saved_metadata = None
+            self.saved_message_count = None
 
         async def save(self, session_state, messages, metadata=None):
             self.saved_metadata = metadata
+            self.saved_message_count = len(messages)
 
         async def save_progress(self, session_state, messages):
             return None
@@ -1921,7 +1923,8 @@ async def test_run_chat_records_canonical_message_count_for_loop(monkeypatch):
 
     await run_chat(ctx, SessionBus(session_id="sess-1"), BusRegistry())
 
-    assert service.saved_metadata["last_message_count"] == 5
+    assert service.saved_message_count == 5
+    assert service.saved_metadata is None
 
 
 @pytest.mark.asyncio

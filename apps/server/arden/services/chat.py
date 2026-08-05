@@ -485,7 +485,7 @@ async def _maybe_precompact_loop_history(
     await deps.session_service.save(
         data.state,
         compacted,
-        metadata={"last_input_tokens": None, "last_message_count": len(compacted)},
+        metadata={"last_input_tokens": None},
     )
     if emit:
         await emit(CompactionFinishedEvent(messages_before=before_count, messages_after=len(compacted)))
@@ -493,7 +493,6 @@ async def _maybe_precompact_loop_history(
         state=data.state,
         messages=compacted,
         last_input_tokens=None,
-        last_message_count=len(compacted),
         context_generation=data.state.context_generation,
         context_etag=data.state.context_etag,
     )
@@ -1998,7 +1997,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
             await ctx.session_service.save(
                 session_state,
                 _persistable_messages(run),
-                metadata={"last_input_tokens": None, "last_message_count": len(_persistable_messages(run))},
+                metadata={"last_input_tokens": None},
             )
             bus.mark_checkpoint()
             await bus.emit(
@@ -2138,13 +2137,7 @@ async def run_chat(ctx: ChatContext, bus: SessionBus, buses: BusRegistry) -> Non
                 run.usage = tracker.usage
                 run_finished = True
                 input_tokens = _response_input_tokens(getattr(agent, "_last_response", None))
-                # Persist the canonical active-context size.
-                metadata: dict | None = None
-                if input_tokens is not None or run.messages:
-                    metadata = {}
-                    if input_tokens is not None:
-                        metadata["last_input_tokens"] = input_tokens
-                    metadata["last_message_count"] = len(_persistable_messages(run))
+                metadata = {"last_input_tokens": input_tokens} if input_tokens is not None else None
                 try:
                     if run.usage.total_tokens:
                         await ctx.session_service.update_goal(

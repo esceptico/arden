@@ -374,7 +374,7 @@ async def test_session_history_restores_persisted_source_refs_unchanged():
             return SimpleNamespace(
                 state=SimpleNamespace(session_id="session-1", chat_model=None),
                 last_input_tokens=None,
-                last_message_count=0,
+                active_message_count=0,
             )
 
         async def list_messages(self, *_args, **_kwargs):

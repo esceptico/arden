@@ -174,24 +174,16 @@ class SessionService:
         return state
 
     async def load(self, session_id: str | None = None) -> SessionData | None:
-        try:
-            sid = session_id or await self.store.get_latest_id()
-            if not sid:
-                return None
-            return await self.store.load_session(sid)
-        except Exception as e:
-            _logger.warning("Failed to load session %s: %s", session_id or "latest", e)
+        sid = session_id or await self.store.get_latest_id()
+        if not sid:
             return None
+        return await self.store.load_session(sid)
 
     async def load_history_header(self, session_id: str | None = None) -> SessionHistoryHeader | None:
-        try:
-            sid = session_id or await self.store.get_latest_id()
-            if not sid:
-                return None
-            return await self.store.load_session_history_header(sid)
-        except Exception as e:
-            _logger.warning("Failed to load session history header %s: %s", session_id or "latest", e)
+        sid = session_id or await self.store.get_latest_id()
+        if not sid:
             return None
+        return await self.store.load_session_history_header(sid)
 
     async def save(
         self,
@@ -229,7 +221,6 @@ class SessionService:
                 data.state = refreshed.state
                 data.messages = refreshed.messages
                 data.last_input_tokens = refreshed.last_input_tokens
-                data.last_message_count = refreshed.last_message_count
                 data.context_generation = refreshed.context_generation
                 data.context_etag = refreshed.context_etag
             expected_ids = self.store._message_id_sequence(data.messages)

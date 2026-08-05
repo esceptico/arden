@@ -45,10 +45,6 @@ class SessionData:
     state: SessionState
     messages: list[dict]
     last_input_tokens: int | None = None
-    # Size of the durable transcript after the most recent run. The desktop's
-    # budget dial uses this for message-pressure because compaction uses the
-    # saved transcript, even when a loop trims its model working set.
-    last_message_count: int | None = None
     # Hash of the exact raw sessions.messages projection, including malformed
     # JSON recovered from the immutable transcript.
     context_generation: int = 0
@@ -60,11 +56,15 @@ class SessionData:
         if self.context_etag is None:
             self.context_etag = self.state.context_etag
 
+    @property
+    def active_message_count(self) -> int:
+        return len(self.messages)
+
 
 @dataclass(frozen=True)
 class SessionHistoryHeader:
     """Budget and routing fields needed before fetching a transcript page."""
 
     state: SessionState
+    active_message_count: int
     last_input_tokens: int | None = None
-    last_message_count: int | None = None

@@ -45,11 +45,15 @@ from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 5
+_SESSION_SCHEMA_VERSION = 6
 
 
 class StaleSessionContextError(RuntimeError):
     """A run tried to save through a context generation that was replaced."""
+
+
+class SessionDataCorruptionError(RuntimeError):
+    """Persisted session data does not satisfy the current storage contract."""
 
 
 LATEST_VISIBLE_ANCHOR_ROW_LIMIT = 1000
@@ -129,6 +133,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     area_id TEXT REFERENCES areas(area_id) ON DELETE SET NULL,
     chat_model TEXT,
     context_generation INTEGER NOT NULL DEFAULT 0,
+    active_message_count INTEGER NOT NULL DEFAULT 0,
     storage_state TEXT NOT NULL DEFAULT 'hot' CHECK(storage_state IN ('hot', 'cold')),
     cold_bundle_path TEXT,
     cold_bundle_sha256 TEXT,
@@ -440,12 +445,13 @@ SQL_SAVE_SESSION = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, area_id, chat_model, context_generation
+    agent_type, agent_status, area_id, chat_model, context_generation, active_message_count
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     last_activity = excluded.last_activity,
     messages = excluded.messages,
+    active_message_count = excluded.active_message_count,
     metadata = excluded.metadata,
     name = excluded.name,
     session_type = excluded.session_type,
@@ -463,9 +469,9 @@ SQL_INSERT_SESSION_IF_ABSENT = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, area_id, chat_model, context_generation
+    agent_type, agent_status, area_id, chat_model, context_generation, active_message_count
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO NOTHING
 """
 
@@ -480,7 +486,7 @@ SQL_LIST_SESSIONS = """
 SELECT session_id, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
        agent_type, agent_status, area_id, chat_model,
-       json_array_length(COALESCE(messages, '[]')) AS message_count
+       active_message_count AS message_count
 FROM sessions
 WHERE archived_at IS NULL
 ORDER BY last_activity {direction}
@@ -491,7 +497,7 @@ SQL_LIST_PRIMARY_SESSIONS = """
 SELECT session_id, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
        agent_type, agent_status, area_id, chat_model,
-       json_array_length(COALESCE(messages, '[]')) AS message_count
+       active_message_count AS message_count
 FROM sessions
 WHERE archived_at IS NULL
   AND COALESCE(session_type, 'chat') != 'agent'
@@ -507,7 +513,7 @@ SELECT session_id, started_at, last_activity, name, archived_at,
        COALESCE(cold_bundle_bytes, 0) AS cold_bundle_bytes,
        CASE WHEN COALESCE(storage_state, 'hot') = 'cold'
             THEN COALESCE(cold_message_count, 0)
-            ELSE json_array_length(COALESCE(messages, '[]')) END AS message_count
+            ELSE active_message_count END AS message_count
 FROM sessions
 WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC
@@ -516,11 +522,12 @@ LIMIT ?
 
 SQL_LOAD_SESSION = "SELECT * FROM sessions WHERE session_id = ?"
 SQL_LOAD_SESSION_HISTORY_HEADER = """
-SELECT session_id, started_at, last_activity, metadata, name, session_type,
-       origin_automation_id, parent_session_id, parent_tool_call_id,
-       agent_type, agent_status, area_id, chat_model, context_generation
-FROM sessions
-WHERE session_id = ?
+SELECT s.session_id, s.started_at, s.last_activity, s.metadata, s.name, s.session_type,
+       s.origin_automation_id, s.parent_session_id, s.parent_tool_call_id,
+       s.agent_type, s.agent_status, s.area_id, s.chat_model, s.context_generation,
+       s.active_message_count
+FROM sessions AS s
+WHERE s.session_id = ?
 """
 # Upsert: a fresh session won't have a row yet on its very first save,
 # and an UPDATE-only would silently no-op (lost user message until the
@@ -529,11 +536,12 @@ SQL_UPSERT_PROGRESS = """
 INSERT INTO sessions (
     session_id, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
-    agent_type, agent_status, area_id, chat_model, context_generation
+    agent_type, agent_status, area_id, chat_model, context_generation, active_message_count
 )
-VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     messages = excluded.messages,
+    active_message_count = excluded.active_message_count,
     last_activity = excluded.last_activity,
     agent_status = excluded.agent_status,
     area_id = sessions.area_id
@@ -548,8 +556,6 @@ SQL_ARCHIVE = "UPDATE sessions SET archived_at = ? WHERE session_id = ? AND arch
 SQL_RESTORE = "UPDATE sessions SET archived_at = NULL WHERE session_id = ? AND archived_at IS NOT NULL"
 SQL_DELETE_ARCHIVED = "DELETE FROM sessions WHERE session_id = ? AND archived_at IS NOT NULL"
 
-SQL_LOAD_SESSION_MESSAGES_COUNT = "SELECT 1 FROM session_messages WHERE session_id = ? LIMIT 1"
-SQL_LOAD_SESSION_MESSAGES_JSON = "SELECT messages FROM sessions WHERE session_id = ?"
 CHAT_IDEMPOTENCY_TTL_DAYS = 30
 CHAT_IDEMPOTENCY_TERMINAL_STATUSES = ("completed", "cancelled", "error", "failed", "ingested", "interrupted")
 # A real request hash is a SHA-256 hex digest, so this can never collide with
@@ -895,6 +901,14 @@ class SessionStore:
             await self._migrate_session_context_generation_schema()
             await self.conn.execute(
                 "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+                ("5",),
+            )
+            await self.conn.commit()
+            version = 5
+        if version == 5:
+            await self._migrate_active_message_count_schema()
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
                 (str(_SESSION_SCHEMA_VERSION),),
             )
             await self.conn.commit()
@@ -927,6 +941,7 @@ class SessionStore:
                 await self.conn.commit()
             except Exception:
                 pass
+        await self._migrate_active_message_count_schema()
         # Area capabilities on the container itself : an area with a page is an area; autonomy set means
         # it has a standing agent.
         for col in (
@@ -995,6 +1010,58 @@ class SessionStore:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(sessions)")
         if rows and "context_generation" not in {row["name"] for row in rows}:
             await self.conn.execute("ALTER TABLE sessions ADD COLUMN context_generation INTEGER NOT NULL DEFAULT 0")
+
+    @staticmethod
+    def _strict_active_projection(session_id: str, raw_messages: object) -> list[dict]:
+        if not isinstance(raw_messages, str):
+            raise SessionDataCorruptionError(f"session {session_id} messages projection is missing")
+        try:
+            messages = json.loads(raw_messages)
+        except json.JSONDecodeError as exc:
+            raise SessionDataCorruptionError(f"session {session_id} messages projection is invalid JSON") from exc
+        if not isinstance(messages, list) or not all(isinstance(message, dict) for message in messages):
+            raise SessionDataCorruptionError(f"session {session_id} messages projection must be an array of objects")
+        return messages
+
+    async def _migrate_active_message_count_schema(self) -> None:
+        async with self.conn.execute("SELECT session_id, messages, metadata FROM sessions") as cursor:
+            async for row in cursor:
+                session_id = str(row["session_id"])
+                self._strict_active_projection(session_id, row["messages"])
+                self._session_metadata(session_id, row["metadata"])
+
+        columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
+        if "active_message_count" not in columns:
+            await self.conn.execute("ALTER TABLE sessions ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0")
+
+        await self.conn.execute(
+            """
+            UPDATE sessions
+            SET active_message_count = json_array_length(messages),
+                metadata = json_remove(metadata, '$.last_message_count')
+            """
+        )
+        missing_transcripts = await self.conn.execute_fetchall(
+            """
+            SELECT session_id, messages
+            FROM sessions AS s
+            WHERE active_message_count > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM session_messages AS sm WHERE sm.session_id = s.session_id
+              )
+            """
+        )
+        now = datetime.now(UTC).isoformat()
+        for row in missing_transcripts:
+            session_id = str(row["session_id"])
+            messages = self._strict_active_projection(session_id, row["messages"])
+            self._stamp_messages(messages, now)
+            messages_json = json.dumps(messages, default=str)
+            await self._mirror_session_messages(session_id, messages, connection=self.conn)
+            await self.conn.execute(
+                "UPDATE sessions SET messages = ? WHERE session_id = ?",
+                (messages_json, session_id),
+            )
 
     async def _pre_migrate_tool_results_schema(self) -> None:
         rows = await self.conn.execute_fetchall("PRAGMA table_info(tool_results)")
@@ -2233,36 +2300,6 @@ class SessionStore:
 
         await flush_current()
 
-    async def _ensure_session_messages_unlocked(
-        self,
-        session_id: str,
-        *,
-        connection: aiosqlite.Connection,
-    ) -> None:
-        has_rows = await connection.execute_fetchall(SQL_LOAD_SESSION_MESSAGES_COUNT, (session_id,))
-        if has_rows:
-            return
-
-        rows = await connection.execute_fetchall(SQL_LOAD_SESSION_MESSAGES_JSON, (session_id,))
-        if not rows or not rows[0]["messages"]:
-            return
-
-        messages = await asyncio.to_thread(lambda: json.loads(rows[0]["messages"]))
-        if not isinstance(messages, list) or not messages:
-            return
-
-        now = datetime.now(UTC).isoformat()
-        serializable = [msg for msg in messages if isinstance(msg, dict)]
-        self._stamp_messages(serializable, now)
-        messages_json = await asyncio.to_thread(lambda: json.dumps(serializable, default=str))
-        await self._mirror_session_messages(session_id, serializable, connection=connection)
-        await connection.execute("UPDATE sessions SET messages = ? WHERE session_id = ?", (messages_json, session_id))
-
-    async def _ensure_session_messages(self, session_id: str) -> None:
-        lock = await self._session_write_lock(session_id)
-        async with lock, self._session_context_transaction() as connection:
-            await self._ensure_session_messages_unlocked(session_id, connection=connection)
-
     async def update_progress(self, state: SessionState, messages: list[dict | Any]) -> None:
         """Lightweight mid-run save: rewrite messages + bump last_activity,
         upserting the row so a fresh session's first save lands instead of
@@ -2293,6 +2330,7 @@ class SessionStore:
                         state.area_id,
                         state.chat_model,
                         state.context_generation,
+                        len(serializable),
                     ),
                 )
                 if cursor.rowcount == 0:
@@ -4762,6 +4800,7 @@ class SessionStore:
                 state.area_id,
                 state.chat_model,
                 generation,
+                len(serializable_messages),
             ),
         )
         if cursor.rowcount == 0:
@@ -4964,6 +5003,7 @@ class SessionStore:
                         state.area_id,
                         state.chat_model,
                         state.context_generation,
+                        len(serializable_messages),
                     ),
                 )
                 created = cursor.rowcount > 0
@@ -4979,43 +5019,63 @@ class SessionStore:
 
     @staticmethod
     def _session_state_from_row(row: aiosqlite.Row) -> SessionState:
-        values = dict(row)
-        started_at = datetime.fromisoformat(row["started_at"])
-        last_activity = datetime.fromisoformat(row["last_activity"])
-        # Attach UTC to naive datetimes from old sessions
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=UTC)
-        if last_activity.tzinfo is None:
-            last_activity = last_activity.replace(tzinfo=UTC)
+        session_id = row["session_id"]
+        try:
+            started_at = datetime.fromisoformat(row["started_at"])
+            last_activity = datetime.fromisoformat(row["last_activity"])
+        except (TypeError, ValueError) as exc:
+            raise SessionDataCorruptionError(f"session {session_id} has invalid timestamps") from exc
+        if started_at.tzinfo is None or last_activity.tzinfo is None:
+            raise SessionDataCorruptionError(f"session {session_id} has timezone-naive timestamps")
+
+        session_type = row["session_type"]
+        if session_type not in {"chat", "channel", "agent"}:
+            raise SessionDataCorruptionError(f"session {session_id} has invalid session_type")
+        context_generation = row["context_generation"]
+        if isinstance(context_generation, bool) or not isinstance(context_generation, int) or context_generation < 0:
+            raise SessionDataCorruptionError(f"session {session_id} has invalid context_generation")
 
         return SessionState(
-            session_id=row["session_id"],
+            session_id=session_id,
             started_at=started_at,
             last_activity=last_activity,
             name=row["name"],
-            session_type=row["session_type"] or "chat",
+            session_type=session_type,
             origin_automation_id=row["origin_automation_id"],
-            parent_session_id=values.get("parent_session_id"),
-            parent_tool_call_id=values.get("parent_tool_call_id"),
-            agent_type=values.get("agent_type"),
-            agent_status=values.get("agent_status"),
+            parent_session_id=row["parent_session_id"],
+            parent_tool_call_id=row["parent_tool_call_id"],
+            agent_type=row["agent_type"],
+            agent_status=row["agent_status"],
             area_id=row["area_id"],
-            chat_model=values.get("chat_model"),
-            context_generation=int(values.get("context_generation") or 0),
+            chat_model=row["chat_model"],
+            context_generation=context_generation,
         )
 
     @staticmethod
-    def _session_metadata(raw_metadata: str | None) -> dict:
+    def _session_metadata(session_id: str, raw_metadata: str | None) -> dict:
+        if not isinstance(raw_metadata, str):
+            raise SessionDataCorruptionError(f"session {session_id} metadata is missing")
         try:
-            parsed = json.loads(raw_metadata) if raw_metadata else {}
-        except (TypeError, json.JSONDecodeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
+            parsed = json.loads(raw_metadata)
+        except json.JSONDecodeError as exc:
+            raise SessionDataCorruptionError(f"session {session_id} metadata is invalid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise SessionDataCorruptionError(f"session {session_id} metadata must be an object")
+        return parsed
 
     @staticmethod
-    def _nonnegative_metadata_int(value: object) -> int | None:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    def _optional_nonnegative_metadata_int(session_id: str, metadata: dict, field: str) -> int | None:
+        value = metadata.get(field)
+        if value is None:
             return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise SessionDataCorruptionError(f"session {session_id} metadata.{field} must be a nonnegative integer")
+        return value
+
+    @staticmethod
+    def _active_message_count(session_id: str, value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise SessionDataCorruptionError(f"session {session_id} has invalid active_message_count")
         return value
 
     async def load_session_history_header(self, session_id: str) -> SessionHistoryHeader | None:
@@ -5026,14 +5086,14 @@ class SessionStore:
 
         row = rows[0]
         state = self._session_state_from_row(row)
-        metadata = self._session_metadata(row["metadata"])
-        input_tokens = self._nonnegative_metadata_int(metadata.get("last_input_tokens"))
-        message_count = self._nonnegative_metadata_int(metadata.get("last_message_count"))
+        metadata = self._session_metadata(session_id, row["metadata"])
+        input_tokens = self._optional_nonnegative_metadata_int(session_id, metadata, "last_input_tokens")
+        message_count = self._active_message_count(session_id, row["active_message_count"])
 
         return SessionHistoryHeader(
             state=state,
             last_input_tokens=input_tokens,
-            last_message_count=message_count,
+            active_message_count=message_count,
         )
 
     async def load_session(self, session_id: str) -> SessionData | None:
@@ -5057,7 +5117,7 @@ class SessionStore:
                 isinstance(message, dict) for message in parsed_messages
             )
             messages = parsed_messages if projection_valid else []
-            metadata = self._session_metadata(raw_metadata)
+            metadata = self._session_metadata(session_id, raw_metadata)
             return messages, projection_valid, metadata
 
         messages, projection_valid, metadata = await asyncio.to_thread(_parse_session_projection)
@@ -5075,12 +5135,17 @@ class SessionStore:
             messages,
             fallback_valid=projection_valid,
         )
+        message_count = self._active_message_count(session_id, row["active_message_count"])
+        if projection_valid and message_count != len(messages):
+            raise SessionDataCorruptionError(
+                f"session {session_id} active_message_count does not match its messages projection"
+            )
         await self._restore_active_tool_result_files(session_id, messages)
+        input_tokens = self._optional_nonnegative_metadata_int(session_id, metadata, "last_input_tokens")
         return SessionData(
             state=state,
             messages=messages,
-            last_input_tokens=metadata.get("last_input_tokens"),
-            last_message_count=metadata.get("last_message_count"),
+            last_input_tokens=input_tokens,
             context_generation=state.context_generation,
             context_etag=context_etag,
         )
@@ -5107,7 +5172,7 @@ class SessionStore:
                 SELECT session_id, started_at, last_activity, name,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
                        agent_type, agent_status, area_id, chat_model,
-                       json_array_length(COALESCE(messages, '[]')) AS message_count
+                       active_message_count AS message_count
                 FROM sessions
                 WHERE archived_at IS NULL
                   AND area_id IS NULL
@@ -5123,7 +5188,7 @@ class SessionStore:
                 SELECT session_id, started_at, last_activity, name,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
                        agent_type, agent_status, area_id, chat_model,
-                       json_array_length(COALESCE(messages, '[]')) AS message_count
+                       active_message_count AS message_count
                 FROM sessions
                 WHERE archived_at IS NULL
                   AND area_id = ?
@@ -5301,6 +5366,7 @@ class SessionStore:
                         """
                         UPDATE sessions
                         SET messages = '[]', metadata = '{}', storage_state = 'cold',
+                            active_message_count = 0,
                             context_generation = context_generation + 1,
                             cold_bundle_path = ?, cold_bundle_sha256 = ?, cold_bundle_bytes = ?,
                             cold_logical_bytes = ?, cold_message_count = ?, cold_prose_sha256 = ?,
@@ -5382,11 +5448,12 @@ class SessionStore:
                         [tuple(table_row.get(column) for column in columns) for table_row in table_rows],
                     )
                 original = snapshot["session"]
+                restored_messages = self._strict_active_projection(session_id, original.get("messages"))
                 schema_rows = await connection.execute_fetchall("PRAGMA table_info(sessions)")
                 restorable = {
                     schema_row["name"]
                     for schema_row in schema_rows
-                    if schema_row["name"] not in {"session_id", "context_generation"}
+                    if schema_row["name"] not in {"session_id", "context_generation", "active_message_count"}
                     and not schema_row["name"].startswith("cold_")
                 }
                 columns = [column for column in original if column in restorable and column != "storage_state"]
@@ -5394,12 +5461,13 @@ class SessionStore:
                 await connection.execute(
                     f"""
                     UPDATE sessions SET {assignments}, storage_state = 'hot',
+                        active_message_count = ?,
                         cold_bundle_path = NULL, cold_bundle_sha256 = NULL, cold_bundle_bytes = NULL,
                         cold_logical_bytes = NULL, cold_message_count = NULL, cold_prose_sha256 = NULL,
                         cold_blob_hashes_json = NULL
                     WHERE session_id = ?
                     """,
-                    (*[original.get(column) for column in columns], session_id),
+                    (*[original.get(column) for column in columns], len(restored_messages), session_id),
                 )
                 await connection.commit()
             bundle_path.unlink(missing_ok=True)
@@ -5578,12 +5646,6 @@ class SessionStore:
                 "before": None,
                 "after": None,
             }
-        has_transcript_rows = await self.read_conn.execute_fetchall(
-            SQL_LOAD_SESSION_MESSAGES_COUNT,
-            (session_id,),
-        )
-        if not has_transcript_rows:
-            await self._ensure_session_messages(session_id)
         limit = max(1, min(limit, 250))
 
         async def seq_for_message(ref: str | None) -> int | None:
@@ -5978,7 +6040,6 @@ class SessionStore:
         return payload if isinstance(payload, dict) else {}
 
     async def list_session_turns(self, session_id: str, limit: int = 100) -> list[dict]:
-        await self._ensure_session_messages(session_id)
         rows = await self.read_conn.execute_fetchall(
             """
             SELECT *

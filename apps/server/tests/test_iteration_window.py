@@ -532,7 +532,7 @@ async def test_loop_iteration_precompacts_full_history_before_model_call():
     assert svc.save_calls
     compacted, metadata = svc.save_calls[-1]
     assert len(compacted) == 6
-    assert metadata == {"last_input_tokens": None, "last_message_count": 6}
+    assert metadata == {"last_input_tokens": None}
     assert ctx.initial_input_tokens is None
     assert ctx.run.messages[-1]["client_id"] == client_id
 

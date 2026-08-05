@@ -393,6 +393,8 @@ async def get_session_history(
 ):
     header = await svc.load_history_header(session_id)
     if not header:
+        if session_id is not None:
+            raise HTTPException(status_code=404, detail="Session not found")
         return {
             "messages": [],
             "active_run_id": None,
@@ -526,18 +528,15 @@ async def get_session_history(
         # Snapshot of the session's budget-relevant counters so the desktop
         # can populate the BudgetDial immediately on session open instead of
         # waiting for the next run to finish and emit RunFinishedEvent.
-        # An absent legacy counter stays unknown: immutable transcript rows
-        # overstate active model context after compaction, while parsing the
-        # full saved projection would put the latency back on this hot path.
         "usage": {
             "last_input_tokens": header.last_input_tokens or 0,
-            "message_count": header.last_message_count,
+            "message_count": header.active_message_count,
         },
         "context_budget": _context_budget_snapshot(
             header.state,
             runtime,
             input_tokens=header.last_input_tokens or 0,
-            message_count=header.last_message_count,
+            message_count=header.active_message_count,
         ).model_dump(),
     }
 
@@ -902,7 +901,7 @@ async def update_session_model(
             data.state,
             runtime,
             input_tokens=data.last_input_tokens or 0,
-            message_count=data.last_message_count if data.last_message_count is not None else len(data.messages),
+            message_count=data.active_message_count,
         ).model_dump(),
     }
 
