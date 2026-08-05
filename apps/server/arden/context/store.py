@@ -1024,7 +1024,8 @@ class SessionStore:
         return messages
 
     async def _migrate_active_message_count_schema(self) -> None:
-        async with self.conn.execute("SELECT session_id, messages, metadata FROM sessions") as cursor:
+        cursor = await self.conn.execute("SELECT session_id, messages, metadata FROM sessions")
+        async with cursor:
             async for row in cursor:
                 session_id = str(row["session_id"])
                 self._strict_active_projection(session_id, row["messages"])
