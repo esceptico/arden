@@ -32,6 +32,7 @@ from arden.context.models import AreaContext, SessionState
 from arden.context.store import SessionStore
 from arden.core import spawner as spawner_module
 from arden.core.isolation import IsolationLevel
+from arden.core.public_refs import public_ref
 from arden.core.spawn_lifecycle import (
     ChildSessionLifecycle,
     cancel_and_join,
@@ -719,6 +720,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
             if status == "started":
                 await store.record_background_agent_started(
                     task_id=event["task_id"],
+                    agent_ref=event["agent_ref"],
                     session_id=event["session_id"],
                     parent_run_id=event.get("parent_run_id"),
                     parent_tool_call_id=event.get("parent_tool_call_id"),
@@ -2105,7 +2107,12 @@ async def test_awaited_spawns_reserve_uncapped(monkeypatch):
     assert len(bg_registry.list_pending()) == count
     assert bg_registry.pending_count == 0
     # A detached reserve still has its full cap available beside them.
-    assert bg_registry.reserve("bg-probe", command="probe", limit=AGENT_MAX_CONCURRENT)
+    assert bg_registry.reserve(
+        "bg-probe",
+        command="probe",
+        limit=AGENT_MAX_CONCURRENT,
+        agent_ref=public_ref("probe", "bg-probe", empty_slug="agent"),
+    )
     bg_registry.release("bg-probe")
 
     gate.set()

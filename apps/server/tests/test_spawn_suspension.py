@@ -10,6 +10,7 @@ import pytest
 from arden.agent import AgentHooks, Choice, CompletionResponse, Message, Usage
 from arden.context.models import SessionState
 from arden.core import spawner as spawner_module
+from arden.core.public_refs import public_ref
 from arden.core.spawner import create_spawn_fn
 from arden.server.state import RunRegistry
 from arden.tools.core.context import BackgroundTaskRegistry, ChildSession, IOBridge, RunContext, ToolContext
@@ -90,6 +91,10 @@ def _spawn_fn():
     return create_spawn_fn(executor=make_executor(), model="gpt-5-mini", max_depth=3, current_depth=0)
 
 
+def _agent_ref(task_id: str, task: str = "research task") -> str:
+    return public_ref(task, task_id, empty_slug="agent")
+
+
 @pytest.mark.asyncio
 async def test_awaited_spawn_rejects_mismatched_durable_wiring_before_side_effects():
     io, calls = _suspension_io()
@@ -128,7 +133,11 @@ async def test_awaited_spawn_rejects_malformed_terminal_suspension():
         existing={
             "kind": "subagent_result",
             "status": "completed",
-            "payload": {"child_run_id": "agent-old", "respawns": 0},
+            "payload": {
+                "child_run_id": "agent-old",
+                "agent_ref": _agent_ref("agent-old"),
+                "respawns": 0,
+            },
             "resolution": None,
         }
     )
@@ -166,6 +175,7 @@ async def test_awaited_spawn_records_suspension_and_store_settles_completion(mon
     assert record["suspension_id"] == "call-research"
     assert record["kind"] == "subagent_result"
     assert record["payload"]["child_run_id"] == result.child_run_id
+    assert record["payload"]["agent_ref"] == result.agent_ref
     assert record["payload"]["agent_type"] == "research"
     assert record["payload"]["respawns"] == 0
     assert [event["status"] for event in durable_events] == ["started", "completed"]
@@ -354,7 +364,12 @@ async def test_replay_with_resolved_suspension_returns_recorded_result_without_s
             "kind": "subagent_result",
             "status": "completed",
             "resolution": {"status": "completed", "result": "recorded answer"},
-            "payload": {"child_run_id": "agent-old", "child_session_id": "test::abcd1234", "respawns": 0},
+            "payload": {
+                "child_run_id": "agent-old",
+                "child_session_id": "test::abcd1234",
+                "agent_ref": _agent_ref("agent-old"),
+                "respawns": 0,
+            },
         }
     )
     session_service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())
@@ -376,6 +391,8 @@ async def test_replay_with_resolved_suspension_returns_recorded_result_without_s
     assert result.wait is True
     assert result.child_run_id == "agent-old"
     assert result.child_session_id == "test::abcd1234"
+    assert result.agent_ref == _agent_ref("agent-old")
+    assert result.child_session_ref == result.agent_ref
     assert calls["consume"] == [{"run_id": "run-1", "suspension_id": "call-research"}]
     # Nothing was spawned: no child session, no roster row, no new suspension.
     session_service.provision_state.assert_not_awaited()
@@ -394,7 +411,11 @@ async def test_replay_with_pending_suspension_respawns_and_increments_counter(mo
             "kind": "subagent_result",
             "status": "pending",
             "resolution": None,
-            "payload": {"child_run_id": "agent-dead", "respawns": 0},
+            "payload": {
+                "child_run_id": "agent-dead",
+                "agent_ref": _agent_ref("agent-dead"),
+                "respawns": 0,
+            },
         }
     )
     ctx = _make_ctx(io, bg_registry=_durable_registry(durable_events))
@@ -410,9 +431,9 @@ async def test_replay_with_pending_suspension_respawns_and_increments_counter(mo
 
     assert result.status == "completed"
     assert result.text == "fresh answer"
-    # A fresh child ran under a NEW id; the (upserted) row carries it plus the
-    # bumped respawn counter.
-    assert result.child_run_id != "agent-dead"
+    # Recovery keeps one logical agent identity and bumps only its attempt count.
+    assert result.child_run_id == "agent-dead"
+    assert result.agent_ref == _agent_ref("agent-dead")
     assert len(calls["record"]) == 1
     assert calls["record"][0]["payload"]["respawns"] == 1
     assert calls["record"][0]["payload"]["child_run_id"] == result.child_run_id
@@ -433,7 +454,12 @@ async def test_replay_with_pending_suspension_caps_respawns(monkeypatch):
             "kind": "subagent_result",
             "status": "pending",
             "resolution": None,
-            "payload": {"child_run_id": "agent-dead", "child_session_id": "test::dead", "respawns": 2},
+            "payload": {
+                "child_run_id": "agent-dead",
+                "child_session_id": "test::dead",
+                "agent_ref": _agent_ref("agent-dead"),
+                "respawns": 2,
+            },
         }
     )
     bg_registry = _durable_registry([])

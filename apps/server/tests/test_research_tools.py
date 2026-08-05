@@ -14,6 +14,7 @@ from arden.agent.types.tools import ToolSourceRef
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
 from arden.core.agent_types import apply_profile
+from arden.core.public_refs import public_ref
 from arden.core.spawner import SpawnResult, create_spawn_fn
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
@@ -45,6 +46,11 @@ SCRATCHPAD_TOOL_NAMES = {
     "list_research_artifacts",
 }
 
+
+def _agent_ref(task: str, child_run_id: str) -> str:
+    return public_ref(task, child_run_id, empty_slug="agent")
+
+
 HARNESS_TOOL_NAMES = {
     "research_track_source",
     "research_curate",
@@ -62,6 +68,18 @@ def test_scratchpad_tools_are_research_only():
     assert not ((SCRATCHPAD_TOOL_NAMES | HARNESS_TOOL_NAMES) & main_tool_names)
 
 
+def test_spawn_result_requires_public_refs_for_a_spawned_child():
+    with pytest.raises(ValueError, match="valid agent_ref"):
+        SpawnResult(text="started", child_run_id="internal-child")
+    with pytest.raises(ValueError, match="both be present"):
+        SpawnResult(
+            text="started",
+            child_run_id="internal-child",
+            child_session_id="internal-session",
+            agent_ref=_agent_ref("task", "internal-child"),
+        )
+
+
 @pytest.mark.asyncio
 async def test_research_offers_scratchpad_and_writes_spawn_provenance(session_store: SessionStore, monkeypatch):
     monkeypatch.setattr(research_module, "generate_slug", lambda _: "fun-panda")
@@ -70,10 +88,13 @@ async def test_research_offers_scratchpad_and_writes_spawn_provenance(session_st
 
     async def spawn_fn(ctx, task, **kwargs):
         captured.update(kwargs)
+        agent_ref = _agent_ref("x", "child-1")
         return SpawnResult(
             text="Started a background agent to: x",
             child_run_id="child-1",
             child_session_id="test::c1",
+            agent_ref=agent_ref,
+            child_session_ref=agent_ref,
             wait=False,
             status="running",
         )
@@ -96,7 +117,7 @@ async def test_research_offers_scratchpad_and_writes_spawn_provenance(session_st
     assert result.data["provenance"]["query"] == "x"
     assert result.data["provenance"]["derivation"] == {
         "research_tool_call_id": "research-1",
-        "child_run_id": "child-1",
+        "agent_ref": _agent_ref("x", "child-1"),
     }
     assert result.data["provenance"]["workspace_ref"] == "research-fun-panda:_provenance.json"
     assert "usage" not in result.data
@@ -104,7 +125,7 @@ async def test_research_offers_scratchpad_and_writes_spawn_provenance(session_st
     assert "research_workspace" not in result.data
     persisted = await research_artifacts_module._get_fs_artifact("research-fun-panda", "_provenance.json")
     assert persisted is not None
-    assert json.loads(persisted)["derivation"]["child_run_id"] == "child-1"
+    assert json.loads(persisted)["derivation"]["agent_ref"] == _agent_ref("x", "child-1")
 
 
 def _context(
@@ -146,10 +167,13 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
 
     async def spawn_fn(ctx, task, **kwargs):
         captured.update(kwargs)
+        agent_ref = _agent_ref("inspect research behavior", "agent-research-1")
         return SpawnResult(
             text="Started a background agent to: inspect research behavior",
             child_run_id="agent-research-1",
             child_session_id="test::r1",
+            agent_ref=agent_ref,
+            child_session_ref=agent_ref,
             parent_tool_call_id="research-1",
             agent_type="research",
             wait=False,
@@ -169,7 +193,8 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
 
     # Detached contract: the tool returns a receipt with the child session
     # address; the report is delivered later as a hidden completion message.
-    assert "test::r1" in result.content
+    assert _agent_ref("inspect research behavior", "agent-research-1") in result.content
+    assert "test::r1" not in result.content
     assert "delivered here automatically" in result.content
     # research now hands the spawner a PROFILE (capability + ledger tools + spawn-tool
     # excludes), not a pre-built tool list — the spawner builds the toolset from it.
@@ -180,9 +205,8 @@ async def test_research_spawns_child_with_research_ledger_helpers(monkeypatch):
     assert captured["wait"] is False
     assert result.data is not None
     assert result.data["child_agent"] == {
-        "child_run_id": "agent-research-1",
-        "child_session_id": "test::r1",
-        "parent_tool_call_id": "research-1",
+        "agent_ref": _agent_ref("inspect research behavior", "agent-research-1"),
+        "session_ref": _agent_ref("inspect research behavior", "agent-research-1"),
         "agent_type": "research",
         "wait": False,
         "status": "running",
@@ -208,7 +232,16 @@ async def test_research_depth_gate_excludes_nested_research(depth, max_depth, ex
 
     async def spawn_fn(ctx, task, **kwargs):
         captured.update(kwargs)
-        return SpawnResult(text="done")
+        agent_ref = _agent_ref(task, "agent-depth")
+        return SpawnResult(
+            text="done",
+            child_run_id="agent-depth",
+            child_session_id="test::depth",
+            agent_ref=agent_ref,
+            child_session_ref=agent_ref,
+            wait=False,
+            status="running",
+        )
 
     ctx = _context(SharedLedger(), spawn_fn=spawn_fn)
     ctx.run.max_depth = max_depth
@@ -236,6 +269,18 @@ async def test_research_at_agent_cap_returns_conflict():
     assert result.is_error
     assert result.outcome.error.code == "conflict"
     assert "already at the limit" in result.content
+
+
+@pytest.mark.asyncio
+async def test_research_rejects_a_success_receipt_without_public_refs():
+    async def spawn_fn(ctx, task, **kwargs):
+        return SpawnResult(text="started", wait=False, status="running")
+
+    ctx = _context(SharedLedger(), spawn_fn=spawn_fn)
+    execution = ToolExecution(tool_id="research-1", tool_name="research", ctx=ctx)
+
+    with pytest.raises(RuntimeError, match="missing its agent/session ref"):
+        await research_module.research(execution, research_module.ResearchInput(task="x", depth="normal"))
 
 
 class _ToolInput(BaseModel):

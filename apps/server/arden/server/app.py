@@ -210,6 +210,7 @@ async def _redeliver_background_completions(
             await prime_bus_cursor_from_store(bus_registry, session_id, runtime.session_service.store)
             await registry.deliver_result(
                 task_id=completion["task_id"],
+                agent_ref=completion["agent_ref"],
                 result=completion.get("result_text") or "",
                 label=completion["command"],
                 status=completion["status"],

@@ -308,6 +308,8 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
             preview="At the agent limit",
             recovery_action="Wait for a running agent to finish, then spawn again.",
         )
+    if spawn.agent_ref is None or spawn.child_session_ref is None:
+        raise RuntimeError("detached research spawn is missing its agent/session ref")
 
     data: dict = spawn.child_agent_data()
     data["research_scope_id"] = research_scope_id
@@ -325,7 +327,7 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
         },
         "derivation": {
             "research_tool_call_id": execution.tool_id,
-            "child_run_id": spawn.child_run_id,
+            "agent_ref": spawn.agent_ref,
         },
     }
     workspace_path = "_provenance.json"
@@ -339,8 +341,8 @@ async def research(execution: ToolExecution, args: ResearchInput) -> ToolResult:
 
     content = (
         f"Started a {args.depth} research agent on: {args.task}\n"
-        f"Its session is {spawn.child_session_id} — steer it with session_send_message(session_id=...), "
-        "inspect its work with session_read(session_id=...). "
+        f'Its agent reference is {spawn.agent_ref} — steer it with session_send_message(session_ref="{spawn.child_session_ref}"), '
+        "inspect its work with session_read(session_ref=...). "
         "The research report is delivered here automatically when done — do not poll for it; "
         "continue other work or end your turn and wait."
     )

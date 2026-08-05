@@ -13,6 +13,9 @@ class BackgroundStartDisposition(StrEnum):
 class SessionState:
     session_id: str
     started_at: datetime
+    # Immutable, model-facing address. Database/session ids stay internal to
+    # the service, API, desktop and SSE layers.
+    public_ref: str | None = None
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     name: str | None = None
     auto_approve: set[str] = field(default_factory=set)

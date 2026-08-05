@@ -29,6 +29,7 @@ from arden.core.deferred_tools_middleware import DeferredToolsModelRequestMiddle
 from arden.core.isolation import IsolationLevel
 from arden.core.llm_client import llm_client
 from arden.core.prompts import AREA_BLOCK, TEAM_CHILD_BLOCK
+from arden.core.public_refs import is_public_ref, public_ref
 from arden.core.spawn_lifecycle import (
     ChildSessionLifecycle,
     activate_child,
@@ -92,6 +93,8 @@ class SpawnResult:
     cost: float | None = None
     child_run_id: str = ""
     child_session_id: str | None = None
+    agent_ref: str | None = None
+    child_session_ref: str | None = None
     parent_tool_call_id: str | None = None
     agent_type: str = "sub_agent"
     wait: bool = True
@@ -100,6 +103,12 @@ class SpawnResult:
     tool_call_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.child_run_id and (self.agent_ref is None or not is_public_ref(self.agent_ref)):
+            raise ValueError("a spawned child must have a valid agent_ref")
+        if (self.child_session_id is None) != (self.child_session_ref is None):
+            raise ValueError("child session id and ref must either both be present or both be absent")
+        if self.child_session_ref is not None and self.child_session_ref != self.agent_ref:
+            raise ValueError("a child session ref must equal its agent_ref")
         object.__setattr__(self, "source_refs", normalize_source_refs(self.source_refs))
         object.__setattr__(
             self, "tool_call_ids", tuple(dict.fromkeys(call_id for call_id in self.tool_call_ids if call_id))
@@ -109,14 +118,13 @@ class SpawnResult:
         if not self.child_run_id:
             return {}
         child_agent = {
-            "child_run_id": self.child_run_id,
-            "parent_tool_call_id": self.parent_tool_call_id,
+            "agent_ref": self.agent_ref,
             "agent_type": self.agent_type,
             "wait": self.wait,
             "status": self.status,
         }
-        if self.child_session_id:
-            child_agent["child_session_id"] = self.child_session_id
+        if self.child_session_ref:
+            child_agent["session_ref"] = self.child_session_ref
         if self.tool_call_ids:
             child_agent["tool_call_ids"] = list(self.tool_call_ids)
         data = {"child_agent": child_agent}
@@ -252,7 +260,8 @@ def create_spawn_fn(
         scope: ToolFilter | None = None,
         exclude_tools: frozenset[str] | None = None,
         task_id: str | None = None,
-    ) -> str:
+        agent_ref: str | None = None,
+    ) -> SpawnResult:
         should_wait = (not background) if wait is None else wait
         background = not should_wait
         # Restart recovery re-spawns under the original durable task id so the
@@ -261,6 +270,10 @@ def create_spawn_fn(
         child_run_id = task_id or f"agent-{uuid4().hex[:10]}"
         resolved_agent_type = agent_type or kind.replace("-", "_").replace(" ", "_")
         task_summary = task[:120]
+        if agent_ref is None:
+            agent_ref = public_ref(task_summary or "agent", child_run_id, empty_slug="agent")
+        elif not is_public_ref(agent_ref):
+            raise ValueError("agent_ref is invalid")
         # Durable-await key: one suspension row per awaited child. A research
         # call has one child and a tool_call_id that is stable across a run
         # resume; workflow fan-out shares one tool_call_id across MANY children,
@@ -277,6 +290,7 @@ def create_spawn_fn(
             parent_io.record_suspension,
             parent_io.resolve_suspension,
         )
+        recovered_child_session_id: str | None = None
         if suspension_id:
             has_any_suspension_callback = any(callback is not None for callback in suspension_callbacks)
             has_all_suspension_callbacks = all(callback is not None for callback in suspension_callbacks)
@@ -293,6 +307,8 @@ def create_spawn_fn(
             )
             if raw_suspension is not None:
                 suspension = decode_child_suspension(raw_suspension)
+                child_run_id = suspension.child_run_id
+                agent_ref = suspension.agent_ref
                 if suspension.status != "pending":
                     # A previous process already ran this child to a terminal
                     # state — hand back the recorded outcome without spawning.
@@ -305,6 +321,8 @@ def create_spawn_fn(
                         text=result,
                         child_run_id=suspension.child_run_id,
                         child_session_id=suspension.child_session_id,
+                        agent_ref=agent_ref,
+                        child_session_ref=agent_ref if suspension.child_session_id is not None else None,
                         parent_tool_call_id=parent_id,
                         agent_type=resolved_agent_type,
                         wait=True,
@@ -335,11 +353,14 @@ def create_spawn_fn(
                         text=failure,
                         child_run_id=suspension.child_run_id,
                         child_session_id=suspension.child_session_id,
+                        agent_ref=agent_ref,
+                        child_session_ref=agent_ref if suspension.child_session_id is not None else None,
                         parent_tool_call_id=parent_id,
                         agent_type=resolved_agent_type,
                         wait=True,
                         status="failed",
                     )
+                recovered_child_session_id = suspension.child_session_id
         # A distinct slug still names parent activity rows immediately, so
         # concurrent sub-agents do not collapse into N generic "Agent" rows.
         agent_slug = generate_slug(2)
@@ -391,12 +412,15 @@ def create_spawn_fn(
         allowed_tool_names = tool_schema_names(filtered_tools)
         child_model = model_override or model
         child_state = _create_session_state(calling_ctx, isolation)
+        if recovered_child_session_id is not None:
+            child_state.session_id = recovered_child_session_id
         # FULL isolation mints a distinct child session ({parent}::{hex}); SHARED
         # reuses the parent's. Advertise child_session_id on this fact alone —
         # not on whether the row already persisted — so a provisioning hiccup
         # can't strip the id and leave the UI unable to open or clear the agent.
         has_child_session = child_state.session_id != calling_ctx.session_id
         if has_child_session:
+            child_state.public_ref = agent_ref
             child_state.name = task_summary or agent_slug
             child_state.session_type = "agent"
             child_state.parent_session_id = calling_ctx.session_id
@@ -619,7 +643,11 @@ def create_spawn_fn(
             async def finalize() -> None:
                 async def record_terminal(terminal_status: str, _persistence_error: Exception | None) -> None:
                     if durable_started:
-                        await registry.record_finished(task_id=task_id, status=terminal_status)
+                        await registry.record_finished(
+                            task_id=task_id,
+                            agent_ref=agent_ref,
+                            status=terminal_status,
+                        )
 
                 await run_operations(
                     "unstarted child cleanup failed",
@@ -715,6 +743,8 @@ def create_spawn_fn(
                 cost=sub_tracker.cost,
                 child_run_id=child_run_id,
                 child_session_id=child_state.session_id if has_child_session else None,
+                agent_ref=agent_ref,
+                child_session_ref=child_state.public_ref if has_child_session else None,
                 parent_tool_call_id=parent_id,
                 agent_type=resolved_agent_type,
                 wait=should_wait,
@@ -734,6 +764,7 @@ def create_spawn_fn(
                 task_id,
                 command=label,
                 limit=None if should_wait else AGENT_MAX_CONCURRENT,
+                agent_ref=agent_ref,
                 child_session_id=child_state.session_id if has_child_session else None,
                 parent_run_id=calling_ctx.run.run_id,
                 summary=task_summary,
@@ -767,6 +798,7 @@ def create_spawn_fn(
                 parent_tool_call_id=parent_id,
                 suspension_id=suspension_id,
                 child_session_id=child_state.session_id if has_child_session else None,
+                agent_ref=agent_ref,
                 agent_type=resolved_agent_type,
                 wait=should_wait,
                 spawn_spec=spawn_spec.to_json(),
@@ -848,6 +880,7 @@ def create_spawn_fn(
                             "task": task_summary,
                             "child_run_id": task_id,
                             "child_session_id": child_state.session_id if has_child_session else None,
+                            "agent_ref": agent_ref,
                             "agent_type": resolved_agent_type,
                             "respawns": respawns,
                         },
@@ -902,6 +935,7 @@ def create_spawn_fn(
                             (
                                 lambda: registry.record_finished(
                                     task_id=task_id,
+                                    agent_ref=agent_ref,
                                     status=terminal_status,
                                     result_text=result_text,
                                 ),
@@ -1061,7 +1095,7 @@ def create_spawn_fn(
                 detail = f"{event.display_name or event.name}: {event.preview}"
             else:
                 return ()
-            await registry.record_activity(task_id, detail)
+            await registry.record_activity(task_id, detail, agent_ref=agent_ref)
             return (
                 BackgroundTaskEvent(
                     task_id=task_id,
@@ -1106,6 +1140,7 @@ def create_spawn_fn(
                         status=terminal_status,
                         emit=parent_emit,
                         child_session_id=child_state.session_id if has_child_session else None,
+                        agent_ref=agent_ref,
                         parent_tool_call_id=parent_id,
                         agent_type=resolved_agent_type,
                         wait=should_wait,
@@ -1171,6 +1206,8 @@ def create_spawn_fn(
             text=f"Started a background agent to: {task}",
             child_run_id=child_run_id,
             child_session_id=child_state.session_id if has_child_session else None,
+            agent_ref=agent_ref,
+            child_session_ref=child_state.public_ref if has_child_session else None,
             parent_tool_call_id=parent_id,
             agent_type=resolved_agent_type,
             wait=False,

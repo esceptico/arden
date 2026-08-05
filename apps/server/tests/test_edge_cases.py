@@ -11,6 +11,7 @@ import arden.database as database
 from arden.agent import Agent
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
+from arden.core.public_refs import public_ref
 from arden.tools.core import EmptyInput, Tool, ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, ToolExecution
 from tests.helpers import (
@@ -241,6 +242,7 @@ async def test_registry_deliver_result_emits_hidden_model_visible_terminal_event
         label="research",
         status="completed",
         emit=emit,
+        agent_ref=public_ref("agent", "bg-1", empty_slug="agent"),
     )
 
     assert emitted[0].event_id == "bg:bg-1:completed"

@@ -9,6 +9,7 @@ import pytest_asyncio
 import arden.database as database
 from arden.context.store import SessionStore
 from arden.core.isolation import IsolationLevel
+from arden.core.public_refs import public_ref
 from arden.core.spawn_spec import ParentRef, SpawnSpec
 from arden.outbox import OUTBOX_AGENT_RUN_REQUESTED, OutboxStore
 from arden.server.app import _enqueue_background_respawns
@@ -60,6 +61,7 @@ def _spec(session_id: str = "sess-1") -> str:
 async def _start_detached(store: SessionStore, task_id: str, *, wait: bool = False, spawn_spec: str | None = None):
     await store.record_background_agent_started(
         task_id=task_id,
+        agent_ref=public_ref("research", f"sess-1:{task_id}", empty_slug="agent"),
         session_id="sess-1",
         parent_run_id="run-1",
         command="research",

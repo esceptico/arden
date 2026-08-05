@@ -7,6 +7,7 @@ from typing import Literal
 from arden.context.models import SessionData, SessionHistoryHeader, SessionState
 from arden.context.store import AREA_FILTER_UNSET, SessionStore
 from arden.core.compactor import compact_messages, compactable_range
+from arden.core.public_refs import public_ref
 from arden.core.tool_result_files import clone_result_files, purge_session_results, rewrite_result_paths
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import SessionActivityEvent, SessionCreatedEvent, SSEEvent
@@ -25,6 +26,7 @@ def session_row(state: SessionState, message_count: int) -> dict:
     patch a row without a refetch."""
     return {
         "session_id": state.session_id,
+        "public_ref": state.public_ref,
         "started_at": state.started_at.isoformat(),
         "last_activity": state.last_activity.isoformat(),
         "name": state.name,
@@ -89,9 +91,15 @@ class SessionService:
         chat_model: str | None = None,
     ) -> SessionState:
         now = datetime.now(UTC)
+        resolved_session_id = session_id or f"{now.strftime('%Y%m%d_%H%M%S')}_{now.microsecond // 1000:03d}"
         return SessionState(
-            session_id=session_id or f"{now.strftime('%Y%m%d_%H%M%S')}_{now.microsecond // 1000:03d}",
+            session_id=resolved_session_id,
             started_at=now,
+            public_ref=public_ref(
+                name.strip() if name and name.strip() else session_type,
+                resolved_session_id,
+                empty_slug=session_type,
+            ),
             name=name,
             session_type=session_type,
             origin_automation_id=origin_automation_id,
@@ -179,6 +187,23 @@ class SessionService:
         if not sid:
             return None
         return await self.store.load_session(sid)
+
+    async def resolve_session_ref(
+        self,
+        session_ref: str,
+        *,
+        area_id: str | object | None = AREA_FILTER_UNSET,
+    ) -> str | None:
+        return await self.store.get_session_id_by_ref(session_ref, area_id=area_id)
+
+    async def load_by_ref(
+        self,
+        session_ref: str,
+        *,
+        area_id: str | object | None = AREA_FILTER_UNSET,
+    ) -> SessionData | None:
+        session_id = await self.resolve_session_ref(session_ref, area_id=area_id)
+        return await self.load(session_id) if session_id is not None else None
 
     async def load_history_header(self, session_id: str | None = None) -> SessionHistoryHeader | None:
         sid = session_id or await self.store.get_latest_id()
@@ -803,7 +828,7 @@ class SessionService:
             reason="session_branch",
         )
         tool_result_ids = self.store.active_tool_result_ids(messages)
-        background_result_ids = self.store.active_background_result_ids(messages)
+        background_result_refs = self.store.active_background_result_ids(messages)
         messages = rewrite_result_paths(messages, session_id, new_state.session_id)
         metadata = {"last_input_tokens": data.last_input_tokens} if data.last_input_tokens else None
         await self.store.create_session_branch(
@@ -811,7 +836,7 @@ class SessionService:
             state=new_state,
             messages=messages,
             tool_call_ids=tool_result_ids,
-            background_task_ids=background_result_ids,
+            background_agent_refs=background_result_refs,
             metadata=metadata,
         )
         try:

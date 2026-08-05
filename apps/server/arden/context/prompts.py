@@ -32,8 +32,8 @@ List of identifiers that may need retrieval:
 - note paths referenced
 - raw_item IDs for full content
 - email IDs
-- background result task IDs; preserve the exact locator as
-  `agent_result_read(task_id="...", offset=0, limit=4000)`
+- background agent refs; preserve the exact locator as
+  `agent_result_read(agent_ref="...", offset=0, limit=4000)`
 
 ## Rules:
 - If a fact cannot be traced to a source, mark (unverified)
@@ -56,8 +56,8 @@ Update each section by merging new information into the existing summary:
 - **Open Loops**: Add new loops, remove resolved ones, keep unresolved ones.
 - **Next Actions**: Rewrite to reflect current state — drop completed items, add new ones.
 - **Key Facts**: Add new facts, keep existing facts still relevant to next actions, drop stale ones.
-- **Pointers**: Update with current set of identifiers needing retrieval. Preserve background result task IDs
-  as exact `agent_result_read(task_id="...", offset=0, limit=4000)` locators until that evidence is obsolete.
+- **Pointers**: Update with current set of identifiers needing retrieval. Preserve background agent refs
+  as exact `agent_result_read(agent_ref="...", offset=0, limit=4000)` locators until that evidence is obsolete.
 
 ## Rules:
 - Preserve detail from the existing summary that is still relevant — do not re-summarize it lossy.
@@ -73,7 +73,7 @@ Preserve:
 - research_outline sections, covered sections, uncovered gaps
 - source-backed facts with source pointers or short quotes
 - contradictions and dead ends with what was tried
-- tool/background result pointers, including exact `agent_result_read(task_id="...", offset=0, limit=4000)`
+- tool/background result pointers, including exact `agent_result_read(agent_ref="...", offset=0, limit=4000)`
   locators, file paths, URLs, message IDs, and query strings needed for retrieval
 
 Rules:

@@ -20,7 +20,7 @@ TEAM_CHILD_BLOCK = f"""TEAM:
 - Messages can arrive mid-run in your loop:
   - <steering_message>…</steering_message> — guidance from your parent or the user; fold it into the current work.
   - <app_followup_task>…</app_followup_task> — a new task assigned to you; do it and cover it in your final message.
-  - <background_agent_result session_id="…" status="…">…</background_agent_result> — an agent YOU spawned reporting back; integrate its result, do not redo its work.
+  - <background_agent_result agent_ref="…" status="…">…</background_agent_result> — an agent YOU spawned reporting back; integrate its result, do not redo its work.
 - An <agent_roster> note lists your own live agents whenever that set changes.
 - Other agents may share this machine and filesystem — do not revert or overwrite edits you did not make.
 - At most {AGENT_MAX_CONCURRENT} detached agents run per session; spawn accordingly."""
@@ -116,7 +116,7 @@ Prefer research() over doing many tool calls yourself — it's faster (parallel)
 
 ## AGENT TEAM
 
-Agents you spawn run detached and report back as hidden <background_agent_result> messages in this conversation. A spawn receipt is not a result — never answer from receipts; say what you started, end the turn, and write the real answer when the reports arrive. An <agent_roster> note lists your live agents whenever that set changes. Steer a running agent with session_send_message(session_id=...); assign more work — or wake a finished agent — with app_followup_task(session_id=...).
+Agents you spawn run detached and report back as hidden <background_agent_result> messages in this conversation. A spawn receipt is not a result — never answer from receipts; say what you started, end the turn, and write the real answer when the reports arrive. An <agent_roster> note lists your live agents whenever that set changes. Steer a running agent with session_send_message(session_ref=...); assign more work — or wake a finished agent — with app_followup_task(agent_ref=...).
 
 ## TOOLS
 

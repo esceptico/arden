@@ -1,18 +1,41 @@
 import asyncio
 import contextlib
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 import arden.tools.background as background_module
 from arden.constants import OFFLOAD_THRESHOLD
 from arden.context.models import SessionState
+from arden.core.public_refs import public_ref
 from arden.server.state import RunRegistry
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
 from arden.tools.core.registry import ToolRegistry
 
 
-def _ctx(registry: BackgroundTaskRegistry, run_registry: RunRegistry | None = None) -> ToolContext:
+def _ref(task_id: str) -> str:
+    return public_ref("agent", task_id, empty_slug="agent")
+
+
+class _ResultStore:
+    def __init__(self, results: dict[str, str] | None = None):
+        self.results = results or {}
+
+    async def get_background_agent_result_by_ref(self, _session_id: str, agent_ref: str) -> str | None:
+        return self.results.get(agent_ref)
+
+    async def request_background_agent_cancel_cascade(self, **_kwargs):
+        return []
+
+
+def _ctx(
+    registry: BackgroundTaskRegistry,
+    run_registry: RunRegistry | None = None,
+    *,
+    results: dict[str, str] | None = None,
+) -> ToolContext:
     return ToolContext(
         session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
         registry=ToolRegistry(),
@@ -20,6 +43,7 @@ def _ctx(registry: BackgroundTaskRegistry, run_registry: RunRegistry | None = No
         io=IOBridge(),
         background_tasks=registry,
         run_registry=run_registry,
+        services={"session": SimpleNamespace(store=_ResultStore(results))},
     )
 
 
@@ -27,20 +51,22 @@ def _ctx(registry: BackgroundTaskRegistry, run_registry: RunRegistry | None = No
 async def test_agent_result_read_pages_exact_unicode_content():
     full = 'αβ\n"quoted"\n終わり'
 
-    async def read_result(task_id: str) -> str | None:
-        return full if task_id == "agent-1" else None
-
-    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
-    execution = ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry))
+    agent_ref = _ref("agent-1")
+    registry = BackgroundTaskRegistry(session_id="test")
+    execution = ToolExecution(
+        tool_id="t",
+        tool_name="agent_result_read",
+        ctx=_ctx(registry, results={agent_ref: full}),
+    )
 
     first = await background_module.agent_result_read(
         execution,
-        background_module.AgentResultReadInput(task_id="agent-1", offset=0, limit=6),
+        background_module.AgentResultReadInput(agent_ref=agent_ref, offset=0, limit=6),
     )
     second = await background_module.agent_result_read(
         execution,
         background_module.AgentResultReadInput(
-            task_id="agent-1",
+            agent_ref=agent_ref,
             offset=first.data["next_offset"],
         ),
     )
@@ -48,14 +74,14 @@ async def test_agent_result_read_pages_exact_unicode_content():
     assert full[:6] in first.content
     assert full[6:] in second.content
     assert first.data == {
-        "task_id": "agent-1",
+        "agent_ref": agent_ref,
         "offset": 0,
         "end_offset": 6,
         "next_offset": 6,
         "total_chars": len(full),
         "has_more": True,
     }
-    assert 'agent_result_read(task_id="agent-1", offset=6, limit=6)' in first.content
+    assert f'agent_result_read(agent_ref="{agent_ref}", offset=6, limit=6)' in first.content
     assert second.data["next_offset"] is None
     assert second.data["has_more"] is False
     assert "End of background agent result." in second.content
@@ -66,13 +92,15 @@ async def test_agent_result_read_pages_exact_unicode_content():
 async def test_agent_result_read_worst_case_page_stays_direct_and_bounded():
     full = ('\x00"\\💥' * 2_000) + "tail"
 
-    async def read_result(_task_id: str) -> str:
-        return full
-
-    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
+    agent_ref = _ref("worst-case")
+    registry = BackgroundTaskRegistry(session_id="test")
     result = await background_module.agent_result_read(
-        ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry)),
-        background_module.AgentResultReadInput(task_id="x" * 200),
+        ToolExecution(
+            tool_id="t",
+            tool_name="agent_result_read",
+            ctx=_ctx(registry, results={agent_ref: full}),
+        ),
+        background_module.AgentResultReadInput(agent_ref=agent_ref),
     )
     assert full[: background_module.BACKGROUND_RESULT_READ_MAX_CHARS] in result.content
     assert result.data["next_offset"] == background_module.BACKGROUND_RESULT_READ_MAX_CHARS
@@ -84,19 +112,21 @@ async def test_agent_result_read_worst_case_page_stays_direct_and_bounded():
 
 @pytest.mark.asyncio
 async def test_agent_result_read_rejects_missing_result_and_past_end_offset():
-    async def read_result(task_id: str) -> str | None:
-        return "done" if task_id == "agent-1" else None
-
-    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
-    execution = ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry))
+    agent_ref = _ref("agent-1")
+    registry = BackgroundTaskRegistry(session_id="test")
+    execution = ToolExecution(
+        tool_id="t",
+        tool_name="agent_result_read",
+        ctx=_ctx(registry, results={agent_ref: "done"}),
+    )
 
     missing = await background_module.agent_result_read(
         execution,
-        background_module.AgentResultReadInput(task_id="missing"),
+        background_module.AgentResultReadInput(agent_ref=_ref("missing")),
     )
     past_end = await background_module.agent_result_read(
         execution,
-        background_module.AgentResultReadInput(task_id="agent-1", offset=5),
+        background_module.AgentResultReadInput(agent_ref=agent_ref, offset=5),
     )
 
     assert missing.is_error
@@ -107,26 +137,26 @@ async def test_agent_result_read_rejects_missing_result_and_past_end_offset():
 
 @pytest.mark.asyncio
 async def test_agent_result_read_empty_terminal_page_and_quoted_task_locator():
-    task_id = 'agent-"quoted"\nnext'
-
-    async def read_result(candidate: str) -> str | None:
-        return "done" if candidate == task_id else None
-
-    registry = BackgroundTaskRegistry(session_id="test", read_result=read_result)
+    agent_ref = _ref("quoted")
+    registry = BackgroundTaskRegistry(session_id="test")
     result = await background_module.agent_result_read(
-        ToolExecution(tool_id="t", tool_name="agent_result_read", ctx=_ctx(registry)),
-        background_module.AgentResultReadInput(task_id=task_id, offset=4, limit=3),
+        ToolExecution(
+            tool_id="t",
+            tool_name="agent_result_read",
+            ctx=_ctx(registry, results={agent_ref: "done"}),
+        ),
+        background_module.AgentResultReadInput(agent_ref=agent_ref, offset=4, limit=3),
     )
 
     assert result.data == {
-        "task_id": task_id,
+        "agent_ref": agent_ref,
         "offset": 4,
         "end_offset": 4,
         "next_offset": None,
         "total_chars": 4,
         "has_more": False,
     }
-    assert 'Task: "agent-\\"quoted\\"\\nnext"' in result.content
+    assert f'Agent: "{agent_ref}"' in result.content
     assert "End of background agent result." in result.content
 
 
@@ -144,16 +174,21 @@ async def _cancel(task: asyncio.Task) -> None:
 
 async def _live_agent(registry: BackgroundTaskRegistry, task_id: str, child_session_id: str) -> asyncio.Task:
     task = await _register_live(registry, task_id, "scan docs")
-    await registry.record_started(task_id=task_id, command="scan docs", child_session_id=child_session_id)
+    await registry.record_started(
+        task_id=task_id,
+        agent_ref=_ref(task_id),
+        command="scan docs",
+        child_session_id=child_session_id,
+    )
     return task
 
 
 def test_background_registry_reservations_count_toward_cap():
     registry = BackgroundTaskRegistry(session_id="test")
 
-    assert registry.reserve("task-1", command="Agent", limit=1)
+    assert registry.reserve("task-1", command="Agent", limit=1, agent_ref=_ref("task-1"))
     assert registry.pending_count == 1
-    assert not registry.reserve("task-2", command="Agent", limit=1)
+    assert not registry.reserve("task-2", command="Agent", limit=1, agent_ref=_ref("task-2"))
 
     registry.release("task-1")
     assert registry.pending_count == 0
@@ -166,7 +201,12 @@ async def test_task_for_session_ignores_finished_agents():
     done = asyncio.create_task(asyncio.sleep(0))
     await done
     registry.register("agent-done", done, command="x")
-    await registry.record_started(task_id="agent-done", command="x", child_session_id="test::done")
+    await registry.record_started(
+        task_id="agent-done",
+        agent_ref=_ref("agent-done"),
+        command="x",
+        child_session_id="test::done",
+    )
 
     try:
         assert registry.task_for_session("test::live") == "agent-live"
@@ -182,7 +222,13 @@ async def test_live_child_sessions_lists_only_running():
     first = await _live_agent(registry, "agent-b", "test::b")
     second = await _live_agent(registry, "agent-a", "test::a")
     # Reserved-but-unregistered spawns have not started, so they are not steerable.
-    registry.reserve("agent-r", command="Agent", limit=9, child_session_id="test::r")
+    registry.reserve(
+        "agent-r",
+        command="Agent",
+        limit=9,
+        agent_ref=_ref("agent-r"),
+        child_session_id="test::r",
+    )
 
     try:
         assert registry.live_child_sessions() == ["test::a", "test::b"]
@@ -199,11 +245,11 @@ async def test_cancel_agent_resolves_the_task_from_the_session_id():
     try:
         result = await background_module.agent_cancel(
             ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(registry)),
-            background_module.AgentCancelInput(session_id="P::a"),
+            background_module.AgentCancelInput(agent_ref=_ref("agent-1")),
         )
 
         assert not result.is_error
-        assert "P::a" in result.content
+        assert _ref("agent-1") in result.content
         with pytest.raises(asyncio.CancelledError):
             await task
     finally:
@@ -218,12 +264,12 @@ async def test_cancel_agent_unknown_session_lists_live_agent_sessions():
     try:
         result = await background_module.agent_cancel(
             ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(registry)),
-            background_module.AgentCancelInput(session_id="P::ghost"),
+            background_module.AgentCancelInput(agent_ref=_ref("ghost")),
         )
 
         assert result.is_error
         assert result.outcome.error.code == "not_found"
-        assert "P::a" in result.content
+        assert _ref("agent-1") in result.content
     finally:
         await _cancel(task)
 
@@ -236,12 +282,17 @@ async def test_cancel_agent_cascades_to_grandchildren():
     task_b = await _live_agent(own, "agent-B", "P::a")
     rb = reg.get_background_registry("P::a")
     task_c = await _register_live(rb, "agent-C", "c")
-    await rb.record_started(task_id="agent-C", command="c", child_session_id="P::a::b")
+    await rb.record_started(
+        task_id="agent-C",
+        agent_ref=_ref("agent-C"),
+        command="c",
+        child_session_id="P::a::b",
+    )
 
     try:
         result = await background_module.agent_cancel(
             ToolExecution(tool_id="t", tool_name="agent_cancel", ctx=_ctx(own, run_registry=reg)),
-            background_module.AgentCancelInput(session_id="P::a"),
+            background_module.AgentCancelInput(agent_ref=_ref("agent-B")),
         )
 
         assert not result.is_error
@@ -257,16 +308,17 @@ async def test_cancel_agent_cascades_to_grandchildren():
 
 @pytest.mark.asyncio
 async def test_cancel_agent_approval_preview_names_the_session():
+    agent_ref = _ref("agent-1")
     approval = await background_module.agent_cancel_tool.approval_info(
         ToolExecution(
             tool_id="t",
             tool_name="agent_cancel",
             ctx=_ctx(BackgroundTaskRegistry(session_id="test")),
         ),
-        session_id="P::a1",
+        agent_ref=agent_ref,
     )
 
-    assert approval.preview == "Agent session: P::a1"
+    assert approval.preview == f"Agent: {agent_ref}"
 
 
 @pytest.mark.asyncio
@@ -276,10 +328,20 @@ async def test_cancel_subtree_cancels_descendant_background_agents():
     # and itself spawned C (running in "P::a::b").
     rb = reg.get_background_registry("P::a")
     task_b = await _register_live(rb, "agent-B", "b")
-    await rb.record_started(task_id="agent-B", command="b", child_session_id="P::a::b")
+    await rb.record_started(
+        task_id="agent-B",
+        agent_ref=_ref("agent-B"),
+        command="b",
+        child_session_id="P::a::b",
+    )
     rc = reg.get_background_registry("P::a::b")
     task_c = await _register_live(rc, "agent-C", "c")
-    await rc.record_started(task_id="agent-C", command="c", child_session_id="P::a::b::c")
+    await rc.record_started(
+        task_id="agent-C",
+        agent_ref=_ref("agent-C"),
+        command="c",
+        child_session_id="P::a::b::c",
+    )
 
     try:
         cancelled = reg.cancel_subtree("P::a")
@@ -334,6 +396,7 @@ async def test_deliver_result_folds_undelivered_steering_into_notification():
 
     await registry.deliver_result(
         task_id="agent-A",
+        agent_ref=_ref("agent-A"),
         result="done",
         label="Agent",
         status="completed",
@@ -344,3 +407,11 @@ async def test_deliver_result_folds_undelivered_steering_into_notification():
     assert captured
     assert "<undelivered_steering>" in captured[0]["content"]
     assert "too late" in captured[0]["content"]
+
+
+def test_background_tool_inputs_reject_internal_id_fields():
+    agent_ref = _ref("agent-1")
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        background_module.AgentCancelInput.model_validate({"agent_ref": agent_ref, "task_id": "agent-1"})
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        background_module.AgentResultReadInput.model_validate({"agent_ref": agent_ref, "task_id": "agent-1"})

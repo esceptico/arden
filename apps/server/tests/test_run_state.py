@@ -3,8 +3,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from arden.core.public_refs import public_ref
 from arden.server.state import RunRegistry, RunState, RunStatus
 from arden.tools.core.context import ResourceObservation
+
+
+def _agent_ref(task_id: str) -> str:
+    return public_ref("agent", task_id, empty_slug="agent")
 
 
 def test_run_registry_restores_explicit_run_id():
@@ -393,11 +398,25 @@ async def test_cancel_run_cascades_into_child_sessions():
     run.status = RunStatus.RUNNING
     bg = registry.get_background_registry("sess-1")
     child_task = asyncio.create_task(asyncio.sleep(3600))
-    bg.reserve("agent-A", command="a", limit=16, child_session_id="sess-1::a", parent_run_id=run.run_id)
+    bg.reserve(
+        "agent-A",
+        command="a",
+        limit=16,
+        agent_ref=_agent_ref("agent-A"),
+        child_session_id="sess-1::a",
+        parent_run_id=run.run_id,
+    )
     bg.register("agent-A", child_task, command="a")
     grand = registry.get_background_registry("sess-1::a")
     grand_task = asyncio.create_task(asyncio.sleep(3600))
-    grand.reserve("agent-B", command="b", limit=16, child_session_id="sess-1::a::b", parent_run_id="child-run")
+    grand.reserve(
+        "agent-B",
+        command="b",
+        limit=16,
+        agent_ref=_agent_ref("agent-B"),
+        child_session_id="sess-1::a::b",
+        parent_run_id="child-run",
+    )
     grand.register("agent-B", grand_task, command="b")
 
     try:
@@ -425,10 +444,10 @@ async def test_stale_cancel_stops_only_its_own_agents():
     newer.status = RunStatus.RUNNING
     bg = registry.get_background_registry("sess-1")
     old_task = asyncio.create_task(asyncio.sleep(3600))
-    bg.reserve("agent-old", command="a", limit=16, parent_run_id=old.run_id)
+    bg.reserve("agent-old", command="a", limit=16, agent_ref=_agent_ref("agent-old"), parent_run_id=old.run_id)
     bg.register("agent-old", old_task, command="a")
     new_task = asyncio.create_task(asyncio.sleep(3600))
-    bg.reserve("agent-new", command="b", limit=16, parent_run_id=newer.run_id)
+    bg.reserve("agent-new", command="b", limit=16, agent_ref=_agent_ref("agent-new"), parent_run_id=newer.run_id)
     bg.register("agent-new", new_task, command="b")
 
     try:

@@ -15,6 +15,7 @@ from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
 from arden.context.models import BackgroundStartDisposition, SessionState
 from arden.context.store import SessionDataCorruptionError, SessionStore, StaleSessionContextError
 from arden.core.compactor import _build_compacted_messages
+from arden.core.public_refs import public_ref
 from arden.core.raw_tool_results import RAW_TOOL_RESULT_DATA_KEY, persist_raw_tool_result
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import ThinkingEvent, ToolCallResultEvent
@@ -43,6 +44,62 @@ def _make_state(session_id: str = "test-session", name: str | None = None) -> Se
         started_at=datetime.now(UTC),
         name=name,
     )
+
+
+def _agent_ref(session_id: str, task_id: str, title: str = "agent") -> str:
+    return public_ref(title, f"{session_id}:{task_id}", empty_slug="agent")
+
+
+async def _provision_agent_session(store: SessionStore, session_id: str, agent_ref: str) -> None:
+    await store.save_session(
+        SessionState(
+            session_id=session_id,
+            public_ref=agent_ref,
+            started_at=datetime.now(UTC),
+            session_type="agent",
+        ),
+        [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_public_ref_is_stable_and_conflicts_fail(store: SessionStore):
+    original = _make_state("stable-ref", name="Original title")
+    await store.save_session(original, [])
+    original_ref = original.public_ref
+
+    renamed = _make_state("stable-ref", name="Renamed title")
+    await store.save_session(renamed, [])
+    assert renamed.public_ref == original_ref
+
+    conflicting = _make_state("stable-ref", name="Renamed title")
+    conflicting.public_ref = public_ref("different", "different-id", empty_slug="chat")
+    with pytest.raises(ValueError, match="immutable"):
+        await store.save_session(conflicting, [])
+
+    loaded = await store.load_session("stable-ref")
+    assert loaded is not None
+    assert loaded.state.public_ref == original_ref
+
+
+@pytest.mark.asyncio
+async def test_session_ref_resolution_enforces_optional_area_scope(store: SessionStore):
+    ops = await store.create_area(name="Ops")
+    finance = await store.create_area(name="Finance")
+    ops_state = _make_state("ops-session", name="Ops chat")
+    ops_state.area_id = ops["area_id"]
+    finance_state = _make_state("finance-session", name="Finance chat")
+    finance_state.area_id = finance["area_id"]
+    plain_state = _make_state("plain-session", name="Plain chat")
+    await store.save_session(ops_state, [])
+    await store.save_session(finance_state, [])
+    await store.save_session(plain_state, [])
+
+    assert await store.get_session_id_by_ref(ops_state.public_ref, area_id=ops["area_id"]) == "ops-session"
+    assert await store.get_session_id_by_ref(finance_state.public_ref, area_id=ops["area_id"]) is None
+    assert await store.get_session_id_by_ref(plain_state.public_ref, area_id=None) == "plain-session"
+    assert await store.get_session_id_by_ref(ops_state.public_ref, area_id=None) is None
+    assert await store.get_session_id_by_ref(finance_state.public_ref) == "finance-session"
 
 
 @pytest.mark.asyncio
@@ -231,7 +288,7 @@ async def test_schema_v6_backfills_area_refs_without_exposing_legacy_scope(tmp_p
     assert "knowledge_scope" not in columns
     assert (await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'"))[0][
         "value"
-    ] == "7"
+    ] == "8"
 
     original_ref = health["area_ref"]
     await store.update_area(health["area_id"], name="Wellbeing")
@@ -1448,8 +1505,11 @@ async def test_chat_run_id_collision_never_reopens_historical_run(store: Session
 
 @pytest.mark.asyncio
 async def test_background_agent_run_lifecycle(store: SessionStore):
+    agent_ref = _agent_ref("sess-1", "bg-1", "research task")
+    await _provision_agent_session(store, "sess-child-1", agent_ref)
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=agent_ref,
         session_id="sess-1",
         parent_run_id="run-1",
         parent_tool_call_id="call-background",
@@ -1491,8 +1551,10 @@ async def test_background_agent_run_lifecycle(store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_background_completion_claim_is_atomic_and_idempotent(store: SessionStore):
+    agent_ref = _agent_ref("sess-1", "bg-1", "research task")
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=agent_ref,
         session_id="sess-1",
         parent_run_id="run-1",
         command="research task",
@@ -1508,6 +1570,7 @@ async def test_background_completion_claim_is_atomic_and_idempotent(store: Sessi
     )
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=agent_ref,
         session_id="sess-1",
         parent_run_id="run-1",
         command="duplicate start",
@@ -1548,12 +1611,14 @@ async def test_background_completion_claim_is_atomic_and_idempotent(store: Sessi
 async def test_background_agent_task_ids_are_session_scoped(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-1", "bg-1", "first"),
         session_id="sess-1",
         parent_run_id="run-1",
         command="first",
     )
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-2", "bg-1", "second"),
         session_id="sess-2",
         parent_run_id="run-2",
         command="second",
@@ -1567,12 +1632,14 @@ async def test_background_agent_task_ids_are_session_scoped(store: SessionStore)
 async def test_background_agent_cancel_request_is_session_scoped_and_evented(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-1", "bg-1", "first"),
         session_id="sess-1",
         parent_run_id="run-1",
         command="first",
     )
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-2", "bg-1", "second"),
         session_id="sess-2",
         parent_run_id="run-2",
         command="second",
@@ -1589,8 +1656,13 @@ async def test_background_agent_cancel_request_is_session_scoped_and_evented(sto
 
 @pytest.mark.asyncio
 async def test_background_agent_cancel_cascade_uses_durable_spawn_edges_and_is_idempotent(store: SessionStore):
+    root_ref = _agent_ref("parent", "root")
+    child_ref = _agent_ref("parent::child", "child")
+    await _provision_agent_session(store, "parent::child", root_ref)
+    await _provision_agent_session(store, "parent::grandchild", child_ref)
     await store.record_background_agent_started(
         task_id="root",
+        agent_ref=root_ref,
         session_id="parent",
         parent_run_id="run",
         child_session_id="parent::child",
@@ -1598,6 +1670,7 @@ async def test_background_agent_cancel_cascade_uses_durable_spawn_edges_and_is_i
     )
     await store.record_background_agent_started(
         task_id="child",
+        agent_ref=child_ref,
         session_id="parent::child",
         parent_run_id="run",
         child_session_id="parent::grandchild",
@@ -1605,6 +1678,7 @@ async def test_background_agent_cancel_cascade_uses_durable_spawn_edges_and_is_i
     )
     await store.record_background_agent_started(
         task_id="grandchild",
+        agent_ref=_agent_ref("parent::grandchild", "grandchild"),
         session_id="parent::grandchild",
         parent_run_id="run",
         command="grandchild",
@@ -1641,8 +1715,13 @@ async def test_background_agent_cancel_cascade_uses_durable_spawn_edges_and_is_i
 
 @pytest.mark.asyncio
 async def test_late_descendant_inherits_existing_session_cancellation(store: SessionStore):
+    root_ref = _agent_ref("parent", "root")
+    late_ref = _agent_ref("parent::child", "late-child")
+    await _provision_agent_session(store, "parent::child", root_ref)
+    await _provision_agent_session(store, "parent::grandchild", late_ref)
     await store.record_background_agent_started(
         task_id="root",
+        agent_ref=root_ref,
         session_id="parent",
         parent_run_id="run",
         child_session_id="parent::child",
@@ -1658,6 +1737,7 @@ async def test_late_descendant_inherits_existing_session_cancellation(store: Ses
 
     disposition = await store.record_background_agent_started(
         task_id="late-child",
+        agent_ref=late_ref,
         session_id="parent::child",
         parent_run_id="child-run",
         child_session_id="parent::grandchild",
@@ -1679,6 +1759,8 @@ async def test_late_descendant_inherits_existing_session_cancellation(store: Ses
 
 @pytest.mark.asyncio
 async def test_awaited_child_completion_atomically_resolves_parent_suspension(store: SessionStore):
+    agent_ref = _agent_ref("parent", "child", "research")
+    await _provision_agent_session(store, "parent::child", agent_ref)
     await store.record_run_suspension(
         run_id="parent-run",
         session_id="parent",
@@ -1688,6 +1770,7 @@ async def test_awaited_child_completion_atomically_resolves_parent_suspension(st
     )
     await store.record_background_agent_started(
         task_id="child",
+        agent_ref=agent_ref,
         session_id="parent",
         parent_run_id="parent-run",
         parent_tool_call_id="tool-call",
@@ -1750,6 +1833,7 @@ async def test_background_agent_schema_migrates_old_task_id_primary_key(tmp_path
     await s.init_schema()
     await s.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-2", "bg-1", "new"),
         session_id="sess-2",
         parent_run_id="run-2",
         command="new",
@@ -1769,6 +1853,105 @@ async def test_background_agent_schema_migrates_old_task_id_primary_key(tmp_path
     assert migrated["agent_type"] == "background_research"
     assert migrated["wait"] is False
     assert await s.get_background_agent_result("sess-2", "bg-1") == "result"
+
+    await read_conn.close()
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v7_backfills_session_and_agent_refs(tmp_path: Path):
+    db = tmp_path / "v7-session-refs.db"
+    conn = await database.connect(db)
+    await conn.executescript(
+        """
+        CREATE TABLE session_store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '7');
+        CREATE TABLE sessions (
+            session_id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            last_activity TEXT NOT NULL,
+            last_accessed_at TEXT,
+            messages TEXT,
+            metadata TEXT,
+            name TEXT,
+            archived_at TEXT,
+            session_type TEXT NOT NULL DEFAULT 'chat',
+            origin_automation_id TEXT,
+            parent_session_id TEXT,
+            parent_tool_call_id TEXT,
+            agent_type TEXT,
+            agent_status TEXT,
+            area_id TEXT,
+            chat_model TEXT,
+            context_generation INTEGER NOT NULL DEFAULT 0,
+            active_message_count INTEGER NOT NULL DEFAULT 0,
+            storage_state TEXT NOT NULL DEFAULT 'hot',
+            cold_bundle_path TEXT,
+            cold_bundle_sha256 TEXT,
+            cold_bundle_bytes INTEGER,
+            cold_logical_bytes INTEGER,
+            cold_message_count INTEGER,
+            cold_prose_sha256 TEXT,
+            cold_blob_hashes_json TEXT
+        );
+        CREATE TABLE background_agent_runs (
+            task_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            parent_run_id TEXT,
+            parent_tool_call_id TEXT,
+            suspension_id TEXT,
+            child_session_id TEXT,
+            agent_type TEXT NOT NULL DEFAULT 'background_research',
+            wait INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            command TEXT NOT NULL,
+            detail TEXT,
+            result_ref TEXT,
+            result_text TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            updated_at TEXT NOT NULL,
+            ended_at TEXT,
+            cancel_requested_at TEXT,
+            cancel_actor TEXT,
+            terminal_cause TEXT,
+            cancel_generation INTEGER NOT NULL DEFAULT 0,
+            cancel_idempotency_key TEXT,
+            notified_at TEXT,
+            completion_id TEXT,
+            spawn_spec TEXT,
+            spawn_attempts INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, task_id)
+        );
+        INSERT INTO sessions (session_id, started_at, last_activity, name, session_type)
+        VALUES
+            ('parent', 'now', 'now', 'Operations', 'chat'),
+            ('channel', 'now', 'now', NULL, 'channel'),
+            ('child', 'now', 'now', 'Research child', 'agent');
+        INSERT INTO background_agent_runs (
+            task_id, session_id, child_session_id, status, command, created_at, updated_at
+        ) VALUES ('bg-1', 'parent', 'child', 'running', 'Research docs', 'now', 'now');
+        """
+    )
+    await conn.commit()
+    read_conn = await database.connect(db, readonly=True)
+    store = SessionStore(conn, read_conn)
+
+    await store.init_schema()
+
+    rows = await conn.execute_fetchall("SELECT session_id, public_ref FROM sessions ORDER BY session_id")
+    refs = {row["session_id"]: row["public_ref"] for row in rows}
+    agent_ref = _agent_ref("parent", "bg-1", "Research docs")
+    assert refs == {
+        "channel": public_ref("channel", "channel", empty_slug="channel"),
+        "child": agent_ref,
+        "parent": public_ref("Operations", "parent", empty_slug="chat"),
+    }
+    run = await store.get_background_agent_run("parent", "bg-1")
+    assert run is not None
+    assert run["agent_ref"] == agent_ref
+    version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
+    assert version[0]["value"] == "8"
 
     await read_conn.close()
     await conn.close()
@@ -1832,6 +2015,7 @@ async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp
     assert await store.list_background_agent_runs("sess-1") == [
         {
             "task_id": "bg-1",
+            "agent_ref": _agent_ref("sess-1", "bg-1", "research"),
             "child_run_id": "bg-1",
             "child_session_id": None,
             "session_id": "sess-1",
@@ -1858,7 +2042,7 @@ async def test_schema_v3_adds_background_cascade_columns_before_serving_rows(tmp
         }
     ]
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "7"
+    assert version[0]["value"] == "8"
 
     await read_conn.close()
     await conn.close()
@@ -1886,7 +2070,7 @@ async def test_schema_v4_adds_context_generation_before_serving_rows(tmp_path: P
     row = (await conn.execute_fetchall("SELECT context_generation FROM sessions WHERE session_id = 'legacy'"))[0]
     assert row["context_generation"] == 0
     version = await conn.execute_fetchall("SELECT value FROM session_store_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "7"
+    assert version[0]["value"] == "8"
 
     await migrated_read.close()
     await conn.close()
@@ -1930,7 +2114,7 @@ async def test_schema_v5_backfills_active_count_and_missing_transcript(tmp_path:
     assert json.loads(row["metadata"]) == {"last_input_tokens": 7}
     assert len(transcript) == 2
     assert all(row["message_id"] for row in transcript)
-    assert version[0]["value"] == "7"
+    assert version[0]["value"] == "8"
 
     await migrated_read.close()
     await conn.close()
@@ -2032,6 +2216,7 @@ async def test_background_agent_event_schema_adds_delivery_columns_before_index(
 async def test_marks_running_background_agents_interrupted_on_startup(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-1", "bg-1", "research task"),
         session_id="sess-1",
         parent_run_id="run-1",
         command="research task",
@@ -2055,6 +2240,7 @@ async def test_marks_running_background_agents_interrupted_on_startup(store: Ses
 async def test_startup_preserves_durable_cancel_cause(store: SessionStore):
     await store.record_background_agent_started(
         task_id="bg-1",
+        agent_ref=_agent_ref("sess-1", "bg-1", "research task"),
         session_id="sess-1",
         parent_run_id="run-1",
         command="research task",
@@ -2079,6 +2265,8 @@ async def test_startup_preserves_durable_cancel_cause(store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_startup_cancel_resolves_awaited_parent_suspension(store: SessionStore):
+    agent_ref = _agent_ref("parent", "child", "research")
+    await _provision_agent_session(store, "parent::child", agent_ref)
     await store.record_run_suspension(
         run_id="parent-run",
         session_id="parent",
@@ -2088,6 +2276,7 @@ async def test_startup_cancel_resolves_awaited_parent_suspension(store: SessionS
     )
     await store.record_background_agent_started(
         task_id="child",
+        agent_ref=agent_ref,
         session_id="parent",
         parent_run_id="parent-run",
         suspension_id="spawn-1",
@@ -2758,8 +2947,11 @@ async def test_compacted_result_ref_survives_branch_and_source_deletion(
 async def test_compacted_background_result_survives_branch_and_source_deletion(store: SessionStore):
     source_id = "source-with-background-result"
     task_id = "bg-branch-result"
+    agent_ref = _agent_ref(source_id, task_id, "research")
+    await _provision_agent_session(store, "source-child", agent_ref)
     await store.record_background_agent_started(
         task_id=task_id,
+        agent_ref=agent_ref,
         session_id=source_id,
         parent_run_id="source-run",
         parent_tool_call_id="source-call",
@@ -2772,7 +2964,7 @@ async def test_compacted_background_result_survives_branch_and_source_deletion(s
         task_id=task_id,
         session_id=source_id,
         status="completed",
-        result_ref=f"background://{task_id}",
+        result_ref=f"background://{agent_ref}",
         result_text="durable branch evidence",
     )
     original = [
@@ -2781,7 +2973,7 @@ async def test_compacted_background_result_survives_branch_and_source_deletion(s
             "role": "user",
             "content": "hidden completion",
             "client_id": f"bg:{task_id}:completed",
-            "background_result_ref": task_id,
+            "background_result_ref": agent_ref,
         },
         {"role": "assistant", "content": "tail", "client_id": "a-1"},
     ]
@@ -2794,10 +2986,11 @@ async def test_compacted_background_result_survives_branch_and_source_deletion(s
     branch_id = branch_state.session_id
     branched = await service.load(branch_id)
     assert branched is not None
-    assert branched.messages[1]["compaction"]["background_result_refs"] == [task_id]
+    assert branched.messages[1]["compaction"]["background_result_refs"] == [agent_ref]
 
     cloned = await store.get_background_agent_run(branch_id, task_id)
     assert cloned is not None
+    assert cloned["agent_ref"] == agent_ref
     assert cloned["parent_run_id"] is None
     assert cloned["parent_tool_call_id"] is None
     assert cloned["child_session_id"] is None
@@ -2809,6 +3002,7 @@ async def test_compacted_background_result_survives_branch_and_source_deletion(s
 
     assert await service.permanently_delete_current(source_id)
     assert await store.get_background_agent_result(branch_id, task_id) == "durable branch evidence"
+    assert await store.get_background_agent_result_by_ref(branch_id, agent_ref) == "durable branch evidence"
     assert await store.list_undelivered_background_completions() == []
     assert await store.list_respawnable_background_agent_runs(max_attempts=3) == []
 
@@ -2820,6 +3014,7 @@ async def test_branch_rolls_back_when_referenced_background_result_is_missing(
 ):
     source_id = "source-with-missing-background-result"
     missing_task_id = "bg-missing"
+    missing_agent_ref = _agent_ref(source_id, missing_task_id)
     tool_call_id = "call-before-rollback"
     blob = persist_raw_tool_result("branch rollback evidence")
     await store.record_session_event(
@@ -2846,8 +3041,9 @@ async def test_branch_rolls_back_when_referenced_background_result_is_missing(
         },
         {
             "role": "user",
-            "content": "legacy hidden completion",
+            "content": "hidden completion with a missing durable result",
             "client_id": f"bg:{missing_task_id}:completed",
+            "background_result_ref": missing_agent_ref,
         },
     ]
     await store.save_session(source_state, messages)

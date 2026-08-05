@@ -22,6 +22,7 @@ from arden.agent.types.events import ToolCompleted
 from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef
 from arden.context.models import SessionData, SessionState
 from arden.core import spawner as spawner_module
+from arden.core.public_refs import public_ref
 from arden.core.spawner import create_spawn_fn
 from arden.core.usage_tracker import UsageTracker
 from arden.events.internal import RunFailed
@@ -813,7 +814,13 @@ async def test_child_io_factory_aclose_keeps_bus_while_run_active():
 
 async def _live_parent_registry(task_id: str, child_session_id: str) -> tuple[BackgroundTaskRegistry, asyncio.Task]:
     registry = BackgroundTaskRegistry(session_id="top")
-    registry.reserve(task_id, command="Agent", limit=16, child_session_id=child_session_id)
+    registry.reserve(
+        task_id,
+        command="Agent",
+        limit=16,
+        agent_ref=public_ref("agent", task_id, empty_slug="agent"),
+        child_session_id=child_session_id,
+    )
     task = asyncio.create_task(asyncio.sleep(30))
     registry.register(task_id, task, command="Agent")
     return registry, task

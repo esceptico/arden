@@ -390,17 +390,13 @@ def _background_result_refs(messages: list[dict]) -> list[str]:
             content = message.get("content")
             if isinstance(content, str) and content.startswith("<background_agent_result"):
                 opening = content.split(">", 1)[0]
-                marker = 'task_id="'
+                marker = 'agent_ref="'
                 marker_start = opening.find(marker)
                 if marker_start >= 0:
                     value_start = marker_start + len(marker)
                     value_end = opening.find('"', value_start)
                     if value_end > value_start:
                         candidates.append(opening[value_start:value_end])
-                elif isinstance(message.get("client_id"), str) and message["client_id"].startswith("bg:"):
-                    legacy_ref, separator, _status = message["client_id"][3:].rpartition(":")
-                    if separator and legacy_ref:
-                        candidates.append(legacy_ref)
         nested = message.get("compaction")
         if isinstance(nested, dict) and isinstance(nested.get("background_result_refs"), list):
             candidates.extend(ref for ref in nested["background_result_refs"] if isinstance(ref, str))

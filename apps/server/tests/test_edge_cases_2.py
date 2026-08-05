@@ -11,6 +11,7 @@ import arden.database as database
 from arden.agent import Agent
 from arden.context.models import SessionState
 from arden.context.store import SessionStore
+from arden.core.public_refs import public_ref
 from arden.services.chat import _retain_user_content, _time_gap_note
 from arden.tools.core import ToolAction, ToolPolicy, ToolResult, ToolScope, tool
 from arden.tools.core.context import BackgroundTaskRegistry, IOBridge, RunContext, ToolContext, ToolExecution
@@ -210,6 +211,7 @@ async def test_registry_deliver_result_with_no_callback(tmp_path, monkeypatch):
         label="test",
         status="completed",
         emit=None,
+        agent_ref=public_ref("agent", "t1", empty_slug="agent"),
     )
     # Verify result file was still written
     result_file = Path(registry._write_result_file("t1_check", "check"))

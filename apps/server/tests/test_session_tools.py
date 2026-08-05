@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from arden.context.models import SessionState
 from arden.context.store import AREA_FILTER_UNSET
+from arden.core.public_refs import public_ref
 from arden.tools.core.context import (
     BackgroundTaskRegistry,
     IOBridge,
@@ -30,14 +31,23 @@ from arden.tools.sessions import (
 )
 
 
+def _session_ref(session_id: str) -> str:
+    return public_ref("session", session_id, empty_slug="session")
+
+
 class _StubSessionService:
     """Just enough of the SessionService surface to drive the tools.
     Lets us assert what the tool actually returned without spinning up a
     real session store."""
 
     def __init__(self, sessions: list[dict], messages: dict[str, list[dict]] | None = None):
-        self._sessions = sessions
+        self._sessions = [
+            {**session, "public_ref": session.get("public_ref") or _session_ref(session["session_id"])}
+            for session in sessions
+        ]
         self._messages = messages or {}
+        self._session_refs = {session_id: _session_ref(session_id) for session_id in self._messages}
+        self._session_refs.update({session["session_id"]: session["public_ref"] for session in self._sessions})
         self.calls: list[tuple[str, dict]] = []
 
     async def list_sessions(self, limit: int = 20, offset: int = 0, **kwargs) -> list[dict]:
@@ -48,6 +58,15 @@ class _StubSessionService:
         self.calls.append(("list_messages", kwargs))
         msgs = self._messages.get(session_id, [])
         return {"messages": list(msgs[:limit])}
+
+    async def resolve_session_ref(self, session_ref: str, *, area_id=AREA_FILTER_UNSET) -> str | None:
+        for session_id, ref in self._session_refs.items():
+            row = next((session for session in self._sessions if session["session_id"] == session_id), None)
+            if ref == session_ref and (
+                area_id is AREA_FILTER_UNSET or (row is not None and row.get("area_id") == area_id)
+            ):
+                return session_id
+        return None
 
     async def search_messages(self, query: str, **kwargs) -> dict:
         self.calls.append(("search_messages", kwargs))
@@ -126,11 +145,14 @@ async def test_list_recent_sessions_returns_formatted_list():
     result = await session_list(execution, SessionListInput(limit=20))
 
     assert not result.is_error
-    assert "20260510_120000_000" in result.content
+    assert _session_ref("20260510_120000_000") in result.content
+    assert "20260510_120000_000" not in result.content
     assert "Daily standup" in result.content
     assert "(untitled)" in result.content  # falls back when name is None
     assert "12 msgs" in result.content
-    assert result.content.index("20260510_120000_000") < result.content.index("20260509_090000_000")
+    assert result.content.index(_session_ref("20260510_120000_000")) < result.content.index(
+        _session_ref("20260509_090000_000")
+    )
     # Non-chat sessions carry a kind tag so callers can honor rules like
     # "never archive channels" from the list alone; plain chats stay untagged.
     assert "Email updates feed [channel]" in result.content
@@ -141,17 +163,39 @@ async def test_list_recent_sessions_returns_formatted_list():
 async def test_session_tools_pass_active_project_scope():
     service = _StubSessionService(
         sessions=[
-            {"session_id": "s1", "name": "Scoped", "last_activity": datetime.now(UTC).isoformat(), "message_count": 1}
+            {
+                "session_id": "s1",
+                "name": "Scoped",
+                "area_id": "proj-1",
+                "last_activity": datetime.now(UTC).isoformat(),
+                "message_count": 1,
+            }
         ],
         messages={"s1": [{"seq": 0, "role": "user", "message": {"role": "user", "content": "hi"}}]},
     )
     execution = _make_execution(services={"session": service}, area_id="proj-1")
 
     await session_list(execution, SessionListInput())
-    await session_read(execution, SessionReadInput(session_id="s1"))
+    await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
 
     assert any(name == "list_sessions" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
     assert any(name == "list_messages" and kwargs.get("area_id") == "proj-1" for name, kwargs in service.calls)
+
+
+@pytest.mark.asyncio
+async def test_search_transcripts_resolves_session_ref_before_querying():
+    service = _StubSessionService(sessions=[{"session_id": "s1", "name": "Scoped"}])
+    execution = _make_execution(services={"session": service})
+
+    await session_search_transcripts(
+        execution,
+        SessionSearchTranscriptsInput(query="invoice", session_ref=_session_ref("s1")),
+    )
+
+    assert service.calls[-1] == (
+        "search_messages",
+        {"limit": 20, "offset": 0, "session_id": "s1", "since": None, "area_id": AREA_FILTER_UNSET},
+    )
 
 
 @pytest.mark.asyncio
@@ -177,8 +221,8 @@ async def test_list_recent_sessions_filters_by_within_days():
 
     result = await session_list(execution, SessionListInput(limit=20, within_days=7))
 
-    assert "recent" in result.content
-    assert "old" not in result.content
+    assert _session_ref("recent") in result.content
+    assert _session_ref("old") not in result.content
 
 
 def _session_page(count: int) -> list[dict]:
@@ -205,9 +249,9 @@ async def test_list_recent_sessions_pages_with_offset():
     result = await session_list(execution, SessionListInput(limit=2, offset=2))
 
     assert service.calls[-1][1]["offset"] == 2
-    assert "s2" in result.content
-    assert "s3" in result.content
-    assert "s0" not in result.content
+    assert _session_ref("s2") in result.content
+    assert _session_ref("s3") in result.content
+    assert _session_ref("s0") not in result.content
     assert result.data["offset"] == 2
     assert result.data["next_offset"] == 4
     # The footer has to teach the exact next call, not just "more exist".
@@ -274,7 +318,7 @@ async def test_list_recent_sessions_within_days_stops_at_the_window_edge():
 
     result = await session_list(execution, SessionListInput(limit=1, within_days=7))
 
-    assert "recent" in result.content
+    assert _session_ref("recent") in result.content
     assert result.data["has_more"] is False
     assert "call again" not in result.content
 
@@ -303,7 +347,7 @@ async def test_read_session_truncates_long_content():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await session_read(execution, SessionReadInput(session_id="s1", content_chars=100))
+    result = await session_read(execution, SessionReadInput(session_ref=_session_ref("s1"), content_chars=100))
 
     assert not result.is_error
     assert "[user]" in result.content
@@ -328,18 +372,54 @@ async def test_read_session_role_filter():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await session_read(execution, SessionReadInput(session_id="s1", role_filter=["user"]))
+    result = await session_read(execution, SessionReadInput(session_ref=_session_ref("s1"), role_filter=["user"]))
 
     assert "[user]" in result.content
     assert "[assistant]" not in result.content
     assert "[tool" not in result.content
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("more_key", "expected_cursor"),
+    [
+        ("has_more_after", "after_seq=12"),
+        ("has_more_before", "before_seq=12"),
+    ],
+)
+async def test_read_session_pagination_footer_keeps_exact_session_ref(more_key, expected_cursor):
+    session_ref = _session_ref("s1")
+    service = _StubSessionService(
+        sessions=[],
+        messages={"s1": [{"seq": 12, "role": "user", "message": {"role": "user", "content": "hi"}}]},
+    )
+
+    async def page(_session_id: str, **_kwargs):
+        return {
+            "messages": service._messages["s1"],
+            more_key: True,
+        }
+
+    service.list_messages = page
+    execution = _make_execution(services={"session": service})
+
+    result = await session_read(execution, SessionReadInput(session_ref=session_ref))
+
+    assert f'session_read(session_ref="{session_ref}", {expected_cursor})' in result.content
+
+
 def test_read_session_rejects_an_unknown_role():
     """A typed enum turns 'usr' into a schema error the model can self-correct,
     instead of a filter that silently matches nothing."""
     with pytest.raises(ValidationError):
-        SessionReadInput(session_id="s1", role_filter=["usr"])
+        SessionReadInput(session_ref=_session_ref("s1"), role_filter=["usr"])
+
+
+def test_session_inputs_reject_raw_internal_ids():
+    with pytest.raises(ValidationError):
+        SessionReadInput(session_id="s1")
+    with pytest.raises(ValidationError):
+        SessionSearchTranscriptsInput(query="invoice", session_id="s1")
 
 
 # --- create_session tool ---
@@ -352,8 +432,10 @@ class _CapturingSessionService:
         self.created: list[SessionState] = []
 
     def create(self, name=None, session_type="chat", origin_automation_id=None):
+        session_id = f"sess-{len(self.created) + 1:03d}"
         state = SessionState(
-            session_id=f"sess-{len(self.created) + 1:03d}",
+            session_id=session_id,
+            public_ref=_session_ref(session_id),
             started_at=datetime.now(UTC),
             name=name,
             session_type=session_type,
@@ -396,7 +478,7 @@ async def test_create_session_defaults_to_channel():
     assert state.session_type == "channel"
     assert state.name == "ops alerts"
     assert state.origin_automation_id is None
-    assert state.session_id in result.content
+    assert state.public_ref in result.content
 
 
 @pytest.mark.asyncio
@@ -419,6 +501,7 @@ async def test_create_session_stamps_origin_when_in_loop():
 
     assert not result.is_error
     assert svc.created[0].origin_automation_id == "loop-shy-otter"
+    assert "loop-shy-otter" not in result.content
 
 
 @pytest.mark.asyncio
@@ -465,7 +548,7 @@ async def test_read_session_handles_structured_content_blocks():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await session_read(execution, SessionReadInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
 
     assert "Look at this image" in result.content
     assert "[image]" in result.content
@@ -514,9 +597,9 @@ async def test_list_recent_sessions_renders_live_and_persisted_status():
     result = await session_list(execution, SessionListInput())
 
     lines = {line.split(" · ")[0]: line for line in result.content.splitlines()}
-    assert lines["- live"].endswith("· running")
-    assert lines["- waiting"].endswith("· needs approval")
-    assert lines["- agent"].endswith("· completed")
+    assert lines[f"- {_session_ref('live')}"].endswith("· running")
+    assert lines[f"- {_session_ref('waiting')}"].endswith("· needs approval")
+    assert lines[f"- {_session_ref('agent')}"].endswith("· completed")
 
 
 @pytest.mark.asyncio
@@ -565,7 +648,15 @@ async def test_an_area_caller_cannot_widen_any_read_beyond_its_area():
     """The area boundary is not a parameter: an Area custodian's allowlist pins
     tool names, so a widening argument would be a hole nothing else closes."""
     service = _StubSessionService(
-        sessions=[],
+        sessions=[
+            {
+                "session_id": "s1",
+                "name": "Ops",
+                "area_id": "ops",
+                "last_activity": datetime.now(UTC).isoformat(),
+                "message_count": 1,
+            }
+        ],
         messages={"s1": [{"seq": 0, "role": "user", "message": {"role": "user", "content": "hi"}}]},
     )
     execution = _make_execution(services={"session": service}, area_id="ops")
@@ -574,10 +665,36 @@ async def test_an_area_caller_cannot_widen_any_read_beyond_its_area():
         assert "scope" not in model.model_fields
 
     await session_list(execution, SessionListInput())
-    await session_read(execution, SessionReadInput(session_id="s1"))
+    await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
     await session_search_transcripts(execution, SessionSearchTranscriptsInput(query="hi"))
 
     assert [kwargs["area_id"] for _, kwargs in service.calls] == ["ops", "ops", "ops"]
+
+
+@pytest.mark.asyncio
+async def test_area_session_read_rejects_a_ref_from_another_area():
+    service = _StubSessionService(
+        sessions=[
+            {
+                "session_id": "finance",
+                "name": "Finance",
+                "area_id": "finance",
+                "last_activity": datetime.now(UTC).isoformat(),
+                "message_count": 1,
+            }
+        ],
+        messages={"finance": [{"seq": 1, "role": "user", "message": {"role": "user", "content": "private"}}]},
+    )
+    execution = _make_execution(services={"session": service}, area_id="ops")
+
+    result = await session_read(
+        execution,
+        SessionReadInput(session_ref=_session_ref("finance")),
+    )
+
+    assert result.is_error
+    assert result.outcome.error.code == "not_found"
+    assert not any(name == "list_messages" for name, _kwargs in service.calls)
 
 
 @pytest.mark.asyncio
@@ -589,11 +706,10 @@ async def test_read_session_prefixes_a_run_status_header():
     registry = _StubRunRegistry([_StubRun("s1", "run-x", approvals=2, queued=1)])
     execution = _make_execution(services={"session": service}, run_registry=registry)
 
-    result = await session_read(execution, SessionReadInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
 
     first = result.content.splitlines()[0]
-    assert first.startswith("[session s1] running")
-    assert "run run-x" in first
+    assert first.startswith(f"[session {_session_ref('s1')}] running")
     assert "2 approval(s) pending" in first
     assert "1 message(s) queued" in first
     assert result.content.splitlines()[1] == ""
@@ -607,9 +723,9 @@ async def test_read_session_reports_idle_for_a_session_without_a_run():
     )
     execution = _make_execution(services={"session": service}, run_registry=_StubRunRegistry())
 
-    result = await session_read(execution, SessionReadInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
 
-    assert result.content.splitlines()[0] == "[session s1] idle"
+    assert result.content.splitlines()[0] == f"[session {_session_ref('s1')}] idle"
 
 
 @pytest.mark.asyncio
@@ -620,7 +736,7 @@ async def test_read_session_omits_the_header_without_a_run_registry():
     )
     execution = _make_execution(services={"session": service})
 
-    result = await session_read(execution, SessionReadInput(session_id="s1"))
+    result = await session_read(execution, SessionReadInput(session_ref=_session_ref("s1")))
 
     assert not result.content.startswith("[session")
 
@@ -636,7 +752,11 @@ async def test_list_recent_sessions_oldest_first_for_archival_sweeps():
     result = await session_list(execution, SessionListInput(limit=3, order="oldest"))
 
     assert service.calls[-1][1]["newest_first"] is False
-    assert result.content.index("s2") < result.content.index("s1") < result.content.index("s0")
+    assert (
+        result.content.index(_session_ref("s2"))
+        < result.content.index(_session_ref("s1"))
+        < result.content.index(_session_ref("s0"))
+    )
 
 
 @pytest.mark.asyncio
@@ -686,7 +806,7 @@ async def test_list_recent_sessions_projects_only_agent_useful_fields():
     result = await session_list(execution, SessionListInput())
 
     assert set(result.data["items"][0]) == set(_ITEM_FIELDS)
-    assert result.data["items"][0]["session_id"] == "s1"
+    assert result.data["items"][0]["session_ref"] == _session_ref("s1")
 
 
 class _FailingSearchService(_StubSessionService):

@@ -16,6 +16,7 @@ from arden.constants import (
     DAILY_NOTES_AUTOMATION_ID,
 )
 from arden.context.models import SessionState
+from arden.core.public_refs import public_ref
 from arden.core.tool_executor import ArdenToolExecutor
 from arden.memory.facts.consumer_store import FactConsumerStore
 from arden.memory.facts.ledger import FactLedger
@@ -1250,10 +1251,15 @@ async def _seed_chat_transcript(runtime: Runtime, session_id: str, turns: list[t
     store = runtime.stores.sessions.store
     await store.conn.execute(
         """
-        INSERT INTO sessions (session_id, started_at, last_activity, session_type)
-        VALUES (?, ?, ?, 'chat')
+        INSERT INTO sessions (session_id, public_ref, started_at, last_activity, session_type)
+        VALUES (?, ?, ?, ?, 'chat')
         """,
-        (session_id, MIGRATED_AT.isoformat(), datetime.now(UTC).isoformat()),
+        (
+            session_id,
+            public_ref("chat", session_id, empty_slug="chat"),
+            MIGRATED_AT.isoformat(),
+            datetime.now(UTC).isoformat(),
+        ),
     )
     for seq, role, text in turns:
         await store.conn.execute(

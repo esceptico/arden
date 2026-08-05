@@ -16,8 +16,10 @@ from pydantic import ValidationError
 from arden.areas.asks import AskStore
 from arden.context.models import SessionData, SessionState
 from arden.context.store import AREA_FILTER_UNSET
+from arden.core.public_refs import public_ref
 from arden.events.sse import EventType, SSEEvent
 from arden.tools.app_control import (
+    AppFollowupTaskInput,
     AppOpenInput,
     AppRequestAttentionInput,
     AreaListInput,
@@ -68,7 +70,24 @@ class _StubSessionService:
 
     async def list_sessions(self, limit: int = 20, **kwargs) -> list[dict]:
         self.list_calls.append({"limit": limit, **kwargs})
-        return [{"session_id": sid} for sid in list(self._sessions)[:limit]]
+        area_id = kwargs.get("area_id", AREA_FILTER_UNSET)
+        sessions = [
+            (sid, data)
+            for sid, data in self._sessions.items()
+            if area_id is AREA_FILTER_UNSET or data.state.area_id == area_id
+        ]
+        return [{"session_id": sid, "public_ref": data.state.public_ref} for sid, data in sessions[:limit]]
+
+    async def resolve_session_ref(
+        self,
+        session_ref: str,
+        *,
+        area_id=AREA_FILTER_UNSET,
+    ) -> str | None:
+        for session_id, data in self._sessions.items():
+            if data.state.public_ref == session_ref and (area_id is AREA_FILTER_UNSET or data.state.area_id == area_id):
+                return session_id
+        return None
 
     async def rename(self, session_id: str, name: str) -> bool:
         self.renamed.append((session_id, name))
@@ -143,9 +162,32 @@ class _StubRunRegistry:
         return self._active.get(session_id)
 
 
-def _session(session_id: str, name: str | None, messages: int = 2) -> SessionData:
+def _session_ref(session_id: str, name: str | None = None) -> str:
+    return public_ref(name or "chat", session_id, empty_slug="chat")
+
+
+def _agent_ref(task_id: str = "agent-1") -> str:
+    return public_ref("scan docs", task_id, empty_slug="agent")
+
+
+def _session(
+    session_id: str,
+    name: str | None,
+    messages: int = 2,
+    *,
+    public_ref_value: str | None = None,
+    parent_session_id: str | None = None,
+    area_id: str | None = None,
+) -> SessionData:
     return SessionData(
-        state=SessionState(session_id=session_id, started_at=datetime.now(UTC), name=name),
+        state=SessionState(
+            session_id=session_id,
+            public_ref=public_ref_value or _session_ref(session_id, name),
+            started_at=datetime.now(UTC),
+            name=name,
+            parent_session_id=parent_session_id,
+            area_id=area_id,
+        ),
         messages=[{"role": "user", "content": "hi"} for _ in range(messages)],
     )
 
@@ -168,8 +210,14 @@ def _make_execution(
         services["automation"] = automation
     if wiki is not None:
         services["wiki"] = wiki
+    current = service._sessions.get("cur")
     ctx = ToolContext(
-        session_state=SessionState(session_id="cur", started_at=datetime.now(UTC), area_id=area_id),
+        session_state=SessionState(
+            session_id="cur",
+            public_ref=current.state.public_ref if current is not None else _session_ref("cur", "Current"),
+            started_at=datetime.now(UTC),
+            area_id=area_id,
+        ),
         registry=ToolRegistry(),
         run=RunContext(run_id="run-1"),
         io=IOBridge(),
@@ -185,7 +233,12 @@ async def _live_agent(session_id: str) -> AsyncIterator[BackgroundTaskRegistry]:
     registry = BackgroundTaskRegistry(session_id="cur")
     task = asyncio.create_task(asyncio.sleep(3600))
     registry.register("agent-1", task, command="scan docs")
-    await registry.record_started(task_id="agent-1", command="scan docs", child_session_id=session_id)
+    await registry.record_started(
+        task_id="agent-1",
+        agent_ref=_agent_ref(),
+        command="scan docs",
+        child_session_id=session_id,
+    )
     try:
         yield registry
     finally:
@@ -198,7 +251,10 @@ async def _live_agent(session_id: str) -> AsyncIterator[BackgroundTaskRegistry]:
 async def test_send_message_refuses_its_own_session():
     execution, _, app_control = _make_execution(sessions={"cur": _session("cur", "Current")})
 
-    result = await session_send_message(execution, SessionSendMessageInput(session_id="cur", message="go"))
+    result = await session_send_message(
+        execution,
+        SessionSendMessageInput(session_ref=_session_ref("cur", "Current"), message="go"),
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -209,11 +265,14 @@ async def test_send_message_refuses_its_own_session():
 async def test_send_message_reports_unknown_session_with_recent_ids():
     execution, service, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await session_send_message(execution, SessionSendMessageInput(session_id="nope", message="go"))
+    result = await session_send_message(
+        execution,
+        SessionSendMessageInput(session_ref=_session_ref("nope", "Missing"), message="go"),
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
-    assert "s1" in result.content
+    assert _session_ref("s1", "Ops") in result.content
     assert not app_control.dispatched
     assert service.list_calls[-1]["area_id"] is AREA_FILTER_UNSET
 
@@ -224,17 +283,64 @@ async def test_unknown_session_hint_stays_inside_the_callers_area():
     about sessions its own session_list would never show it."""
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")}, area_id="ops")
 
-    result = await session_send_message(execution, SessionSendMessageInput(session_id="nope", message="go"))
+    result = await session_send_message(
+        execution,
+        SessionSendMessageInput(session_ref=_session_ref("nope", "Missing"), message="go"),
+    )
 
     assert result.is_error
     assert service.list_calls[-1]["area_id"] == "ops"
 
 
 @pytest.mark.asyncio
+async def test_area_caller_cannot_target_a_session_from_another_area():
+    finance_ref = _session_ref("finance", "Finance")
+    execution, service, app_control = _make_execution(
+        sessions={"finance": _session("finance", "Finance", area_id="finance")},
+        area_id="ops",
+        run_registry=_StubRunRegistry(),
+    )
+
+    sent = await session_send_message(
+        execution,
+        SessionSendMessageInput(session_ref=finance_ref, message="go"),
+    )
+    renamed = await session_rename(
+        execution,
+        SessionRenameInput(session_ref=finance_ref, name="No access"),
+    )
+    archived = await session_archive(
+        execution,
+        SessionArchiveInput(session_refs=[finance_ref]),
+    )
+    opened = await app_open(
+        execution,
+        AppOpenInput(
+            destination={"kind": "session", "session_ref": finance_ref},
+            label="Open Finance",
+        ),
+    )
+
+    assert [result.outcome.error.code for result in (sent, renamed, archived, opened)] == [
+        "not_found",
+        "not_found",
+        "conflict",
+        "not_found",
+    ]
+    assert service.renamed == []
+    assert service.archived == []
+    assert app_control.dispatched == []
+    assert app_control.emitted == []
+
+
+@pytest.mark.asyncio
 async def test_send_message_dispatches_with_tool_call_client_id_and_no_approval_override():
     execution, _, app_control = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await session_send_message(execution, SessionSendMessageInput(session_id="s1", message="check the digest"))
+    result = await session_send_message(
+        execution,
+        SessionSendMessageInput(session_ref=_session_ref("s1", "Ops"), message="check the digest"),
+    )
 
     assert not result.is_error
     assert app_control.dispatched == [
@@ -252,7 +358,10 @@ async def test_send_message_refuses_an_archived_target():
         archived={"s1"},
     )
 
-    result = await session_send_message(execution, SessionSendMessageInput(session_id="s1", message="go"))
+    result = await session_send_message(
+        execution,
+        SessionSendMessageInput(session_ref=_session_ref("s1", "Ops"), message="go"),
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -269,10 +378,21 @@ async def test_send_message_policy_matches_bash():
 @pytest.mark.asyncio
 async def test_send_message_steers_a_live_agent_without_dispatching():
     async with _live_agent("cur::a1") as registry:
-        execution, _, app_control = _make_execution(background_tasks=registry)
+        execution, _, app_control = _make_execution(
+            sessions={
+                "cur::a1": _session(
+                    "cur::a1",
+                    "Agent",
+                    public_ref_value=_agent_ref(),
+                    parent_session_id="cur",
+                )
+            },
+            background_tasks=registry,
+        )
 
         result = await session_send_message(
-            execution, SessionSendMessageInput(session_id="cur::a1", message="also check pricing")
+            execution,
+            SessionSendMessageInput(session_ref=_agent_ref(), message="also check pricing"),
         )
 
         assert not result.is_error
@@ -287,16 +407,31 @@ async def test_send_message_steers_a_live_agent_without_dispatching():
 @pytest.mark.asyncio
 async def test_send_message_waives_approval_only_for_own_live_agents():
     async with _live_agent("cur::a1") as registry:
-        execution, _, _ = _make_execution(background_tasks=registry)
+        execution, _, _ = _make_execution(
+            sessions={
+                "cur::a1": _session(
+                    "cur::a1",
+                    "Agent",
+                    public_ref_value=_agent_ref(),
+                    parent_session_id="cur",
+                ),
+                "s1": _session("s1", "Ops"),
+            },
+            background_tasks=registry,
+        )
 
         waived = await approve_session_send_message(
-            execution, SessionSendMessageInput(session_id="cur::a1", message="go")
+            execution,
+            SessionSendMessageInput(session_ref=_agent_ref(), message="go"),
         )
-        foreign = await approve_session_send_message(execution, SessionSendMessageInput(session_id="s1", message="go"))
+        foreign = await approve_session_send_message(
+            execution,
+            SessionSendMessageInput(session_ref=_session_ref("s1", "Ops"), message="go"),
+        )
 
         assert waived is APPROVAL_WAIVED
         assert isinstance(foreign, ApprovalInfo)
-        assert foreign.preview.startswith("To: s1")
+        assert foreign.preview.startswith(f"To: {_session_ref('s1', 'Ops')}")
 
 
 @pytest.mark.asyncio
@@ -305,11 +440,21 @@ async def test_send_message_refuses_to_dispatch_when_the_agent_finished_mid_appr
     async with _live_agent("cur::a1") as registry:
         monkeypatch.setattr(registry, "queue_steering", lambda task_id, text: False)
         execution, _, app_control = _make_execution(
-            sessions={"cur::a1": _session("cur::a1", "Agent")},
+            sessions={
+                "cur::a1": _session(
+                    "cur::a1",
+                    "Agent",
+                    public_ref_value=_agent_ref(),
+                    parent_session_id="cur",
+                )
+            },
             background_tasks=registry,
         )
 
-        result = await session_send_message(execution, SessionSendMessageInput(session_id="cur::a1", message="go"))
+        result = await session_send_message(
+            execution,
+            SessionSendMessageInput(session_ref=_agent_ref(), message="go"),
+        )
 
         assert result.is_error
         assert result.outcome.error.code == "conflict"
@@ -320,7 +465,10 @@ async def test_send_message_refuses_to_dispatch_when_the_agent_finished_mid_appr
 async def test_rename_session_renames_and_announces_row():
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Old name", messages=3)})
 
-    result = await session_rename(execution, SessionRenameInput(session_id="s1", name="Invoice triage"))
+    result = await session_rename(
+        execution,
+        SessionRenameInput(session_ref=_session_ref("s1", "Old name"), name="Invoice triage"),
+    )
 
     assert not result.is_error
     assert service.renamed == [("s1", "Invoice triage")]
@@ -332,7 +480,10 @@ async def test_rename_session_renames_and_announces_row():
 async def test_rename_session_reports_unknown_session():
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")})
 
-    result = await session_rename(execution, SessionRenameInput(session_id="ghost", name="Nope"))
+    result = await session_rename(
+        execution,
+        SessionRenameInput(session_ref=_session_ref("ghost", "Ghost"), name="Nope"),
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "not_found"
@@ -345,7 +496,10 @@ async def test_rename_session_refuses_an_archived_target():
     at the top of the list until the next /sessions load."""
     execution, service, _ = _make_execution(sessions={"s1": _session("s1", "Ops")}, archived={"s1"})
 
-    result = await session_rename(execution, SessionRenameInput(session_id="s1", name="Nope"))
+    result = await session_rename(
+        execution,
+        SessionRenameInput(session_ref=_session_ref("s1", "Ops"), name="Nope"),
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -360,11 +514,16 @@ async def test_archive_session_skips_own_session_but_archives_the_rest():
         run_registry=_StubRunRegistry(),
     )
 
-    result = await session_archive(execution, SessionArchiveInput(session_ids=["cur", "s1"]))
+    current_ref = _session_ref("cur", "Current")
+    ops_ref = _session_ref("s1", "Ops")
+    result = await session_archive(
+        execution,
+        SessionArchiveInput(session_refs=[current_ref, ops_ref]),
+    )
 
     assert not result.is_error
     assert service.archived == ["s1"]
-    assert "cur · skipped — this is the session you are running in" in result.content
+    assert f"{current_ref} · skipped — this is the session you are running in" in result.content
     assert "Archived 1 of 2" in result.content
 
 
@@ -377,14 +536,23 @@ async def test_archive_session_batch_reports_every_outcome():
         run_registry=_StubRunRegistry({"s2": object()}),
     )
 
-    result = await session_archive(execution, SessionArchiveInput(session_ids=["s1", "s2", "s3", "ghost", "s1"]))
+    refs = {
+        "s1": _session_ref("s1", "Ops"),
+        "s2": _session_ref("s2", "Live"),
+        "s3": _session_ref("s3", "Old"),
+        "ghost": _session_ref("ghost", "Ghost"),
+    }
+    result = await session_archive(
+        execution,
+        SessionArchiveInput(session_refs=[refs["s1"], refs["s2"], refs["s3"], refs["ghost"], refs["s1"]]),
+    )
 
     assert not result.is_error
     assert service.archived == ["s1"]  # duplicate id archives once
-    assert "s1 · archived — Ops" in result.content
-    assert "s2 · skipped — live run in progress" in result.content
-    assert "s3 · skipped — already archived" in result.content
-    assert "ghost · skipped — no such session" in result.content
+    assert f"{refs['s1']} · archived — Ops" in result.content
+    assert f"{refs['s2']} · skipped — live run in progress" in result.content
+    assert f"{refs['s3']} · skipped — already archived" in result.content
+    assert f"{refs['ghost']} · skipped — no such session" in result.content
     assert result.data == {"archived": 1, "requested": 5}
 
 
@@ -396,7 +564,10 @@ async def test_archive_session_all_skipped_is_an_error():
         run_registry=_StubRunRegistry(),
     )
 
-    result = await session_archive(execution, SessionArchiveInput(session_ids=["s1", "ghost"]))
+    result = await session_archive(
+        execution,
+        SessionArchiveInput(session_refs=[_session_ref("s1", "Ops"), _session_ref("ghost", "Ghost")]),
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "conflict"
@@ -520,7 +691,10 @@ async def test_open_in_app_refuses_an_unknown_session():
 
     result = await app_open(
         execution,
-        AppOpenInput(destination={"kind": "session", "session_id": "ghost"}, label="Open the ghost chat"),
+        AppOpenInput(
+            destination={"kind": "session", "session_ref": _session_ref("ghost", "Ghost")},
+            label="Open the ghost chat",
+        ),
     )
 
     assert result.is_error
@@ -627,6 +801,40 @@ def test_open_in_app_rejects_internal_area_id_field():
         )
 
 
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (SessionSendMessageInput, {"session_ref": _session_ref("s1", "Ops"), "session_id": "s1", "message": "go"}),
+        (AppFollowupTaskInput, {"agent_ref": _agent_ref(), "session_id": "cur::a1", "task": "go"}),
+        (SessionRenameInput, {"session_ref": _session_ref("s1", "Ops"), "session_id": "s1", "name": "New"}),
+        (
+            SessionArchiveInput,
+            {"session_refs": [_session_ref("s1", "Ops")], "session_ids": ["s1"]},
+        ),
+    ],
+)
+def test_app_control_inputs_reject_internal_session_id_fields(model, payload):
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        model.model_validate(payload)
+
+
+def test_app_control_inputs_reject_raw_ids_as_public_refs():
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        SessionSendMessageInput(session_ref="s1", message="go")
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        AppFollowupTaskInput(agent_ref="agent-1", task="go")
+
+
+def test_open_in_app_rejects_internal_session_id_field():
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AppOpenInput.model_validate(
+            {
+                "destination": {"kind": "session", "session_id": "s1"},
+                "label": "Open Ops",
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_open_in_app_opens_the_automations_surface_without_a_task_id():
     """The bare surface carries no ref, so there is nothing to validate."""
@@ -665,13 +873,21 @@ async def test_rename_session_updates_a_live_runs_in_memory_state():
 
     registry = RunRegistry()
     live = registry.create_run("s1")
-    live.session_state = SessionState(session_id="s1", started_at=datetime.now(UTC), name="Old name")
+    live.session_state = SessionState(
+        session_id="s1",
+        public_ref=_session_ref("s1", "Old name"),
+        started_at=datetime.now(UTC),
+        name="Old name",
+    )
     execution, service, _ = _make_execution(
         sessions={"s1": _session("s1", "Old name", messages=3)},
         run_registry=registry,
     )
 
-    result = await session_rename(execution, SessionRenameInput(session_id="s1", name="Invoice triage"))
+    result = await session_rename(
+        execution,
+        SessionRenameInput(session_ref=_session_ref("s1", "Old name"), name="Invoice triage"),
+    )
 
     assert not result.is_error
     assert service.renamed == [("s1", "Invoice triage")]

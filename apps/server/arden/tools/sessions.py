@@ -17,10 +17,11 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.agent.types.tools import ToolSourceRef, normalize_source_refs
 from arden.context.store import AREA_FILTER_UNSET
+from arden.core.public_refs import PublicRef, is_public_ref
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.collections import format_timestamp
 from arden.tools.core.context import ToolExecution
@@ -41,7 +42,7 @@ _MAX_MESSAGE_LIMIT = 200
 # plumbing (parent_session_id, origin_automation_id, chat_model, …) that no
 # consumer of this tool acts on.
 _ITEM_FIELDS = (
-    "session_id",
+    "session_ref",
     "name",
     "session_type",
     "started_at",
@@ -73,14 +74,14 @@ def _live_status(execution: ToolExecution) -> dict[str, str]:
     }
 
 
-def _run_header(execution: ToolExecution, session_id: str) -> str | None:
+def _run_header(execution: ToolExecution, session_id: str, session_ref_value: str) -> str | None:
     registry = execution.ctx.run_registry
     if registry is None:
         return None
     run = registry.get_active_run(session_id)
     if run is None:
-        return f"[session {session_id}] idle"
-    parts = [f"[session {session_id}] running", f"run {run.run_id}"]
+        return f"[session {session_ref_value}] idle"
+    parts = [f"[session {session_ref_value}] running"]
     if run.pending_approvals:
         parts.append(f"{len(run.pending_approvals)} approval(s) pending")
     if run.pending_injection_count:
@@ -89,6 +90,8 @@ def _run_header(execution: ToolExecution, session_id: str) -> str | None:
 
 
 class SessionListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     limit: int = Field(
         default=_DEFAULT_LIST_LIMIT,
         ge=1,
@@ -124,11 +127,13 @@ class SessionListInput(BaseModel):
 
 
 class SessionSearchTranscriptsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(
         description=(
             "Full-text query across chat transcripts (FTS5 syntax: bare words "
             'are AND-ed; quote "exact phrases"). Searches the readable message '
-            "text, not JSON. Returns ranked snippets with session_id + seq so "
+            "text, not JSON. Returns ranked snippets with session_ref + seq so "
             "you can session_read(around_seq=...) for context."
         )
     )
@@ -143,9 +148,9 @@ class SessionSearchTranscriptsInput(BaseModel):
         ge=0,
         description="Pagination offset — skip this many hits. Use limit+offset to page through results.",
     )
-    session_id: str | None = Field(
+    session_ref: PublicRef | None = Field(
         default=None,
-        description="Restrict the search to one session. Omit to search across all transcripts.",
+        description="Restrict the search to one session_ref. Omit to search across all transcripts.",
     )
     within_days: int | None = Field(
         default=None,
@@ -156,6 +161,8 @@ class SessionSearchTranscriptsInput(BaseModel):
 
 
 class SessionCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(description="Short human-readable label for the new session (e.g. 'ops-alerts').")
     session_type: Literal["chat", "channel"] = Field(
         default="channel",
@@ -167,7 +174,9 @@ class SessionCreateInput(BaseModel):
 
 
 class SessionReadInput(BaseModel):
-    session_id: str = Field(description="The session_id from session_list.")
+    model_config = ConfigDict(extra="forbid")
+
+    session_ref: PublicRef = Field(description="The exact session_ref from session_list.")
     limit: int = Field(
         default=_DEFAULT_MESSAGE_LIMIT,
         ge=1,
@@ -276,14 +285,14 @@ def _format_when(raw) -> str:
     return format_timestamp(dt)
 
 
-def session_ref(session_id: str, title: str) -> ToolSourceRef:
-    return ToolSourceRef(provider="arden", kind="session", ref=session_id, title=title or session_id)
+def session_ref(public_ref: str, title: str) -> ToolSourceRef:
+    return ToolSourceRef(provider="arden", kind="session", ref=public_ref, title=title or public_ref)
 
 
-def _message_ref(session_id: str, seq: object, title: str) -> ToolSourceRef | None:
+def _message_ref(public_ref: str, seq: object, title: str) -> ToolSourceRef | None:
     if not isinstance(seq, int):
         return None
-    return ToolSourceRef(provider="arden", kind="message", ref=f"{session_id}:{seq}", title=title)
+    return ToolSourceRef(provider="arden", kind="message", ref=f"{public_ref}:{seq}", title=title)
 
 
 def _session_unavailable() -> ToolResult:
@@ -341,11 +350,11 @@ async def session_list(execution: ToolExecution, args: SessionListInput) -> Tool
     live = _live_status(execution)
     lines: list[str] = []
     for s in sessions:
-        sid = s.get("session_id", "?")
+        sid = s.get("public_ref", "?")
         name = (s.get("name") or "(untitled)").strip()
         when = _format_when(s.get("last_activity") or s.get("started_at"))
         count = s.get("message_count", 0)
-        status = live.get(sid) or (s.get("agent_status") or "")
+        status = live.get(str(s.get("session_id", ""))) or (s.get("agent_status") or "")
         # Non-chat sessions are marked so callers can honor kind-based rules
         # ("never archive channels") without reading each session first.
         session_type = s.get("session_type") or "chat"
@@ -364,14 +373,20 @@ async def session_list(execution: ToolExecution, args: SessionListInput) -> Tool
         content="\n".join(lines),
         preview=f"{len(sessions)} sessions" + (" (capped)" if has_more else ""),
         data={
-            "items": [{field: session.get(field) for field in _ITEM_FIELDS} for session in sessions],
+            "items": [
+                {
+                    **{field: session.get(field) for field in _ITEM_FIELDS if field != "session_ref"},
+                    "session_ref": session.get("public_ref"),
+                }
+                for session in sessions
+            ],
             "count": len(sessions),
             "has_more": has_more,
             "offset": args.offset,
             "next_offset": next_offset if has_more else None,
         },
         source_refs=normalize_source_refs(
-            session_ref(str(session.get("session_id", "")), str(session.get("name") or session.get("session_id", "")))
+            session_ref(str(session.get("public_ref", "")), str(session.get("name") or session.get("public_ref", "")))
             for session in sessions
         ),
     )
@@ -389,17 +404,17 @@ async def session_create(execution: ToolExecution, args: SessionCreateInput) -> 
         origin_automation_id=origin,
         area_id=execution.ctx.session_state.area_id,
     )
+    if state.public_ref is None or not is_public_ref(state.public_ref):
+        raise RuntimeError("provisioned session is missing a valid public_ref")
 
     lines = [
         f"Created {args.session_type}: {state.name}",
-        f"ID: {state.session_id}",
+        f"Reference: {state.public_ref}",
     ]
-    if origin:
-        lines.append(f"Origin automation: {origin}")
     return ToolResult(
         content="\n".join(lines),
-        preview=f"Created ({state.session_id})",
-        source_refs=(session_ref(state.session_id, state.name or state.session_id),),
+        preview=f"Created ({state.public_ref})",
+        source_refs=(session_ref(state.public_ref, state.name or state.public_ref),),
     )
 
 
@@ -418,9 +433,17 @@ async def session_read(execution: ToolExecution, args: SessionReadInput) -> Tool
             recovery_action="Choose one pagination direction and retry.",
         )
 
+    session_id = await svc.resolve_session_ref(args.session_ref, area_id=area_filter(execution))
+    if session_id is None:
+        return ToolResult.failure(
+            code="not_found",
+            message=f"No session {args.session_ref}.",
+            preview="Session not found",
+            recovery_action="Call session_list and retry with an exact session_ref.",
+        )
     try:
         page = await svc.list_messages(
-            args.session_id,
+            session_id,
             limit=args.limit,
             after_seq=args.after_seq,
             before_seq=args.before_seq,
@@ -430,16 +453,16 @@ async def session_read(execution: ToolExecution, args: SessionReadInput) -> Tool
     except Exception:
         return ToolResult.failure(
             code="session_read_failed",
-            message=f"Failed to read session {args.session_id}.",
+            message=f"Failed to read session {args.session_ref}.",
             preview="Read failed",
             retryable=True,
-            recovery_action="Call session_list and retry with an exact readable session ID.",
+            recovery_action="Call session_list and retry with an exact readable session_ref.",
         )
 
     raw_messages = page.get("messages") if isinstance(page, dict) else page
     if not raw_messages:
         return ToolResult(
-            content=f"No messages in session {args.session_id}.",
+            content=f"No messages in session {args.session_ref}.",
             preview="0 messages",
         )
 
@@ -447,7 +470,7 @@ async def session_read(execution: ToolExecution, args: SessionReadInput) -> Tool
     kept = 0
     first_seq: int | None = None
     last_seq: int | None = None
-    source_refs: list[ToolSourceRef] = [session_ref(args.session_id, f"Session {args.session_id}")]
+    source_refs: list[ToolSourceRef] = [session_ref(args.session_ref, f"Session {args.session_ref}")]
     for row in raw_messages:
         # Each row is {seq, role, created_at, message: {...}}. The body lives
         # in the nested message; role is mirrored at the top level.
@@ -464,24 +487,24 @@ async def session_read(execution: ToolExecution, args: SessionReadInput) -> Tool
         if seq is not None:
             first_seq = seq if first_seq is None else first_seq
             last_seq = seq
-        if ref := _message_ref(args.session_id, seq, f"Session {args.session_id} message {seq}"):
+        if ref := _message_ref(args.session_ref, seq, f"Session {args.session_ref} message {seq}"):
             source_refs.append(ref)
         kept += 1
 
     if not kept:
         return ToolResult(
-            content=f"No messages matched filter in session {args.session_id}.",
+            content=f"No messages matched filter in session {args.session_ref}.",
             preview="0 matched",
         )
 
     footer: list[str] = []
     if isinstance(page, dict):
         if page.get("has_more_after") and last_seq is not None:
-            footer.append(f"More after: session_read(after_seq={last_seq})")
+            footer.append(f'More after: session_read(session_ref="{args.session_ref}", after_seq={last_seq})')
         if page.get("has_more_before") and first_seq is not None:
-            footer.append(f"More before: session_read(before_seq={first_seq})")
+            footer.append(f'More before: session_read(session_ref="{args.session_ref}", before_seq={first_seq})')
     body_text = "\n".join(lines)
-    if header := _run_header(execution, args.session_id):
+    if header := _run_header(execution, session_id, args.session_ref):
         body_text = f"{header}\n\n{body_text}"
     if footer:
         body_text += "\n\n" + "\n".join(footer)
@@ -502,12 +525,22 @@ async def session_search_transcripts(execution: ToolExecution, args: SessionSear
     if args.within_days is not None:
         since = (datetime.now(UTC) - timedelta(days=args.within_days)).isoformat()
 
+    session_id: str | None = None
+    if args.session_ref is not None:
+        session_id = await svc.resolve_session_ref(args.session_ref, area_id=area_filter(execution))
+        if session_id is None:
+            return ToolResult.failure(
+                code="not_found",
+                message=f"No session {args.session_ref}.",
+                preview="Session not found",
+                recovery_action="Call session_list and retry with an exact session_ref.",
+            )
     try:
         result = await svc.search_messages(
             args.query,
             limit=args.limit,
             offset=args.offset,
-            session_id=args.session_id,
+            session_id=session_id,
             since=since,
             area_id=area_filter(execution),
         )
@@ -530,7 +563,7 @@ async def session_search_transcripts(execution: ToolExecution, args: SessionSear
 
     lines: list[str] = []
     for h in hits:
-        sid = h.get("session_id", "?")
+        sid = h.get("public_ref", "?")
         name = (h.get("session_name") or "(untitled)").strip()
         when = _format_when(h.get("created_at"))
         role = (h.get("role") or "").lower()
@@ -549,9 +582,9 @@ async def session_search_transcripts(execution: ToolExecution, args: SessionSear
             for hit in hits
             if (
                 ref := _message_ref(
-                    str(hit.get("session_id", "")),
+                    str(hit.get("public_ref", "")),
                     hit.get("seq"),
-                    f"{hit.get('session_name') or hit.get('session_id', '')} message {hit.get('seq')}",
+                    f"{hit.get('session_name') or hit.get('public_ref', '')} message {hit.get('seq')}",
                 )
             )
         ),
@@ -561,7 +594,7 @@ async def session_search_transcripts(execution: ToolExecution, args: SessionSear
 # --- Tool registration ---
 
 LIST_RECENT_SESSIONS_DESCRIPTION = (
-    "List recent chat sessions (most recent first) with id, name, last "
+    "List recent chat sessions (most recent first) with session_ref, name, last "
     "activity, and message count. Read-only. Use to find sessions worth "
     "inspecting before calling session_read. Useful for cross-session "
     "pattern detection (audit automations, propose-* skills running in "
@@ -575,7 +608,7 @@ LIST_RECENT_SESSIONS_DESCRIPTION = (
 )
 
 READ_SESSION_DESCRIPTION = (
-    "Read messages from a specific session by session_id. Content is "
+    "Read messages from a specific session by session_ref. Content is "
     "truncated per message to keep context manageable; raise "
     "content_chars (up to 4000) for fuller bodies. Use role_filter=['user'] "
     "to scan only user prompts when looking for patterns. Each line is "
@@ -621,8 +654,8 @@ session_read_tool = tool(
 SEARCH_TRANSCRIPTS_DESCRIPTION = (
     "Full-text search across chat transcripts, ranked by relevance. Searches "
     "the readable message text (not JSON/images). Filter to one chat with "
-    "session_id, bound by time with within_days, page with limit+offset. Each "
-    "hit gives session_id + seq — follow up with session_read(session_id, "
+    "session_ref, bound by time with within_days, page with limit+offset. Each "
+    "hit gives session_ref + seq — follow up with session_read(session_ref, "
     "around_seq=seq) to read the surrounding conversation. Inside an Area, only "
     "that Area's transcripts are searched. Read-only."
 )

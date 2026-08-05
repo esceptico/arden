@@ -14,6 +14,7 @@ from arden.agent.agent import RunBudget
 from arden.agent.ledger import SharedLedger
 from arden.constants import ARDEN_TMP_BASE
 from arden.context.models import AreaContext, BackgroundStartDisposition, SessionState
+from arden.core.public_refs import is_public_ref
 from arden.events.sse import ApprovalNeededEvent, BackgroundTaskEvent, ConnectionNeededEvent, InputNeededEvent
 from arden.logging import get_logger
 from arden.tools.core.contracts import ConnectionDescriptor, RunRegistryContract, ToolRegistryContract
@@ -373,13 +374,13 @@ def _format_elapsed(seconds: float) -> str:
 def _bound_completed_result(
     result: str,
     *,
-    task_id: str,
+    agent_ref: str,
     fixed_notification_chars: int,
 ) -> tuple[str, str]:
     """Fit a completed result into its hidden notification, preserving both ends."""
     retrieval = (
         f"The full exact result is {len(result)} characters. Continue with "
-        f'agent_result_read(task_id="{task_id}", offset=0, '
+        f'agent_result_read(agent_ref="{agent_ref}", offset=0, '
         f"limit={BACKGROUND_RESULT_READ_MAX_CHARS}).\n"
     )
     marker = "\n\n[Middle omitted from this bounded completion.]\n\n"
@@ -441,6 +442,7 @@ class BackgroundTaskRegistry:
     # task_id -> the agent's own child session id, so a cancel can walk the
     # spawn subtree (descendants run inside this session).
     _child_sessions: dict[str, str] = field(default_factory=dict)
+    _agent_refs: dict[str, str] = field(default_factory=dict)
     # task_id -> run that spawned it, so cancelling a superseded run can stop
     # its own agents without touching a newer run's.
     _parent_runs: dict[str, str] = field(default_factory=dict)
@@ -467,6 +469,7 @@ class BackgroundTaskRegistry:
         self._reserved.discard(task_id)
         self._inboxes.pop(task_id, None)
         self._child_sessions.pop(task_id, None)
+        self._agent_refs.pop(task_id, None)
         self._parent_runs.pop(task_id, None)
         self._closed_inboxes.discard(task_id)
         self._uncapped.discard(task_id)
@@ -480,11 +483,14 @@ class BackgroundTaskRegistry:
         *,
         command: str,
         limit: int | None,
+        agent_ref: str,
         child_session_id: str | None = None,
         parent_run_id: str | None = None,
         summary: str | None = None,
         agent_type: str | None = None,
     ) -> bool:
+        if not is_public_ref(agent_ref):
+            raise ValueError("agent_ref is invalid")
         if task_id in self._tasks or task_id in self._reserved:
             return False
         if limit is None:
@@ -495,6 +501,7 @@ class BackgroundTaskRegistry:
         self._commands[task_id] = command
         if child_session_id:
             self._child_sessions[task_id] = child_session_id
+        self._agent_refs[task_id] = agent_ref
         if parent_run_id:
             self._parent_runs[task_id] = parent_run_id
         if summary:
@@ -510,6 +517,26 @@ class BackgroundTaskRegistry:
 
     def child_session(self, task_id: str) -> str | None:
         return self._child_sessions.get(task_id)
+
+    def agent_ref(self, task_id: str) -> str | None:
+        return self._agent_refs.get(task_id)
+
+    def task_for_agent_ref(self, agent_ref: str) -> str | None:
+        return next(
+            (
+                task_id
+                for task_id, value in self._agent_refs.items()
+                if value == agent_ref and (task := self._tasks.get(task_id)) is not None and not task.done()
+            ),
+            None,
+        )
+
+    def live_agent_refs(self) -> list[str]:
+        return sorted(
+            ref
+            for task_id, ref in self._agent_refs.items()
+            if (task := self._tasks.get(task_id)) is not None and not task.done()
+        )
 
     def parent_run(self, task_id: str) -> str | None:
         return self._parent_runs.get(task_id)
@@ -594,7 +621,10 @@ class BackgroundTaskRegistry:
             elapsed = _format_elapsed(now - started) if started is not None else "just started"
             agent_type = self._agent_types.get(task_id) or "agent"
             summary = (self._summaries.get(task_id) or self._commands.get(task_id) or "")[:_ROSTER_SUMMARY_CHARS]
-            address = self._child_sessions.get(task_id, task_id)
+            try:
+                address = self._agent_refs[task_id]
+            except KeyError as exc:
+                raise RuntimeError(f"live background task {task_id!r} has no agent_ref") from exc
             lines.append(f"- {address} · {agent_type} · running {elapsed} · {summary}")
         shown = lines[:_ROSTER_MAX_ROWS]
         if len(lines) > _ROSTER_MAX_ROWS:
@@ -654,12 +684,16 @@ class BackgroundTaskRegistry:
         parent_tool_call_id: str | None = None,
         suspension_id: str | None = None,
         child_session_id: str | None = None,
+        agent_ref: str | None = None,
         agent_type: str | None = None,
         wait: bool | None = None,
         spawn_spec: str | None = None,
     ) -> BackgroundStartDisposition:
         if not self.record_event:
             return BackgroundStartDisposition.STARTED
+        resolved_agent_ref = agent_ref or self._agent_refs.get(task_id)
+        if resolved_agent_ref is None:
+            raise RuntimeError(f"background task {task_id!r} has no agent_ref")
         terminal = status in {"completed", "failed", "cancelled", "interrupted"}
         disposition = await self.record_event(
             task_id=task_id,
@@ -668,6 +702,7 @@ class BackgroundTaskRegistry:
             parent_tool_call_id=parent_tool_call_id,
             suspension_id=suspension_id,
             child_session_id=child_session_id,
+            agent_ref=resolved_agent_ref,
             agent_type=agent_type,
             wait=wait,
             command=self._commands.get(task_id, ""),
@@ -685,6 +720,7 @@ class BackgroundTaskRegistry:
         *,
         task_id: str,
         command: str,
+        agent_ref: str,
         parent_run_id: str | None = None,
         parent_tool_call_id: str | None = None,
         suspension_id: str | None = None,
@@ -696,6 +732,9 @@ class BackgroundTaskRegistry:
         self._commands[task_id] = command
         if child_session_id:
             self._child_sessions[task_id] = child_session_id
+        if not is_public_ref(agent_ref):
+            raise ValueError("agent_ref is invalid")
+        self._agent_refs[task_id] = agent_ref
         return await self._record(
             task_id=task_id,
             status="started",
@@ -703,18 +742,26 @@ class BackgroundTaskRegistry:
             parent_tool_call_id=parent_tool_call_id,
             suspension_id=suspension_id,
             child_session_id=child_session_id,
+            agent_ref=agent_ref,
             agent_type=agent_type,
             wait=wait,
             spawn_spec=spawn_spec,
         )
 
-    async def record_activity(self, task_id: str, detail: str) -> None:
-        await self._record(task_id=task_id, status="activity", detail=detail)
+    async def record_activity(self, task_id: str, detail: str, *, agent_ref: str) -> None:
+        await self._record(task_id=task_id, status="activity", detail=detail, agent_ref=agent_ref)
 
-    async def record_finished(self, *, task_id: str, status: str, result_text: str | None = None) -> None:
+    async def record_finished(
+        self,
+        *,
+        task_id: str,
+        agent_ref: str,
+        status: str,
+        result_text: str | None = None,
+    ) -> None:
         """Terminal row for an awaited spawn — its result returns in-process,
         so there is no delivery; only the durable roster outcome."""
-        await self._record(task_id=task_id, status=status, result_text=result_text)
+        await self._record(task_id=task_id, status=status, result_text=result_text, agent_ref=agent_ref)
 
     def cancel_all(self) -> list[tuple[str, str]]:
         """Cancel all pending tasks. Returns list of (task_id, command) for cancelled tasks."""
@@ -787,13 +834,18 @@ class BackgroundTaskRegistry:
         label: str,
         status: str,
         emit: Callable[[Any], Awaitable[None]] | None,
+        agent_ref: str,
         child_session_id: str | None = None,
         parent_tool_call_id: str | None = None,
         agent_type: str | None = None,
         wait: bool | None = None,
         undelivered_steering: list[str] | None = None,
     ) -> None:
-        result_ref = f"background://{task_id}"
+        registered_ref = self._agent_refs.get(task_id)
+        if registered_ref is not None and registered_ref != agent_ref:
+            raise ValueError("background completion agent_ref does not match its registered task")
+        self._agent_refs[task_id] = agent_ref
+        result_ref = f"background://{agent_ref}"
         completion_id = f"bg:{task_id}:{status}"
         notification_result = _completion_notification_result(result, undelivered_steering)
         durable_result = _durable_completion_result(result, undelivered_steering)
@@ -839,11 +891,13 @@ class BackgroundTaskRegistry:
         except Exception:
             _logger.warning("Failed to write supplementary background result file", exc_info=True)
 
-        # Durable completions recorded before child sessions existed carry no id.
-        session_attr = f' session_id="{child_session_id}"' if child_session_id else ""
+        # Model-facing completion pointers use stable refs; raw ids remain in
+        # the registry and persistence layer only.
+        child_session_ref = agent_ref if child_session_id else None
+        session_attr = f' session_ref="{child_session_ref}"' if child_session_ref else ""
         follow_up = (
-            f'Read that agent\'s session with session_read(session_id="{child_session_id}") if you need more.\n'
-            if child_session_id
+            f'Read that agent\'s session with session_read(session_ref="{child_session_ref}") if you need more.\n'
+            if child_session_ref
             else ""
         )
         # Failure reports stay short. Completed work keeps a much larger
@@ -854,7 +908,7 @@ class BackgroundTaskRegistry:
             result_was_truncated = len(notify_result) > _FAILED_RESULT_CHAR_LIMIT
             if len(notify_result) > _FAILED_RESULT_CHAR_LIMIT:
                 notify_result = notify_result[:_FAILED_RESULT_CHAR_LIMIT] + "\n[truncated]"
-            target = f'session_id="{child_session_id}"' if child_session_id else "session_id=..."
+            target = f'agent_ref="{agent_ref}"' if agent_ref else "agent_ref=..."
             failure_guidance = (
                 f"This agent's run {status}. If you still need this work, assign a follow-up with "
                 f"app_followup_task({target}) or spawn a fresh agent.\n"
@@ -862,7 +916,7 @@ class BackgroundTaskRegistry:
             if result_was_truncated:
                 failure_guidance += (
                     "The exact completion is preserved durably. "
-                    f'Use agent_result_read(task_id="{task_id}", offset=0, '
+                    f'Use agent_result_read(agent_ref="{agent_ref}", offset=0, '
                     f"limit={BACKGROUND_RESULT_READ_MAX_CHARS}).\n"
                 )
         response_instruction = (
@@ -871,7 +925,7 @@ class BackgroundTaskRegistry:
             else "Write a visible assistant response now. Summarize the result directly for the user.\n"
         )
         notification_prefix = (
-            f'<background_agent_result task_id="{task_id}" result_ref="{result_ref}"'
+            f'<background_agent_result agent_ref="{agent_ref}" result_ref="{result_ref}"'
             f'{session_attr} status="{status}">\n'
             "This is a hidden completion event. The user cannot see this message.\n"
             f"{response_instruction}"
@@ -891,7 +945,7 @@ class BackgroundTaskRegistry:
         ):
             notify_result, retrieval_guidance = _bound_completed_result(
                 notify_result,
-                task_id=task_id,
+                agent_ref=agent_ref,
                 fixed_notification_chars=len(notification_prefix) + len(result_close) + len(notification_tail),
             )
         notification = notification_prefix + notify_result + result_close + retrieval_guidance + notification_tail
@@ -902,7 +956,7 @@ class BackgroundTaskRegistry:
                 "is_meta": True,
                 "client_id": f"bg:{task_id}:{status}",
                 "background_status": status,
-                "background_result_ref": task_id,
+                "background_result_ref": agent_ref,
             }
         ]
 

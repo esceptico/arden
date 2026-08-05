@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from arden.areas.agent import NOTIFY_ASK_TTL_HOURS
 from arden.areas.asks import nominate_focus
 from arden.areas.models import Ask
+from arden.core.public_refs import PublicRef
 from arden.events.destinations import (
     AppDestination,
     AreaDestination,
@@ -36,11 +37,11 @@ _RECENT_ID_HINT_LIMIT = 10
 
 
 class SessionSendMessageInput(BaseModel):
-    session_id: str = Field(
-        min_length=1,
-        max_length=200,
+    model_config = ConfigDict(extra="forbid")
+
+    session_ref: PublicRef = Field(
         description=(
-            "Target session id: another chat from session_list, or the "
+            "Target session_ref: another chat from session_list, or the "
             "session background() returned for an agent you spawned. Must not be "
             "the session you are running in — use loop_create for another turn here."
         ),
@@ -57,12 +58,11 @@ class SessionSendMessageInput(BaseModel):
 
 
 class AppFollowupTaskInput(BaseModel):
-    session_id: str = Field(
-        min_length=1,
-        max_length=200,
+    model_config = ConfigDict(extra="forbid")
+
+    agent_ref: PublicRef = Field(
         description=(
-            "Session id of an agent this session spawned — the id research()/background() "
-            "returned. Must not be the session you are running in."
+            "Exact agent_ref of an agent this session spawned. returned. Must not be the session you are running in."
         ),
     )
     task: str = Field(
@@ -76,7 +76,9 @@ class AppFollowupTaskInput(BaseModel):
 
 
 class SessionRenameInput(BaseModel):
-    session_id: str = Field(min_length=1, max_length=200, description="Session id from session_list.")
+    model_config = ConfigDict(extra="forbid")
+
+    session_ref: PublicRef = Field(description="session_ref from session_list.")
     name: str = Field(
         min_length=1,
         max_length=120,
@@ -85,11 +87,13 @@ class SessionRenameInput(BaseModel):
 
 
 class SessionArchiveInput(BaseModel):
-    session_ids: list[str] = Field(
+    model_config = ConfigDict(extra="forbid")
+
+    session_refs: list[PublicRef] = Field(
         min_length=1,
         max_length=50,
         description=(
-            "Session ids from session_list to archive. A single "
+            "session_refs from session_list to archive. A single "
             "session is a one-element list; an archival sweep passes the "
             "whole batch at once."
         ),
@@ -138,14 +142,21 @@ class ToolAutomationDestination(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["automation"]
-    automation_ref: str | None = Field(default=None, min_length=1, max_length=200)
+    automation_ref: PublicRef | None = None
 
 
 class ToolAreaDestination(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["area"]
-    area_ref: str = Field(min_length=1, max_length=200)
+    area_ref: PublicRef
+
+
+class ToolSessionDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["session"]
+    session_ref: PublicRef
 
 
 class AreaListInput(BaseModel):
@@ -154,7 +165,7 @@ class AreaListInput(BaseModel):
 
 ToolAppDestination = Annotated[
     HomeDestination
-    | SessionDestination
+    | ToolSessionDestination
     | SettingsDestination
     | ToolAutomationDestination
     | MemoryDestination
@@ -169,7 +180,7 @@ class AppOpenInput(BaseModel):
     destination: ToolAppDestination = Field(
         description=(
             'Where to send the user. One of: {"kind":"home"}, '
-            '{"kind":"session","session_id":"..."}, {"kind":"settings","tab":"models"}, '
+            '{"kind":"session","session_ref":"..."}, {"kind":"settings","tab":"models"}, '
             '{"kind":"automation","automation_ref":"..."}, {"kind":"memory","path":"..."}, '
             '{"kind":"area","area_ref":"..."}. automation_ref, tab and path may be omitted '
             "to open the surface itself; a memory path opens that wiki page."
@@ -186,16 +197,16 @@ class AppOpenInput(BaseModel):
     )
 
 
-async def _unknown_session(execution: ToolExecution, session_id: str) -> ToolResult:
-    """Name the sessions that DO exist so a bad id self-corrects in one turn."""
+async def _unknown_session(execution: ToolExecution, session_ref: str) -> ToolResult:
+    """Name the sessions that exist so a bad ref self-corrects in one turn."""
     svc = execution.ctx.services["session"]
     recent = await svc.list_sessions(limit=_RECENT_ID_HINT_LIMIT, area_id=area_filter(execution))
-    known = ", ".join(str(row.get("session_id")) for row in recent) or "none"
+    known = ", ".join(str(row.get("public_ref")) for row in recent) or "none"
     return ToolResult.failure(
         code="not_found",
-        message=f"No session {session_id}. Recent session ids: {known}.",
+        message=f"No session {session_ref}. Recent session refs: {known}.",
         preview="Unknown session",
-        recovery_action="Call session_list and retry with an exact session_id.",
+        recovery_action="Call session_list and retry with an exact session_ref.",
     )
 
 
@@ -234,68 +245,75 @@ def _archived_session(session_id: str, recovery_action: str) -> ToolResult:
 async def approve_session_send_message(
     execution: ToolExecution, args: SessionSendMessageInput
 ) -> ApprovalInfo | ApprovalWaived:
-    if execution.ctx.background_tasks.task_for_session(args.session_id) is not None:
+    session_id = await execution.ctx.services["session"].resolve_session_ref(
+        args.session_ref,
+        area_id=area_filter(execution),
+    )
+    if session_id is not None and execution.ctx.background_tasks.task_for_session(session_id) is not None:
         return APPROVAL_WAIVED
     return ApprovalInfo(
         description="Send a prompt to another chat",
-        preview=f"To: {args.session_id}\n\n{args.message[:_PREVIEW_CHARS]}",
+        preview=f"To: {args.session_ref}\n\n{args.message[:_PREVIEW_CHARS]}",
         diff=None,
     )
 
 
 async def session_send_message(execution: ToolExecution, args: SessionSendMessageInput) -> ToolResult:
-    if args.session_id == execution.ctx.session_id:
+    svc = execution.ctx.services["session"]
+    session_id = await svc.resolve_session_ref(args.session_ref, area_id=area_filter(execution))
+    if session_id is None:
+        return await _unknown_session(execution, args.session_ref)
+    if session_id == execution.ctx.session_id:
         return ToolResult.failure(
             code="invalid_arguments",
             message="session_send_message cannot target its own session.",
             preview="Same session",
             recovery_action=(
-                "Use loop_create to give yourself another turn in this chat, or target a different session_id."
+                "Use loop_create to give yourself another turn in this chat, or target a different session_ref."
             ),
         )
 
     registry = execution.ctx.background_tasks
-    if (task_id := registry.task_for_session(args.session_id)) is not None:
+    if (task_id := registry.task_for_session(session_id)) is not None:
         if registry.queue_steering(task_id, args.message):
             return ToolResult(
-                content=f"Queued for the agent in {args.session_id}; it reads this at its next step.",
-                preview=f"Steered {args.session_id}",
+                content=f"Queued for agent {args.session_ref}; it reads this at its next step.",
+                preview=f"Steered {args.session_ref}",
             )
         # It finished between the approval check and here. Falling through to
         # dispatch would start a fresh run on an approval nobody granted.
         return ToolResult.failure(
             code="conflict",
-            message=f"The agent in {args.session_id} finished before the message landed.",
+            message=f"Agent {args.session_ref} finished before the message landed.",
             preview="Agent finished",
             recovery_action=(
-                "Its result is delivered automatically; session_read(session_id=...) for detail. "
+                "Its result is delivered automatically; session_read(session_ref=...) for detail. "
                 "Call session_send_message again only if you want a new run in that session."
             ),
         )
 
-    svc = execution.ctx.services["session"]
-    data = await svc.load(args.session_id)
+    data = await svc.load(session_id)
     if data is None:
-        return await _unknown_session(execution, args.session_id)
-    if await svc.is_archived(args.session_id):
+        return await _unknown_session(execution, args.session_ref)
+    if await svc.is_archived(session_id):
         return _archived_session(
-            args.session_id,
+            args.session_ref,
             "Ask the user to restore it from Settings → Archive, or target a session that is still in the sidebar.",
         )
 
     await execution.ctx.services["app_control"].dispatch(
-        args.session_id,
+        session_id,
         args.message,
         client_id=f"session_send_message:{execution.tool_id}",
     )
-    label = data.state.name or args.session_id
+    label = data.state.name or args.session_ref
     return ToolResult(
         content=(
-            f"Delivered to {label} ({args.session_id}). It will be picked up in that "
+            f"Delivered to {label} ({args.session_ref}). It will be picked up in that "
             "chat's current or next run; the reply appears there, not here."
         ),
         preview=f"Sent to {label}",
-        source_refs=(session_ref(args.session_id, label),),
+        source_refs=(session_ref(args.session_ref, label),),
     )
 
 
@@ -304,105 +322,106 @@ async def approve_app_followup_task(
 ) -> ApprovalInfo | ApprovalWaived:
     # Same line send_message draws: queueing into a live agent is free; waking
     # an idle one starts a fresh run — that costs money, so the user decides.
-    if execution.ctx.background_tasks.task_for_session(args.session_id) is not None:
+    if execution.ctx.background_tasks.task_for_agent_ref(args.agent_ref) is not None:
         return APPROVAL_WAIVED
     return ApprovalInfo(
         description="Wake an idle agent with a new task",
-        preview=f"To: {args.session_id}\n\n{args.task[:_PREVIEW_CHARS]}",
+        preview=f"To: {args.agent_ref}\n\n{args.task[:_PREVIEW_CHARS]}",
         diff=None,
     )
 
 
 async def app_followup_task(execution: ToolExecution, args: AppFollowupTaskInput) -> ToolResult:
     ctx = execution.ctx
-    if args.session_id == ctx.session_id:
-        return ToolResult.failure(
-            code="invalid_arguments",
-            message="app_followup_task cannot target its own session.",
-            preview="Same session",
-            recovery_action="Use loop_create for another turn here, or target an agent session you spawned.",
-        )
-
     registry = ctx.background_tasks
-    if (task_id := registry.task_for_session(args.session_id)) is not None:
+    if (task_id := registry.task_for_agent_ref(args.agent_ref)) is not None:
         if registry.queue_followup(task_id, args.task):
             return ToolResult(
                 content=(
-                    f"Task queued for the running agent in {args.session_id}; it picks it up at its "
+                    f"Task queued for agent {args.agent_ref}; it picks it up at its "
                     "next step and its report is delivered here automatically."
                 ),
-                preview=f"Tasked {args.session_id}",
+                preview=f"Tasked {args.agent_ref}",
             )
         # It finished between the approval check and here. Waking it now would
         # start a run on a waiver granted for a queue, not a dispatch.
         return ToolResult.failure(
             code="conflict",
-            message=f"The agent in {args.session_id} finished before the task landed.",
+            message=f"Agent {args.agent_ref} finished before the task landed.",
             preview="Agent finished",
             recovery_action="Call app_followup_task again — it will wake the idle agent, with the user's approval.",
         )
 
     svc = ctx.services["session"]
-    data = await svc.load(args.session_id)
+    session_id = await svc.resolve_session_ref(args.agent_ref, area_id=area_filter(execution))
+    data = await svc.load(session_id) if session_id is not None else None
     if data is None:
-        return await _unknown_session(execution, args.session_id)
+        return await _unknown_session(execution, args.agent_ref)
+    if session_id == ctx.session_id:
+        return ToolResult.failure(
+            code="invalid_arguments",
+            message="app_followup_task cannot target its own session.",
+            preview="Same session",
+            recovery_action="Use loop_create for another turn here, or target an agent_ref you spawned.",
+        )
     if data.state.parent_session_id != ctx.session_id:
-        live = registry.live_child_sessions()
-        listing = "\n".join(f"- {sid}" for sid in live)
+        live = registry.live_agent_refs()
+        listing = "\n".join(f"- {agent_ref}" for agent_ref in live)
         return ToolResult.failure(
             code="invalid_arguments",
             message=(
-                f"{args.session_id} is not an agent of this session."
+                f"{args.agent_ref} is not an agent of this session."
                 + (f" Your live agents:\n{listing}" if live else " You have no live agents.")
             ),
             preview="Not your agent",
             recovery_action=(
-                "Target a session id research()/background() returned to you; use session_send_message for any other chat."
+                "Target an agent_ref research()/background() returned to you; use session_send_message for any other chat."
             ),
         )
-    if await svc.is_archived(args.session_id):
+    if await svc.is_archived(session_id):
         return _archived_session(
-            args.session_id,
+            args.agent_ref,
             "Spawn a fresh agent instead — background(task=...) or research(task=...).",
         )
 
     await ctx.services["app_control"].dispatch(
-        args.session_id,
+        session_id,
         f"<app_followup_task>\n{args.task}\n</app_followup_task>",
         client_id=f"bg:followup:{execution.tool_id}",
     )
-    label = data.state.name or args.session_id
+    label = data.state.name or args.agent_ref
     return ToolResult(
         content=(
-            f"Woke the idle agent {label} ({args.session_id}) with the task. It runs in its own "
-            "session with its prior context; session_read(session_id=...) shows the outcome."
+            f"Woke the idle agent {label} ({args.agent_ref}) with the task. It runs in its own "
+            "session with its prior context; session_read(session_ref=...) shows the outcome."
         ),
         preview=f"Woke {label}",
-        source_refs=(session_ref(args.session_id, label),),
+        source_refs=(session_ref(args.agent_ref, label),),
     )
 
 
 async def session_rename(execution: ToolExecution, args: SessionRenameInput) -> ToolResult:
     svc = execution.ctx.services["session"]
-    data = await svc.load(args.session_id)
+    session_id = await svc.resolve_session_ref(args.session_ref, area_id=area_filter(execution))
+    data = await svc.load(session_id) if session_id is not None else None
     if data is None:
-        return await _unknown_session(execution, args.session_id)
-    if await svc.is_archived(args.session_id):
+        return await _unknown_session(execution, args.session_ref)
+    if await svc.is_archived(session_id):
         return _archived_session(
-            args.session_id,
+            args.session_ref,
             "Leave archived chats alone; renaming one would pull it back into the sidebar.",
         )
 
     previous = data.state.name or "(untitled)"
-    await svc.rename(args.session_id, args.name)
+    await svc.rename(session_id, args.name)
     if execution.ctx.run_registry is not None:
-        execution.ctx.run_registry.sync_session_name(args.session_id, args.name)
+        execution.ctx.run_registry.sync_session_name(session_id, args.name)
     data.state.name = args.name
     await svc.announce_row(data.state, len(data.messages))
     return ToolResult(
-        content=f"Renamed {args.session_id}: {previous} → {args.name}.",
+        content=f"Renamed {args.session_ref}: {previous} → {args.name}.",
         preview=f"Renamed to {args.name}",
-        source_refs=(session_ref(args.session_id, args.name),),
+        source_refs=(session_ref(args.session_ref, args.name),),
     )
 
 
@@ -414,25 +433,29 @@ async def session_archive(execution: ToolExecution, args: SessionArchiveInput) -
 
     # Each id stands alone: a sweep must not lose 49 good archives to one
     # bad id, so skips are reported, never fatal.
-    for session_id in dict.fromkeys(args.session_ids):
+    for session_ref_value in dict.fromkeys(args.session_refs):
+        session_id = await svc.resolve_session_ref(session_ref_value, area_id=area_filter(execution))
+        if session_id is None:
+            lines.append(f"- {session_ref_value} · skipped — no such session")
+            continue
         if session_id == execution.ctx.session_id:
-            lines.append(f"- {session_id} · skipped — this is the session you are running in")
+            lines.append(f"- {session_ref_value} · skipped — this is the session you are running in")
             continue
         if registry is not None and registry.get_active_run(session_id) is not None:
-            lines.append(f"- {session_id} · skipped — live run in progress")
+            lines.append(f"- {session_ref_value} · skipped — live run in progress")
             continue
         data = await svc.load(session_id)
         if data is None:
-            lines.append(f"- {session_id} · skipped — no such session")
+            lines.append(f"- {session_ref_value} · skipped — no such session")
             continue
         if await svc.is_archived(session_id):
-            lines.append(f"- {session_id} · skipped — already archived")
+            lines.append(f"- {session_ref_value} · skipped — already archived")
             continue
         await svc.archive(session_id)
         archived += 1
-        lines.append(f"- {session_id} · archived — {data.state.name or '(untitled)'}")
+        lines.append(f"- {session_ref_value} · archived — {data.state.name or '(untitled)'}")
 
-    summary = f"Archived {archived} of {len(args.session_ids)}."
+    summary = f"Archived {archived} of {len(args.session_refs)}."
     if archived == 0:
         return ToolResult.failure(
             code="conflict",
@@ -443,7 +466,7 @@ async def session_archive(execution: ToolExecution, args: SessionArchiveInput) -
     return ToolResult(
         content="\n".join([f"{summary} Restore from Settings → Archive.", *lines]),
         preview=summary,
-        data={"archived": archived, "requested": len(args.session_ids)},
+        data={"archived": archived, "requested": len(args.session_refs)},
     )
 
 
@@ -496,9 +519,14 @@ async def _resolve_destination(
     sees a dead card and the agent believes it succeeded. Only ref-carrying
     destinations can be wrong — home/settings/memory are fixed surfaces."""
     match destination:
-        case SessionDestination():
-            if await execution.ctx.services["session"].load(destination.session_id) is None:
-                return await _unknown_session(execution, destination.session_id)
+        case ToolSessionDestination():
+            session_id = await execution.ctx.services["session"].resolve_session_ref(
+                destination.session_ref,
+                area_id=area_filter(execution),
+            )
+            if session_id is None:
+                return await _unknown_session(execution, destination.session_ref)
+            return SessionDestination(kind="session", session_id=session_id)
         case ToolAreaDestination():
             area = await execution.ctx.services["session"].get_area_by_ref(destination.area_ref)
             if area is None:
@@ -562,7 +590,7 @@ SEND_MESSAGE_DESCRIPTION = (
     "Deliver a message to a session — the single address for anything you can talk to. "
     "Delivers guidance promptly; it does NOT wake a finished agent — app_followup_task does. "
     "Two behaviours, chosen from the target:\n\n"
-    "- An agent you spawned that is still running (the session id background() returned): the "
+    "- An agent you spawned that is still running (the session_ref background() returned): the "
     "message is queued as steering and the agent reads it at its next step. No approval.\n"
     "- Any other chat: the target's agent picks it up immediately if a run is live there, "
     "otherwise a fresh run starts. Always requires the user's approval, like bash. Cannot "
@@ -570,11 +598,11 @@ SEND_MESSAGE_DESCRIPTION = (
     "Fire and forget either way: nothing is waited for and no answer comes back here. The chat's "
     "reply lands in that chat; the agent's result is delivered to you automatically when it finishes. "
     "If you need an answer inside this turn, use research() instead.\n\n"
-    "Find ids with session_list; inspect what a session did with session_read."
+    "Find refs with session_list; inspect what a session did with session_read."
 )
 
 FOLLOWUP_TASK_DESCRIPTION = (
-    "Assign a new task to an agent you spawned, addressed by its session id. Works whether the "
+    "Assign a new task to an agent you spawned, addressed by its agent_ref. Works whether the "
     "agent is running or finished:\n\n"
     "- Still running: the task is queued as a <app_followup_task> the agent reads at its next step, "
     "and its report covers it — delivered here automatically. No approval.\n"
@@ -594,11 +622,11 @@ RENAME_SESSION_DESCRIPTION = (
 ARCHIVE_SESSION_DESCRIPTION = (
     "Archive chat sessions — they leave the sidebar and move to Settings → Archive, "
     "where the user can restore them. Reversible; no approval needed. Takes a batch "
-    "of session_ids; each id succeeds or is skipped independently (the session you "
-    "are running in, one with a live run, an unknown id, or one already archived is "
+    "of session_refs; each ref succeeds or is skipped independently (the session you "
+    "are running in, one with a live run, an unknown ref, or one already archived is "
     "skipped, never fatal), and the result reports every outcome. The archival "
     "chain: session_list(order='oldest', within_days=…) → drop rows you must "
-    "keep ([channel], [agent], anything running) → session_archive(session_ids=[…]) "
+    "keep ([channel], [agent], anything running) → session_archive(session_refs=[…]) "
     "once with the whole batch."
 )
 

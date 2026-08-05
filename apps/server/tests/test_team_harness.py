@@ -13,6 +13,7 @@ from arden.context.models import SessionData, SessionState
 from arden.core import spawner as spawner_module
 from arden.core.isolation import IsolationLevel
 from arden.core.prompts import TEAM_CHILD_BLOCK
+from arden.core.public_refs import public_ref
 from arden.core.spawner import create_spawn_fn
 from arden.tools.app_control import (
     AppFollowupTaskInput,
@@ -69,8 +70,12 @@ async def test_child_system_prompt_carries_the_team_identity_fragment(monkeypatc
     assert "<agent_roster>" in prompt
 
 
+def _agent_ref(task_id: str) -> str:
+    return public_ref("agent", task_id, empty_slug="agent")
+
+
 def _live(registry: BackgroundTaskRegistry, task_id: str, **reserve_kwargs) -> asyncio.Task:
-    registry.reserve(task_id, command="Agent", limit=None, **reserve_kwargs)
+    registry.reserve(task_id, command="Agent", limit=None, agent_ref=_agent_ref(task_id), **reserve_kwargs)
     task = asyncio.create_task(asyncio.sleep(3600))
     registry.register(task_id, task, command="Agent")
     return task
@@ -99,7 +104,7 @@ async def test_roster_note_renders_live_children_and_only_on_change():
         assert note["role"] == "user"
         assert note["is_meta"] is True
         assert "<agent_roster>" in note["content"]
-        assert "test::a1" in note["content"]
+        assert _agent_ref("agent-1") in note["content"]
         assert "research" in note["content"]
         assert "running" in note["content"]
         assert "Audit the billing pipeline" in note["content"]
@@ -112,8 +117,8 @@ async def test_roster_note_renders_live_children_and_only_on_change():
         try:
             note = registry.roster_note_if_changed()
             assert note is not None
-            assert "test::a1" in note["content"]
-            assert "test::b2" in note["content"]
+            assert _agent_ref("agent-1") in note["content"]
+            assert _agent_ref("agent-2") in note["content"]
         finally:
             await _cancel(second)
     finally:
@@ -129,11 +134,16 @@ class _StubSessionService:
     async def load(self, session_id: str) -> SessionData | None:
         return self._sessions.get(session_id)
 
+    async def resolve_session_ref(self, session_ref: str, **_kwargs) -> str | None:
+        return next(
+            (session_id for session_id, data in self._sessions.items() if data.state.public_ref == session_ref), None
+        )
+
     async def is_archived(self, session_id: str) -> bool:
         return False
 
     async def list_sessions(self, limit: int = 20, **kwargs) -> list[dict]:
-        return [{"session_id": sid} for sid in list(self._sessions)[:limit]]
+        return [{"session_ref": data.state.public_ref} for data in list(self._sessions.values())[:limit]]
 
 
 class _StubAppControl:
@@ -146,7 +156,12 @@ class _StubAppControl:
 
 
 def _agent_session(session_id: str, parent_session_id: str | None) -> SessionData:
-    state = SessionState(session_id=session_id, started_at=datetime.now(UTC), name="Agent")
+    state = SessionState(
+        session_id=session_id,
+        public_ref=_agent_ref(session_id),
+        started_at=datetime.now(UTC),
+        name="Agent",
+    )
     state.session_type = "agent"
     state.parent_session_id = parent_session_id
     return SessionData(state=state, messages=[])
@@ -176,7 +191,7 @@ async def test_followup_task_queues_into_a_live_agents_inbox():
         execution, app_control = _execution(registry)
 
         result = await app_followup_task(
-            execution, AppFollowupTaskInput(session_id="cur::a1", task="also audit invoices")
+            execution, AppFollowupTaskInput(agent_ref=_agent_ref("agent-1"), task="also audit invoices")
         )
 
         assert not result.is_error
@@ -194,7 +209,9 @@ async def test_followup_task_wakes_a_finished_agent_with_a_hidden_continuation()
     registry = BackgroundTaskRegistry(session_id="cur")
     execution, app_control = _execution(registry, sessions={"cur::a1": _agent_session("cur::a1", "cur")})
 
-    result = await app_followup_task(execution, AppFollowupTaskInput(session_id="cur::a1", task="re-check the totals"))
+    result = await app_followup_task(
+        execution, AppFollowupTaskInput(agent_ref=_agent_ref("cur::a1"), task="re-check the totals")
+    )
 
     assert not result.is_error
     assert len(app_control.dispatched) == 1
@@ -211,7 +228,9 @@ async def test_followup_task_refuses_a_session_that_is_not_your_agent():
     registry = BackgroundTaskRegistry(session_id="cur")
     execution, app_control = _execution(registry, sessions={"other::a1": _agent_session("other::a1", "other")})
 
-    result = await app_followup_task(execution, AppFollowupTaskInput(session_id="other::a1", task="do things"))
+    result = await app_followup_task(
+        execution, AppFollowupTaskInput(agent_ref=_agent_ref("other::a1"), task="do things")
+    )
 
     assert result.is_error
     assert result.outcome.error.code == "invalid_arguments"
@@ -225,8 +244,12 @@ async def test_followup_task_approval_waived_only_for_live_agents():
     try:
         execution, _ = _execution(registry)
 
-        live = await approve_app_followup_task(execution, AppFollowupTaskInput(session_id="cur::a1", task="go"))
-        idle = await approve_app_followup_task(execution, AppFollowupTaskInput(session_id="cur::b2", task="go"))
+        live = await approve_app_followup_task(
+            execution, AppFollowupTaskInput(agent_ref=_agent_ref("agent-1"), task="go")
+        )
+        idle = await approve_app_followup_task(
+            execution, AppFollowupTaskInput(agent_ref=_agent_ref("cur::b2"), task="go")
+        )
 
         assert live is APPROVAL_WAIVED
         assert isinstance(idle, ApprovalInfo)
@@ -253,6 +276,7 @@ async def _delivered(registry: BackgroundTaskRegistry, *, status: str, result: s
         label="Agent",
         status=status,
         emit=None,
+        agent_ref=_agent_ref("agent-1"),
         child_session_id="cur::a1",
     )
     assert len(captured) == 1
@@ -269,7 +293,7 @@ async def test_deliver_result_truncates_failed_bodies_and_appends_guidance(tmp_p
     assert "x" * 3_600 in content
     assert "x" * 3_601 not in content
     assert "This agent's run failed." in content
-    assert 'app_followup_task(session_id="cur::a1")' in content
+    assert f'app_followup_task(agent_ref="{_agent_ref("agent-1")}")' in content
 
 
 @pytest.mark.asyncio
@@ -308,6 +332,7 @@ async def test_deliver_result_bounds_large_completion_after_persisting_exact_bod
         label="Agent",
         status="completed",
         emit=None,
+        agent_ref=_agent_ref("agent-1"),
         child_session_id="cur::a1",
     )
 
@@ -316,13 +341,13 @@ async def test_deliver_result_bounds_large_completion_after_persisting_exact_bod
     content = order[1][1]
     assert isinstance(content, str)
     assert len(content) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
-    assert 'task_id="agent-1"' in content
-    assert 'result_ref="background://agent-1"' in content
+    assert f'agent_ref="{_agent_ref("agent-1")}"' in content
+    assert f'result_ref="background://{_agent_ref("agent-1")}"' in content
     assert "H" * 1_000 in content
     assert "M" * 1_000 not in content
     assert "T" * 1_000 in content
     assert "[Middle omitted from this bounded completion.]" in content
-    assert 'agent_result_read(task_id="agent-1", offset=0, limit=4000)' in content
+    assert f'agent_result_read(agent_ref="{_agent_ref("agent-1")}", offset=0, limit=4000)' in content
     assert await registry.read_background_result("agent-1") == body
 
 
@@ -351,6 +376,7 @@ async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_
         label="Agent",
         status="completed",
         emit=None,
+        agent_ref=_agent_ref("agent-1"),
         undelivered_steering=steering,
     )
 
@@ -365,7 +391,7 @@ async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_
     assert "A" * 1_000 in injected[0]
     assert "C" * 1_000 in injected[0]
     assert "[Middle omitted from this bounded completion.]" in injected[0]
-    assert 'agent_result_read(task_id="agent-1", offset=0, limit=4000)' in injected[0]
+    assert f'agent_result_read(agent_ref="{_agent_ref("agent-1")}", offset=0, limit=4000)' in injected[0]
 
     await registry.deliver_result(
         task_id="agent-2",
@@ -373,10 +399,11 @@ async def test_deliver_result_bounds_late_steering_and_preserves_it_durably(tmp_
         label="Agent",
         status="failed",
         emit=None,
+        agent_ref=_agent_ref("agent-2"),
         undelivered_steering=steering,
     )
 
     assert json.loads(recorded[1])["undelivered_steering"] == steering
     assert len(injected[1]) <= context_module._COMPLETED_NOTIFICATION_CHAR_LIMIT
     assert "[truncated]" in injected[1]
-    assert 'agent_result_read(task_id="agent-2", offset=0, limit=4000)' in injected[1]
+    assert f'agent_result_read(agent_ref="{_agent_ref("agent-2")}", offset=0, limit=4000)' in injected[1]

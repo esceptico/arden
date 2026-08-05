@@ -3,11 +3,16 @@
 import hashlib
 import re
 import unicodedata
+from typing import Annotated
+
+from pydantic import StringConstraints
 
 _ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 _SUFFIX_LENGTH = 6
 _SUFFIX_SPACE = 36**_SUFFIX_LENGTH
-_PUBLIC_REF = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*~[a-z0-9]{6}\Z")
+PUBLIC_REF_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*~[a-z0-9]{6}$"
+PublicRef = Annotated[str, StringConstraints(pattern=PUBLIC_REF_PATTERN)]
+_PUBLIC_REF = re.compile(PUBLIC_REF_PATTERN)
 
 
 def public_ref(

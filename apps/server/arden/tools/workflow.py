@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints,
 
 from arden.context.models import BackgroundStartDisposition
 from arden.core.agent_types import SPAWN_SURFACE_GUIDANCE
+from arden.core.public_refs import public_ref
 from arden.events.sse import WorkflowFinishedEvent, WorkflowStartedEvent
 from arden.logging import get_logger
 from arden.orchestra.dynamic import run_script
@@ -201,13 +202,20 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
 
     workflow_id = f"wf-{uuid4().hex[:10]}"
     title = args.title or args.name or "workflow"
+    agent_ref = public_ref(title, workflow_id, empty_slug="workflow")
     label = f"Workflow: {title}"
     bg_registry = ctx.background_tasks
     # Uncapped, like awaited spawns: a workflow is ONE curated pipeline bounded
     # by the Orchestra global semaphore; the detached-agent cap exists to bound
     # runaway background() fan-out, not curated presets. workflow_id is
     # uuid-fresh, so reserve can only fail on an impossible duplicate.
-    if not bg_registry.reserve(workflow_id, command=label, limit=None, parent_run_id=ctx.run.run_id):
+    if not bg_registry.reserve(
+        workflow_id,
+        command=label,
+        limit=None,
+        agent_ref=agent_ref,
+        parent_run_id=ctx.run.run_id,
+    ):
         return ToolResult.failure(
             code="conflict",
             message=f"Workflow id {workflow_id} is already registered.",
@@ -220,6 +228,7 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
         # spawn_spec — a workflow is not respawned from the outbox on restart.
         start_disposition = await bg_registry.record_started(
             task_id=workflow_id,
+            agent_ref=agent_ref,
             command=label,
             parent_run_id=ctx.run.run_id,
             parent_tool_call_id=execution.tool_id,
@@ -290,6 +299,7 @@ async def run_workflow(execution: ToolExecution, args: WorkflowInput) -> ToolRes
         try:
             await bg_registry.deliver_result(
                 task_id=workflow_id,
+                agent_ref=agent_ref,
                 result=result_text,
                 label=label,
                 status=status,

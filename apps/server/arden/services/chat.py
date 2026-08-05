@@ -378,8 +378,12 @@ def _background_event_recorder(session_service: SessionService):
         if not task_id or not session_id:
             return None
         if status == "started":
+            agent_ref = event.get("agent_ref")
+            if not isinstance(agent_ref, str):
+                raise RuntimeError("background agent start is missing its public ref")
             return await store.record_background_agent_started(
                 task_id=task_id,
+                agent_ref=agent_ref,
                 session_id=session_id,
                 parent_run_id=event.get("parent_run_id"),
                 parent_tool_call_id=event.get("parent_tool_call_id"),
@@ -567,7 +571,7 @@ def _close_interrupted_tool_step(messages: list[dict]) -> None:
 
 
 def _is_meta_client_id(client_id: str | None) -> bool:
-    return bool(client_id and client_id.startswith(("loop:", "bg:", "goal:")))
+    return bool(client_id and client_id.startswith(("loop:", "goal:")))
 
 
 async def _load_area_page_context(wiki_context: WikiContextBuilder | None, area_record: dict | None) -> dict | None:
@@ -1101,6 +1105,7 @@ async def respawn_background_agent(
             agent_type=spec.agent_type,
             kind="background",
             task_id=task_id,
+            agent_ref=row["agent_ref"],
         )
     except Exception as exc:
         # A respawn that dies here would otherwise be silent: the outbox event
@@ -1117,11 +1122,11 @@ async def respawn_background_agent(
         )
         if deps.dispatch_session_message is not None:
             notification = (
-                f'<background_agent_result session_id="{row.get("child_session_id") or ""}" status="failed">\n'
+                f'<background_agent_result agent_ref="{row["agent_ref"]}" status="failed">\n'
                 "This is a hidden completion event. The user cannot see this message.\n"
                 f"The agent could not be restarted after a server restart: {failure}\n"
                 "This agent's run failed. If you still need this work, assign a follow-up with "
-                'app_followup_task(session_id="...") or spawn a fresh agent.\n'
+                'app_followup_task(agent_ref="...") or spawn a fresh agent.\n'
                 "</background_agent_result>"
             )
             await deps.dispatch_session_message(session_id, notification, f"bg:{task_id}:respawn-failed", True, None)

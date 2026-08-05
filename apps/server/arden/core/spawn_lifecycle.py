@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from arden.context.models import SessionState
+from arden.core.public_refs import is_public_ref
 from arden.tools.core.context import BackgroundTaskRegistry, ChildIOParams, IOBridge, ToolContext
 
 
@@ -18,6 +19,7 @@ class ChildSuspension:
     status: str
     child_run_id: str
     child_session_id: str | None
+    agent_ref: str
     respawns: int
     result_status: str | None
     result: str | None
@@ -39,15 +41,18 @@ def decode_child_suspension(value: object) -> ChildSuspension:
         raise RuntimeError("invalid subagent suspension payload")
     child_run_id = payload.get("child_run_id")
     child_session_id = payload.get("child_session_id")
+    agent_ref = payload.get("agent_ref")
     respawns = payload.get("respawns")
     if not isinstance(child_run_id, str) or not child_run_id:
         raise RuntimeError("subagent suspension is missing child_run_id")
     if child_session_id is not None and not isinstance(child_session_id, str):
         raise RuntimeError("invalid subagent suspension child_session_id")
+    if not isinstance(agent_ref, str) or not is_public_ref(agent_ref):
+        raise RuntimeError("subagent suspension is missing a valid agent_ref")
     if isinstance(respawns, bool) or not isinstance(respawns, int) or respawns < 0:
         raise RuntimeError("invalid subagent suspension respawns")
     if status == "pending":
-        return ChildSuspension(status, child_run_id, child_session_id, respawns, None, None)
+        return ChildSuspension(status, child_run_id, child_session_id, agent_ref, respawns, None, None)
     resolution = value.get("resolution")
     if not isinstance(resolution, Mapping):
         raise RuntimeError("terminal subagent suspension is missing its resolution")
@@ -55,7 +60,7 @@ def decode_child_suspension(value: object) -> ChildSuspension:
     result = resolution.get("result")
     if result_status != status or not isinstance(result, str):
         raise RuntimeError("invalid subagent suspension resolution")
-    return ChildSuspension(status, child_run_id, child_session_id, respawns, result_status, result)
+    return ChildSuspension(status, child_run_id, child_session_id, agent_ref, respawns, result_status, result)
 
 
 def append_failure(errors: list[Exception], error: Exception) -> None:

@@ -46,7 +46,7 @@ from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_
 
 _logger = get_logger(__name__)
 
-_SESSION_SCHEMA_VERSION = 7
+_SESSION_SCHEMA_VERSION = 8
 
 
 class StaleSessionContextError(RuntimeError):
@@ -118,6 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_areas_archived_updated
 
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
+    public_ref TEXT NOT NULL UNIQUE,
     started_at TEXT NOT NULL,
     last_activity TEXT NOT NULL,
     last_accessed_at TEXT,
@@ -356,6 +357,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_compactions_session_boundary
 
 CREATE TABLE IF NOT EXISTS background_agent_runs (
     task_id TEXT NOT NULL,
+    agent_ref TEXT NOT NULL,
     session_id TEXT NOT NULL,
     parent_run_id TEXT,
     parent_tool_call_id TEXT,
@@ -444,11 +446,11 @@ CREATE TABLE IF NOT EXISTS session_todos (
 
 SQL_SAVE_SESSION = """
 INSERT INTO sessions (
-    session_id, started_at, last_activity, messages, metadata, name,
+    session_id, public_ref, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
     agent_type, agent_status, area_id, chat_model, context_generation, active_message_count
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     last_activity = excluded.last_activity,
     messages = excluded.messages,
@@ -468,11 +470,11 @@ WHERE sessions.context_generation = excluded.context_generation
 
 SQL_INSERT_SESSION_IF_ABSENT = """
 INSERT INTO sessions (
-    session_id, started_at, last_activity, messages, metadata, name,
+    session_id, public_ref, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
     agent_type, agent_status, area_id, chat_model, context_generation, active_message_count
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO NOTHING
 """
 
@@ -484,7 +486,7 @@ ORDER BY last_activity DESC LIMIT 1
 
 # {direction} is filled with DESC/ASC from a bool — never caller text.
 SQL_LIST_SESSIONS = """
-SELECT session_id, started_at, last_activity, name,
+SELECT session_id, public_ref, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
        agent_type, agent_status, area_id, chat_model,
        active_message_count AS message_count
@@ -495,7 +497,7 @@ LIMIT ? OFFSET ?
 """
 
 SQL_LIST_PRIMARY_SESSIONS = """
-SELECT session_id, started_at, last_activity, name,
+SELECT session_id, public_ref, started_at, last_activity, name,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
        agent_type, agent_status, area_id, chat_model,
        active_message_count AS message_count
@@ -507,7 +509,7 @@ LIMIT ? OFFSET ?
 """
 
 SQL_LIST_ARCHIVED = """
-SELECT session_id, started_at, last_activity, name, archived_at,
+SELECT session_id, public_ref, started_at, last_activity, name, archived_at,
        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
        agent_type, agent_status, area_id, chat_model,
        COALESCE(storage_state, 'hot') AS storage_state,
@@ -523,7 +525,7 @@ LIMIT ?
 
 SQL_LOAD_SESSION = "SELECT * FROM sessions WHERE session_id = ?"
 SQL_LOAD_SESSION_HISTORY_HEADER = """
-SELECT s.session_id, s.started_at, s.last_activity, s.metadata, s.name, s.session_type,
+SELECT s.session_id, s.public_ref, s.started_at, s.last_activity, s.metadata, s.name, s.session_type,
        s.origin_automation_id, s.parent_session_id, s.parent_tool_call_id,
        s.agent_type, s.agent_status, s.area_id, s.chat_model, s.context_generation,
        s.active_message_count
@@ -535,11 +537,11 @@ WHERE s.session_id = ?
 # final end-of-run save).
 SQL_UPSERT_PROGRESS = """
 INSERT INTO sessions (
-    session_id, started_at, last_activity, messages, metadata, name,
+    session_id, public_ref, started_at, last_activity, messages, metadata, name,
     session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
     agent_type, agent_status, area_id, chat_model, context_generation, active_message_count
 )
-VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
     messages = excluded.messages,
     active_message_count = excluded.active_message_count,
@@ -657,6 +659,7 @@ class SessionStore:
     def _background_agent_payload(self, row: aiosqlite.Row) -> dict:
         return {
             "task_id": row["task_id"],
+            "agent_ref": row["agent_ref"],
             "child_run_id": row["task_id"],
             "child_session_id": row["child_session_id"],
             "session_id": row["session_id"],
@@ -918,6 +921,14 @@ class SessionStore:
             await self._migrate_area_refs_schema()
             await self.conn.execute(
                 "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
+                ("7",),
+            )
+            await self.conn.commit()
+            version = 7
+        if version == 7:
+            await self._migrate_session_agent_refs_schema()
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO session_store_meta(key, value) VALUES('schema_version', ?)",
                 (str(_SESSION_SCHEMA_VERSION),),
             )
             await self.conn.commit()
@@ -969,7 +980,9 @@ class SessionStore:
                 pass
         await self.conn.execute("UPDATE areas SET name_key = lower(trim(name)) WHERE name_key IS NULL OR name_key = ''")
         await self.conn.commit()
+        await self._migrate_background_agent_runs_schema()
         await self._migrate_area_refs_schema()
+        await self._migrate_session_agent_refs_schema()
         try:
             await self.conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_active_name_key "
@@ -994,7 +1007,6 @@ class SessionStore:
         await self._migrate_session_messages_fts()
         await self._migrate_tool_calls_schema()
         await self._migrate_run_suspensions_schema()
-        await self._migrate_background_agent_runs_schema()
         await self._migrate_background_agent_events_schema()
         await self._migrate_chat_compactions_schema()
         await self._migrate_chat_runs_schema()
@@ -1057,6 +1069,100 @@ class SessionStore:
                 await self.conn.execute("CREATE UNIQUE INDEX idx_areas_area_ref ON areas(area_ref)")
             if "knowledge_scope" in columns:
                 await self.conn.execute("ALTER TABLE areas DROP COLUMN knowledge_scope")
+            await self.conn.commit()
+        except BaseException:
+            await self.conn.rollback()
+            raise
+
+    @staticmethod
+    def _session_ref_text(name: object, session_type: object) -> tuple[str, str]:
+        kind = str(session_type) if session_type in {"chat", "channel", "agent"} else "chat"
+        title = name.strip() if isinstance(name, str) and name.strip() else kind
+        return title, kind
+
+    async def _migrate_session_agent_refs_schema(self) -> None:
+        """Give model-facing session and agent identities one immutable address.
+
+        Background rows are assigned first. A linked child session is the same
+        logical agent, so it receives that exact address rather than a second
+        alias. This is intentionally a one-way migration: raw IDs never become
+        valid tool inputs.
+        """
+        await self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            session_columns = {row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(sessions)")}
+            if "public_ref" not in session_columns:
+                await self.conn.execute("ALTER TABLE sessions ADD COLUMN public_ref TEXT")
+            run_columns = {
+                row["name"] for row in await self.conn.execute_fetchall("PRAGMA table_info(background_agent_runs)")
+            }
+            if "agent_ref" not in run_columns:
+                await self.conn.execute("ALTER TABLE background_agent_runs ADD COLUMN agent_ref TEXT")
+
+            used_refs: set[tuple[str, str]] = set()
+            runs = await self.conn.execute_fetchall(
+                "SELECT session_id, task_id, agent_ref, command, child_session_id FROM background_agent_runs"
+            )
+            for row in runs:
+                task_id = str(row["task_id"])
+                agent_ref = row["agent_ref"]
+                if agent_ref is None:
+                    title = str(row["command"] or "agent").strip() or "agent"
+                    agent_ref = public_ref(
+                        title,
+                        f"{row['session_id']}:{task_id}",
+                        empty_slug="agent",
+                    )
+                    await self.conn.execute(
+                        "UPDATE background_agent_runs SET agent_ref = ? WHERE session_id = ? AND task_id = ?",
+                        (agent_ref, row["session_id"], task_id),
+                    )
+                if not isinstance(agent_ref, str) or not is_public_ref(agent_ref):
+                    raise RuntimeError(f"background agent {task_id!r} has an invalid public ref")
+                ref_key = (str(row["session_id"]), agent_ref)
+                if ref_key in used_refs:
+                    raise RuntimeError(f"background agent public ref collision: {agent_ref}")
+                used_refs.add(ref_key)
+                child_session_id = row["child_session_id"]
+                if child_session_id:
+                    child = await self.conn.execute_fetchall(
+                        "SELECT session_id, public_ref FROM sessions WHERE session_id = ?", (child_session_id,)
+                    )
+                    if not child:
+                        raise RuntimeError(
+                            f"background agent {task_id!r} owns missing child session {child_session_id!r}"
+                        )
+                    existing = child[0]["public_ref"]
+                    if existing is not None and existing != agent_ref:
+                        raise RuntimeError(f"child session {child_session_id!r} conflicts with its agent ref")
+                    await self.conn.execute(
+                        "UPDATE sessions SET public_ref = ? WHERE session_id = ?", (agent_ref, child_session_id)
+                    )
+
+            sessions = await self.conn.execute_fetchall(
+                "SELECT session_id, public_ref, name, session_type FROM sessions"
+            )
+            session_refs: set[str] = set()
+            for row in sessions:
+                session_id = str(row["session_id"])
+                session_ref = row["public_ref"]
+                if session_ref is None:
+                    title, kind = self._session_ref_text(row["name"], row["session_type"])
+                    session_ref = public_ref(title, session_id, empty_slug=kind)
+                    await self.conn.execute(
+                        "UPDATE sessions SET public_ref = ? WHERE session_id = ?", (session_ref, session_id)
+                    )
+                if not isinstance(session_ref, str) or not is_public_ref(session_ref):
+                    raise RuntimeError(f"session {session_id!r} has an invalid public ref")
+                if session_ref in session_refs:
+                    raise RuntimeError(f"session public ref collision: {session_ref}")
+                session_refs.add(session_ref)
+
+            await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_public_ref ON sessions(public_ref)")
+            await self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_background_agent_runs_session_agent_ref "
+                "ON background_agent_runs(session_id, agent_ref)"
+            )
             await self.conn.commit()
         except BaseException:
             await self.conn.rollback()
@@ -2004,10 +2110,6 @@ class SessionStore:
             direct = message.get("background_result_ref")
             if isinstance(direct, str) and direct:
                 refs.add(direct)
-            elif isinstance(message.get("client_id"), str) and message["client_id"].startswith("bg:"):
-                legacy_ref, separator, _status = message["client_id"][3:].rpartition(":")
-                if separator and legacy_ref:
-                    refs.add(legacy_ref)
             compaction = message.get("compaction")
             nested = compaction.get("background_result_refs") if isinstance(compaction, dict) else None
             if isinstance(nested, list):
@@ -2362,6 +2464,7 @@ class SessionStore:
         async with lock:
             async with self._session_context_transaction() as connection:
                 serializable = self._to_serializable_messages(messages)
+                await self._ensure_session_public_ref(state, connection)
                 now = datetime.now(UTC).isoformat()
                 self._stamp_messages(serializable, now)
 
@@ -2370,6 +2473,7 @@ class SessionStore:
                     SQL_UPSERT_PROGRESS,
                     (
                         state.session_id,
+                        state.public_ref,
                         state.started_at.isoformat(),
                         now,
                         messages_json,
@@ -3120,7 +3224,7 @@ class SessionStore:
         state: SessionState,
         messages: list[dict | Any],
         tool_call_ids: set[str],
-        background_task_ids: set[str],
+        background_agent_refs: set[str],
         metadata: dict | None = None,
     ) -> None:
         """Atomically persist a branch and its durable recovery records."""
@@ -3195,26 +3299,26 @@ class SessionStore:
                     ],
                 )
 
-            if background_task_ids:
-                placeholders = ",".join("?" for _ in background_task_ids)
+            if background_agent_refs:
+                placeholders = ",".join("?" for _ in background_agent_refs)
                 rows = await connection.execute_fetchall(
                     f"""
                     SELECT * FROM background_agent_runs
-                    WHERE session_id = ? AND task_id IN ({placeholders})
+                    WHERE session_id = ? AND agent_ref IN ({placeholders})
                       AND status IN ('completed', 'failed', 'cancelled', 'interrupted')
                       AND completion_id IS NOT NULL
                     """,
-                    (source_session_id, *sorted(background_task_ids)),
+                    (source_session_id, *sorted(background_agent_refs)),
                 )
-                by_task = {str(row["task_id"]): row for row in rows}
-                missing = sorted(background_task_ids - by_task.keys())
+                by_ref = {str(row["agent_ref"]): row for row in rows}
+                missing = sorted(background_agent_refs - by_ref.keys())
                 if missing:
                     raise ValueError(f"background results unavailable for branch: {', '.join(missing)}")
                 now = datetime.now(UTC).isoformat()
                 await connection.executemany(
                     """
                     INSERT INTO background_agent_runs (
-                        task_id, session_id, parent_run_id, parent_tool_call_id,
+                        task_id, agent_ref, session_id, parent_run_id, parent_tool_call_id,
                         suspension_id, child_session_id, agent_type, wait, status,
                         command, detail, result_ref, result_text, created_at,
                         started_at, updated_at, ended_at, cancel_requested_at,
@@ -3222,13 +3326,14 @@ class SessionStore:
                         cancel_idempotency_key, notified_at, completion_id,
                         spawn_spec, spawn_attempts
                     ) VALUES (
-                        ?, ?, NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         NULL, NULL, NULL, 0, NULL, ?, ?, NULL, 0
                     )
                     """,
                     [
                         (
-                            task_id,
+                            row["task_id"],
+                            row["agent_ref"],
                             state.session_id,
                             row["agent_type"],
                             row["status"],
@@ -3241,9 +3346,9 @@ class SessionStore:
                             row["updated_at"],
                             row["ended_at"],
                             now,
-                            f"branch:{state.session_id}:{task_id}:{row['status']}",
+                            f"branch:{state.session_id}:{row['task_id']}:{row['status']}",
                         )
-                        for task_id, row in by_task.items()
+                        for row in by_ref.values()
                     ],
                 )
         state.context_etag = etag
@@ -3582,6 +3687,7 @@ class SessionStore:
         self,
         *,
         task_id: str,
+        agent_ref: str,
         session_id: str,
         parent_run_id: str | None,
         command: str,
@@ -3593,7 +3699,23 @@ class SessionStore:
         spawn_spec: str | None = None,
     ) -> BackgroundStartDisposition:
         now = datetime.now(UTC).isoformat()
+        if not is_public_ref(agent_ref):
+            raise ValueError("background agent_ref is invalid")
         async with self._background_event_lock:
+            existing_rows = await self.conn.execute_fetchall(
+                "SELECT agent_ref FROM background_agent_runs WHERE session_id = ? AND task_id = ?",
+                (session_id, task_id),
+            )
+            if existing_rows and existing_rows[0]["agent_ref"] != agent_ref:
+                raise ValueError("background agent_ref is immutable")
+            if child_session_id is not None:
+                child_rows = await self.conn.execute_fetchall(
+                    "SELECT public_ref FROM sessions WHERE session_id = ?", (child_session_id,)
+                )
+                if not child_rows:
+                    raise KeyError(f"unknown background child session: {child_session_id}")
+                if child_rows[0]["public_ref"] != agent_ref:
+                    raise ValueError("background agent_ref must equal its child session public_ref")
             scope_rows = await self.conn.execute_fetchall(
                 "SELECT * FROM execution_cancellation_scopes WHERE session_id = ?",
                 (session_id,),
@@ -3602,11 +3724,11 @@ class SessionStore:
             cursor = await self.conn.execute(
                 """
                 INSERT INTO background_agent_runs (
-                    task_id, session_id, parent_run_id, parent_tool_call_id, suspension_id, child_session_id,
+                    task_id, agent_ref, session_id, parent_run_id, parent_tool_call_id, suspension_id, child_session_id,
                     agent_type, wait, status, command, spawn_spec,
                     created_at, started_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, task_id) DO UPDATE SET
                     session_id = excluded.session_id,
                     parent_run_id = excluded.parent_run_id,
@@ -3633,6 +3755,7 @@ class SessionStore:
                 """,
                 (
                     task_id,
+                    agent_ref,
                     session_id,
                     parent_run_id,
                     parent_tool_call_id,
@@ -4056,6 +4179,18 @@ class SessionStore:
             WHERE session_id = ? AND task_id = ?
             """,
             (session_id, task_id),
+        )
+        if not rows:
+            return None
+        value = rows[0]["result_text"]
+        return value if isinstance(value, str) else None
+
+    async def get_background_agent_result_by_ref(self, session_id: str, agent_ref: str) -> str | None:
+        if not is_public_ref(agent_ref):
+            return None
+        rows = await self.read_conn.execute_fetchall(
+            "SELECT result_text FROM background_agent_runs WHERE session_id = ? AND agent_ref = ?",
+            (session_id, agent_ref),
         )
         if not rows:
             return None
@@ -4825,6 +4960,7 @@ class SessionStore:
         connection: aiosqlite.Connection,
     ) -> tuple[list[dict], str]:
         serializable_messages = self._to_serializable_messages(messages)
+        await self._ensure_session_public_ref(state, connection)
 
         # The list is shared with the agent's in-memory context, so stable
         # identity and timestamps survive later append-only saves.
@@ -4839,6 +4975,7 @@ class SessionStore:
             SQL_SAVE_SESSION,
             (
                 state.session_id,
+                state.public_ref,
                 state.started_at.isoformat(),
                 state.last_activity.isoformat(),
                 messages_json,
@@ -5032,6 +5169,7 @@ class SessionStore:
         async with lock:
             async with self._session_context_transaction() as connection:
                 serializable_messages = self._to_serializable_messages(messages or [])
+                await self._ensure_session_public_ref(state, connection)
                 now = datetime.now(UTC).isoformat()
                 self._stamp_messages(serializable_messages, now)
                 meta = metadata or {}
@@ -5042,6 +5180,7 @@ class SessionStore:
                     SQL_INSERT_SESSION_IF_ABSENT,
                     (
                         state.session_id,
+                        state.public_ref,
                         state.started_at.isoformat(),
                         state.last_activity.isoformat(),
                         messages_json,
@@ -5091,6 +5230,7 @@ class SessionStore:
         return SessionState(
             session_id=session_id,
             started_at=started_at,
+            public_ref=row["public_ref"],
             last_activity=last_activity,
             name=row["name"],
             session_type=session_type,
@@ -5207,6 +5347,49 @@ class SessionStore:
         rows = await self.read_conn.execute_fetchall(SQL_GET_LATEST)
         return rows[0]["session_id"] if rows else None
 
+    async def _ensure_session_public_ref(
+        self,
+        state: SessionState,
+        connection: aiosqlite.Connection,
+    ) -> None:
+        rows = await connection.execute_fetchall(
+            "SELECT public_ref FROM sessions WHERE session_id = ?",
+            (state.session_id,),
+        )
+        if rows:
+            stored_ref = rows[0]["public_ref"]
+            if not isinstance(stored_ref, str) or not is_public_ref(stored_ref):
+                raise ValueError("stored session public_ref is invalid")
+            if state.public_ref is not None and state.public_ref != stored_ref:
+                raise ValueError("session public_ref is immutable")
+            state.public_ref = stored_ref
+            return
+        if state.public_ref is None:
+            title, kind = self._session_ref_text(state.name, state.session_type)
+            state.public_ref = public_ref(title, state.session_id, empty_slug=kind)
+        if not is_public_ref(state.public_ref):
+            raise ValueError("session public_ref is invalid")
+
+    async def get_session_id_by_ref(
+        self,
+        session_ref: str,
+        *,
+        area_id: str | object | None = AREA_FILTER_UNSET,
+    ) -> str | None:
+        if not is_public_ref(session_ref):
+            return None
+        if area_id is AREA_FILTER_UNSET:
+            query = "SELECT session_id FROM sessions WHERE public_ref = ?"
+            params: tuple[object, ...] = (session_ref,)
+        elif area_id is None:
+            query = "SELECT session_id FROM sessions WHERE public_ref = ? AND area_id IS NULL"
+            params = (session_ref,)
+        else:
+            query = "SELECT session_id FROM sessions WHERE public_ref = ? AND area_id = ?"
+            params = (session_ref, area_id)
+        rows = await self.read_conn.execute_fetchall(query, params)
+        return str(rows[0]["session_id"]) if rows else None
+
     async def list_sessions(
         self,
         limit: int = 20,
@@ -5223,6 +5406,7 @@ class SessionStore:
             rows = await self.read_conn.execute_fetchall(
                 f"""
                 SELECT session_id, started_at, last_activity, name,
+                       public_ref,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
                        agent_type, agent_status, area_id, chat_model,
                        active_message_count AS message_count
@@ -5239,6 +5423,7 @@ class SessionStore:
             rows = await self.read_conn.execute_fetchall(
                 f"""
                 SELECT session_id, started_at, last_activity, name,
+                       public_ref,
                        session_type, origin_automation_id, parent_session_id, parent_tool_call_id,
                        agent_type, agent_status, area_id, chat_model,
                        active_message_count AS message_count
@@ -5254,6 +5439,7 @@ class SessionStore:
         return [
             {
                 "session_id": row["session_id"],
+                "public_ref": row["public_ref"],
                 "started_at": row["started_at"],
                 "last_activity": row["last_activity"],
                 "name": row["name"],
@@ -5307,6 +5493,7 @@ class SessionStore:
         return [
             {
                 "session_id": row["session_id"],
+                "public_ref": row["public_ref"],
                 "started_at": row["started_at"],
                 "last_activity": row["last_activity"],
                 "name": row["name"],
@@ -5908,7 +6095,7 @@ class SessionStore:
         # One extra row signals a further page.
         fts_sql_limit, fts_sql_offset = limit + 1, offset
         sql = f"""
-            SELECT m.session_id AS session_id, s.name AS session_name,
+            SELECT m.session_id AS session_id, s.public_ref AS public_ref, s.name AS session_name,
                    m.seq AS seq, m.role AS role, m.created_at AS created_at,
                    snippet(session_messages_fts, 0, '[', ']', '…', 16) AS snippet
             FROM session_messages_fts
@@ -5937,6 +6124,7 @@ class SessionStore:
     def _search_hit(r: Any, snippet: str | None = None) -> dict:
         return {
             "session_id": r["session_id"],
+            "public_ref": r["public_ref"],
             "session_name": r["session_name"],
             "seq": r["seq"],
             "role": r["role"],
