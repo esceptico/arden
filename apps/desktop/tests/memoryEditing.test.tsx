@@ -2,6 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { AppConfig } from "@/api/core";
+import {
+  listMemoryArtifactSummaries,
+  readMemoryArtifactDetail,
+} from "@/api/memoryArtifacts";
+import { handleAutomationEvent } from "@/features/automations/hooks/useAutomationEvents";
 import { ArtifactMemoryView } from "@/features/memory/components/ArtifactMemoryView";
 import { clearDrafts, draftKey, getDraft, setDraft } from "@/features/memory/lib/draftStore";
 import { splitFrontmatter } from "@/features/memory/lib/format";
@@ -9,13 +14,20 @@ import { useStore } from "@/stores";
 import {
   error,
   installCanonicalMemoryBridge,
+  ok,
   type HistoryCommitFixture,
   type WikiPageFixture,
 } from "./helpers/canonicalMemoryBridge";
 
 const config: AppConfig = { serverUrl: "http://localhost:6877", apiKey: "test-key" };
 const originalDesktop = window.ardenDesktop;
+const originalConfig = useStore.getState().config;
 const originalVaultVersion = useStore.getState().memoryVaultVersion;
+const originalCurrentSessionId = useStore.getState().currentSessionId;
+const originalAutomations = useStore.getState().automations;
+const originalSessions = useStore.getState().sessions;
+const originalAreas = useStore.getState().areas;
+const originalAutomationStream = useStore.getState().automationStream;
 const roots = new Set<Root>();
 
 function page(
@@ -88,7 +100,16 @@ afterEach(async () => {
   roots.clear();
   clearDrafts();
   window.ardenDesktop = originalDesktop;
-  useStore.setState({ memoryVaultVersion: originalVaultVersion, memoryVaultChanges: [] });
+  useStore.setState({
+    areas: originalAreas,
+    automations: originalAutomations,
+    automationStream: originalAutomationStream,
+    config: originalConfig,
+    currentSessionId: originalCurrentSessionId,
+    memoryVaultVersion: originalVaultVersion,
+    memoryVaultChanges: [],
+    sessions: originalSessions,
+  });
   document.body.replaceChildren();
   localStorage.removeItem("arden.desktop.memory.inspectorOpen");
   localStorage.removeItem("arden.desktop.memory.lastPath");
@@ -379,6 +400,100 @@ test("coarse and sequenced changes in one render reconcile once", async () => {
   expect(summaryReads()).toBe(summariesBefore + 1);
   expect(detailReads()).toBe(detailsBefore + 1);
   expect(host.textContent).toContain("Coarse external update.");
+});
+
+test("automation replay gaps reconcile every replayable projection and reject stale Memory reads", async () => {
+  const staleSummaryGate = deferred();
+  let holdStaleSummary = false;
+  useStore.setState({
+    areas: { ...originalAreas, openAreaKey: "area-a" },
+    automationStream: {
+      ...originalAutomationStream,
+      phase: "connected",
+      statuses: { "stale-task": "working: old tool" },
+    },
+    config,
+    currentSessionId: null,
+    memoryVaultVersion: 8,
+    memoryVaultChanges: [{ paths: ["topics/old.md"], revision: "old", seq: 72 }],
+  });
+  const stalePage = page();
+  const bridge = installCanonicalMemoryBridge({
+    pages: [stalePage],
+    onRequest: async ({ path }) => {
+      if (path === "/admin/wiki/pages" && holdStaleSummary) {
+        holdStaleSummary = false;
+        await staleSummaryGate.promise;
+        return ok({
+          repository_head: stalePage.repositoryHead,
+          pages: [{
+            page_id: stalePage.pageId,
+            path: stalePage.path,
+            resource_state: "active",
+            title: stalePage.title,
+            aliases: [],
+            lifecycle: "active",
+            redirect_to: null,
+            metadata: stalePage.metadata,
+            version: stalePage.version,
+            repository_head: stalePage.repositoryHead,
+            created_at: null,
+            updated_at: null,
+          }],
+        });
+      }
+      if (path === "/automations") return ok({ automations: [] });
+      if (path.startsWith("/sessions?")) return ok({ sessions: [] });
+      if (path === "/areas") return ok({ areas: [] });
+      if (path === "/areas/overview") {
+        return ok({ areas: [], focus: [], brief: { done: [], in_progress: [], needs_you: [] } });
+      }
+      if (path === "/areas/area-a") return ok({ key: "area-a" });
+      return undefined;
+    },
+  });
+  const { host } = await renderView();
+  const summaryReads = () => bridge.requests.filter(({ path }) => path === "/admin/wiki/pages").length;
+  const detailReads = () => bridge.requests.filter(({ path }) => /^\/admin\/wiki\/pages\/[^/]+$/.test(path)).length;
+  const detailsBefore = detailReads();
+  const versionBefore = useStore.getState().memoryVaultVersion;
+
+  holdStaleSummary = true;
+  const staleRead = listMemoryArtifactSummaries(config);
+  await settle(20);
+  const summariesBeforeReset = summaryReads();
+  bridge.state.pages.delete(stalePage.pageId);
+  bridge.updatePage(page({
+    pageId: "page-new",
+    content: "---\ntitle: A\n---\n# A\n\nRecovered after gap.\n",
+    version: "note-r2",
+    repositoryHead: "wiki-head-2",
+  }));
+  await act(async () => handleAutomationEvent({
+    type: "stream_reset",
+    reason: "replay_gap",
+    seq: 77,
+  }));
+  await settle(340);
+
+  expect(useStore.getState().memoryVaultVersion).toBe(versionBefore + 1);
+  expect(useStore.getState().memoryVaultChanges).toEqual([]);
+  expect(useStore.getState().automationStream.statuses).toEqual({});
+  expect(summaryReads()).toBe(summariesBeforeReset + 1);
+  expect(detailReads()).toBe(detailsBefore + 1);
+  expect(bridge.requests.filter(({ path }) => path === "/automations")).toHaveLength(1);
+  expect(bridge.requests.filter(({ path }) => path.startsWith("/sessions?"))).toHaveLength(1);
+  expect(bridge.requests.filter(({ path }) => path === "/areas")).toHaveLength(1);
+  expect(bridge.requests.filter(({ path }) => path === "/areas/overview")).toHaveLength(1);
+  expect(bridge.requests.filter(({ path }) => path === "/areas/area-a")).toHaveLength(1);
+  expect(host.textContent).toContain("Recovered after gap.");
+
+  staleSummaryGate.resolve();
+  await staleRead;
+  const summariesBeforeProbe = summaryReads();
+  const probe = await readMemoryArtifactDetail(config, stalePage.path);
+  expect(probe.artifact.pageId).toBe("page-new");
+  expect(summaryReads()).toBe(summariesBeforeProbe);
 });
 
 test("changes received during reconciliation form one trailing batch", async () => {

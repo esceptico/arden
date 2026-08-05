@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   automationEventsUrl,
+  handleAutomationEvent,
   memoryVaultChangeFromEvent,
 } from "@/features/automations/hooks/useAutomationEvents";
 import { useStore } from "@/stores";
@@ -61,5 +62,21 @@ describe("automation event stream helpers", () => {
       Array.from({ length: MEMORY_VAULT_CHANGE_CAP }, (_, index) => index + 13),
     );
     expect(changes.find((change) => change.seq === MEMORY_VAULT_CHANGE_CAP)?.revision).toBe(`r${MEMORY_VAULT_CHANGE_CAP}`);
+  });
+
+  test("unsequenced memory events become one coarse reset", () => {
+    useStore.setState({
+      memoryVaultVersion: 40,
+      memoryVaultChanges: [{ paths: ["topics/old.md"], revision: "old", seq: 88 }],
+    });
+
+    handleAutomationEvent({
+      type: "memory_changed",
+      paths: ["topics/a.md"],
+      revision: "sha256:r2",
+    });
+
+    expect(useStore.getState().memoryVaultVersion).toBe(41);
+    expect(useStore.getState().memoryVaultChanges).toEqual([]);
   });
 });

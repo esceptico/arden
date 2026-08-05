@@ -34,6 +34,7 @@ import {
   reduceAutomationStreamConnecting,
   reduceAutomationStreamFailed,
   reduceAutomationStreamIdle,
+  reduceAutomationStreamReset,
   reduceAutomationStreamStale,
   type AutomationStreamDomainState,
   type AutomationStreamPhase,
@@ -928,6 +929,10 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => ({
       automationStream: reduceAutomationStreamIdle(s.automationStream),
     })),
+  automationStreamReset: () =>
+    set((s) => ({
+      automationStream: reduceAutomationStreamReset(s.automationStream),
+    })),
   automationProgress: (taskId, status) =>
     set((s) => ({
       automationStream: reduceAutomationProgress(s.automationStream, taskId, status),
@@ -942,7 +947,7 @@ export const useStore = create<State & Actions>((set) => ({
     set((s) => {
       const memoryVaultChanges = change
         ? appendMemoryVaultChange(s.memoryVaultChanges, change)
-        : s.memoryVaultChanges;
+        : [];
       if (change && memoryVaultChanges === s.memoryVaultChanges) return {};
       return {
         memoryVaultVersion: s.memoryVaultVersion + 1,

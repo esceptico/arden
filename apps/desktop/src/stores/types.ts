@@ -675,11 +675,13 @@ export interface Actions {
   automationStreamStale: () => void;
   automationStreamFailed: (error: string) => void;
   automationStreamIdle: () => void;
+  automationStreamReset: () => void;
   automationProgress: (taskId: string, status: string) => void;
   automationFinished: (taskId: string) => void;
   /** Monotonic counter bumped when the server's live memory vault absorbs
    *  on-disk changes (Obsidian edit, feed write, maintenance pass) — the
-   *  memory view refetches silently when it moves. */
+   *  memory view refetches silently when it moves. An omitted change is a
+   *  coarse reset and clears retained sequences. */
   memoryVaultVersion: number;
   memoryVaultChanges: readonly SequencedMemoryVaultChange[];
   memoryVaultChanged: (change?: MemoryVaultChange) => void;

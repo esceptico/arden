@@ -59,6 +59,13 @@ export function reduceAutomationStreamIdle(
   return { ...state, phase: "idle", error: null, updatedAt: now };
 }
 
+export function reduceAutomationStreamReset(
+  state: AutomationStreamDomainState,
+  now = Date.now(),
+): AutomationStreamDomainState {
+  return { ...state, statuses: {}, updatedAt: now };
+}
+
 export function reduceAutomationProgress(
   state: AutomationStreamDomainState,
   taskId: string,

@@ -6,6 +6,7 @@ import {
   reduceAutomationStreamConnected,
   reduceAutomationStreamConnecting,
   reduceAutomationStreamFailed,
+  reduceAutomationStreamReset,
   reduceAutomationStreamStale,
 } from "@/stores/automation-domain";
 import {
@@ -29,15 +30,19 @@ test("automation domain areas stream phase and per-task status", () => {
   expect(progressed.phase).toBe("connected");
   expect(progressed.statuses["task-1"]).toBe("starting...");
 
-  const stale = reduceAutomationStreamStale(progressed, 4);
-  expect(stale.phase).toBe("stale");
-  expect(reduceAutomationStreamConnecting(stale, 5).phase).toBe("reconnecting");
+  const reset = reduceAutomationStreamReset(progressed, 4);
+  expect(reset.phase).toBe("connected");
+  expect(reset.statuses).toEqual({});
 
-  const failed = reduceAutomationStreamFailed(stale, "boom", 6);
+  const stale = reduceAutomationStreamStale(progressed, 5);
+  expect(stale.phase).toBe("stale");
+  expect(reduceAutomationStreamConnecting(stale, 6).phase).toBe("reconnecting");
+
+  const failed = reduceAutomationStreamFailed(stale, "boom", 7);
   expect(failed.phase).toBe("failed");
   expect(failed.error).toBe("boom");
 
-  const finished = reduceAutomationFinished(failed, "task-1", 7);
+  const finished = reduceAutomationFinished(failed, "task-1", 8);
   expect(finished.statuses["task-1"]).toBeUndefined();
 });
 

@@ -4,8 +4,9 @@ import { refreshLoops } from "@/actions/loops";
 import { fetchAutomations } from "@/actions/automations";
 import { fetchAreasOverview, fetchAreaDetail } from "@/actions/areas";
 import { applyAppDestination } from "@/actions/navigation";
-import { refreshAreas } from "@/actions/sessions";
+import { refreshAreas, refreshSessions } from "@/actions/sessions";
 import type { AppConfig } from "@/api/core";
+import { invalidateMemoryArtifactCache } from "@/api/memoryArtifacts";
 import type { AppDestination } from "@/api/navigation";
 import type { SessionListItem } from "@/api/types";
 import { createStallWatchdog } from "@/lib/streamWatchdog";
@@ -25,7 +26,7 @@ const AUTOMATION_STALL_CHECK_MS = 5_000;
  *  string and signals that the row should drop out of the running list.
  *  `session_created` announces a channel session an automation just
  *  provisioned, so the sidebar adds the row live instead of after Cmd+R. */
-type AutomationEvent =
+export type AutomationEvent =
   | { type: "automation_progress"; task_id: string; status: string; seq?: number }
   | { type: "automation_finished"; task_id: string; result: string | null; seq?: number }
   | { type: "session_created"; session: SessionListItem; seq?: number }
@@ -77,6 +78,83 @@ export function applyNavigationRequest(
   });
 }
 
+/** Apply one decoded automation-stream event. Transport liveness stays in
+ *  the hook; domain projections remain directly testable without an SSE
+ *  connection. */
+export function handleAutomationEvent(event: AutomationEvent): void {
+  const store = () => useStore.getState();
+  if (event.type === "automation_progress") {
+    store().automationProgress(event.task_id, event.status);
+    // "starting..." is the scheduler's fire signal — the server just bumped
+    // next_run_at and claimed the running flag, so pull loops and the
+    // automation list to reset the countdown chip and show the run
+    // immediately instead of waiting out the next poll.
+    if (event.status === "starting...") {
+      void fetchAutomations();
+      const sid = store().currentSessionId;
+      if (sid) void refreshLoops(sid);
+    }
+  } else if (event.type === "automation_finished") {
+    store().automationFinished(event.task_id);
+    const st = store();
+    const auto = st.automations?.find((candidate) => candidate.task_id === event.task_id) ?? null;
+    const toast = automationToast({
+      taskId: event.task_id,
+      name: auto?.name ?? null,
+      result: event.result,
+      automationsOpen: st.automationsOpen,
+    });
+    if (toast) st.pushToast(toast);
+    // Drop the row from the sidebar card immediately rather than after the
+    // next 20s poll catches up to running_since going null.
+    void fetchAutomations();
+    // A finished automation run may have written area asks/state — refresh
+    // Home's focus set the same way areas_changed does.
+    void fetchAreasOverview();
+  } else if (event.type === "session_created") {
+    // An automation just provisioned its channel session. Prepend it so the
+    // sidebar row shows up live; the store dedupes an already-loaded id.
+    store().prependSession(event.session);
+  } else if (event.type === "memory_changed") {
+    // Missing sequences cannot participate in exact dedupe, so treat them as
+    // a coarse invalidation instead of silently dropping the update.
+    const change = memoryVaultChangeFromEvent(event);
+    if (change.seq == null) invalidateMemoryArtifactCache(store().config);
+    store().memoryVaultChanged(change.seq == null ? undefined : change);
+  } else if (event.type === "session_activity") {
+    // A channel the user may not be viewing got new content — bump its
+    // sidebar row to the top with fresh metadata.
+    store().patchSession(event.session);
+  } else if (event.type === "areas_changed") {
+    // An area's asks/state moved (server-side dream/consolidation or an
+    // automation write) — refetch so the Home focus set and strip
+    // reflect it without waiting for the next mount.
+    void fetchAreasOverview();
+    void refreshAreas();
+    // If the changed area's room is currently open, refetch its detail too —
+    // otherwise the open room goes stale until the user re-opens it.
+    const openKey = store().areas.openAreaKey;
+    if (openKey && event.keys.includes(openKey)) {
+      void fetchAreaDetail(openKey);
+    }
+  } else if (event.type === "navigation_requested") {
+    applyNavigationRequest(event);
+  } else if (event.type === "stream_reset") {
+    // The stream multiplexes automations, sessions, Areas, and Memory. A gap
+    // makes every replayable projection suspect; navigation requests remain
+    // intentionally ephemeral.
+    const st = store();
+    st.automationStreamReset();
+    invalidateMemoryArtifactCache(st.config);
+    st.memoryVaultChanged();
+    void fetchAutomations();
+    if (st.currentSessionId) void refreshLoops(st.currentSessionId);
+    void Promise.allSettled([refreshSessions(), refreshAreas()]);
+    void fetchAreasOverview();
+    if (st.areas.openAreaKey) void fetchAreaDetail(st.areas.openAreaKey);
+  }
+}
+
 /** Subscribe to `/automations/events` for the lifetime of the app. The
  *  hook owns transport only; automation stream status and per-task
  *  projections live in the automation domain. */
@@ -102,66 +180,7 @@ export function useAutomationEvents(): void {
 
     const handle = (event: AutomationEvent) => {
       watchdog.bump();
-      if (event.type === "automation_progress") {
-        store().automationProgress(event.task_id, event.status);
-        // "starting..." is the scheduler's fire signal — the server just bumped
-        // next_run_at and claimed the running flag, so pull loops and the
-        // automation list to reset the countdown chip and show the run
-        // immediately instead of waiting out the next poll.
-        if (event.status === "starting...") {
-          void fetchAutomations();
-          const sid = useStore.getState().currentSessionId;
-          if (sid) void refreshLoops(sid);
-        }
-      } else if (event.type === "automation_finished") {
-        store().automationFinished(event.task_id);
-        const st = store();
-        const auto = st.automations?.find((a) => a.task_id === event.task_id) ?? null;
-        const toast = automationToast({
-          taskId: event.task_id,
-          name: auto?.name ?? null,
-          result: event.result,
-          automationsOpen: st.automationsOpen,
-        });
-        if (toast) st.pushToast(toast);
-        // Drop the row from the sidebar card immediately rather than after the
-        // next 20s poll catches up to running_since going null.
-        void fetchAutomations();
-        // A finished automation run may have written area asks/state —
-        // refresh Home's focus set the same way areas_changed does.
-        void fetchAreasOverview();
-      } else if (event.type === "session_created") {
-        // An automation just provisioned its channel session. Prepend it so the
-        // sidebar row shows up live; the store dedupes an already-loaded id.
-        store().prependSession(event.session);
-      } else if (event.type === "memory_changed") {
-        // The live memory vault absorbed on-disk edits (Obsidian, a feed run,
-        // a maintenance pass) — bump the version so an open memory view
-        // silently refetches what it's showing.
-        store().memoryVaultChanged(memoryVaultChangeFromEvent(event));
-      } else if (event.type === "session_activity") {
-        // A channel the user may not be viewing got new content — bump its
-        // sidebar row to the top with fresh metadata.
-        store().patchSession(event.session);
-      } else if (event.type === "areas_changed") {
-        // An area's asks/state moved (server-side dream/consolidation or an
-        // automation write) — refetch so the Home focus set and strip
-        // reflect it without waiting for the next mount.
-        void fetchAreasOverview();
-        void refreshAreas();
-        // If the changed area's room is currently open, refetch its detail
-        // too — otherwise the open room goes stale until the user re-opens it.
-        const openKey = useStore.getState().areas.openAreaKey;
-        if (openKey && event.keys.includes(openKey)) {
-          void fetchAreaDetail(openKey);
-        }
-      } else if (event.type === "navigation_requested") {
-        applyNavigationRequest(event);
-      } else if (event.type === "stream_reset") {
-        void fetchAutomations();
-        const sid = useStore.getState().currentSessionId;
-        if (sid) void refreshLoops(sid);
-      }
+      handleAutomationEvent(event);
     };
 
     store().automationStreamConnecting();
