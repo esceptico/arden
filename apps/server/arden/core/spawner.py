@@ -623,11 +623,7 @@ def create_spawn_fn(
 
                 await run_operations(
                     "unstarted child cleanup failed",
-                    child_lifecycle.settle(
-                        status,
-                        record_terminal,
-                        persist=child_lifecycle.provisioned,
-                    ),
+                    lambda: child_lifecycle.settle(status, record_terminal, persist=child_lifecycle.provisioned),
                 )
 
             await finish_despite_cancellation(finalize())
@@ -899,15 +895,17 @@ def create_spawn_fn(
                         )
                         terminal_operations = []
                         if terminal_status != "completed":
-                            terminal_operations.append(_emit_visible_child_final(child_lifecycle.io, result_text))
+                            terminal_operations.append(
+                                lambda: _emit_visible_child_final(child_lifecycle.io, result_text)
+                            )
                         terminal_operations.extend(
                             (
-                                registry.record_finished(
+                                lambda: registry.record_finished(
                                     task_id=task_id,
                                     status=terminal_status,
                                     result_text=result_text,
                                 ),
-                                _emit_task_finished(terminal_status, summary),
+                                lambda: _emit_task_finished(terminal_status, summary),
                             )
                         )
                         await run_operations(
@@ -1099,9 +1097,9 @@ def create_spawn_fn(
                 )
                 terminal_operations = []
                 if terminal_status != "completed":
-                    terminal_operations.append(_emit_visible_child_final(child_lifecycle.io, terminal_result))
+                    terminal_operations.append(lambda: _emit_visible_child_final(child_lifecycle.io, terminal_result))
                 terminal_operations.append(
-                    registry.deliver_result(
+                    lambda: registry.deliver_result(
                         task_id=task_id,
                         result=terminal_result,
                         label=label,

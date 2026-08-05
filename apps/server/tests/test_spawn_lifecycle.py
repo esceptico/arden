@@ -32,7 +32,12 @@ from arden.context.models import AreaContext, SessionState
 from arden.context.store import SessionStore
 from arden.core import spawner as spawner_module
 from arden.core.isolation import IsolationLevel
-from arden.core.spawn_lifecycle import cancel_and_join, collect_failure
+from arden.core.spawn_lifecycle import (
+    ChildSessionLifecycle,
+    cancel_and_join,
+    collect_failure,
+    run_operations,
+)
 from arden.core.spawner import create_spawn_fn, get_response_cost
 from arden.events.sse import (
     BackgroundTaskEvent,
@@ -109,6 +114,116 @@ async def test_collect_failure_does_not_convert_system_exit():
 
     assert caught.value.code == 7
     assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_run_operations_attempts_every_operation_before_cancellation():
+    calls: list[str] = []
+
+    async def cancel() -> None:
+        calls.append("cancel")
+        raise asyncio.CancelledError
+
+    async def fail() -> None:
+        calls.append("fail")
+        raise RuntimeError("cleanup failed")
+
+    async def finish() -> None:
+        calls.append("finish")
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await run_operations("terminal cleanup failed", cancel, fail, finish)
+
+    assert calls == ["cancel", "fail", "finish"]
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+async def _provisioned_child_lifecycle(*, save, child_io_factory=None):
+    executor = make_executor()
+    service = SimpleNamespace(provision_state=AsyncMock(), save=save)
+    run = RunContext(run_id="run-1", child_io_factory=child_io_factory)
+    parent = ToolContext(
+        session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        services={"session": service},
+        background_tasks=BackgroundTaskRegistry(session_id="parent"),
+    )
+    child_state = SessionState(session_id="child", started_at=datetime.now(UTC), session_type="agent")
+    child = ToolContext(
+        session_state=child_state,
+        registry=executor.registry,
+        run=run,
+        io=IOBridge(),
+        services=parent.services,
+        background_tasks=parent.background_tasks,
+    )
+    lifecycle = ChildSessionLifecycle(
+        parent=parent,
+        child=child,
+        state=child_state,
+        messages=[],
+        task_id="agent~111111",
+        has_child_session=True,
+    )
+    await lifecycle.provision()
+    await lifecycle.acquire_io()
+    return lifecycle, service
+
+
+@pytest.mark.asyncio
+async def test_child_settlement_closes_io_after_terminal_record_cancellation():
+    finished: list[str] = []
+    closed = False
+
+    async def child_io_factory(_params):
+        async def finish(status: str) -> None:
+            finished.append(status)
+
+        async def close() -> None:
+            nonlocal closed
+            closed = True
+
+        return ChildSession(io=IOBridge(), finish=finish, aclose=close)
+
+    lifecycle, service = await _provisioned_child_lifecycle(
+        save=AsyncMock(),
+        child_io_factory=child_io_factory,
+    )
+
+    async def cancel_record(_status: str, _error: Exception | None) -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await lifecycle.settle("completed", cancel_record)
+
+    service.save.assert_awaited_once()
+    assert finished == ["completed"]
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_child_settlement_persists_failed_status_after_save_cancellation():
+    persisted: list[str | None] = []
+    recorded: list[tuple[str, Exception | None]] = []
+
+    async def save(state, _messages) -> None:
+        persisted.append(state.agent_status)
+        if len(persisted) == 1:
+            raise asyncio.CancelledError
+
+    lifecycle, _service = await _provisioned_child_lifecycle(save=save)
+
+    async def record(status: str, error: Exception | None) -> None:
+        recorded.append((status, error))
+
+    with pytest.raises(asyncio.CancelledError):
+        await lifecycle.settle("completed", record)
+
+    assert persisted == ["completed", "failed"]
+    assert recorded and recorded[0][0] == "failed"
+    assert isinstance(recorded[0][1], RuntimeError)
 
 
 def _tool_event_agent(*, gate: asyncio.Event | None = None):

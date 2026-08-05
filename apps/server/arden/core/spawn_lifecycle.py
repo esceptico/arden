@@ -81,11 +81,42 @@ async def collect_failure(errors: list[Exception], operation: Awaitable[object])
         append_failure(errors, error)
 
 
-async def run_operations(message: str, *operations: Awaitable[object]) -> None:
+Operation = Callable[[], Awaitable[object]]
+
+
+async def _attempt_all(operations: tuple[Operation, ...]) -> tuple[list[Exception], asyncio.CancelledError | None]:
     errors: list[Exception] = []
+    cancellation: asyncio.CancelledError | None = None
     for operation in operations:
-        await collect_failure(errors, operation)
-    raise_failures(message, errors)
+        try:
+            await operation()
+        except asyncio.CancelledError as error:
+            cancellation = cancellation or error
+        except Exception as error:
+            append_failure(errors, error)
+    return errors, cancellation
+
+
+def _raise_operation_failures(
+    message: str,
+    errors: list[Exception],
+    cancellation: asyncio.CancelledError | None,
+) -> None:
+    try:
+        raise_failures(message, errors)
+    except Exception as error:
+        if cancellation is not None:
+            raise cancellation from error
+        raise
+    if cancellation is not None:
+        raise cancellation
+
+
+async def run_operations(message: str, *operations: Operation) -> None:
+    """Attempt every owned operation before propagating failures or cancellation."""
+
+    errors, cancellation = await _attempt_all(operations)
+    _raise_operation_failures(message, errors, cancellation)
 
 
 async def cancel_and_join(task: asyncio.Task | None, *, observe_done: bool = False) -> None:
@@ -137,15 +168,19 @@ async def activate_child(
     except asyncio.CancelledError as cancellation:
         try:
             await finish_despite_cancellation(
-                run_operations("child activation cleanup failed", cleanup(), abort("cancelled"))
+                run_operations("child activation cleanup failed", cleanup, lambda: abort("cancelled"))
             )
         except Exception as error:
             raise cancellation from error
         raise
     except Exception as error:
         errors = [error]
-        await collect_failure(errors, cleanup())
-        await collect_failure(errors, abort("failed"))
+        try:
+            await run_operations("child activation cleanup failed", cleanup, lambda: abort("failed"))
+        except asyncio.CancelledError as cancellation:
+            raise cancellation from error
+        except Exception as cleanup_error:
+            append_failure(errors, cleanup_error)
         raise_failures("child activation failed", errors)
 
 
@@ -244,20 +279,34 @@ class ChildSessionLifecycle:
         """Persist and publish one immutable terminal status, then close IO."""
         errors: list[Exception] = []
         persistence_error: Exception | None = None
+        cancellation: asyncio.CancelledError | None = None
         if persist:
             try:
                 await self.persist(status)
-            except asyncio.CancelledError:
-                raise
+            except asyncio.CancelledError as error:
+                cancellation = error
+                persistence_error = RuntimeError("child session persistence was cancelled")
+                errors.append(persistence_error)
+                status = "failed"
+                self._state.agent_status = status
+                correction_errors, correction_cancellation = await _attempt_all((lambda: self.persist(status),))
+                errors.extend(correction_errors)
+                cancellation = cancellation or correction_cancellation
             except Exception as error:
                 append_failure(errors, error)
                 persistence_error = error
                 status = "failed"
                 self._state.agent_status = status
-        await collect_failure(errors, record_terminal(status, persistence_error))
-        await collect_failure(errors, self.finish(status))
-        await collect_failure(errors, self.teardown())
-        raise_failures("child terminal settlement failed", errors)
+        terminal_errors, terminal_cancellation = await _attempt_all(
+            (
+                lambda: record_terminal(status, persistence_error),
+                lambda: self.finish(status),
+                self.teardown,
+            )
+        )
+        errors.extend(terminal_errors)
+        cancellation = cancellation or terminal_cancellation
+        _raise_operation_failures("child terminal settlement failed", errors, cancellation)
         return status
 
     async def teardown(self) -> None:
