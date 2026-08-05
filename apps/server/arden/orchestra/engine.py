@@ -51,14 +51,11 @@ Stage = Callable[[Any, Any, int], Awaitable[Any]]
 
 
 class WorkflowSpawnLimit(RuntimeError):
-    """Raised when the per-run spawn cap is hit. Distinct so _safe re-raises it
-    instead of degrading the runaway guard into a silent None."""
+    """Raised when the per-run spawn cap is hit."""
 
 
 class WorkflowBudgetExceeded(RuntimeError):
-    """Raised when the run's output-token ceiling is hit before a spawn. Like
-    WorkflowSpawnLimit, _safe re-raises it so a fan-out aborts instead of
-    silently degrading to None."""
+    """Raised when the run's output-token ceiling is hit before a spawn."""
 
 
 class WorkflowStructuredOutputMissing(RuntimeError):
@@ -100,22 +97,8 @@ class TokenBudget:
         return max(0, self._b.total - self._b.output_tokens)
 
 
-async def _safe(unit: Unit) -> Any:
-    try:
-        return await (unit() if callable(unit) else unit)
-    except (
-        WorkflowAgentFailed,
-        WorkflowSpawnLimit,
-        WorkflowBudgetExceeded,
-        WorkflowStructuredOutputMissing,
-        WorkflowStructuredFormatError,
-    ):
-        # Resource guards and explicit contract failures abort the whole fan-out;
-        # degrading them to None would hide a known failure from the workflow.
-        raise
-    except Exception as exc:
-        _logger.warning("workflow unit failed: %s", exc)
-        return None
+async def _run_unit(unit: Unit) -> Any:
+    return await (unit() if callable(unit) else unit)
 
 
 class Orchestra:
@@ -124,8 +107,8 @@ class Orchestra:
     Combinators mirror the Workflow engine: agent() spawns one subagent and,
     when given a schema, returns a validated formatter result; parallel() fans
     out with a barrier; pipeline() runs per-item stage chains with no barrier.
-    Unknown unit exceptions degrade to None so independent siblings can finish;
-    explicit worker, budget, and output-contract failures abort the workflow.
+    Every unit failure aborts the workflow. A workflow must model any
+    recoverable partial result explicitly in its own result schema.
     """
 
     def __init__(
@@ -345,7 +328,7 @@ class Orchestra:
 
     async def parallel(self, units: list[Unit]) -> list[Any]:
         async with asyncio.TaskGroup() as tg:
-            tasks = [tg.create_task(_safe(unit)) for unit in units]
+            tasks = [tg.create_task(_run_unit(unit)) for unit in units]
         return [task.result() for task in tasks]
 
     async def pipeline(self, items: list[Any], *stages: Stage) -> list[Any]:
@@ -353,12 +336,10 @@ class Orchestra:
             current = item
             for stage in stages:
                 current = await stage(current, item, index)
-                if current is None:
-                    return None
             return current
 
         async with asyncio.TaskGroup() as tg:
-            tasks = [tg.create_task(_safe(lambda it=it, i=i: chain(it, i))) for i, it in enumerate(items)]
+            tasks = [tg.create_task(chain(item, index)) for index, item in enumerate(items)]
         return [task.result() for task in tasks]
 
     @observed_trace("workflow.agent", tags="workflow")
@@ -448,8 +429,6 @@ class Orchestra:
             raise
         except Exception as exc:
             if invocation_id is not None:
-                # A _safe-degraded None journals as failed and RE-RUNS on
-                # replay — never freeze a transient failure into a hole.
                 await self._journal.fail(invocation_id, str(exc))
             raise
         if spawn.status != "completed":

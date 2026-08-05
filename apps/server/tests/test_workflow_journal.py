@@ -157,6 +157,35 @@ async def test_failed_journal_record_reruns(store):
     assert calls3["i"] == 0
 
 
+async def test_parallel_worker_exception_never_returns_none_or_caches_a_hole(store):
+    attempts = {"count": 0}
+
+    async def spawn(ctx, *, task, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("worker crashed")
+        return SimpleNamespace(text="recovered", status="completed")
+
+    first = Orchestra.for_ctx(SimpleNamespace(spawn_fn=spawn), journal=_journal(store))
+    with pytest.raises(BaseException) as raised:
+        await first.parallel([lambda: first.agent("t1")])
+    errors = raised.value.exceptions if isinstance(raised.value, BaseExceptionGroup) else [raised.value]
+    assert any(isinstance(error, RuntimeError) and str(error) == "worker crashed" for error in errors)
+
+    failed = await store.get(_worker_id(1, "t1"))
+    assert failed is not None and failed.status is InvocationStatus.FAILED
+
+    retry = Orchestra.for_ctx(SimpleNamespace(spawn_fn=spawn), journal=_journal(store))
+    assert await retry.parallel([lambda: retry.agent("t1")]) == ["recovered"]
+    recovered = await store.get(_worker_id(1, "t1", retry=1))
+    assert recovered is not None and recovered.status is InvocationStatus.SUCCEEDED
+
+    replay, calls = _ctx(["never"])
+    cached = Orchestra.for_ctx(replay, journal=_journal(store))
+    assert await cached.parallel([lambda: cached.agent("t1")]) == ["recovered"]
+    assert calls["i"] == 0
+
+
 @pytest.mark.parametrize("status", ["failed", "cancelled"])
 async def test_terminal_worker_failure_is_journaled_as_failed_and_reruns(store, status):
     attempts = {"count": 0}

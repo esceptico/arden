@@ -155,7 +155,7 @@ async def test_parallel_reraises_missing_structured_output():
     assert any(isinstance(e, WorkflowStructuredOutputMissing) for e in flat)
 
 
-async def test_parallel_preserves_order_and_isolates_failures():
+async def test_parallel_propagates_untyped_unit_failures():
     async def ok(v):
         return v
 
@@ -164,8 +164,11 @@ async def test_parallel_preserves_order_and_isolates_failures():
 
     ctx, _ = _ctx_with(["x"])
     o = Orchestra.for_ctx(ctx)
-    results = await o.parallel([(lambda: ok(1)), (lambda: boom()), (lambda: ok(3))])
-    assert results == [1, None, 3]
+    with pytest.raises(BaseException) as raised:
+        await o.parallel([(lambda: ok(1)), (lambda: boom()), (lambda: ok(3))])
+
+    errors = raised.value.exceptions if isinstance(raised.value, BaseExceptionGroup) else [raised.value]
+    assert any(isinstance(error, RuntimeError) and str(error) == "nope" for error in errors)
 
 
 async def test_pipeline_runs_all_stages_per_item():
@@ -182,7 +185,7 @@ async def test_pipeline_runs_all_stages_per_item():
     assert results == [3, 5, 7]
 
 
-async def test_pipeline_drops_item_on_none_stage():
+async def test_pipeline_passes_none_to_the_next_stage():
     ctx, _ = _ctx_with(["x"])
     o = Orchestra.for_ctx(ctx)
 
@@ -190,13 +193,13 @@ async def test_pipeline_drops_item_on_none_stage():
         return None if item == 2 else item
 
     async def stage2(prev, item, i):
-        return prev * 10
+        return "skipped" if prev is None else prev * 10
 
     results = await o.pipeline([1, 2, 3], stage1, stage2)
-    assert results == [10, None, 30]
+    assert results == [10, "skipped", 30]
 
 
-async def test_pipeline_isolates_stage_exceptions():
+async def test_pipeline_propagates_stage_exceptions():
     ctx, _ = _ctx_with(["x"])
     o = Orchestra.for_ctx(ctx)
 
@@ -205,8 +208,11 @@ async def test_pipeline_isolates_stage_exceptions():
             raise RuntimeError("boom")
         return item
 
-    results = await o.pipeline([1, 2, 3], stage1)
-    assert results == [1, None, 3]
+    with pytest.raises(BaseException) as raised:
+        await o.pipeline([1, 2, 3], stage1)
+
+    errors = raised.value.exceptions if isinstance(raised.value, BaseExceptionGroup) else [raised.value]
+    assert any(isinstance(error, RuntimeError) and str(error) == "boom" for error in errors)
 
 
 async def test_parallel_spawns_get_unique_lifecycle_ids():
