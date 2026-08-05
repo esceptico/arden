@@ -20,6 +20,8 @@ wheels/
 .superpowers/
 .worktrees/
 .local/
+# Local development ledgers
+/docs/ledgers/
 .arden-tmp/
 docs/internal/sandbox/
 data/
