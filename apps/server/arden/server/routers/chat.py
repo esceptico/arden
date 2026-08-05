@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from arden.events.sse import TextMessageContentEvent
 from arden.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
+from arden.integrations.connection_request import IntegrationConnectionRequestEnvelope
 from arden.logging import get_logger
 from arden.server.bus import BusRegistry, StreamRecord
 from arden.server.chat_replay import ChatReplayPlanner, is_replayable_chat_event
@@ -443,18 +444,7 @@ async def submit_tool_result(
 
 
 def _connection_descriptor_from_payload(payload: dict) -> IntegrationConnectionDescriptor:
-    return IntegrationConnectionDescriptor(
-        integration_id=str(payload["integration_id"]),
-        connection_id=str(payload["connection_id"]),
-        label=str(payload["label"]),
-        capability=str(payload["capability"]),
-        action=str(payload["action"]),  # type: ignore[arg-type]
-        settings_tab=str(payload.get("settings_tab") or "integrations"),
-        state=str(payload.get("reason") or "not_configured"),  # type: ignore[arg-type]
-        detail=str(payload.get("detail") or "") or None,
-        required_scopes=tuple(str(value) for value in payload.get("required_scopes") or []),
-        tool_names=tuple(str(value) for value in payload.get("tool_names") or []),
-    )
+    return IntegrationConnectionRequestEnvelope.model_validate(payload).to_descriptor()
 
 
 @router.post("/connections/result")
@@ -473,17 +463,27 @@ async def submit_connection_result(
         if durable_row is not None and durable_row.get("kind") != "integration_connection":
             durable_row = None
         if descriptor is None and durable_row is not None:
-            descriptor = _connection_descriptor_from_payload(durable_row.get("payload") or {})
+            descriptor = _connection_descriptor_from_payload(durable_row["payload"])
 
     if descriptor is None:
         raise HTTPException(status_code=404, detail="No pending connection for this tool")
 
     if request.approved:
-        await runtime.reload_config()
+        expected_account_ref = descriptor.account_ref
+        if expected_account_ref is not None and (
+            request.account_ref is None or request.account_ref != expected_account_ref
+        ):
+            raise HTTPException(
+                status_code=424,
+                detail=f"Reconnect the {descriptor.label} account {expected_account_ref} to continue.",
+            )
         try:
-            await runtime.connection_service.verify_connection(descriptor.integration_id)
+            await runtime.connection_service.verify_connection(
+                descriptor.integration_id,
+                account_ref=expected_account_ref or request.account_ref,
+            )
         except IntegrationConnectionError as exc:
-            raise HTTPException(status_code=409, detail=exc.detail) from exc
+            raise HTTPException(status_code=424, detail=exc.detail) from exc
 
     future = run.pending_connections.get(request.tool_id) if run else None
     if future is not None and future.done():

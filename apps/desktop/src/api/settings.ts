@@ -262,10 +262,14 @@ export async function connectGoogleServiceApi(
   config: AppConfig,
   integrationId: GoogleIntegrationId,
   accountId?: string,
+  accountRef?: string,
 ): Promise<{ status: string; account: GoogleAccountSummary }> {
   return apiWithConfig(config, `/google/${integrationId}/connect`, {
     method: "POST",
-    body: JSON.stringify(accountId ? { account_id: accountId } : {}),
+    body: JSON.stringify({
+      ...(accountId ? { account_id: accountId } : {}),
+      ...(accountRef ? { account_ref: accountRef } : {}),
+    }),
   });
 }
 

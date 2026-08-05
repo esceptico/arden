@@ -28,6 +28,7 @@ class IntegrationConnectionError(RuntimeError):
         detail: str,
         required_scopes: tuple[str, ...] = (),
         retry_safe: bool = False,
+        account_ref: str | None = None,
     ):
         super().__init__(detail)
         self.integration_id = integration_id
@@ -35,6 +36,7 @@ class IntegrationConnectionError(RuntimeError):
         self.detail = detail
         self.required_scopes = required_scopes
         self.retry_safe = retry_safe
+        self.account_ref = account_ref
 
 
 class IntegrationOperationError(RuntimeError):
@@ -97,6 +99,7 @@ class IntegrationConnectionDescriptor:
     detail: str | None = None
     required_scopes: tuple[str, ...] = ()
     tool_names: tuple[str, ...] = ()
+    account_ref: str | None = None
 
 
 @dataclass(frozen=True)

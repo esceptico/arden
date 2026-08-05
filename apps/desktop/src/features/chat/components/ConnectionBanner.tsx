@@ -53,6 +53,7 @@ export function ConnectionBanner() {
             {connection.source === "recovery" ? `${connection.label} needs attention` : `Connect ${connection.label}`}
           </div>
           <p className="mt-0.5 text-sm leading-5 text-muted">{connection.capability}</p>
+          {connection.accountRef && <p className="mt-1 text-xs text-faint">Account: {connection.accountRef}</p>}
           {connection.detail && connection.detail !== connection.capability && (
             <p className="mt-1 text-xs text-faint">{connection.detail}</p>
           )}

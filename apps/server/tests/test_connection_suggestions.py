@@ -18,6 +18,14 @@ from arden.tools.core.registry import ToolRegistry
 from arden.tools.core.types import ToolOverrideDecision
 
 
+async def _empty_connection_suspension(**_kwargs):
+    return None
+
+
+async def _persist_connection(**_kwargs):
+    return None
+
+
 def _descriptor(
     integration_id: str = "gmail",
     *,
@@ -38,8 +46,10 @@ def _descriptor(
 def test_catalog_lists_only_registered_disconnected_connections():
     text = render_connection_catalog([_descriptor(), _descriptor("slack", state="connected")])
 
-    assert 'integration_id="gmail"' in text
-    assert 'integration_id="slack"' not in text
+    assert 'connection_ref="gmail"' in text
+    assert 'connection_ref="slack"' not in text
+    assert "integration_id" not in text
+    assert "connection_id" not in text
     assert "Only request a connection when the user's explicit request requires it" in text
     assert "Do not suggest integrations speculatively" in text
 
@@ -95,6 +105,10 @@ async def test_request_connection_routes_one_connection_consent_without_generic_
             emit=emit,
             pending_approvals=pending_approvals,
             pending_connections=pending_connections,
+            record_connection=_persist_connection,
+            resolve_connection=_persist_connection,
+            get_suspension=_empty_connection_suspension,
+            consume_suspension=_persist_connection,
         ),
         services={"connections": service},
         background_tasks=BackgroundTaskRegistry(session_id="session-1"),
@@ -104,7 +118,7 @@ async def test_request_connection_routes_one_connection_consent_without_generic_
         registry.execute(
             "connection_request",
             execution,
-            {"integration_id": "gmail", "reason": "Need email"},
+            {"connection_ref": "gmail", "reason": "Need email"},
         )
     )
     for _ in range(20):
@@ -131,7 +145,7 @@ async def test_request_connection_rejects_unknown_integration_without_prompting(
 
     result = await connection_request(
         execution,
-        ConnectionRequestInput(integration_id="notion", reason="Need project data"),
+        ConnectionRequestInput(connection_ref="notion", reason="Need project data"),
     )
 
     assert result.is_error
@@ -147,7 +161,7 @@ async def test_request_connection_rejects_already_connected_integration_without_
 
     result = await connection_request(
         execution,
-        ConnectionRequestInput(integration_id="gmail", reason="Need email"),
+        ConnectionRequestInput(connection_ref="gmail", reason="Need email"),
     )
 
     assert result.is_error
@@ -173,7 +187,14 @@ async def test_accepted_connection_exposes_registered_tools_to_the_current_run()
         session_state=SessionState(session_id="session-1", started_at=datetime.now(UTC)),
         registry=ToolRegistry(),
         run=run,
-        io=IOBridge(emit=emit, pending_connections=pending),
+        io=IOBridge(
+            emit=emit,
+            pending_connections=pending,
+            record_connection=_persist_connection,
+            resolve_connection=_persist_connection,
+            get_suspension=_empty_connection_suspension,
+            consume_suspension=_persist_connection,
+        ),
         services={"connections": service},
         background_tasks=BackgroundTaskRegistry(session_id="session-1"),
     )
@@ -181,7 +202,7 @@ async def test_accepted_connection_exposes_registered_tools_to_the_current_run()
     task = asyncio.create_task(
         connection_request(
             execution,
-            ConnectionRequestInput(integration_id="gmail", reason="Need email"),
+            ConnectionRequestInput(connection_ref="gmail", reason="Need email"),
         )
     )
     for _ in range(20):

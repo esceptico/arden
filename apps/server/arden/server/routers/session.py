@@ -17,6 +17,7 @@ from arden.core.model_context_budget import HISTORY_TOOL_RESULT_PREVIEW_CHARS, c
 from arden.core.prompts import UNTRUSTED_DATA_RULE
 from arden.core.tool_result_data import persistable_tool_result_data
 from arden.events.sse import GoalClearedEvent, GoalUpdatedEvent
+from arden.integrations.connection_request import IntegrationConnectionRequestEnvelope
 from arden.observability import observed_trace
 from arden.server.bus import BusRegistry, prime_bus_cursor_from_store
 from arden.server.deps import get_bus_registry, require_run_registry, require_session_service
@@ -105,19 +106,10 @@ def _approval_snapshot(row: dict) -> dict:
 
 
 def _connection_snapshot(row: dict) -> dict:
-    payload = row.get("payload") or {}
+    envelope = IntegrationConnectionRequestEnvelope.model_validate(row["payload"])
     return {
         "tool_id": row["tool_call_id"],
-        "integration_id": payload.get("integration_id"),
-        "connection_id": payload.get("connection_id"),
-        "label": payload.get("label"),
-        "reason": payload.get("reason"),
-        "detail": payload.get("detail"),
-        "capability": payload.get("capability"),
-        "action": payload.get("action"),
-        "settings_tab": payload.get("settings_tab") or "integrations",
-        "required_scopes": list(payload.get("required_scopes") or []),
-        "source": payload.get("source") or "suggestion",
+        **envelope.snapshot_fields(),
         "status": "pending",
         "requested_at": row.get("requested_at"),
         "run_id": row.get("run_id"),

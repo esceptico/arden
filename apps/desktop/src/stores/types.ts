@@ -310,6 +310,7 @@ export interface PendingConnection {
   settingsTab: string;
   requiredScopes: string[];
   source: "recovery" | "suggestion";
+  accountRef?: string;
 }
 
 export interface TodoListState {

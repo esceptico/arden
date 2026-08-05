@@ -1,25 +1,19 @@
 import asyncio
-import json
 import os
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from google.oauth2.credentials import Credentials
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
 from arden.integrations.google_auth.accounts import GoogleService
-from arden.integrations.google_auth.auth import (
-    SCOPES_CALENDAR,
-    discover_calendar_tokens,
-    discover_gmail_tokens,
-    google_account_store,
+from arden.integrations.google_auth.auth import google_account_store, scopes_for_google_service
+from arden.integrations.google_auth.credentials import (
+    GoogleCredentialsFileError,
+    GoogleOAuthClientDocument,
     google_credentials_status,
     import_google_credentials_file,
     save_google_credentials_json,
-    scopes_for_google_choice,
-    scopes_for_google_service,
 )
 from arden.integrations.slack.client import SlackClient
 from arden.server.routers.mcp import list_mcp_servers
@@ -30,13 +24,36 @@ router = APIRouter(prefix="/setup", tags=["setup"])
 
 
 class GooglePreflightRequest(BaseModel):
-    service_choice: str | None = None
-    integration_id: GoogleService | None = None
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    integration_id: GoogleService
 
 
 class SlackVerifyRequest(BaseModel):
     service_id: Literal["slack_bot_token", "slack_user_token"]
     api_key: str
+
+
+class GoogleCredentialsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str | None = Field(default=None, min_length=1)
+    document: GoogleOAuthClientDocument | None = Field(default=None, alias="json")
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "GoogleCredentialsRequest":
+        if (self.path is None) == (self.document is None):
+            raise ValueError("Provide exactly one of path or json")
+        if self.path is not None and not self.path.strip():
+            raise ValueError("path must not be blank")
+        return self
+
+
+def _google_credentials_request(payload: object = Body(...)) -> GoogleCredentialsRequest:
+    try:
+        return GoogleCredentialsRequest.model_validate(payload, strict=True)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Invalid Google Desktop OAuth credentials request.") from exc
 
 
 def _provider_status(provider) -> dict:
@@ -48,59 +65,6 @@ def _provider_status(provider) -> dict:
         "detail": provider.health.detail,
         "tool_count": provider.tool_count,
     }
-
-
-def _token_email_from_name(token_path: Path) -> str | None:
-    name = token_path.stem
-    if name.startswith("gmail_token_"):
-        return name.removeprefix("gmail_token_")
-    return None
-
-
-def _load_token_credentials_passive(token_path: Path) -> tuple[Credentials | None, str | None]:
-    """Load authorized-user token metadata without refreshing or starting OAuth."""
-    try:
-        data = json.loads(token_path.read_text())
-        creds = Credentials.from_authorized_user_info(data)
-    except Exception as e:
-        return None, str(e)
-
-    # Status endpoints must be passive: do not refresh and do not fall back to
-    # InstalledAppFlow. Surface unusable tokens as health errors instead.
-    if not creds.valid and not creds.refresh_token:
-        return creds, "Google token is invalid and has no refresh token. Re-run setup."
-    return creds, None
-
-
-def _gmail_accounts() -> list[dict]:
-    accounts = []
-    for token_path in discover_gmail_tokens():
-        creds, error = _load_token_credentials_passive(token_path)
-        accounts.append(
-            {
-                "email": _token_email_from_name(token_path),
-                "token_file": token_path.name,
-                "has_send_scope": bool(
-                    creds and creds.scopes and "https://www.googleapis.com/auth/gmail.send" in creds.scopes
-                ),
-                "error": error,
-            }
-        )
-    return accounts
-
-
-def _calendar_token_statuses() -> list[dict]:
-    statuses = []
-    for token_path in discover_calendar_tokens():
-        creds, error = _load_token_credentials_passive(token_path)
-        statuses.append(
-            {
-                "token_file": token_path.name,
-                "has_calendar_scope": bool(creds and creds.scopes and SCOPES_CALENDAR[0] in creds.scopes),
-                "error": error,
-            }
-        )
-    return statuses
 
 
 def _google_accounts() -> list[dict]:
@@ -149,9 +113,7 @@ async def setup_status(runtime: Runtime = Depends(get_runtime)):
                 runtime.config.integration_enabled(service) for service in ("gmail", "calendar", "google_drive")
             ),
             "credentials": google_credentials_status(),
-            "accounts": _gmail_accounts(),
             "google_accounts": _google_accounts(),
-            "calendar_tokens": _calendar_token_statuses(),
             "provider_statuses": [p for p in native_providers if p["id"] in {"gmail", "calendar", "google_drive"}],
         },
         "slack": {
@@ -166,42 +128,27 @@ async def setup_status(runtime: Runtime = Depends(get_runtime)):
 
 
 @router.post("/google/credentials")
-async def setup_google_credentials(req: dict = Body(...)):
-    path = req.get("path")
-    json_payload = req.get("json")
-    if bool(path) == bool(json_payload):
-        raise HTTPException(status_code=400, detail="Provide exactly one of path or json")
-    if path is not None and not isinstance(path, str):
-        raise HTTPException(status_code=400, detail="path must be a string")
-    if json_payload is not None and not isinstance(json_payload, dict):
-        raise HTTPException(status_code=400, detail="json must be an object")
+async def setup_google_credentials(req: GoogleCredentialsRequest = Depends(_google_credentials_request)):
     try:
-        if path:
-            await asyncio.to_thread(import_google_credentials_file, path)
+        if req.path is not None:
+            await asyncio.to_thread(import_google_credentials_file, req.path)
         else:
-            save_google_credentials_json(json_payload or {})
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+            assert req.document is not None
+            save_google_credentials_json(req.document)
+    except GoogleCredentialsFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "saved", "credentials": google_credentials_status()}
 
 
 @router.post("/google/preflight")
 async def setup_google_preflight(req: GooglePreflightRequest):
-    try:
-        if req.integration_id is not None:
-            scopes = scopes_for_google_service(req.integration_id)
-        elif req.service_choice is not None:
-            scopes = scopes_for_google_choice(req.service_choice)
-        else:
-            raise ValueError("integration_id is required")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    scopes = scopes_for_google_service(req.integration_id)
     credentials = google_credentials_status()
     warnings = []
-    if not credentials["exists"]:
-        warnings.append(credentials["error"])
-    elif not credentials["valid"]:
-        warnings.append(credentials["error"] or "Google credentials are invalid")
+    if not credentials.exists:
+        warnings.append(credentials.error)
+    elif not credentials.valid:
+        warnings.append(credentials.error or "Google credentials are invalid")
     return {"ok": not warnings, "credentials": credentials, "scopes": scopes, "warnings": warnings}
 
 

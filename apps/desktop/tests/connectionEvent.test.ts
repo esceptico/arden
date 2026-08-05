@@ -25,6 +25,7 @@ test("connection_needed creates a native integration card", () => {
     settings_tab: "integrations",
     required_scopes: ["gmail.readonly"],
     source: "recovery",
+    account_ref: "me@example.test",
   });
 
   expect(getState().pendingConnections).toEqual([
@@ -33,6 +34,7 @@ test("connection_needed creates a native integration card", () => {
       toolId: "call-1",
       integrationId: "gmail",
       source: "recovery",
+      accountRef: "me@example.test",
     }),
   ]);
 });
@@ -107,8 +109,11 @@ test("runtime snapshot restores a pending connection after restart", () => {
       settings_tab: "integrations",
       required_scopes: [],
       source: "recovery",
+      account_ref: "me@example.test",
     }],
   }, true);
 
-  expect(restored).toEqual([expect.objectContaining({ toolId: "call-1", runId: "run-1" })]);
+  expect(restored).toEqual([
+    expect.objectContaining({ toolId: "call-1", runId: "run-1", accountRef: "me@example.test" }),
+  ]);
 });

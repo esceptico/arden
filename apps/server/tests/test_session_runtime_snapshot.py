@@ -468,6 +468,7 @@ async def test_history_runtime_snapshot_includes_pending_connection(session_serv
             detail="Reconnect Gmail",
             required_scopes=("gmail.readonly",),
             tool_names=("emails",),
+            account_ref="me@example.test",
         ),
         source="recovery",
         detail="Reconnect Gmail",
@@ -494,6 +495,7 @@ async def test_history_runtime_snapshot_includes_pending_connection(session_serv
             "status": "pending",
             "requested_at": result["runtime"]["pending_connections"][0]["requested_at"],
             "run_id": "run-connection",
+            "account_ref": "me@example.test",
         }
     ]
 

@@ -351,6 +351,15 @@ async def _approval_callback_required(
     return None
 
 
+def _require_connection_callback[T](
+    callback: Callable[..., Awaitable[T]] | None,
+    label: str,
+) -> Callable[..., Awaitable[T]]:
+    if callback is None:
+        raise RuntimeError(f"Connection {label} persistence callback is not configured")
+    return callback
+
+
 RESULT_BASE = Path(ARDEN_TMP_BASE)
 
 # Bound all terminal injections. The full result remains durable and can be
@@ -1054,42 +1063,37 @@ class ToolExecution:
     ) -> bool:
         if descriptor.integration_id in self.ctx.run.declined_connections:
             return False
-        if self.ctx.io.get_suspension:
-            try:
-                suspension = await self.ctx.io.get_suspension(
-                    run_id=self.ctx.run.run_id,
-                    suspension_id=self.tool_id,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _logger.exception("Connection suspension lookup failed")
-            else:
-                if (
-                    suspension
-                    and suspension.get("kind") == "integration_connection"
-                    and suspension.get("status") != "pending"
-                ):
-                    resolution = suspension.get("resolution") or {}
-                    accepted = bool(resolution.get("approved"))
-                    await _approval_callback_best_effort(
-                        self.ctx.io.consume_suspension,
-                        "consume",
-                        run_id=self.ctx.run.run_id,
-                        suspension_id=self.tool_id,
-                    )
-                    if not accepted:
-                        self.ctx.run.declined_connections.add(descriptor.integration_id)
-                    return accepted
+
+        get_suspension = _require_connection_callback(self.ctx.io.get_suspension, "lookup")
+        record_connection = _require_connection_callback(self.ctx.io.record_connection, "record")
+        resolve_connection = _require_connection_callback(self.ctx.io.resolve_connection, "resolve")
+        consume_suspension = _require_connection_callback(self.ctx.io.consume_suspension, "consume")
+
+        suspension = await get_suspension(
+            run_id=self.ctx.run.run_id,
+            suspension_id=self.tool_id,
+        )
+        if (
+            suspension
+            and suspension.get("kind") == "integration_connection"
+            and suspension.get("status") != "pending"
+        ):
+            resolution = suspension.get("resolution") or {}
+            accepted = bool(resolution.get("approved"))
+            await consume_suspension(
+                run_id=self.ctx.run.run_id,
+                suspension_id=self.tool_id,
+            )
+            if not accepted:
+                self.ctx.run.declined_connections.add(descriptor.integration_id)
+            return accepted
 
         if not self.ctx.io.emit or self.ctx.io.pending_connections is None:
             return False
 
         request_detail = (detail or descriptor.detail or descriptor.capability).strip()
         expires_at = (datetime.now(UTC) + timedelta(seconds=self.ctx.io.approval_timeout_seconds)).isoformat()
-        await _approval_callback_best_effort(
-            self.ctx.io.record_connection,
-            "record connection",
+        await record_connection(
             run_id=self.ctx.run.run_id,
             session_id=self.ctx.session_id,
             tool_call_id=self.tool_id,
@@ -1119,13 +1123,12 @@ class ToolExecution:
                     settings_tab=descriptor.settings_tab,
                     required_scopes=list(descriptor.required_scopes),
                     source=source,
+                    account_ref=descriptor.account_ref,
                 )
             )
             response = await asyncio.wait_for(future, timeout=self.ctx.io.approval_timeout_seconds)
         except TimeoutError:
-            await _approval_callback_best_effort(
-                self.ctx.io.resolve_connection,
-                "resolve connection",
+            await resolve_connection(
                 run_id=self.ctx.run.run_id,
                 tool_call_id=self.tool_id,
                 status="expired",
@@ -1138,23 +1141,19 @@ class ToolExecution:
                 self.ctx.io.pending_connection_descriptors.pop(self.tool_id, None)
 
         accepted = bool(response["approved"])
-        if not accepted:
-            self.ctx.run.declined_connections.add(descriptor.integration_id)
-        await _approval_callback_best_effort(
-            self.ctx.io.resolve_connection,
-            "resolve connection",
+        await resolve_connection(
             run_id=self.ctx.run.run_id,
             tool_call_id=self.tool_id,
             status="approved" if accepted else "rejected",
             result_feedback=response.get("result", "").strip() or None,
         )
         if accepted:
-            await _approval_callback_best_effort(
-                self.ctx.io.consume_suspension,
-                "consume",
+            await consume_suspension(
                 run_id=self.ctx.run.run_id,
                 suspension_id=self.tool_id,
             )
+        else:
+            self.ctx.run.declined_connections.add(descriptor.integration_id)
         return accepted
 
     async def request_approval(

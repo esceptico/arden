@@ -1,14 +1,36 @@
+import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from html import escape
-from inspect import isawaitable
+from inspect import iscoroutinefunction
+from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from arden.integrations.base import IntegrationConnectionDescriptor, IntegrationConnectionError
 from arden.integrations.registry import IntegrationRegistry
 from arden.tools.core import ToolResult, tool
 from arden.tools.core.context import ToolExecution
 from arden.tools.core.types import ToolAction, ToolPolicy, ToolScope
+
+
+@runtime_checkable
+class _ConnectionVerifier(Protocol):
+    def verify_connection(self) -> object: ...
+
+
+@runtime_checkable
+class _AccountConnectionVerifier(Protocol):
+    def verify_account(self, account_ref: str) -> object: ...
+
+
+async def _run_verifier(check: Callable[..., object], *args: str) -> None:
+    if iscoroutinefunction(check):
+        result = await check(*args)
+    else:
+        result = await asyncio.to_thread(check, *args)
+    if result is not None:
+        raise TypeError("Connection verifiers must return None")
 
 
 class ConnectionService:
@@ -20,8 +42,8 @@ class ConnectionService:
     def list_connections(self) -> list[IntegrationConnectionDescriptor]:
         return self._registry.list_connections()
 
-    def get_disconnected(self, integration_id: str) -> IntegrationConnectionDescriptor | None:
-        descriptor = self._registry.get_connection(integration_id)
+    def get_disconnected(self, connection_ref: str) -> IntegrationConnectionDescriptor | None:
+        descriptor = self._registry.get_connection(connection_ref)
         if descriptor is None or descriptor.state == "connected":
             return None
         return descriptor
@@ -35,32 +57,35 @@ class ConnectionService:
             state=error.reason,
             detail=error.detail,
             required_scopes=error.required_scopes or descriptor.required_scopes,
+            account_ref=error.account_ref,
         )
 
-    async def verify_connection(self, integration_id: str) -> IntegrationConnectionDescriptor:
+    async def verify_connection(
+        self,
+        integration_id: str,
+        *,
+        account_ref: str | None = None,
+    ) -> IntegrationConnectionDescriptor:
         descriptor = self._registry.get_connection(integration_id)
-        client = self._registry.get_client(integration_id)
-        if descriptor is None or descriptor.state != "connected" or client is None:
+        if descriptor is None or descriptor.state != "connected":
             raise IntegrationConnectionError(
                 integration_id=integration_id,
                 reason=descriptor.state if descriptor and descriptor.state != "connected" else "degraded",
                 detail=f"{descriptor.label if descriptor else integration_id} is not connected.",
             )
-        check = getattr(client, "verify_connection", None)
-        if check is None:
-            return descriptor
-        try:
-            result = check()
-            if isawaitable(result):
-                await result
-        except IntegrationConnectionError:
-            raise
-        except Exception as exc:
-            raise IntegrationConnectionError(
-                integration_id=integration_id,
-                reason="degraded",
-                detail=f"Could not verify {descriptor.label}.",
-            ) from exc
+        client = self._registry.get_client(integration_id)
+        if client is None:
+            raise RuntimeError(f"{descriptor.label} is connected but has no provider client")
+        if not isinstance(client, _ConnectionVerifier):
+            raise TypeError(f"{type(client).__name__} must implement verify_connection")
+        if account_ref is not None:
+            if not isinstance(client, _AccountConnectionVerifier):
+                raise TypeError(f"{type(client).__name__} must implement verify_account")
+            check = client.verify_account
+        else:
+            check = client.verify_connection
+        args = (account_ref,) if account_ref is not None else ()
+        await _run_verifier(check, *args)
         return descriptor
 
     @staticmethod
@@ -77,8 +102,7 @@ def render_connection_catalog(descriptors: list[IntegrationConnectionDescriptor]
         return None
     rows = "\n".join(
         (
-            f'<integration integration_id="{escape(row.integration_id, quote=True)}" '
-            f'connection_id="{escape(row.connection_id, quote=True)}" '
+            f'<integration connection_ref="{escape(row.integration_id, quote=True)}" '
             f'state="{escape(row.state, quote=True)}">'
             f"{escape(row.capability, quote=True)}</integration>"
         )
@@ -87,7 +111,7 @@ def render_connection_catalog(descriptors: list[IntegrationConnectionDescriptor]
     return (
         "## AVAILABLE CONNECTIONS\n"
         "Only request a connection when the user's explicit request requires it and no connected tool can "
-        "satisfy the request. Do not suggest integrations speculatively. Use the exact integration_id below; "
+        "satisfy the request. Do not suggest integrations speculatively. Use the exact connection_ref below; "
         "never infer another integration or connection from keywords or error text.\n"
         "<available_connections>\n"
         f"{rows}\n"
@@ -96,7 +120,14 @@ def render_connection_catalog(descriptors: list[IntegrationConnectionDescriptor]
 
 
 class ConnectionRequestInput(BaseModel):
-    integration_id: str = Field(description="Exact integration_id from <available_connections>.")
+    model_config = ConfigDict(extra="forbid")
+
+    connection_ref: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Exact connection_ref from <available_connections>.",
+    )
     reason: str = Field(
         max_length=500,
         description="Short explanation of why the user's explicit request requires this capability.",
@@ -105,7 +136,9 @@ class ConnectionRequestInput(BaseModel):
 
 async def connection_request(execution: ToolExecution, args: ConnectionRequestInput) -> ToolResult:
     service = execution.ctx.get_client("connections", ConnectionService)
-    descriptor = service.get_disconnected(args.integration_id) if service else None
+    if service is None:
+        raise RuntimeError("Connection service is not configured")
+    descriptor = service.get_disconnected(args.connection_ref)
     if descriptor is None:
         return ToolResult.failure(
             code="connection_not_available",

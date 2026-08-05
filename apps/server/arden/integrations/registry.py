@@ -6,9 +6,6 @@ from arden.integrations.base import (
     IntegrationHealth,
     ToolProviderStatus,
 )
-from arden.logging import get_logger
-
-_logger = get_logger(__name__)
 
 
 class IntegrationRegistry:
@@ -20,27 +17,25 @@ class IntegrationRegistry:
         self._config: Config | None = None
 
     def sync(self, config: Config) -> None:
-        self._config = config
+        clients: dict[str, object] = {}
+        errors: dict[str, str] = {}
+        connection_errors: dict[str, IntegrationConnectionError] = {}
         for id, integration in self._integrations.items():
             if integration.build is None:
                 continue
             try:
                 client = integration.build(config)
-            except Exception as e:
-                _logger.exception("Integration %r build failed", id)
-                self._clients.pop(id, None)
-                self._errors[id] = str(e)
-                if isinstance(e, IntegrationConnectionError):
-                    self._connection_errors[id] = e
-                else:
-                    self._connection_errors.pop(id, None)
+            except IntegrationConnectionError as error:
+                errors[id] = error.detail
+                connection_errors[id] = error
                 continue
-            self._errors.pop(id, None)
-            self._connection_errors.pop(id, None)
-            if client is None:
-                self._clients.pop(id, None)
-            else:
-                self._clients[id] = client
+            if client is not None:
+                clients[id] = client
+
+        self._config = config
+        self._clients = clients
+        self._errors = errors
+        self._connection_errors = connection_errors
 
     @property
     def integrations(self) -> dict[str, Integration]:
@@ -71,9 +66,6 @@ class IntegrationRegistry:
             state = error.reason
             detail = error.detail
             required_scopes = error.required_scopes or required_scopes
-        elif id in self._errors:
-            state = "degraded"
-            detail = self._errors[id]
         elif self._config is not None and spec.configured is not None and not spec.configured(self._config):
             state = "not_configured"
         elif self._config is not None and spec.enabled is not None and not spec.enabled(self._config):

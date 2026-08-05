@@ -66,6 +66,7 @@ export interface RuntimeConnectionSnapshot {
   settings_tab: string;
   required_scopes: string[];
   source: "recovery" | "suggestion";
+  account_ref?: string | null;
 }
 
 export type ConnectionState = "not_configured" | "disabled" | "auth_required" | "scope_required" | "degraded";
@@ -145,7 +146,7 @@ export type ServerEvent = CommonServerEventFields & (
   // ─── arden-specific (non-AG-UI canonical) ───────────────────────────
   | { type: "approval_needed"; tool_id: string; name: string; path?: string | null; diff?: string | null; content_preview?: string | null; run_id?: string | null; session_id?: string | null; agent_type?: string | null; agent_name?: string | null; action?: string | null; scope?: string | null; expires_at?: string | null }
   | { type: "input_needed"; tool_id: string; name: string; title: string; html: string }
-  | { type: "connection_needed"; run_id: string; tool_id: string; integration_id: string; connection_id: string; label: string; reason: ConnectionState; detail: string; capability: string; action: ConnectionAction; settings_tab: string; required_scopes: string[]; source: "recovery" | "suggestion" }
+  | { type: "connection_needed"; run_id: string; tool_id: string; integration_id: string; connection_id: string; label: string; reason: ConnectionState; detail: string; capability: string; action: ConnectionAction; settings_tab: string; required_scopes: string[]; source: "recovery" | "suggestion"; account_ref?: string | null }
   | {
       type: "background_task";
       event_id?: string | null;

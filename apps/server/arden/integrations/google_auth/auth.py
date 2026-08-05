@@ -1,26 +1,36 @@
-import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request as URLRequest
 from urllib.request import urlopen
 
-from google.auth.exceptions import RefreshError
+import httplib2
+from google.auth.exceptions import GoogleAuthError, RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from oauthlib.oauth2 import OAuth2Error
+from oauthlib.oauth2.rfc6749.tokens import OAuth2Token
+from requests import RequestException
 
-from arden.integrations.base import IntegrationConnectionError
-from arden.integrations.google_auth.accounts import GoogleAccount, GoogleAccountStore, GoogleService
+from arden.integrations.base import IntegrationConnectionError, IntegrationOperationError
+from arden.integrations.google_auth.accounts import (
+    GoogleAccount,
+    GoogleAccountStore,
+    GoogleService,
+    validate_google_account_email,
+)
+from arden.integrations.google_auth.credentials import CREDENTIALS_PATH
+from arden.integrations.google_auth.storage import write_private_text
 from arden.settings import ARDEN_DIR
-
-CREDENTIALS_PATH = ARDEN_DIR / "gmail_credentials.json"
 
 SCOPES_GMAIL_READ = ["https://www.googleapis.com/auth/gmail.readonly"]
 SCOPES_GMAIL_SEND = ["https://www.googleapis.com/auth/gmail.send"]
 SCOPES_CALENDAR = ["https://www.googleapis.com/auth/calendar"]
-SCOPES_PUBSUB = ["https://www.googleapis.com/auth/pubsub"]
 SCOPES_IDENTITY = ["openid", "https://www.googleapis.com/auth/userinfo.email"]
 SCOPES_DRIVE = [
     "https://www.googleapis.com/auth/drive.metadata.readonly",
@@ -35,193 +45,100 @@ GOOGLE_SERVICE_SCOPES: dict[GoogleService, list[str]] = {
     "google_drive": SCOPES_IDENTITY + SCOPES_DRIVE,
 }
 
-# Default scopes for new tokens (Gmail + Calendar + Pub/Sub for push notifications)
-SCOPES_ALL = SCOPES_GMAIL_READ + SCOPES_GMAIL_SEND + SCOPES_CALENDAR + SCOPES_PUBSUB
-
-GoogleServiceChoice = Literal["email", "email_calendar", "calendar", "all"]
-GOOGLE_SCOPE_CHOICES: dict[str, list[str]] = {
-    "email": SCOPES_GMAIL_READ + SCOPES_GMAIL_SEND,
-    "email_calendar": SCOPES_GMAIL_READ + SCOPES_GMAIL_SEND + SCOPES_CALENDAR,
-    "calendar": SCOPES_CALENDAR,
-    "all": SCOPES_ALL,
-}
-
-
-def scopes_for_google_choice(choice: str) -> list[str]:
-    try:
-        return list(GOOGLE_SCOPE_CHOICES[choice])
-    except KeyError:
-        raise ValueError("service_choice must be one of: email, email_calendar, calendar, all")
-
-
 def scopes_for_google_service(service: GoogleService) -> list[str]:
     return list(GOOGLE_SERVICE_SCOPES[service])
 
 
 def google_account_store() -> GoogleAccountStore:
-    store = GoogleAccountStore(ARDEN_DIR)
-    store.migrate_legacy()
-    return store
+    return GoogleAccountStore(ARDEN_DIR)
 
 
-def _normalized_installed_payload(data: dict) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("Google credentials JSON must be an object")
-    if "web" in data and "installed" not in data:
-        raise ValueError("Use OAuth client type Desktop app, not Web application.")
-    installed = data.get("installed", data)
-    if not isinstance(installed, dict):
-        raise ValueError("Google credentials installed client must be an object")
-    if installed.get("client_type") == "web":
-        raise ValueError("Use OAuth client type Desktop app, not Web application.")
-    return installed
-
-
-def validate_google_credentials_payload(data: dict) -> dict:
-    installed = _normalized_installed_payload(data)
-    required = ("client_id", "client_secret", "auth_uri", "token_uri")
-    missing = [key for key in required if not installed.get(key)]
-    if missing:
-        raise ValueError(f"Google Desktop app credentials missing required field(s): {', '.join(missing)}")
-    return {"installed": dict(installed)}
-
-
-def save_google_credentials_json(data: dict) -> Path:
-    normalized = validate_google_credentials_payload(data)
-    CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CREDENTIALS_PATH.write_text(json.dumps(normalized, indent=2))
-    return CREDENTIALS_PATH
-
-
-def import_google_credentials_file(path: str | Path) -> Path:
-    source = Path(path).expanduser()
-    if not source.is_file():
-        raise ValueError(f"Google credentials file not found: {source}")
-    try:
-        data = json.loads(source.read_text())
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Google credentials file is not valid JSON: {e}")
-    return save_google_credentials_json(data)
-
-
-def google_credentials_status() -> dict:
-    status = {
-        "path": str(CREDENTIALS_PATH),
-        "exists": CREDENTIALS_PATH.exists(),
-        "valid": False,
-        "client_id": None,
-        "client_type": None,
-        "error": None,
-    }
-    if not CREDENTIALS_PATH.exists():
-        status["error"] = (
-            f"Google credentials not found at {CREDENTIALS_PATH}. "
-            "Download OAuth Desktop app credentials from Google Cloud Console."
+def _credential_scopes(creds: Credentials) -> tuple[str, ...]:
+    scopes = creds.scopes
+    if scopes is None:
+        return ()
+    if not isinstance(scopes, (list, tuple)) or any(
+        not isinstance(scope, str) or not scope.strip() or scope != scope.strip() for scope in scopes
+    ):
+        raise IntegrationOperationError(
+            code="invalid_response",
+            safe_message="Google authorization returned invalid permissions.",
         )
-        return status
-    try:
-        data = json.loads(CREDENTIALS_PATH.read_text())
-        if "web" in data and "installed" not in data:
-            status["client_type"] = "web"
-            status["client_id"] = data.get("web", {}).get("client_id")
-            raise ValueError("Use OAuth client type Desktop app, not Web application.")
-        installed = _normalized_installed_payload(data)
-        status["client_type"] = "installed"
-        status["client_id"] = installed.get("client_id")
-        validate_google_credentials_payload(data)
-        status["valid"] = True
-    except Exception as e:
-        status["error"] = str(e)
-    return status
-
-
-def discover_gmail_tokens() -> list[Path]:
-    """Find all Gmail token files in ~/.arden/"""
-    if not ARDEN_DIR.exists():
-        return []
-    return sorted(list(ARDEN_DIR.glob("gmail_token*.json")))
-
-
-def discover_calendar_tokens() -> list[Path]:
-    """Find all token files that have calendar scope (Gmail tokens work too)."""
-    if not ARDEN_DIR.exists():
-        return []
-    # Check both calendar_token*.json AND gmail_token*.json (unified auth)
-    calendar_tokens = list(ARDEN_DIR.glob("calendar_token*.json"))
-    gmail_tokens = list(ARDEN_DIR.glob("gmail_token*.json"))
-    return sorted(calendar_tokens + gmail_tokens)
-
-
-def gmail_token_path(email: str) -> Path:
-    """Get token path for a Gmail account by email."""
-    return ARDEN_DIR / f"gmail_token_{email}.json"
-
-
-def _next_calendar_token_path() -> Path:
-    base = ARDEN_DIR / "calendar_token.json"
-    if not base.exists():
-        return base
-    for idx in range(1, 1000):
-        candidate = ARDEN_DIR / f"calendar_token_{idx}.json"
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError("Could not allocate a calendar token filename")
+    if len(scopes) != len(set(scopes)):
+        raise IntegrationOperationError(
+            code="invalid_response",
+            safe_message="Google authorization returned duplicate permissions.",
+        )
+    return tuple(scopes)
 
 
 def get_google_credentials(
     token_path: Path,
-    scopes: list[str] | None = None,
     require_scopes: list[str] | None = None,
     integration_id: str = "google",
 ) -> Credentials:
-    """
-    Get or refresh OAuth credentials from token file.
+    """Load runtime credentials without starting an interactive OAuth flow."""
+    if not token_path.exists():
+        raise IntegrationConnectionError(
+            integration_id=integration_id,
+            reason="auth_required",
+            detail="Google authorization is missing. Reconnect the account.",
+            retry_safe=True,
+        )
 
-    Args:
-        token_path: Path to the token JSON file
-        scopes: Scopes to request for new tokens (default: SCOPES_ALL)
-        require_scopes: If set, require every listed OAuth scope
-        integration_id: Native integration identifier for typed recovery
-
-    Returns:
-        Valid Credentials object
-
-    Raises:
-        FileNotFoundError: If credentials file doesn't exist
-        IntegrationConnectionError: If authorization expired or required scopes are absent
-    """
-    scopes = scopes or SCOPES_ALL
-    creds = None
-
-    if token_path.exists():
+    try:
         creds = Credentials.from_authorized_user_file(str(token_path))
+    except (OSError, TypeError, ValueError) as exc:
+        raise IntegrationConnectionError(
+            integration_id=integration_id,
+            reason="auth_required",
+            detail="Google authorization is unreadable. Reconnect the account.",
+            retry_safe=True,
+        ) from exc
+    if not creds.valid:
+        if not (creds.expired and creds.refresh_token):
+            raise IntegrationConnectionError(
+                integration_id=integration_id,
+                reason="auth_required",
+                detail="Google authorization is invalid. Reconnect the account.",
+                retry_safe=True,
+            )
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            raise IntegrationConnectionError(
+                integration_id=integration_id,
+                reason="auth_required",
+                detail="Google authorization expired or was revoked. Reconnect the account.",
+                retry_safe=True,
+            ) from exc
+        except (OSError, TransportError) as exc:
+            raise IntegrationOperationError(
+                code="provider_error",
+                safe_message="Google authorization refresh failed.",
+                retryable=True,
+            ) from exc
 
-    if not creds or not creds.valid:
-        refreshed = False
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                refreshed = True
-            except RefreshError as exc:
-                raise IntegrationConnectionError(
-                    integration_id=integration_id,
-                    reason="auth_required",
-                    detail=f"Google authorization expired or was revoked for {token_path.name}.",
-                    retry_safe=True,
-                ) from exc
-        if not refreshed:
-            if not CREDENTIALS_PATH.exists():
-                raise FileNotFoundError(
-                    f"Google credentials not found at {CREDENTIALS_PATH}. "
-                    "Download OAuth Desktop app credentials from Google Cloud Console."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), scopes)
-            creds = flow.run_local_server(port=0)
+        if not creds.valid:
+            raise IntegrationConnectionError(
+                integration_id=integration_id,
+                reason="auth_required",
+                detail="Google authorization could not be refreshed. Reconnect the account.",
+                retry_safe=True,
+            )
 
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(creds.to_json())
+        try:
+            write_private_text(token_path, creds.to_json())
+        except (OSError, TypeError, ValueError) as exc:
+            raise IntegrationOperationError(
+                code="persistence_error",
+                safe_message="Could not persist refreshed Google authorization.",
+                retryable=False,
+            ) from exc
 
-    missing_scopes = tuple(scope for scope in require_scopes or () if scope not in (creds.scopes or ()))
+    granted_scopes = _credential_scopes(creds)
+    required_scopes = () if require_scopes is None else tuple(require_scopes)
+    missing_scopes = tuple(scope for scope in required_scopes if scope not in granted_scopes)
     if missing_scopes:
         raise IntegrationConnectionError(
             integration_id=integration_id,
@@ -236,46 +153,156 @@ def get_google_credentials(
 
 def has_scope(creds: Credentials, scope: str) -> bool:
     """Check if credentials have a specific scope."""
-    if not creds.scopes:
-        return False
-    return scope in creds.scopes
+    return scope in _credential_scopes(creds)
 
 
 def _run_local_oauth(flow) -> Credentials:
     try:
         return flow.run_local_server(port=0, include_granted_scopes="true")
     except Warning as warning:
-        old_scopes = getattr(warning, "old_scope", None)
-        new_scopes = getattr(warning, "new_scope", None)
-        token = getattr(warning, "token", None)
-        if old_scopes is None or new_scopes is None or token is None or not set(old_scopes).issubset(new_scopes):
+        token = warning.token
+        old_scopes = warning.old_scope
+        new_scopes = warning.new_scope
+        if (
+            not isinstance(token, OAuth2Token)
+            or not isinstance(old_scopes, list)
+            or not isinstance(new_scopes, list)
+            or any(not isinstance(scope, str) for scope in (*old_scopes, *new_scopes))
+        ):
+            raise
+        old_scope_set = set(old_scopes)
+        new_scope_set = set(new_scopes)
+        if (
+            not old_scope_set < new_scope_set
+            or set(token.old_scopes) != old_scope_set
+            or set(token.scopes) != new_scope_set
+        ):
             raise
         flow.oauth2session.token = dict(token)
         return flow.credentials
+
+
+def _authorize_google_credentials(
+    service: GoogleService,
+    requested_scopes: list[str],
+    account_ref: str | None,
+) -> Credentials:
+    try:
+        flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), requested_scopes)
+    except (FileNotFoundError, ValueError) as exc:
+        raise IntegrationOperationError(
+            code="configuration_error",
+            safe_message="Google OAuth credentials are invalid or unavailable.",
+        ) from exc
+    try:
+        return _run_local_oauth(flow)
+    except (OAuth2Error, Warning) as exc:
+        raise IntegrationConnectionError(
+            integration_id=service,
+            reason="auth_required",
+            detail="Google authorization did not complete.",
+            retry_safe=True,
+            account_ref=account_ref,
+        ) from exc
+    except (GoogleAuthError, RequestException, OSError, httplib2.ServerNotFoundError) as exc:
+        raise IntegrationOperationError(
+            code="provider_error",
+            safe_message="Google authorization service is unavailable.",
+            retryable=True,
+        ) from exc
+
+
+def _google_profile_email(
+    service: GoogleService,
+    credentials: Credentials,
+    account_ref: str | None,
+) -> str:
+    try:
+        profile = build("oauth2", "v2", credentials=credentials).userinfo().get().execute()
+    except HttpError as exc:
+        status = exc.resp.status
+        if status in {401, 403}:
+            raise IntegrationConnectionError(
+                integration_id=service,
+                reason="auth_required",
+                detail="Google could not verify the authorized account.",
+                retry_safe=True,
+                account_ref=account_ref,
+            ) from exc
+        raise IntegrationOperationError(
+            code="provider_error",
+            safe_message="Google profile request failed.",
+            retryable=status in {408, 429, 500, 502, 503, 504},
+        ) from exc
+    except (GoogleAuthError, RequestException, OSError, httplib2.ServerNotFoundError) as exc:
+        raise IntegrationOperationError(
+            code="provider_error",
+            safe_message="Google profile request failed.",
+            retryable=True,
+        ) from exc
+
+    if not isinstance(profile, Mapping):
+        raise IntegrationOperationError(
+            code="invalid_response",
+            safe_message="Google profile response was invalid.",
+        )
+    email = profile.get("email")
+    if not isinstance(email, str):
+        raise IntegrationOperationError(
+            code="invalid_response",
+            safe_message="Google profile did not include an email address.",
+        )
+    try:
+        return validate_google_account_email(email)
+    except ValueError as exc:
+        raise IntegrationOperationError(
+            code="invalid_response",
+            safe_message="Google profile returned an invalid email address.",
+        ) from exc
 
 
 def authorize_google_service(
     service: GoogleService,
     *,
     account_id: str | None = None,
+    expected_account_ref: str | None = None,
     store: GoogleAccountStore | None = None,
 ) -> GoogleAccount:
     if not CREDENTIALS_PATH.exists():
-        raise FileNotFoundError(
-            f"Google credentials not found at {CREDENTIALS_PATH}. "
-            "Download OAuth Desktop app credentials from Google Cloud Console."
+        raise IntegrationOperationError(
+            code="configuration_error",
+            safe_message="Google OAuth credentials are not configured.",
         )
-    store = store or google_account_store()
+    if store is None:
+        store = google_account_store()
     requested = scopes_for_google_service(service)
-    if account_id:
+    target_account_ref = expected_account_ref
+    if target_account_ref is not None:
+        try:
+            validate_google_account_email(target_account_ref)
+        except ValueError as exc:
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="Google account_ref must be an exact email address.",
+            ) from exc
+    if account_id is not None:
         account = next((item for item in store.list_accounts() if item.id == account_id), None)
         if account is None:
-            raise ValueError(f"Unknown Google account: {account_id}")
-        requested = list(dict.fromkeys((*account.scopes, *requested)))
+            raise IntegrationConnectionError(
+                integration_id=service,
+                reason="auth_required",
+                detail="The selected Google account is unavailable.",
+            )
+        selected_account_ref = account.email
+        if target_account_ref is not None and target_account_ref.casefold() != selected_account_ref.casefold():
+            raise IntegrationOperationError(
+                code="invalid_ref",
+                safe_message="The selected Google account does not match the requested account.",
+            )
+        target_account_ref = selected_account_ref
 
-    flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), requested)
-    creds = _run_local_oauth(flow)
-    granted = tuple(creds.scopes or requested)
+    creds = _authorize_google_credentials(service, requested, target_account_ref)
+    granted = _credential_scopes(creds)
     missing = tuple(scope for scope in GOOGLE_SERVICE_SCOPES[service] if scope not in granted)
     if missing:
         raise IntegrationConnectionError(
@@ -284,25 +311,80 @@ def authorize_google_service(
             detail="Google authorization is missing required permissions.",
             required_scopes=missing,
             retry_safe=True,
+            account_ref=target_account_ref,
         )
-    profile = build("oauth2", "v2", credentials=creds).userinfo().get().execute()
-    email = str(profile.get("email") or "").strip() or None
+    email = _google_profile_email(service, creds, target_account_ref)
+    if target_account_ref is not None and email.casefold() != target_account_ref.casefold():
+        raise IntegrationConnectionError(
+            integration_id=service,
+            reason="auth_required",
+            detail=f"Google authorization must use {target_account_ref}.",
+            retry_safe=True,
+            account_ref=target_account_ref,
+        )
+    stable_account_ref = email if target_account_ref is None else target_account_ref
     return store.upsert_authorization(
         account_id=account_id,
-        email=email,
+        email=stable_account_ref,
         credential_json=creds.to_json(),
         scopes=granted,
         service=service,
     )
 
 
-def revoke_google_account(account: GoogleAccount, store: GoogleAccountStore | None = None) -> None:
-    store = store or google_account_store()
+@dataclass(frozen=True, slots=True)
+class GoogleRevocationPlan:
+    tokens: tuple[str, ...]
+
+
+def prepare_google_account_revocation(
+    account: GoogleAccount,
+    store: GoogleAccountStore | None = None,
+) -> GoogleRevocationPlan:
+    if store is None:
+        store = google_account_store()
+    tokens: list[str] = []
     for token_path in store.token_paths(account):
-        creds = Credentials.from_authorized_user_file(str(token_path))
-        token = creds.refresh_token or creds.token
-        if not token:
-            continue
+        try:
+            creds = Credentials.from_authorized_user_file(str(token_path))
+        except (GoogleAuthError, OSError, TypeError, ValueError) as exc:
+            raise IntegrationOperationError(
+                code="invalid_credentials",
+                safe_message="Google authorization credentials could not be read for revocation.",
+                retryable=False,
+            ) from exc
+        token = creds.refresh_token if creds.refresh_token is not None else creds.token
+        if not isinstance(token, str) or not token:
+            raise IntegrationOperationError(
+                code="invalid_credentials",
+                safe_message="Google authorization credentials do not contain a revocable token.",
+                retryable=False,
+            )
+        tokens.append(token)
+    return GoogleRevocationPlan(tokens=tuple(dict.fromkeys(tokens)))
+
+
+def _revocation_error(*, completed: int, retryable: bool, uncertain: bool = False) -> IntegrationOperationError:
+    if completed:
+        return IntegrationOperationError(
+            code="partial_revocation",
+            safe_message="Some Google authorizations were revoked, but the remaining revocations failed.",
+            retryable=retryable,
+        )
+    return IntegrationOperationError(
+        code="revocation_uncertain" if uncertain else "provider_error",
+        safe_message=(
+            "Google authorization revocation was not confirmed."
+            if uncertain
+            else "Google authorization revocation failed."
+        ),
+        retryable=retryable,
+    )
+
+
+def execute_google_account_revocation(plan: GoogleRevocationPlan) -> None:
+    completed = 0
+    for token in plan.tokens:
         body = urlencode({"token": token}).encode()
         request = URLRequest(
             "https://oauth2.googleapis.com/revoke",
@@ -310,37 +392,28 @@ def revoke_google_account(account: GoogleAccount, store: GoogleAccountStore | No
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             method="POST",
         )
-        with urlopen(request, timeout=15) as response:
-            if response.status not in {200, 400}:
-                raise RuntimeError(f"Google token revocation failed with HTTP {response.status}")
+        try:
+            with urlopen(request, timeout=15) as response:
+                status = response.status
+        except HTTPError as exc:
+            # Google returns 400 when a token is already invalid. That is the
+            # desired terminal state, so local removal may continue.
+            if exc.code == 400:
+                completed += 1
+                continue
+            raise _revocation_error(
+                completed=completed,
+                retryable=exc.code in {408, 429, 500, 502, 503, 504},
+            ) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise _revocation_error(completed=completed, retryable=True, uncertain=True) from exc
+        if status not in {200, 400}:
+            raise _revocation_error(
+                completed=completed,
+                retryable=status in {408, 429, 500, 502, 503, 504},
+            )
+        completed += 1
 
 
-def add_google_account(service_choice: str = "all") -> dict:
-    scopes = scopes_for_google_choice(service_choice)
-    if not CREDENTIALS_PATH.exists():
-        raise FileNotFoundError(
-            f"Google credentials not found at {CREDENTIALS_PATH}. "
-            "Download OAuth Desktop app credentials from Google Cloud Console."
-        )
-
-    flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), scopes)
-    creds = flow.run_local_server(port=0)
-
-    email = None
-    if service_choice in ("email", "email_calendar", "all"):
-        service = build("gmail", "v1", credentials=creds)
-        profile = service.users().getProfile(userId="me").execute()
-        email = profile.get("emailAddress", "unknown")
-        token_path = gmail_token_path(email)
-    else:
-        token_path = _next_calendar_token_path()
-
-    ARDEN_DIR.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(creds.to_json())
-
-    return {
-        "email": email,
-        "status": "connected",
-        "token_file": token_path.name,
-        "scopes": scopes,
-    }
+def revoke_google_account(account: GoogleAccount, store: GoogleAccountStore | None = None) -> None:
+    execute_google_account_revocation(prepare_google_account_revocation(account, store))

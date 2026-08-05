@@ -320,6 +320,7 @@ function applyServerEvent(event: ServerEvent): ServerEventEffect | undefined {
         settingsTab: event.settings_tab,
         requiredScopes: event.required_scopes,
         source: event.source,
+        accountRef: event.account_ref ?? undefined,
       });
       return;
     case "background_task":

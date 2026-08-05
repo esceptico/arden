@@ -152,6 +152,7 @@ export function pendingConnectionsFromRuntime(
     settingsTab: connection.settings_tab,
     requiredScopes: connection.required_scopes,
     source: connection.source,
+    accountRef: connection.account_ref ?? undefined,
   }));
 }
 

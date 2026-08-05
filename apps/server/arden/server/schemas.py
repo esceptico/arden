@@ -41,6 +41,7 @@ class ConnectionResultRequest(BaseModel):
     tool_id: str
     result: str = ""
     approved: bool = True
+    account_ref: str | None = Field(default=None, min_length=1, max_length=320)
 
 
 class CancelRequest(BaseModel):

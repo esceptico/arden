@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from arden.config import Config
 from arden.integrations.base import (
     Integration,
@@ -94,20 +96,30 @@ def test_registry_preserves_typed_connection_build_failure():
     assert descriptor.detail == "Reconnect Example"
 
 
-def test_registry_reports_untyped_build_failure_as_degraded():
+def test_registry_propagates_untyped_build_failure_without_replacing_current_clients():
+    fail = False
+    client = object()
+
     def build(_config):
-        raise RuntimeError("provider unavailable")
+        if fail:
+            raise RuntimeError("provider implementation failed")
+        return client
 
     registry = IntegrationRegistry([_integration(build)])
     registry.sync(
         Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key="configured")
     )
+    fail = True
+
+    with pytest.raises(RuntimeError, match="provider implementation failed"):
+        registry.sync(
+            Config(_env_file=None, memory=False, integration_states={"example": True}, openai_api_key="updated")
+        )
 
     descriptor = registry.get_connection("example")
-
     assert descriptor is not None
-    assert descriptor.state == "degraded"
-    assert descriptor.detail == "provider unavailable"
+    assert descriptor.state == "connected"
+    assert registry.get_client("example") is client
 
 
 def test_registered_native_integrations_declare_connection_capabilities():
