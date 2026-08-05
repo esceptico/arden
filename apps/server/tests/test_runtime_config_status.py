@@ -47,6 +47,22 @@ def test_config_rejects_non_positive_max_depth():
         Config(memory=False, max_depth=0)
 
 
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    [
+        ({"chat_model": "missing/chat"}, "unknown chat model"),
+        ({"embedding_model": "missing/embedding"}, "unknown embedding model"),
+        (
+            {"model_roles": {"research": {"model": "missing/research"}}},
+            "unknown model 'missing/research' for role 'research'",
+        ),
+    ],
+)
+def test_config_rejects_unknown_model_ids(settings, message):
+    with pytest.raises(ValidationError, match=message):
+        Config(memory=False, **settings)
+
+
 def test_update_config_request_rejects_non_positive_max_depth():
     with pytest.raises(ValidationError):
         UpdateConfigRequest(max_depth=0)

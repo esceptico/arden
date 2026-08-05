@@ -332,8 +332,7 @@ class Config(BaseSettings):
         known = get_models()
         for role, setup in roles.items():
             if setup.model and setup.model not in known:
-                _logger.warning("Unknown model '%s' for role '%s', falling back to default", setup.model, role)
-                roles[role] = setup.model_copy(update={"model": None})
+                raise ValueError(f"unknown model {setup.model!r} for role {role!r}")
         return roles
 
     @field_validator("chat_model")
@@ -342,8 +341,7 @@ class Config(BaseSettings):
         if v is None:
             return v
         if v not in get_models():
-            _logger.warning("Unknown model '%s' in settings, falling back to default", v)
-            return None
+            raise ValueError(f"unknown chat model: {v!r}")
         return v
 
     @field_validator("timezone", "memory_timezone")
@@ -361,8 +359,7 @@ class Config(BaseSettings):
         if v is None:
             return v
         if v not in get_embedding_models():
-            _logger.warning("Unknown embedding model '%s' in settings, falling back to default", v)
-            return None
+            raise ValueError(f"unknown embedding model: {v!r}")
         return v
 
     @field_validator("web_search", mode="before")
