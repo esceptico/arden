@@ -54,7 +54,10 @@ test("primary workspaces share title, rail, and prose roles", () => {
 test("the chat composer matches conversation body typography", () => {
   const composer = read("../src/features/chat/components/Composer.tsx");
   const chat = read("../src/design/chat.css");
-  expect(composer).toContain("text-[var(--text-body)] leading-[var(--leading-body)] text-ink outline-none");
+  // Type lives in chat.css only. The className used to restate it, which is
+  // two places to change and one to forget — the composer must not redeclare
+  // it and drift away from the conversation body.
+  expect(composer).not.toMatch(/text-\[var\(--text-body\)\]|leading-\[var\(--leading-body\)\]/);
   expect(composer).not.toContain("text-md leading-[var(--leading-reading)]");
   expect(chat).toMatch(/\.board-composer__input\s*\{[^}]*font-size:\s*var\(--text-body\);[^}]*line-height:\s*var\(--leading-body\);/s);
 });

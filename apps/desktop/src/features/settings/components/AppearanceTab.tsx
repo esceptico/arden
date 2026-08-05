@@ -60,6 +60,7 @@ export function AppearanceTab() {
   const uiFont = useStore((s) => s.prefs.uiFont);
   const uiFontSize = useStore((s) => s.prefs.uiFontSize);
   const fontSmoothing = useStore((s) => s.prefs.fontSmoothing);
+  const showReasoning = useStore((s) => s.prefs.showReasoning);
   const setPref = useStore((s) => s.setPref);
 
   const onAccentKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) =>
@@ -184,7 +185,7 @@ export function AppearanceTab() {
         </SettingsSurface>
       </SettingsSection>
 
-      <SettingsSection title="Working strip" detail={`${thinkingIntensity} intensity`}>
+      <SettingsSection title="Agent activity">
         <SettingsSurface>
           <SettingsSettingRow
             title="Working strip"
@@ -203,6 +204,17 @@ export function AppearanceTab() {
                   </Tab>
                 ))}
               </Tabs>
+            }
+          />
+          <SettingsSettingRow
+            title="Show reasoning"
+            hint="Renders the model's thinking as a collapsible block in chat. Only appears when the model runs with a reasoning effort set."
+            control={
+              <SwitchControl
+                checked={showReasoning}
+                onChange={(next) => setPref("showReasoning", next)}
+                aria-label="Show reasoning"
+              />
             }
           />
         </SettingsSurface>

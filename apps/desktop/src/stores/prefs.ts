@@ -44,6 +44,7 @@ export const DEFAULT_PREFS: Prefs = {
   uiFont: "",
   uiFontSize: 14,
   fontSmoothing: true,
+  showReasoning: false,
 };
 
 type LegacyPrefs = Partial<Prefs> & Record<string, unknown> & {

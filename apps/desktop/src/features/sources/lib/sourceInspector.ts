@@ -17,12 +17,14 @@ export function sourceInspectorSelection({
   messages,
   order,
   sourceTurnId,
+  showReasoning,
 }: {
   messages: ReadonlyMap<string, UiMessage>;
   order: string[];
   sourceTurnId: string | null;
+  showReasoning?: boolean;
 }): SourceInspectorSelection {
-  const segments = transcriptSegments(messages, order);
+  const segments = transcriptSegments(messages, order, showReasoning);
   const segment = sourceTurnId === null
     ? latestSourceBearingTurn(messages, segments)
     : segments.find((candidate) => candidate.turnId === sourceTurnId);
@@ -44,6 +46,7 @@ export function sourceInspectorSelection({
 function transcriptSegments(
   messages: ReadonlyMap<string, UiMessage>,
   order: string[],
+  showReasoning?: boolean,
 ): MessageSegment[] {
   const roles = order.map((id) => messages.get(id)?.role ?? null);
   const metaFlags = order.map((id) => Boolean(messages.get(id)?.isMeta));
@@ -51,7 +54,7 @@ function transcriptSegments(
     const message = messages.get(id);
     return message?.role === "assistant" && message.content.trim() ? "x" : "";
   });
-  const visibleIds = visibleMessageIds({ ids: order, roles, metaFlags, contents });
+  const visibleIds = visibleMessageIds({ ids: order, roles, metaFlags, contents, showReasoning });
   return messageSegments({ ids: order, roles, metaFlags, visibleIds });
 }
 

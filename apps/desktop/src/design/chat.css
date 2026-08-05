@@ -198,11 +198,30 @@
 .board-tool-line:hover,
 .board-reasoning__head:hover { color: var(--ink-soft); opacity: 1; }
 
-.board-reasoning__body {
-  max-inline-size: 38rem;
-  padding: var(--space-3);
-  border-radius: var(--r-house);
-  background: var(--surface-muted);
+/* Fluid Functionalism thinking-steps, values from
+   `registry/base/thinking-steps.tsx`: label and description both 13px,
+   separated by weight and ink alone; 4px between them; the connector runs
+   beside the body, which is why the body sits in the step's text column
+   rather than in a panel of its own. Geometry comes from the shared
+   `ThinkingStep` row — the same gutter every tool call in the trace uses. */
+.board-reasoning__step-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+/* Three classes, deliberately: `.md.typeset` sets
+   `font-size: calc(var(--typeset-size) * 1.125)`, so a two-class rule only
+   wins on source order and silently loses the moment this body is rendered
+   anywhere typeset loads later. The description is 13px muted — same size as
+   its label, separated by weight and ink alone. */
+.board-reasoning__step-body.md.typeset {
+  max-inline-size: 36rem;
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--muted);
 }
 
 .board-error-message__card {
@@ -347,9 +366,16 @@
 
 /* One working state, one locus: a strip above the input that names the tool
    in flight. The rim tint marks the composer as busy; the strip carries the
-   detail. No layout properties animate except the strip's own height. */
+   detail. No layout properties animate except the strip's own height.
+
+   The rim stays an inset shadow on the panel itself. An element's own inset
+   shadow is not clipped by its own `overflow`, so it draws at full strength
+   around the whole 23px corner; an overlay pinned to the same edge would sit
+   exactly on the clip boundary and get eroded to a third of its opacity along
+   the arc. The dither field is what keeps clear of it — see
+   `.board-composer__strip-field`. */
 .board-composer.is-working {
-  box-shadow: var(--shadow-3), inset 0 0 0 1px color-mix(in oklab, var(--accent) var(--strip-rim-strength), transparent);
+  box-shadow: var(--shadow-3), inset 0 0 0 var(--border-width) color-mix(in oklab, var(--accent) var(--strip-rim-strength), transparent);
 }
 
 /* Height is the only animated property. Padding and the rule live on the
@@ -367,7 +393,7 @@
   height: 1.875rem;
   display: flex;
   align-items: center;
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-3);
   isolation: isolate;
   /* The house inset rule, not a full-bleed border: a border here spans the
      panel edge-to-edge and paints over the is-working ring, breaking it at
@@ -384,17 +410,33 @@
 /* The rule is inset to the strip's own text padding so it lines up with the
    label rather than with the panel edge. */
 .board-composer__strip-inner::after {
-  right: var(--space-4);
-  left: var(--space-4);
+  right: var(--space-3);
+  left: var(--space-3);
 }
 
 /* The canvas reads its own resolved `color` to paint the field, so the ink
-   follows the theme instead of being hardcoded. */
+   follows the theme instead of being hardcoded.
+
+   It is held off the busy rim by exactly the rim's width and rounded
+   concentrically with the panel, so the dots stop short of the ring instead of
+   painting over it: an inset shadow paints with the panel's background box —
+   below every descendant — so a full-bleed field at `inset: 0` chewed the ring
+   along the top edge and into both corners. Radius clips the canvas bitmap,
+   and WorkingStrip re-measures from `getBoundingClientRect`, so the field
+   resizes itself. */
 .board-composer__strip-field {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: var(--border-width) var(--border-width) 0;
+  /* Explicit CSS size is load-bearing, not decoration: a canvas is a replaced
+     element, so without it layout falls back to the width/height ATTRIBUTES —
+     which WorkingStrip sets to rect × dpr every frame. Measured size then
+     feeds the backing store feeds the measured size, and the canvas doubles
+     itself at 60fps until it fails to composite (the white strip + broken
+     frame). Percentages resolve against the strip-inner box, so this is the
+     same geometry the inset describes, pinned. */
+  width: calc(100% - 2 * var(--border-width));
+  height: calc(100% - var(--border-width));
+  border-radius: calc(var(--r-panel) - var(--border-width)) calc(var(--r-panel) - var(--border-width)) 0 0;
   z-index: 0;
   pointer-events: none;
   color: var(--ink);
@@ -428,7 +470,19 @@
   outline-offset: 0;
 }
 
-.board-composer__input-row { min-height: 3.5rem; }
+/* The composer is self-aligned, not transcript-aligned: one 16px inner axis
+   shared by the draft, the strip label, and the toolbar's leading glyph.
+   Coupling the draft to the message lane's 28px gutter was tried and read as
+   a hole on the left — the reference (2026-08-05) aligns text with its own
+   controls and lets the sent message land where the transcript wants it.
+   Padding is symmetric and the line box is centred, so a single line reads on
+   the row's optical centre. Height is the only thing that grows. */
+.board-composer__input-row {
+  display: flex;
+  align-items: center;
+  min-height: 3.5rem;
+  padding: var(--space-3);
+}
 
 .board-composer__input {
   width: 100%;
@@ -449,8 +503,6 @@
   outline: 0;
   box-shadow: none;
 }
-
-.board-composer__input::placeholder { color: var(--faint); }
 
 /* Contenteditable composer document: plain text nodes, atomic mention
    tokens, and <br>s — nothing else (mentionEditor.ts is the contract). */
@@ -500,7 +552,19 @@
   translate: 0 1px;
 }
 
-.board-composer__toolbar { height: 2.5rem; min-height: 2.5rem; flex: none; }
+/* One inset on every side, so a control sits the same distance from the
+   panel's bottom edge as from its side. Height follows the control rather
+   than being pinned: 6 + 30 + 6.
+
+   That inset also settles the text axis without an optical calc. A 30px
+   control centres its 18px glyph 6px in, so at `--space-1-5` the glyph's
+   left edge lands on 12px — which is `--space-3`, the draft's own inline
+   padding. Two tokens, both ends exact. */
+.board-composer__toolbar {
+  min-height: calc(var(--control-size-large) + 2 * var(--space-1-5));
+  flex: none;
+  padding: var(--space-1-5);
+}
 .board-composer .composer-tool-button { min-height: var(--control-size-large); }
 /* .arden-icon-button's base size (--icon-button-size, 28px) is narrower than
    the 30px this row bumps every control to — width alone was left behind,
@@ -516,10 +580,12 @@
 }
 .board-composer .composer-mode-button svg { color: var(--accent); }
 
+/* The row's control size, like every other control in it — so the send
+   glyph's right edge lands on the same 12px axis the draft's left edge does. */
 .board-composer__send {
   position: relative;
-  width: var(--icon-button-size);
-  height: var(--icon-button-size);
+  width: var(--control-size-large);
+  height: var(--control-size-large);
   display: grid;
   place-items: center;
   flex: none;

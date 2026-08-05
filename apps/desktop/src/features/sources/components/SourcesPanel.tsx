@@ -24,12 +24,13 @@ export function SourcesPanel() {
   const sourceRefsRevision = useStore((state) => state.sourceRefsRevision);
   const sourceTurnId = useStore((state) => state.sourceTurnId);
   const setViewingTool = useStore((state) => state.setViewingTool);
+  const showReasoning = useStore((state) => state.prefs.showReasoning);
   const selection = useMemo(
     () => {
       const { messages, order } = useStore.getState();
-      return sourceInspectorSelection({ messages, order, sourceTurnId });
+      return sourceInspectorSelection({ messages, order, sourceTurnId, showReasoning });
     },
-    [sourceRefsRevision, sourceTurnId],
+    [sourceRefsRevision, sourceTurnId, showReasoning],
   );
   const groups = useMemo(
     () => groupInspectedSources(selection.sources),

@@ -4,6 +4,7 @@ type MessageVisibilityInput = {
   role: Role | null;
   content?: string;
   isMeta?: boolean;
+  showReasoning?: boolean;
 };
 
 type MessageDisplayPolicy = {
@@ -19,9 +20,12 @@ export function messageDisplayPolicy(message: MessageVisibilityInput): MessageDi
   const isMetaUser = message.role === "user" && message.isMeta === true;
   const isTodoState = message.role === "todo";
   const isContinuation = isReasoning || isEmptyAssistant || isTodoState;
+  // Opting reasoning into the transcript changes only what is drawn; it stays
+  // a continuation so activity grouping is untouched.
+  const isRevealedReasoning = isReasoning && message.showReasoning === true;
 
   return {
-    hiddenInTranscript: isContinuation || isMetaUser,
+    hiddenInTranscript: (isContinuation && !isRevealedReasoning) || isMetaUser,
     breaksTurn: isMetaUser,
     breaksActivity: isMetaUser || !isContinuation,
   };
@@ -44,11 +48,13 @@ export function visibleMessageIds({
   roles,
   metaFlags,
   contents,
+  showReasoning,
 }: {
   ids: string[];
   roles: (Role | null)[];
   metaFlags?: boolean[];
   contents?: string[];
+  showReasoning?: boolean;
 }): string[] {
   return ids.filter((_, index) => {
     const role = roles[index];
@@ -58,6 +64,7 @@ export function visibleMessageIds({
       role,
       content,
       isMeta: metaFlags?.[index] ?? false,
+      showReasoning,
     });
   });
 }

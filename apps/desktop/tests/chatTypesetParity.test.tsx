@@ -166,12 +166,72 @@ test("Chat keeps the compact budget control and shared model picker classes", ()
 });
 
 test("Chat composer uses compact 56px input and 40px toolbar geometry", () => {
-  expect(composer).toContain("board-composer__input-row flex min-h-14");
+  // Box metrics live in chat.css, not in the className — the row carries the
+  // hook and nothing else.
+  expect(composer).toContain('className="board-composer__input-row"');
   expect(composerToolbar).toContain('className="composer-tool-button composer-toolbar-control"');
   expect(composerToolbar).toContain('className="composer-tool-button composer-toolbar-control composer-mode-button"');
-  expect(chat).toContain(".board-composer__input-row { min-height: 3.5rem; }");
-  expect(chat).toContain(".board-composer__toolbar { height: 2.5rem; min-height: 2.5rem; flex: none; }");
+  const row = chat.match(/\.board-composer__input-row\s*\{([^}]*)\}/)?.[1] ?? "";
+  const bar = chat.match(/\.board-composer__toolbar\s*\{([^}]*)\}/)?.[1] ?? "";
+  expect(row).toContain("min-height: 3.5rem;");
+  expect(bar).toContain("min-height: calc(var(--control-size-large) + 2 * var(--space-1-5));");
   expect(chat).toContain(".board-composer .composer-tool-button { min-height: var(--control-size-large); }");
+});
+
+test("the composer is self-aligned: one 16px axis for text and its own controls", () => {
+  // The composer aligns to ITSELF, not to the transcript. Coupling the draft
+  // to the lane's 28px gutter was tried and read as a hole on the left, since
+  // the toolbar controls sat far inboard of the text directly above them.
+  const body = (sel: string) => chat.match(new RegExp(`\\${sel}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+
+  expect(body(".board-composer__input-row")).toContain("padding: var(--space-3);");
+  expect(body(".board-composer__strip-inner")).toContain("padding: 0 var(--space-3);");
+  expect(composer).not.toContain("--content-gutter");
+  // One inset on every side, so a control sits as far from the panel's bottom
+  // edge as from its side — `padding: 4px 8px` was the reported defect. That
+  // same inset puts the glyph on the text axis without an optical calc: a
+  // 30px control centres its 18px glyph 6px in, so 6 + 6 = 12px = --space-3,
+  // the draft's own padding. Measured: draft text and attach glyph both 272.
+  expect(body(".board-composer__toolbar")).toContain("padding: var(--space-1-5);");
+  expect(body(".board-composer__toolbar")).not.toMatch(/padding-(inline|left|right):/);
+});
+
+test("a single line of draft sits on the input row's optical centre", () => {
+  // A 20px line box was top-pinned by `items-start` inside a 44px min-height
+  // that duplicated the row's own 56px constraint, leaving 8px above it and
+  // 28px below. The line box defines the height now, and padding is symmetric.
+  expect(composer).not.toContain("min-h-[44px]");
+  const inputRow = chat.match(/\.board-composer__input-row\s*\{([^}]*)\}/)?.[1] ?? "";
+  expect(inputRow).toContain("align-items: center;");
+  expect(inputRow).toContain("min-height: 3.5rem;");
+});
+
+test("the dither field stops short of the busy rim instead of painting over it", () => {
+  // The rim is the panel's own inset shadow, which paints with its background
+  // box — below every descendant — so a full-bleed canvas at `inset: 0` chewed
+  // it along the top edge and into both corners. The field is held off by the
+  // rim's width and rounded concentrically with the panel.
+  //
+  // The rim must stay on the panel rather than move to an overlay: an element's
+  // own inset shadow is not clipped by its own `overflow`, whereas an overlay
+  // pinned to the same edge sits on the clip boundary and erodes along the arc.
+  const workingRule = chat.match(/\.board-composer\.is-working\s*\{([^}]*)\}/)?.[1] ?? "";
+  const fieldRule = chat.match(/\.board-composer__strip-field\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  expect(workingRule).toContain("inset 0 0 0 var(--border-width)");
+  expect(fieldRule).toContain("inset: var(--border-width) var(--border-width) 0;");
+  expect(fieldRule).toContain("border-radius: calc(var(--r-panel) - var(--border-width))");
+  // A full-bleed field would silently reintroduce the overlap.
+  expect(fieldRule).not.toContain("width: 100%;");
+  expect(fieldRule).not.toContain("inset: 0");
+  // Explicit CSS size on the canvas is load-bearing: a canvas is a replaced
+  // element, so without it layout falls back to the width/height attributes,
+  // which WorkingStrip assigns from rect × dpr every frame — measured size
+  // feeds the backing store feeds the measured size, and the canvas doubles
+  // itself at 60fps until it fails to composite (rendered as a solid strip
+  // with a broken frame). Caught live, not by the one-shot harness.
+  expect(fieldRule).toContain("width: calc(100% - 2 * var(--border-width));");
+  expect(fieldRule).toContain("height: calc(100% - var(--border-width));");
 });
 
 test("Chat composer uses the mock's single surface focus ring", () => {

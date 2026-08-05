@@ -109,8 +109,8 @@ test("productive typography and chat rhythm use the calibrated density scale", (
   expect(chat).toMatch(/\.board-chat__lane\s*\{[\s\S]*?gap:\s*var\(--space-4\);/);
   expect(chat).toMatch(/\.board-turn\s*\{\s*gap:\s*var\(--space-4\);\s*\}/);
   expect(chat).toMatch(/\.board-assistant\s*\{[\s\S]*?row-gap:\s*var\(--space-2\);/);
-  expect(chat).toContain(".board-composer__input-row { min-height: 3.5rem; }");
-  expect(chat).toContain(".board-composer__toolbar { height: 2.5rem; min-height: 2.5rem; flex: none; }");
+  expect(chat.match(/\.board-composer__input-row\s*\{([^}]*)\}/)?.[1] ?? "").toContain("min-height: 3.5rem;");
+  expect(chat.match(/\.board-composer__toolbar\s*\{([^}]*)\}/)?.[1] ?? "").toContain("padding: var(--space-1-5);");
 });
 
 test("shared controls use named paint layers instead of numeric z utilities", () => {

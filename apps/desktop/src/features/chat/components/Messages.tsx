@@ -172,9 +172,10 @@ export function Messages() {
       }),
     ),
   );
+  const showReasoning = useStore((s) => s.prefs.showReasoning);
   const visibleOrder = useMemo(
-    () => visibleMessageIds({ ids: order, roles, metaFlags, contents: contentFlags }),
-    [order, roles, metaFlags, contentFlags],
+    () => visibleMessageIds({ ids: order, roles, metaFlags, contents: contentFlags, showReasoning }),
+    [order, roles, metaFlags, contentFlags, showReasoning],
   );
 
   const segments = useMemo(

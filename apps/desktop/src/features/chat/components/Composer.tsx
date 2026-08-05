@@ -287,7 +287,7 @@ export function Composer() {
       {/* Wrapper exists so the CommandPicker can sit as a sibling of
           the form rather than a child and avoid being clipped by the
           composer panel. */}
-      <div className="board-composer-wrap relative max-w-[760px] mx-auto">
+      <div className="board-composer-wrap relative max-w-[var(--content-max-width)] mx-auto">
         <QueueCard onEdit={editQueuedMessage} />
         {pickerOpen && query !== null && (
           <CommandPicker query={query} onSelect={applyPickerSelection} skillsOnly={mention !== null && mention.start > 0} />
@@ -349,7 +349,7 @@ export function Composer() {
               e.target.value = ""; // allow picking the same file again later
             }}
           />
-          <div className="board-composer__input-row flex min-h-14 items-start gap-2 px-4 pt-2 pb-1">
+          <div className="board-composer__input-row">
             <div
                 ref={inputRef}
                 id="message-input"
@@ -507,7 +507,7 @@ export function Composer() {
                   const text = e.clipboardData.getData("text/plain");
                   if (text) document.execCommand("insertText", false, text);
                 }}
-                className="board-composer__input board-composer__editor min-h-[44px] max-h-[220px] min-w-0 flex-1 border-0 bg-transparent p-0 text-[var(--text-body)] leading-[var(--leading-body)] text-ink outline-none"
+                className="board-composer__input board-composer__editor max-h-[220px] min-w-0 flex-1 border-0 bg-transparent p-0 text-ink outline-none"
             />
           </div>
           <ComposerToolbar

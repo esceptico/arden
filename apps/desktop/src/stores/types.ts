@@ -39,6 +39,7 @@ export type SettingsTabId =
   | "tools"
   | "mcp"
   | "appearance"
+  | "storage"
   | "archive";
 
 export type Role =
@@ -123,6 +124,10 @@ export interface Prefs {
   /** True = -webkit-font-smoothing: antialiased (default). False = auto,
    *  the platform's native subpixel rendering. */
   fontSmoothing: boolean;
+  /** True = reasoning messages render as collapsible blocks in the
+   *  transcript. Activity grouping is unaffected — reasoning stays an
+   *  activity continuation either way. */
+  showReasoning: boolean;
 }
 
 /** A desktop-owned fresh turn waiting behind the active run. */
