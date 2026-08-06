@@ -84,7 +84,10 @@ class RuntimeResearchRunner:
         agent_config = AgentConfig.from_config(config, model=model)
         ledger = SharedLedger()
         session_state = SessionState(session_id=f"mcp::{run_id}", started_at=datetime.now(UTC))
-        background_tasks = BackgroundTaskRegistry(session_id=session_state.session_id)
+        background_tasks = BackgroundTaskRegistry(
+            session_id=session_state.session_id,
+            retain_settled_task_ids=True,
+        )
         run = RunContext(
             run_id=run_id,
             current_depth=0,
@@ -135,13 +138,20 @@ class RuntimeResearchRunner:
         )
         answer = result.content
         child = (result.data or {}).get("child_agent") or {}
-        task_id = child.get("child_run_id")
-        if task_id and (spawn_task := background_tasks.task(task_id)) is not None:
-            with suppress(asyncio.CancelledError):
-                await spawn_task
+        if child:
+            agent_ref = child.get("agent_ref")
+            if not isinstance(agent_ref, str):
+                raise RuntimeError("MCP research result is missing its public agent ref")
+            task_id = background_tasks.task_id_for_agent_ref(agent_ref)
+            if task_id is None:
+                raise RuntimeError(f"MCP research agent {agent_ref} is not registered")
+            if spawn_task := background_tasks.task(task_id):
+                with suppress(asyncio.CancelledError):
+                    await spawn_task
             delivered = await background_tasks.read_background_result(task_id)
-            if delivered:
-                answer = delivered
+            if delivered is None:
+                raise RuntimeError(f"MCP research agent {agent_ref} finished without a durable result")
+            answer = delivered
         ledger.add_coverage_gap_notes(scope=run_id)
         return _research_output(run_id, answer, ledger)
 

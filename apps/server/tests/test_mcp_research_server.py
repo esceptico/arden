@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -19,6 +20,32 @@ class FakeRunner:
     async def run(self, *, task: str, depth: mcp_server.ResearchDepth) -> mcp_server.ArdenResearchOutput:
         self.calls.append({"task": task, "depth": depth})
         return self.output
+
+
+def _runtime():
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            chat_model="model-a",
+            research_model="model-b",
+            workflow_model="model-c",
+            max_depth=3,
+            agent_max_iterations=None,
+            agent_max_tool_calls=None,
+            agent_max_wall_time_seconds=None,
+            agent_max_cost=None,
+            agent_max_output_tokens=None,
+            model_reasoning_efforts={},
+            role_setup=lambda _role: SimpleNamespace(model=None, reasoning_effort=None),
+            deferred_tools=False,
+            compression_threshold=0.8,
+            max_messages=120,
+            compression_keep_ratio=0.2,
+            summary_max_tokens=1500,
+            approval_timeout_seconds=300,
+            reasoning_effort_for=lambda model: None,
+        ),
+        executor=SimpleNamespace(registry=SimpleNamespace(), tool_services={}),
+    )
 
 
 @pytest.mark.asyncio
@@ -84,30 +111,7 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
 
     monkeypatch.setattr(research_module, "research", fake_research)
 
-    runtime = SimpleNamespace(
-        config=SimpleNamespace(
-            chat_model="model-a",
-            research_model="model-b",
-            workflow_model="model-c",
-            max_depth=3,
-            agent_max_iterations=None,
-            agent_max_tool_calls=None,
-            agent_max_wall_time_seconds=None,
-            agent_max_cost=None,
-            agent_max_output_tokens=None,
-            model_reasoning_efforts={},
-            role_setup=lambda _role: SimpleNamespace(model=None, reasoning_effort=None),
-            deferred_tools=False,
-            compression_threshold=0.8,
-            max_messages=120,
-            compression_keep_ratio=0.2,
-            summary_max_tokens=1500,
-            approval_timeout_seconds=300,
-            reasoning_effort_for=lambda model: None,
-        ),
-        executor=SimpleNamespace(registry=SimpleNamespace(), tool_services={}),
-    )
-    runner = mcp_server.RuntimeResearchRunner(runtime, run_id_factory=lambda: "research-1")
+    runner = mcp_server.RuntimeResearchRunner(_runtime(), run_id_factory=lambda: "research-1")
 
     result = await runner.run(task="research Dex integration", depth="deep")
 
@@ -129,6 +133,51 @@ async def test_runtime_research_runner_areas_internal_ledger_notes(monkeypatch):
             "source_b": "current-plan",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_research_runner_reads_a_fast_settled_agent_by_public_ref(monkeypatch):
+    captured = {}
+
+    async def fake_research(execution, _args):
+        registry = execution.ctx.background_tasks
+        captured["registry"] = registry
+        assert registry.retain_settled_task_ids is True
+        agent_ref = "research~abc123"
+        task_id = "internal-task-id"
+
+        async def read_result(resolved_task_id):
+            assert resolved_task_id == task_id
+            return "Final durable research report."
+
+        registry.read_result = read_result
+        assert registry.reserve(task_id, command="research", limit=1, agent_ref=agent_ref)
+        task = asyncio.create_task(asyncio.sleep(0))
+        registry.register(task_id, task, command="research")
+        await task
+        await asyncio.sleep(0)
+        assert registry.live_task_for_agent_ref(agent_ref) is None
+        assert registry.task_id_for_agent_ref(agent_ref) == task_id
+        return ToolResult(
+            content="Spawn receipt.",
+            preview="Started",
+            data={
+                "child_agent": {
+                    "agent_ref": agent_ref,
+                    "agent_type": "research",
+                    "wait": False,
+                    "status": "running",
+                }
+            },
+        )
+
+    monkeypatch.setattr(research_module, "research", fake_research)
+    runner = mcp_server.RuntimeResearchRunner(_runtime(), run_id_factory=lambda: "research-1")
+
+    result = await runner.run(task="research fast completion", depth="normal")
+
+    assert result.answer == "Final durable research report."
+    assert captured["registry"].task_id_for_agent_ref("research~abc123") is None
 
 
 @pytest.mark.asyncio

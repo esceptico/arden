@@ -294,7 +294,7 @@ def _index_signature(index: IndexManifest) -> tuple:
     )
 
 
-async def assert_v9_schema(conn: aiosqlite.Connection) -> None:
+async def assert_current_schema(conn: aiosqlite.Connection) -> None:
     """Reject any current-schema topology that is not canonical."""
 
     manifest = await read_context_schema_manifest(conn, include_optional_indexes=True)
@@ -306,11 +306,12 @@ async def assert_v9_schema(conn: aiosqlite.Connection) -> None:
     actual_tables = {table.name: table for table in manifest.tables}
     if set(actual_tables) != set(expected_table_sql):
         raise SessionSchemaError(
-            f"context schema v9 has invalid tables: expected {sorted(expected_table_sql)}, got {sorted(actual_tables)}"
+            "current context schema has invalid tables: "
+            f"expected {sorted(expected_table_sql)}, got {sorted(actual_tables)}"
         )
     for name, expected_sql in expected_table_sql.items():
         if actual_tables[name].sql != expected_sql:
-            raise SessionSchemaError(f"context schema v9 has a non-canonical {name} table")
+            raise SessionSchemaError(f"current context schema has a non-canonical {name} table")
 
     expected_indexes = {
         item.name: normalize_schema_sql(item.sql)
@@ -322,15 +323,15 @@ async def assert_v9_schema(conn: aiosqlite.Connection) -> None:
     optional_named = set(actual_named) & set(_OPTIONAL_INDEX_SQL)
     if set(actual_named) != required_named | optional_named:
         raise SessionSchemaError(
-            f"context schema v9 has invalid named indexes: expected {sorted(required_named)}, "
+            f"current context schema has invalid named indexes: expected {sorted(required_named)}, "
             f"got {sorted(actual_named)}"
         )
     for name, expected_sql in expected_indexes.items():
         if actual_named[name].sql != expected_sql:
-            raise SessionSchemaError(f"context schema v9 has a non-canonical {name} index")
+            raise SessionSchemaError(f"current context schema has a non-canonical {name} index")
     for name in optional_named:
         if actual_named[name].sql != normalize_schema_sql(_OPTIONAL_INDEX_SQL[name]):
-            raise SessionSchemaError(f"context schema v9 has a non-canonical {name} recovery index")
+            raise SessionSchemaError(f"current context schema has a non-canonical {name} recovery index")
 
     actual_auto = {
         _index_signature(index)
@@ -338,7 +339,7 @@ async def assert_v9_schema(conn: aiosqlite.Connection) -> None:
         if index.origin in {"pk", "u"}
     }
     if actual_auto != _EXPECTED_AUTO_INDEXES:
-        raise SessionSchemaError("context schema v9 has invalid automatic indexes")
+        raise SessionSchemaError("current context schema has invalid automatic indexes")
 
     expected_triggers = {
         item.name: (item.table, normalize_schema_sql(item.sql))
@@ -347,7 +348,7 @@ async def assert_v9_schema(conn: aiosqlite.Connection) -> None:
     }
     actual_triggers = {trigger.name: (trigger.table, trigger.sql) for trigger in manifest.triggers}
     if actual_triggers != expected_triggers:
-        raise SessionSchemaError("context schema v9 has invalid session-message FTS triggers")
+        raise SessionSchemaError("current context schema has invalid session-message FTS triggers")
 
     actual_foreign_keys = {
         foreign_key
@@ -355,11 +356,11 @@ async def assert_v9_schema(conn: aiosqlite.Connection) -> None:
         for foreign_key in table.foreign_keys
     }
     if actual_foreign_keys != _EXPECTED_FOREIGN_KEYS:
-        raise SessionSchemaError("context schema v9 has invalid foreign keys")
+        raise SessionSchemaError("current context schema has invalid foreign keys")
 
     legacy = await conn.execute_fetchall(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND "
         "(name GLOB '*_old*' OR name LIKE 'tool_results_legacy%')"
     )
     if legacy:
-        raise SessionSchemaError(f"context schema v9 has legacy tables: {[row['name'] for row in legacy]}")
+        raise SessionSchemaError(f"current context schema has legacy tables: {[row['name'] for row in legacy]}")

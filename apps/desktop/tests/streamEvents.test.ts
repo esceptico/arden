@@ -2753,8 +2753,8 @@ test("tool result child agent metadata attaches to activity item", async () => {
     preview: "done",
     data: {
       child_agent: {
-        child_run_id: "agent-123",
-        parent_tool_call_id: "call-research",
+        agent_ref: "research~abc123",
+        session_ref: "research~abc123",
         agent_type: "research",
         wait: true,
         status: "completed",
@@ -2771,8 +2771,8 @@ test("tool result child agent metadata attaches to activity item", async () => {
   const item = state.messages.get(activityId!)?.activity?.items.find((it) => it.id === "call-research");
   expect(item?.semanticKind).toBe("agent");
   expect(item?.childAgent).toEqual({
-    childRunId: "agent-123",
-    parentToolCallId: "call-research",
+    agentRef: "research~abc123",
+    sessionRef: "research~abc123",
     agentType: "research",
     wait: true,
     status: "completed",
@@ -3070,7 +3070,8 @@ test("right sidebar active background agents excludes terminal statuses", () => 
 test("right sidebar maps child-agent snapshots into active sidebar rows", () => {
   expect(
     childAgentTaskToBackgroundSnapshot({
-      task_id: "legacy-bg-id",
+      task_id: "internal-task-id",
+      agent_ref: "research-auth-flow~abc123",
       child_run_id: "child-run-1",
       child_session_id: "session-child-1",
       command: "research auth flow",
@@ -3082,6 +3083,7 @@ test("right sidebar maps child-agent snapshots into active sidebar rows", () => 
     }),
   ).toEqual({
     taskId: "child-run-1",
+    agentRef: "research-auth-flow~abc123",
     childSessionId: "session-child-1",
     command: "research auth flow",
     status: "running",

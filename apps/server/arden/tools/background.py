@@ -151,7 +151,7 @@ async def agent_cancel(execution: ToolExecution, args: AgentCancelInput) -> Tool
             preview="Invalid agent ref",
             recovery_action="Use a live agent_ref from the roster.",
         )
-    task_id = registry.task_for_agent_ref(args.agent_ref)
+    task_id = registry.live_task_for_agent_ref(args.agent_ref)
     if task_id is None:
         running = registry.live_agent_refs()
         listing = "\n".join(f"- {agent_ref}" for agent_ref in running)

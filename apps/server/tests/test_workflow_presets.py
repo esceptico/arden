@@ -198,7 +198,7 @@ async def test_run_workflow_preset_resolves_and_carries_description(registry: Sk
     assert agent_ref in result.content
     assert workflow_id not in result.content
     assert persistable_tool_result_data(result.data, result.source_refs) is None
-    assert ctx.background_tasks.task_for_agent_ref(agent_ref) == workflow_id
+    assert ctx.background_tasks.live_task_for_agent_ref(agent_ref) == workflow_id
     started = next(e for e in events if type(e).__name__ == "WorkflowStartedEvent")
     assert started.name == "echo"
     assert started.description == PRESET_DESCRIPTION
@@ -247,7 +247,7 @@ async def test_run_workflow_cancel_kills_the_orchestra(registry: SkillRegistry, 
 
     result = await run_workflow(execution, WorkflowInput(name="slow"))
     agent_ref = result.data["agent_ref"]
-    workflow_id = ctx.background_tasks.task_for_agent_ref(agent_ref)
+    workflow_id = ctx.background_tasks.live_task_for_agent_ref(agent_ref)
     assert workflow_id == result.data["workflow_id"]
     task = ctx.background_tasks.task(workflow_id)
     assert task is not None

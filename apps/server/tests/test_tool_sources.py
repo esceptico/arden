@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from arden.agent.tools.dispatch import dispatch_tools
 from arden.agent.tools.runner import ToolRunner
@@ -200,15 +201,29 @@ def test_source_ref_rejects_embedded_credentials_and_invalid_ports():
         _source(url="https://example.test:notaport")
 
 
-def test_persistable_tool_result_data_keeps_only_provenance_and_typed_source_refs():
+def _persisted_child_agent() -> dict:
+    return {
+        "agent_ref": "research~abc123",
+        "session_ref": "research~abc123",
+        "agent_type": "research",
+        "wait": False,
+        "status": "running",
+    }
+
+
+def _research_provenance() -> dict:
+    return {
+        "query": "audit",
+        "window": {"depth": "deep", "current_depth": 0, "max_depth": 3},
+        "derivation": {"agent_ref": "research~abc123"},
+        "workspace_ref": "research-1:_provenance.json",
+    }
+
+
+def test_persistable_tool_result_data_keeps_only_strict_public_metadata_and_typed_source_refs():
     data = {
-        "child_agent": {"child_run_id": "child-1", "wait": False},
-        "provenance": {
-            "query": "audit",
-            "window": {"depth": "deep"},
-            "derivation": {"child_run_id": "child-1"},
-            "workspace_ref": "research-1:_provenance.json",
-        },
+        "child_agent": _persisted_child_agent(),
+        "provenance": _research_provenance(),
         "source_refs": [
             _source().to_dict(),
             _source(title="Duplicate").to_dict(),
@@ -217,11 +232,30 @@ def test_persistable_tool_result_data_keeps_only_provenance_and_typed_source_ref
     }
 
     assert persistable_tool_result_data(data) == {
-        "child_agent": {"child_run_id": "child-1", "wait": False},
-        "provenance": data["provenance"],
+        "child_agent": _persisted_child_agent(),
+        "provenance": _research_provenance(),
         "source_refs": [_source().to_dict()],
     }
     assert persistable_tool_result_data(None, (_source(url=None),)) == {"source_refs": [_source(url=None).to_dict()]}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"child_agent": {**_persisted_child_agent(), "child_run_id": "internal-child"}},
+        {"child_agent": {**_persisted_child_agent(), "child_session_id": "internal-session"}},
+        {"child_agent": {**_persisted_child_agent(), "parent_tool_call_id": "call-1"}},
+        {"child_agent": {**_persisted_child_agent(), "tool_call_ids": ["call-1"]}},
+        {"child_agent": {**_persisted_child_agent(), "session_ref": "different~abc123"}},
+        {"child_agent": "not-an-object"},
+        {"provenance": {**_research_provenance(), "research_tool_call_id": "call-1"}},
+        {"provenance": {**_research_provenance(), "derivation": {"child_run_id": "internal-child"}}},
+        {"provenance": ["not-an-object"]},
+    ],
+)
+def test_persistable_tool_result_data_rejects_invalid_metadata(data):
+    with pytest.raises(ValidationError):
+        persistable_tool_result_data(data)
 
 
 def test_persisted_source_refs_raise_instead_of_disappearing() -> None:
@@ -298,8 +332,8 @@ def test_tool_executor_offload_preserves_source_refs(monkeypatch, tmp_path: Path
         content="x" * (OFFLOAD_THRESHOLD + 1),
         preview="large",
         data={
-            "child_agent": {"child_run_id": "child-1", "wait": False},
-            "provenance": {"workspace_ref": "research-1:_provenance.json"},
+            "child_agent": _persisted_child_agent(),
+            "provenance": _research_provenance(),
             "matches": [{"text": "not continuation metadata"}],
         },
         source_refs=(_source(),),
@@ -448,6 +482,7 @@ class _ResearchProvenanceRunner:
                 "research_scope_id": "research-fun-panda",
                 "provenance": {
                     "query": "audit tool history",
+                    "window": {"depth": "deep", "current_depth": 0, "max_depth": 3},
                     "derivation": {"agent_ref": "audit~abc123"},
                     "workspace_ref": "research-fun-panda:_provenance.json",
                 },
@@ -490,6 +525,7 @@ async def test_dispatch_keeps_research_provenance_without_internal_tool_call_id(
             "data": {
                 "provenance": {
                     "query": "audit tool history",
+                    "window": {"depth": "deep", "current_depth": 0, "max_depth": 3},
                     "derivation": {"agent_ref": "audit~abc123"},
                     "workspace_ref": "research-fun-panda:_provenance.json",
                 }

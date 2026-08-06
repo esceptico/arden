@@ -558,41 +558,9 @@ async def background_run(request: BackgroundRequest, run_registry: RunRegistry =
 
 async def _list_child_agents(
     session_id: str,
-    runtime: Runtime,
-    run_registry: RunRegistry,
+    session_service,
 ) -> dict:
-    session_service = getattr(runtime, "session_service", None)
-    store = getattr(session_service, "store", None)
-    if store is not None:
-        return {"tasks": await store.list_background_agent_runs(session_id)}
-
-    registry = run_registry.get_background_registry(session_id)
-    pending = registry.list_pending()
-    now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    return {
-        "tasks": [
-            {
-                "task_id": tid,
-                "child_run_id": tid,
-                "session_id": session_id,
-                "parent_run_id": None,
-                "parent_tool_call_id": None,
-                "agent_type": "background_research",
-                "wait": False,
-                "status": "running",
-                "command": cmd,
-                "detail": None,
-                "result_ref": None,
-                "created_at": now,
-                "started_at": None,
-                "updated_at": now,
-                "ended_at": None,
-                "cancel_requested_at": None,
-                "notified_at": None,
-            }
-            for tid, cmd in pending
-        ]
-    }
+    return {"tasks": await session_service.store.list_background_agent_runs(session_id)}
 
 
 async def _child_agent_result_snapshot(
@@ -708,19 +676,17 @@ async def _cancel_child_agent(
 @router.get("/chat/background-tasks", response_model=BackgroundAgentRunsResponse)
 async def list_background_tasks(
     session_id: str,
-    runtime: Runtime = Depends(get_runtime),
-    run_registry: RunRegistry = Depends(require_run_registry),
+    session_service=Depends(require_session_service),
 ):
-    return await _list_child_agents(session_id, runtime, run_registry)
+    return await _list_child_agents(session_id, session_service)
 
 
 @router.get("/chat/child-agents", response_model=BackgroundAgentRunsResponse)
 async def list_child_agents(
     session_id: str,
-    runtime: Runtime = Depends(get_runtime),
-    run_registry: RunRegistry = Depends(require_run_registry),
+    session_service=Depends(require_session_service),
 ):
-    return await _list_child_agents(session_id, runtime, run_registry)
+    return await _list_child_agents(session_id, session_service)
 
 
 @router.get("/chat/child-agents/{child_run_id}/result", response_model=ChildAgentResultResponse)

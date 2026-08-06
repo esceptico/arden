@@ -34,6 +34,7 @@ function activityMessage(items: ActivityItem[]): UiMessage {
 function rosterRow(overrides: Partial<BackgroundAgent> = {}): BackgroundAgent {
   return {
     taskId: "child-run-1",
+    agentRef: "research-auth-flow~abc123",
     sessionId: "session-1",
     childSessionId: "session-1::d0021162",
     command: "Research",
@@ -61,6 +62,33 @@ describe("syncTranscriptAgentsFromRoster", () => {
     expect(item?.cancelRequested).toBe(false);
     // The input map is never mutated.
     expect(messages.get("activity-1")?.activity?.items[0].taskStatus).toBe("running");
+  });
+
+  it("matches persisted public metadata to a roster with unrelated internal IDs", () => {
+    const publicItem = agentItem({
+      id: "history-call",
+      childAgent: {
+        agentRef: "research-auth-flow~abc123",
+        sessionRef: "research-auth-flow~abc123",
+        agentType: "background_research",
+        wait: false,
+        status: "running",
+      },
+    });
+    const messages = new Map([["activity-1", activityMessage([publicItem])]]);
+    const next = syncTranscriptAgentsFromRoster(
+      messages,
+      {
+        "session-1:internal-task": rosterRow({
+          taskId: "internal-task",
+          childSessionId: "session-1::internal",
+          parentToolCallId: undefined,
+        }),
+      },
+      "session-1",
+    );
+
+    expect(next?.get("activity-1")?.activity?.items[0].taskStatus).toBe("completed");
   });
 
   it("carries failed and interrupted through, and matches by parent tool call id alone", () => {

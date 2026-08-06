@@ -87,6 +87,7 @@ function activityMessage(): UiMessage {
 function backgroundAgent(overrides: Partial<BackgroundAgent> = {}): BackgroundAgent {
   return {
     taskId: "child-run-1",
+    agentRef: "research-auth-flow~abc123",
     sessionId: "session-1",
     childSessionId: "child-session-1",
     command: "Research",
@@ -99,3 +100,30 @@ function backgroundAgent(overrides: Partial<BackgroundAgent> = {}): BackgroundAg
     ...overrides,
   };
 }
+
+test("public history refs match active agents with different internal IDs", () => {
+  const activity = activityMessage();
+  const item = activity.activity!.items[0];
+  item.id = "history-call";
+  item.childAgent = {
+    agentRef: "research-auth-flow~abc123",
+    sessionRef: "research-auth-flow~abc123",
+    agentType: "research",
+    wait: false,
+    status: "running",
+  };
+  const agent = backgroundAgent({
+    taskId: "internal-task",
+    childSessionId: "session-1::internal",
+    parentToolCallId: undefined,
+  });
+
+  expect(
+    turnHasActiveChildAgent({
+      childIds: [activity.id],
+      messages: new Map([[activity.id, activity]]),
+      backgroundAgents: { "session-1:internal-task": agent },
+      sessionId: "session-1",
+    }),
+  ).toBe(true);
+});

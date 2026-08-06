@@ -15,6 +15,7 @@ class _Store:
         return [
             {
                 "task_id": "bg-1",
+                "agent_ref": "research~abc123",
                 "child_run_id": "bg-1",
                 "session_id": session_id,
                 "parent_run_id": "run-1",
@@ -76,6 +77,10 @@ class _Runtime:
     def list_pending(self):
         return [("bg-1", "research")]
 
+    def agent_ref(self, task_id):
+        assert task_id == "bg-1"
+        return "research~abc123"
+
     def cancel(self, task_id):
         return None
 
@@ -100,6 +105,7 @@ def test_background_tasks_endpoint_returns_durable_snapshot():
 
     assert response.status_code == 200
     assert response.json()["tasks"][0]["status"] == "running"
+    assert response.json()["tasks"][0]["agent_ref"] == "research~abc123"
     assert response.json()["tasks"][0]["detail"] == "read files"
     assert response.json()["tasks"][0]["child_run_id"] == "bg-1"
     assert response.json()["tasks"][0]["parent_tool_call_id"] == "call-background"
@@ -132,6 +138,19 @@ def test_child_agents_endpoint_returns_same_durable_snapshot():
     assert response.json()["tasks"][0]["child_run_id"] == "bg-1"
     assert response.json()["tasks"][0]["parent_tool_call_id"] == "call-background"
     assert response.json()["tasks"][0]["agent_type"] == "background_research"
+
+
+def test_child_agents_requires_the_durable_session_store():
+    runtime = _Runtime()
+    runtime.session_service = None
+    app.dependency_overrides[get_runtime] = lambda: runtime
+    try:
+        response = TestClient(app).get("/chat/child-agents?session_id=sess-1")
+    finally:
+        app.dependency_overrides.pop(get_runtime, None)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Session service not available"}
 
 
 def test_child_agent_cancel_requests_same_durable_cancel():

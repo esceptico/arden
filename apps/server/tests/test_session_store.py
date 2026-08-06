@@ -1843,9 +1843,7 @@ async def test_research_provenance_round_trips_in_durable_tool_result_data(store
         "query": "audit harness",
         "window": {"depth": "deep", "current_depth": 0, "max_depth": 3},
         "derivation": {
-            "research_tool_call_id": "research-1",
-            "child_run_id": "child-1",
-            "child_tool_call_ids": ["child-call-1"],
+            "agent_ref": "audit-harness~abc123",
         },
         "workspace_ref": "research-1:_provenance.json",
     }

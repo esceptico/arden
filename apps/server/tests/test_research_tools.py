@@ -451,7 +451,9 @@ async def test_spawner_carries_child_tool_calls_and_source_refs(monkeypatch):
 
     assert result.tool_call_ids == ("child-call-1",)
     assert result.source_refs == (source,)
-    assert result.child_agent_data()["source_refs"] == [source.to_dict()]
+    child_data = result.child_agent_data()
+    assert "tool_call_ids" not in child_data["child_agent"]
+    assert child_data["source_refs"] == [source.to_dict()]
 
 
 @pytest.mark.asyncio

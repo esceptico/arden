@@ -649,8 +649,8 @@ async def test_history_includes_tool_result_data(session_service: SessionService
     state = _state("sess-tool-result-data")
     data = {
         "child_agent": {
-            "child_run_id": "child-run-123456",
-            "parent_tool_call_id": "call-1",
+            "agent_ref": "background-research~abc123",
+            "session_ref": "background-research~abc123",
             "agent_type": "background_research",
             "wait": False,
             "status": "running",

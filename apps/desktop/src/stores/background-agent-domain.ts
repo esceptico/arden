@@ -17,6 +17,7 @@ export interface BackgroundAgentsDomainState {
 
 export interface BackgroundAgentSnapshot {
   taskId: string;
+  agentRef: string;
   childSessionId?: string;
   command: string;
   status?: BackgroundAgentStatus | string | null;
@@ -74,6 +75,7 @@ export function reduceBackgroundAgentsForSession(
     const prev = rows[key];
     const next: BackgroundAgent = {
       taskId: agent.taskId,
+      agentRef: agent.agentRef,
       sessionId,
       childSessionId: agent.childSessionId ?? prev?.childSessionId,
       command: agent.command,
@@ -136,6 +138,7 @@ function isEquivalentBackgroundAgent(
 ): boolean {
   return (
     prev.taskId === next.taskId &&
+    prev.agentRef === next.agentRef &&
     prev.sessionId === next.sessionId &&
     prev.childSessionId === next.childSessionId &&
     prev.command === next.command &&
@@ -178,6 +181,9 @@ export function findBackgroundAgentForActivityItem(
   if (!sessionId) return undefined;
   for (const agent of Object.values(rows)) {
     if (agent.sessionId !== sessionId) continue;
+    if (agent.agentRef && agent.agentRef === item.childAgent?.agentRef) {
+      return agent;
+    }
     if (
       agent.parentToolCallId &&
       (agent.parentToolCallId === item.id ||

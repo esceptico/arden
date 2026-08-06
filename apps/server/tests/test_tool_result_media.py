@@ -31,7 +31,14 @@ class DataRunner:
             preview="Started",
             duration_ms=1,
             is_error=False,
-            data={"child_agent": {"child_run_id": "child-run-1", "wait": False}},
+            data={
+                "child_agent": {
+                    "agent_ref": "research~abc123",
+                    "agent_type": "research",
+                    "wait": False,
+                    "status": "running",
+                }
+            },
             display_name="Background",
         )
 
@@ -87,7 +94,14 @@ async def test_dispatch_tools_persists_tool_result_data():
         "role": Role.TOOL,
         "tool_call_id": "call_data",
         "content": "Started background agent.",
-        "data": {"child_agent": {"child_run_id": "child-run-1", "wait": False}},
+        "data": {
+            "child_agent": {
+                "agent_ref": "research~abc123",
+                "agent_type": "research",
+                "wait": False,
+                "status": "running",
+            }
+        },
     }
 
 

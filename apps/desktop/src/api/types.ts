@@ -393,6 +393,7 @@ export interface AutomationRun {
 
 export interface BackgroundTaskSummary {
   task_id: string;
+  agent_ref: string;
   child_run_id?: string | null;
   child_session_id?: string | null;
   session_id?: string;

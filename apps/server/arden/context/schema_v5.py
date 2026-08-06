@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
+from arden.context.child_agent_metadata_migration import rewrite_child_agent_metadata
 from arden.context.errors import SessionDataCorruptionError
 from arden.context.schema_sql import CANONICAL_SQL_OBJECTS, CANONICAL_TABLE_SQL
 from arden.core.public_refs import is_public_ref, public_ref
@@ -375,7 +376,7 @@ async def _rebuild_canonical_tables(conn: aiosqlite.Connection) -> None:
             await conn.execute(item.sql)
 
 
-async def migrate_v5_to_v9(
+async def migrate_v5_to_current(
     conn: aiosqlite.Connection,
     *,
     strict_active_projection: StrictProjection,
@@ -384,14 +385,14 @@ async def migrate_v5_to_v9(
     mirror_session_messages: MirrorMessages,
     validate_schema: SchemaValidator,
 ) -> None:
-    """Atomically convert the one accepted v5 layout to canonical v9."""
+    """Atomically convert the one accepted v5 layout to the current contract."""
 
     cold = await conn.execute_fetchall(
         "SELECT session_id FROM sessions WHERE storage_state = 'cold' LIMIT 1"
     )
     if cold:
         raise SessionDataCorruptionError(
-            f"session {cold[0]['session_id']} must be restored from cold storage before schema v9 migration"
+            f"session {cold[0]['session_id']} must be restored from cold storage before schema migration"
         )
 
     if conn.in_transaction:
@@ -411,6 +412,7 @@ async def migrate_v5_to_v9(
 
         await _rewrite_provider_receipts(conn, strict_active_projection=strict_active_projection)
         await _backfill_public_refs(conn)
+        await rewrite_child_agent_metadata(conn, strict_active_projection=strict_active_projection)
         await conn.execute("ALTER TABLE sessions ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0")
         await conn.execute(
             """
@@ -430,7 +432,7 @@ async def migrate_v5_to_v9(
         await conn.execute("DROP TABLE tool_results_legacy")
 
         cursor = await conn.execute(
-            "UPDATE session_store_meta SET value = '9' WHERE key = 'schema_version' AND value = '5'"
+            "UPDATE session_store_meta SET value = '10' WHERE key = 'schema_version' AND value = '5'"
         )
         if cursor.rowcount != 1:
             raise RuntimeError("schema v5 version row changed during migration")

@@ -10,6 +10,7 @@ import { EASE_DECELERATE, MOTION } from "@/lib/tokens/motion";
 import { buildStats, formatAgentUsage } from "@/features/chat/lib/toolViewer";
 import { CopyButton } from "@/features/chat/components/CopyButton";
 import { ActivityTree } from "@/features/chat/components/ActivityTree";
+import { findBackgroundAgentForActivityItem } from "@/stores/background-agent-domain";
 
 export function AgentBody({
   item,
@@ -23,7 +24,10 @@ export function AgentBody({
   const task = useMemo(() => extractTask(item.args) ?? item.target, [item.args, item.target]);
   const stats = useMemo(() => buildStats(descendants), [descendants]);
   const running = activityItemStatus(item) === "ongoing";
-  const childRunId = item.childAgent?.childRunId;
+  const roster = useStore((s) =>
+    findBackgroundAgentForActivityItem(s.backgroundAgents.rows, item, s.currentSessionId),
+  );
+  const childRunId = roster?.taskId ?? item.childAgent?.childRunId;
   const [childResult, setChildResult] = useState<ChildAgentResult | null>(null);
   const [childResultError, setChildResultError] = useState<string | null>(null);
   const [childResultLoading, setChildResultLoading] = useState(false);
@@ -93,7 +97,7 @@ export function AgentBody({
         <div className="flex items-center gap-2">
           <Caption>Result</Caption>
           {item.childAgent && (
-            <span className="text-xs text-faint" title={item.childAgent.childRunId}>
+            <span className="text-xs text-faint" title={item.childAgent.agentRef}>
               {humanizeAgentType(item.childAgent.agentType)} · {item.childAgent.wait ? "awaited" : "detached"}
             </span>
           )}

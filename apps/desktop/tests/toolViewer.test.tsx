@@ -11,7 +11,7 @@ afterEach(() => {
   delete (globalThis.window as unknown as { ardenDesktop?: unknown }).ardenDesktop;
 });
 
-test("agent inspector loads durable child-agent result by child run id", async () => {
+test("agent inspector resolves a public history ref to the roster's internal result route", async () => {
   const { appEl, root, restore } = setupDom();
   const requests: string[] = [];
   const item: ActivityItem = {
@@ -24,8 +24,8 @@ test("agent inspector loads durable child-agent result by child run id", async (
     status: "executed",
     taskStatus: "completed",
     childAgent: {
-      childRunId: "child-run-1",
-      parentToolCallId: "call-bg",
+      agentRef: "research-auth-flow~abc123",
+      sessionRef: "research-auth-flow~abc123",
       agentType: "background_research",
       wait: false,
       status: "completed",
@@ -72,7 +72,23 @@ test("agent inspector loads durable child-agent result by child run id", async (
     ]),
     order: ["activity-1"],
     viewingTool: item,
-    backgroundAgents: createBackgroundAgentsDomainState(),
+    backgroundAgents: {
+      ...createBackgroundAgentsDomainState(),
+      rows: {
+        "sess-1:child-run-1": {
+          taskId: "child-run-1",
+          agentRef: "research-auth-flow~abc123",
+          sessionId: "sess-1",
+          childSessionId: "sess-1::child",
+          command: "research auth flow",
+          status: "completed",
+          agentType: "background_research",
+          wait: false,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      },
+    },
   });
 
   try {

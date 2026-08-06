@@ -9,6 +9,7 @@ from arden.areas.display_contract import (
     WORK_TEXT_MAX_CHARS,
 )
 from arden.core.content import ContextContent, ContextManifestEntry
+from arden.core.public_refs import PublicRef
 from arden.tools.core.types import ToolOverrideDecision
 from arden.tools.scopes import SettableScopeKey
 
@@ -85,6 +86,7 @@ class BackgroundTaskSessionStatusResponse(BaseModel):
 
 class BackgroundAgentRunResponse(BaseModel):
     task_id: str
+    agent_ref: PublicRef
     child_run_id: str | None = None
     child_session_id: str | None = None
     session_id: str

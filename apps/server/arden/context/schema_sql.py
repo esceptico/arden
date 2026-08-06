@@ -1,4 +1,4 @@
-"""Canonical SQLite schema for a fresh v9 context database."""
+"""Canonical SQLite schema for a fresh current context database."""
 
 import re
 from dataclasses import dataclass
@@ -394,7 +394,7 @@ AFTER UPDATE ON session_messages BEGIN
     VALUES (new.rowid, new.search_text);
 END;
 
-INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '9');
+INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '10');
 """
 
 

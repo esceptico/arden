@@ -222,7 +222,7 @@ function AgentRow({
   const fetchedSnippet = useStore((s) => {
     const key = roster
       ? backgroundAgentKey(roster.sessionId, roster.taskId)
-      : item.childAgent && s.currentSessionId
+      : item.childAgent?.childRunId && s.currentSessionId
         ? backgroundAgentKey(s.currentSessionId, item.childAgent.childRunId)
         : null;
     return key ? s.childAgentResultSnippets[key] : undefined;

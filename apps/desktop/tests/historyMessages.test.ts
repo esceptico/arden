@@ -212,9 +212,8 @@ test("rehydrates child agent metadata from persisted tool result data", () => {
       tool_call_id: "agent-call-1",
       data: {
         child_agent: {
-          child_run_id: "child-run-123456",
-          child_session_id: "session-child-1",
-          parent_tool_call_id: "agent-call-1",
+          agent_ref: "research-auth-flow~abc123",
+          session_ref: "research-auth-flow~abc123",
           agent_type: "background_research",
           wait: false,
           status: "running",
@@ -228,9 +227,8 @@ test("rehydrates child agent metadata from persisted tool result data", () => {
 
   expect(activity?.activity?.items[0].semanticKind).toBe("agent");
   expect(activity?.activity?.items[0].childAgent).toEqual({
-    childRunId: "child-run-123456",
-    childSessionId: "session-child-1",
-    parentToolCallId: "agent-call-1",
+    agentRef: "research-auth-flow~abc123",
+    sessionRef: "research-auth-flow~abc123",
     agentType: "background_research",
     wait: false,
     status: "running",

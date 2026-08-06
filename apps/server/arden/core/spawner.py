@@ -125,8 +125,6 @@ class SpawnResult:
         }
         if self.child_session_ref:
             child_agent["session_ref"] = self.child_session_ref
-        if self.tool_call_ids:
-            child_agent["tool_call_ids"] = list(self.tool_call_ids)
         data = {"child_agent": child_agent}
         if self.source_refs:
             data["source_refs"] = [ref.to_dict() for ref in self.source_refs]

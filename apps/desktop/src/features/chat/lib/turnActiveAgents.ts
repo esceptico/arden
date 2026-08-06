@@ -18,12 +18,18 @@ export function turnHasActiveChildAgent({
   if (!sessionId) return false;
 
   const refs = collectTurnChildAgentRefs(childIds, messages);
-  if (!refs.parentToolCallIds.size && !refs.childRunIds.size && !refs.childSessionIds.size) {
+  if (
+    !refs.agentRefs.size &&
+    !refs.parentToolCallIds.size &&
+    !refs.childRunIds.size &&
+    !refs.childSessionIds.size
+  ) {
     return false;
   }
 
   return Object.values(backgroundAgents).some((agent) => {
     if (agent.sessionId !== sessionId || !isActiveBackgroundAgent(agent)) return false;
+    if (agent.agentRef && refs.agentRefs.has(agent.agentRef)) return true;
     if (agent.parentToolCallId && refs.parentToolCallIds.has(agent.parentToolCallId)) return true;
     if (agent.childSessionId && refs.childSessionIds.has(agent.childSessionId)) return true;
     return refs.childRunIds.has(agent.taskId);
@@ -34,10 +40,12 @@ function collectTurnChildAgentRefs(
   childIds: readonly string[],
   messages: ReadonlyMap<string, UiMessage>,
 ): {
+  agentRefs: Set<string>;
   parentToolCallIds: Set<string>;
   childRunIds: Set<string>;
   childSessionIds: Set<string>;
 } {
+  const agentRefs = new Set<string>();
   const parentToolCallIds = new Set<string>();
   const childRunIds = new Set<string>();
   const childSessionIds = new Set<string>();
@@ -50,11 +58,12 @@ function collectTurnChildAgentRefs(
       if (item.childAgent?.parentToolCallId) {
         parentToolCallIds.add(item.childAgent.parentToolCallId);
       }
+      if (item.childAgent?.agentRef) agentRefs.add(item.childAgent.agentRef);
       if (item.childAgent?.childRunId) childRunIds.add(item.childAgent.childRunId);
       if (item.childAgent?.childSessionId) childSessionIds.add(item.childAgent.childSessionId);
       if (item.runId) childRunIds.add(item.runId);
     }
   }
 
-  return { parentToolCallIds, childRunIds, childSessionIds };
+  return { agentRefs, parentToolCallIds, childRunIds, childSessionIds };
 }

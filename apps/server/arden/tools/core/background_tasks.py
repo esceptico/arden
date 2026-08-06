@@ -94,6 +94,7 @@ class BackgroundTaskRegistry:
     on_result: Callable[[list[dict]], Awaitable[None]] | None = None
     record_event: Callable[..., Awaitable[BackgroundStartDisposition | None]] | None = None
     read_result: Callable[[str], Awaitable[str | None]] | None = None
+    retain_settled_task_ids: bool = False
     claim_completion: Callable[..., Awaitable[dict]] | None = None
     mark_completion_delivered: Callable[..., Awaitable[None]] | None = None
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
@@ -108,6 +109,7 @@ class BackgroundTaskRegistry:
     # spawn subtree (descendants run inside this session).
     _child_sessions: dict[str, str] = field(default_factory=dict)
     _agent_refs: dict[str, str] = field(default_factory=dict)
+    _settled_task_ids: dict[str, str] = field(default_factory=dict)
     # task_id -> run that spawned it, so cancelling a superseded run can stop
     # its own agents without touching a newer run's.
     _parent_runs: dict[str, str] = field(default_factory=dict)
@@ -186,7 +188,7 @@ class BackgroundTaskRegistry:
     def agent_ref(self, task_id: str) -> str | None:
         return self._agent_refs.get(task_id)
 
-    def task_for_agent_ref(self, agent_ref: str) -> str | None:
+    def live_task_for_agent_ref(self, agent_ref: str) -> str | None:
         return next(
             (
                 task_id
@@ -195,6 +197,14 @@ class BackgroundTaskRegistry:
             ),
             None,
         )
+
+    def task_id_for_agent_ref(self, agent_ref: str) -> str | None:
+        """Resolve a task while it is live or after it settles in this registry."""
+        live_task_id = next(
+            (task_id for task_id, value in self._agent_refs.items() if value == agent_ref),
+            None,
+        )
+        return live_task_id or self._settled_task_ids.get(agent_ref)
 
     def live_agent_refs(self) -> list[str]:
         return sorted(
@@ -324,7 +334,10 @@ class BackgroundTaskRegistry:
         self._commands[task_id] = command
 
         def complete(completed: asyncio.Task) -> None:
+            agent_ref = self._agent_refs.get(task_id)
             self._remove(task_id)
+            if agent_ref is not None and self.retain_settled_task_ids:
+                self._settled_task_ids[agent_ref] = task_id
             if not observe_failure or completed.cancelled():
                 return
             error = completed.exception()
@@ -483,14 +496,22 @@ class BackgroundTaskRegistry:
         return path if path.is_relative_to(result_dir) else None
 
     async def read_background_result(self, task_id: str) -> str | None:
-        if self.read_result:
-            return await self.read_result(task_id)
-        path = self._result_path(task_id)
-        if path is None:
-            return None
-        if not path.exists():
-            return None
-        return await asyncio.to_thread(path.read_text, encoding="utf-8")
+        try:
+            if self.read_result:
+                return await self.read_result(task_id)
+            path = self._result_path(task_id)
+            if path is None:
+                return None
+            if not path.exists():
+                return None
+            return await asyncio.to_thread(path.read_text, encoding="utf-8")
+        finally:
+            settled_ref = next(
+                (agent_ref for agent_ref, settled_task_id in self._settled_task_ids.items() if settled_task_id == task_id),
+                None,
+            )
+            if settled_ref is not None:
+                self._settled_task_ids.pop(settled_ref)
 
     async def deliver_result(
         self,

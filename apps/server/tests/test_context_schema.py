@@ -20,6 +20,65 @@ async def _store(tmp_path: Path) -> tuple[aiosqlite.Connection, aiosqlite.Connec
     return conn, read_conn, SessionStore(conn, read_conn)
 
 
+def _internal_child_receipt() -> dict:
+    return {
+        "child_run_id": "agent-internal-1",
+        "child_session_id": "child-internal-1",
+        "parent_tool_call_id": "call-internal-1",
+        "agent_type": "research",
+        "wait": True,
+        "status": "completed",
+        "tool_call_ids": ["nested-call-internal-1"],
+    }
+
+
+async def _seed_internal_child_receipt(conn: aiosqlite.Connection, store: SessionStore) -> None:
+    child_ref = "research~abc123"
+    await store.save_session(
+        SessionState(
+            session_id="child-internal-1",
+            public_ref=child_ref,
+            started_at=datetime.now(UTC),
+            session_type="agent",
+            parent_session_id="parent-internal-1",
+            parent_tool_call_id="call-internal-1",
+            agent_type="research",
+            agent_status="completed",
+        ),
+        [],
+    )
+    await store.save_session(
+        SessionState(session_id="parent-internal-1", started_at=datetime.now(UTC)),
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call-internal-1",
+                "content": "done",
+                "data": {"child_agent": _internal_child_receipt()},
+            }
+        ],
+    )
+    event = {
+        "type": "TOOL_CALL_RESULT",
+        "tool_call_id": "call-internal-1",
+        "data": {"child_agent": _internal_child_receipt()},
+    }
+    await conn.execute(
+        """
+        INSERT INTO session_events(session_id, seq, event_type, event_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "parent-internal-1",
+            1,
+            "tool_call_result",
+            json.dumps(event),
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+    await conn.commit()
+
+
 async def _downgrade_to_v5(conn: aiosqlite.Connection) -> None:
     await conn.execute("PRAGMA foreign_keys=OFF")
     await conn.executescript(
@@ -255,7 +314,7 @@ async def test_fresh_context_schema_is_canonical(tmp_path: Path):
             "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'session_messages_a_%'"
         )
 
-        assert [row["value"] for row in version] == ["9"]
+        assert [row["value"] for row in version] == ["10"]
         assert {"attention", "interrupts", "paused_at"} <= area_columns
         assert {row["name"] for row in triggers} == {
             "session_messages_ai",
@@ -309,7 +368,7 @@ async def test_v5_upgrade_backfills_missing_transcript_atomically(tmp_path: Path
         assert row["active_message_count"] == 1
         assert len(transcript) == 1
         version = await conn.execute_fetchall("SELECT value FROM session_store_meta")
-        assert [item["value"] for item in version] == ["9"]
+        assert [item["value"] for item in version] == ["10"]
     finally:
         await read_conn.close()
         await conn.close()
@@ -438,7 +497,7 @@ async def test_v5_postcondition_failure_rolls_back_ddl(tmp_path: Path, monkeypat
         async def reject_postcondition(_conn):
             raise RuntimeError("injected postcondition failure")
 
-        monkeypatch.setattr(context_schema, "_assert_v9_shape", reject_postcondition)
+        monkeypatch.setattr(context_schema, "_assert_current_shape", reject_postcondition)
         with pytest.raises(RuntimeError, match="injected postcondition"):
             await store.init_schema()
 
@@ -481,7 +540,7 @@ async def test_v5_corruption_rolls_back_before_schema_mutation(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", ["4", "10"])
+@pytest.mark.parametrize("version", ["4", "11"])
 async def test_unsupported_schema_versions_fail_without_mutation(tmp_path: Path, version: str):
     conn, read_conn, store = await _store(tmp_path)
     try:
@@ -497,6 +556,75 @@ async def test_unsupported_schema_versions_fail_without_mutation(tmp_path: Path,
 
         stored = await conn.execute_fetchall("SELECT value FROM session_store_meta")
         assert [item["value"] for item in stored] == [version]
+    finally:
+        await read_conn.close()
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v5_upgrade_replaces_internal_child_receipts_everywhere(tmp_path: Path):
+    conn, read_conn, store = await _store(tmp_path)
+    try:
+        await store.init_schema()
+        await _seed_internal_child_receipt(conn, store)
+        await read_conn.close()
+        await _downgrade_to_v5(conn)
+        read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+        store.read_conn = read_conn
+
+        await store.init_schema()
+
+        child_row = (await conn.execute_fetchall(
+            "SELECT public_ref FROM sessions WHERE session_id = 'child-internal-1'"
+        ))[0]
+        expected_ref = child_row["public_ref"]
+        projection = json.loads((await conn.execute_fetchall(
+            "SELECT messages FROM sessions WHERE session_id = 'parent-internal-1'"
+        ))[0]["messages"])[0]["data"]["child_agent"]
+        transcript = json.loads((await conn.execute_fetchall(
+            "SELECT message_json FROM session_messages WHERE session_id = 'parent-internal-1'"
+        ))[0]["message_json"])["data"]["child_agent"]
+        event = json.loads((await conn.execute_fetchall(
+            "SELECT event_json FROM session_events WHERE session_id = 'parent-internal-1'"
+        ))[0]["event_json"])["data"]["child_agent"]
+        expected = {
+            "agent_ref": expected_ref,
+            "session_ref": expected_ref,
+            "agent_type": "research",
+            "wait": True,
+            "status": "completed",
+        }
+        assert projection == transcript == event == expected
+        assert (await conn.execute_fetchall("SELECT value FROM session_store_meta"))[0]["value"] == "10"
+    finally:
+        await read_conn.close()
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_v5_child_receipt_migration_rolls_back_unresolved_internal_ids(tmp_path: Path):
+    conn, read_conn, store = await _store(tmp_path)
+    try:
+        await store.init_schema()
+        broken = _internal_child_receipt()
+        broken["child_session_id"] = "missing-child"
+        await store.save_session(
+            SessionState(session_id="parent-internal-1", started_at=datetime.now(UTC)),
+            [{"role": "tool", "content": "done", "data": {"child_agent": broken}}],
+        )
+        await read_conn.close()
+        await _downgrade_to_v5(conn)
+        read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
+        store.read_conn = read_conn
+
+        with pytest.raises(SessionDataCorruptionError, match="missing child session"):
+            await store.init_schema()
+
+        assert (await conn.execute_fetchall("SELECT value FROM session_store_meta"))[0]["value"] == "5"
+        projection = json.loads((await conn.execute_fetchall(
+            "SELECT messages FROM sessions WHERE session_id = 'parent-internal-1'"
+        ))[0]["messages"])[0]["data"]["child_agent"]
+        assert projection["child_run_id"] == "agent-internal-1"
     finally:
         await read_conn.close()
         await conn.close()

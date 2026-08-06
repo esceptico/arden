@@ -320,7 +320,7 @@ async def approve_app_followup_task(
 ) -> ApprovalInfo | ApprovalWaived:
     # Same line send_message draws: queueing into a live agent is free; waking
     # an idle one starts a fresh run — that costs money, so the user decides.
-    if execution.ctx.background_tasks.task_for_agent_ref(args.agent_ref) is not None:
+    if execution.ctx.background_tasks.live_task_for_agent_ref(args.agent_ref) is not None:
         return APPROVAL_WAIVED
     return ApprovalInfo(
         description="Wake an idle agent with a new task",
@@ -332,7 +332,7 @@ async def approve_app_followup_task(
 async def app_followup_task(execution: ToolExecution, args: AppFollowupTaskInput) -> ToolResult:
     ctx = execution.ctx
     registry = ctx.background_tasks
-    if (task_id := registry.task_for_agent_ref(args.agent_ref)) is not None:
+    if (task_id := registry.live_task_for_agent_ref(args.agent_ref)) is not None:
         if registry.queue_followup(task_id, args.task):
             return ToolResult(
                 content=(

@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { areaHistoryResponse, type HistoryResponse } from "@/stores/history-response";
+import {
+  areaHistoryResponse,
+  historyMessagesToUi,
+  type HistoryResponse,
+} from "@/stores/history-response";
 import type { UiMessage } from "@/stores/types";
 
 const contextBudget = {
@@ -35,8 +39,8 @@ test("active history merge keeps child agent metadata from durable result data",
         tool_call_id: "agent-call-1",
         data: {
           child_agent: {
-            child_run_id: "child-run-123456",
-            parent_tool_call_id: "agent-call-1",
+            agent_ref: "research-auth-flow~abc123",
+            session_ref: "research-auth-flow~abc123",
             agent_type: "background_research",
             wait: false,
             status: "running",
@@ -88,12 +92,51 @@ test("active history merge keeps child agent metadata from durable result data",
   const activity = areaed.items.find((item) => item.role === "activity");
 
   expect(activity?.activity?.items[0].childAgent).toEqual({
-    childRunId: "child-run-123456",
-    parentToolCallId: "agent-call-1",
+    agentRef: "research-auth-flow~abc123",
+    sessionRef: "research-auth-flow~abc123",
     agentType: "background_research",
     wait: false,
     status: "running",
   });
+});
+
+test("history rejects legacy internal child-agent metadata", () => {
+  const history: HistoryResponse = {
+    messages: [
+      {
+        role: "assistant",
+        content: "",
+        id: "assistant-tools",
+        tool_calls: [
+          {
+            id: "agent-call-1",
+            name: "background",
+            arguments: '{"task":"research"}',
+            kind: "agent",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: "Started background agent.",
+        id: "agent-result-1",
+        tool_call_id: "agent-call-1",
+        data: {
+          child_agent: {
+            agent_ref: "research-auth-flow~abc123",
+            agent_type: "background_research",
+            wait: false,
+            status: "running",
+            child_run_id: "internal-child-run",
+          },
+        },
+      },
+    ],
+    active_run_id: null,
+    context_budget: contextBudget,
+  };
+
+  expect(() => historyMessagesToUi(history.messages, null)).toThrow("unknown field: child_run_id");
 });
 
 test("history rebuild keeps durable tool outcomes", () => {

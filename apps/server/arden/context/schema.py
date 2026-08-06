@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 import aiosqlite
 
 from arden.context.errors import SessionSchemaError
-from arden.context.schema_manifest import assert_v9_schema as _assert_v9_shape
+from arden.context.schema_manifest import assert_current_schema as _assert_current_shape
 from arden.context.schema_manifest import (
     read_context_schema_manifest as _read_context_schema_manifest,
 )
@@ -14,10 +14,10 @@ from arden.context.schema_sql import (
     CANONICAL_SQL_OBJECTS,
     normalize_schema_sql,
 )
-from arden.context.schema_v5 import migrate_v5_to_v9
+from arden.context.schema_v5 import migrate_v5_to_current
 
-CURRENT_VERSION = 9
-SUPPORTED_UPGRADE_VERSION = 5
+CURRENT_VERSION = 10
+V5_UPGRADE_VERSION = 5
 read_context_schema_manifest = _read_context_schema_manifest
 
 StrictProjection = Callable[[str, object], list[dict]]
@@ -25,7 +25,7 @@ MetadataParser = Callable[[str, str | None], dict]
 StampMessages = Callable[[list[dict], str], None]
 MirrorMessages = Callable[..., Awaitable[None]]
 
-_V9_COLUMN_NAMES: dict[str, set[str]] = {
+_CURRENT_COLUMN_NAMES: dict[str, set[str]] = {
     "areas": {
         "area_id", "area_ref", "name", "name_key", "default_cwds",
         "instructions", "page_path", "page_id", "autonomy", "attention",
@@ -137,17 +137,17 @@ async def initialize_context_schema(
 
     version = await _schema_version(conn)
     if version == CURRENT_VERSION:
-        await _assert_v9_shape(conn)
+        await _assert_current_shape(conn)
         return
-    if version == SUPPORTED_UPGRADE_VERSION:
+    if version == V5_UPGRADE_VERSION:
         await _assert_v5_shape(conn)
-        await migrate_v5_to_v9(
+        await migrate_v5_to_current(
             conn,
             strict_active_projection=strict_active_projection,
             parse_metadata=parse_metadata,
             stamp_messages=stamp_messages,
             mirror_session_messages=mirror_session_messages,
-            validate_schema=lambda: _assert_v9_shape(conn),
+            validate_schema=lambda: _assert_current_shape(conn),
         )
         return
     if version > CURRENT_VERSION:
@@ -171,7 +171,7 @@ async def _create_fresh(conn: aiosqlite.Connection) -> None:
         await conn.execute("VACUUM")
     try:
         await conn.executescript(f"BEGIN IMMEDIATE;\n{CANONICAL_SCHEMA_SQL}")
-        await _assert_v9_shape(conn)
+        await _assert_current_shape(conn)
         await conn.commit()
     except BaseException:
         await conn.rollback()
@@ -199,7 +199,7 @@ async def _schema_version(conn: aiosqlite.Connection) -> int:
 
 
 async def _assert_v5_shape(conn: aiosqlite.Connection) -> None:
-    expected = {name: set(columns) for name, columns in _V9_COLUMN_NAMES.items()}
+    expected = {name: set(columns) for name, columns in _CURRENT_COLUMN_NAMES.items()}
     expected.update(_V5_ONLY_COLUMN_NAMES)
     expected["sessions"] -= {"active_message_count", "public_ref"}
     expected["sessions"].add("slice_key")

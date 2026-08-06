@@ -356,7 +356,7 @@ describe("agentRunFromActivityItem", () => {
 
 describe("childAgentTaskToBackgroundSnapshot", () => {
   it("keeps live statuses running and settles unknown statuses as interrupted", () => {
-    const base = { task_id: "t1", command: "research" };
+    const base = { task_id: "t1", agent_ref: "research~abc123", command: "research" };
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "running" }).status).toBe("running");
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "activity" }).status).toBe("running");
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "interrupted" }).status).toBe(

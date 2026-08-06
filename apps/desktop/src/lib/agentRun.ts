@@ -15,6 +15,7 @@ export function childAgentTaskToBackgroundSnapshot(
 ): BackgroundAgentSnapshot {
   return {
     taskId: task.child_run_id ?? task.task_id,
+    agentRef: task.agent_ref,
     childSessionId: task.child_session_id ?? undefined,
     command: task.command,
     status: normalizeBackgroundAgentStatus(task.status),
@@ -245,7 +246,7 @@ export function agentRunFromActivityItem(
     type: humanizeAgentType(child?.agentType ?? item.kind),
     status,
     elapsedLabel: item.durationMs != null ? formatDuration(item.durationMs) : "",
-    childSessionId: child?.childSessionId ?? roster?.childSessionId,
+    childSessionId: roster?.childSessionId ?? child?.childSessionId,
     runId: item.runId,
     detached: child ? child.wait === false : roster ? roster.wait === false : undefined,
     progress: item.progress,

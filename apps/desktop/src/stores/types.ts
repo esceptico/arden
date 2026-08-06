@@ -169,6 +169,8 @@ export type BackgroundAgentStatus =
 
 export interface BackgroundAgent {
   taskId: string;
+  /** Public model-facing identity; taskId remains the internal control key. */
+  agentRef?: string;
   sessionId: string;
   childSessionId?: string;
   command: string;
@@ -183,7 +185,11 @@ export interface BackgroundAgent {
 }
 
 export interface ChildAgentRef {
-  childRunId: string;
+  /** Public identity persisted in model history. */
+  agentRef?: string;
+  sessionRef?: string;
+  /** Internal live-control identities supplied only by lifecycle events. */
+  childRunId?: string;
   childSessionId?: string;
   parentToolCallId?: string;
   agentType: string;
@@ -638,6 +644,8 @@ export interface Actions {
     sessionId: string,
     agents: {
       taskId: string;
+      agentRef: string;
+      childSessionId?: string;
       command: string;
       status?: BackgroundAgentStatus | string | null;
       detail?: string;
