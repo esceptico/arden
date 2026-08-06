@@ -257,13 +257,7 @@ class SessionStore:
 
 
     async def init_schema(self) -> None:
-        await initialize_context_schema(
-            self.conn,
-            strict_active_projection=self._strict_active_projection,
-            parse_metadata=self._session_metadata,
-            stamp_messages=self._stamp_messages,
-            mirror_session_messages=self._mirror_session_messages,
-        )
+        await initialize_context_schema(self.conn)
 
     @staticmethod
     def _session_ref_text(name: object, session_type: object) -> tuple[str, str]:
