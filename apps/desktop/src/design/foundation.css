@@ -920,6 +920,13 @@ textarea.arden-field {
 .switch-control.switch-control-on .switch-control-knob {
   transform: translateX(0.875rem);
 }
+/* Square corner profile: --r-square (9px) clamps to a pill on an 18px track,
+   so like kbd chips the switch branches to the small-surface square value.
+   Knob stays concentric: track radius − its 2px inset. */
+html[data-corners="square"] .switch-control { border-radius: var(--r-tag); }
+html[data-corners="square"] .switch-control-knob {
+  border-radius: calc(var(--r-tag) - 0.125rem);
+}
 .switch-control:focus-visible {
   outline: none;
   box-shadow:
