@@ -90,7 +90,7 @@ async def compact_context(
         }
 
     if resolved_session_id:
-        await prime_bus_cursor_from_store(buses, resolved_session_id, runtime.session_service.store)
+        await prime_bus_cursor_from_store(buses, resolved_session_id, runtime.session_service.store.events)
     bus = buses.get_or_create(resolved_session_id) if resolved_session_id else None
 
     if bus:

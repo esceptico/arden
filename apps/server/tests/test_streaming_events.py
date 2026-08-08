@@ -157,7 +157,14 @@ def test_text_boundary_events_convert_to_sse():
 
 @pytest.mark.asyncio
 async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_safe_calls():
+    class EventStore:
+        async def get_tool_result_for_call(self, *, run_id, tool_call_id):
+            assert (run_id, tool_call_id) == ("run-1", "c1")
+            return {"content": "durable result"}
+
     class Store(_BackgroundCompletionStoreMixin):
+        events = EventStore()
+
         async def list_tool_calls(self, *, run_id):
             assert run_id == "run-1"
             return [
@@ -199,10 +206,6 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
                     "outcome": None,
                 },
             ]
-
-        async def get_tool_result_for_call(self, *, run_id, tool_call_id):
-            assert (run_id, tool_call_id) == ("run-1", "c1")
-            return {"content": "durable result"}
 
     calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 6)]
     prepared = []
@@ -3665,7 +3668,7 @@ async def test_startup_global_bus_resumes_before_producers_emit():
         async def record_session_events(self, records):
             recorded.extend(records)
 
-    runtime = SimpleNamespace(session_service=SimpleNamespace(store=EventStore()))
+    runtime = SimpleNamespace(session_service=SimpleNamespace(store=SimpleNamespace(events=EventStore())))
     buses = await _create_bus_registry(runtime)
     bus = buses.get_or_create("automation:events")
 

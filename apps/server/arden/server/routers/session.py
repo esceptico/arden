@@ -122,8 +122,8 @@ async def _session_runtime_snapshot(
     buses: BusRegistry,
     session_id: str,
 ) -> dict:
-    latest_event_seq = await svc.store.get_latest_session_event_seq(session_id)
-    durable_checkpoint_seq = await svc.store.get_latest_session_checkpoint_seq(session_id)
+    latest_event_seq = await svc.store.events.get_latest_session_event_seq(session_id)
+    durable_checkpoint_seq = await svc.store.events.get_latest_session_checkpoint_seq(session_id)
     bus = buses.get(session_id)
     if bus is not None:
         latest_event_seq = max(latest_event_seq, bus.next_seq - 1)
@@ -589,7 +589,7 @@ async def set_session_goal(
     goal = await svc.set_goal(session_id, objective, token_budget=req.token_budget)
     if not goal:
         raise HTTPException(status_code=500, detail="Failed to set goal")
-    await _emit_goal_event(buses, session_id, goal, event_store=svc.store)
+    await _emit_goal_event(buses, session_id, goal, event_store=svc.store.events)
     return goal
 
 
@@ -640,7 +640,7 @@ async def update_session_goal(
     )
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
-    await _emit_goal_event(buses, session_id, goal, event_store=svc.store)
+    await _emit_goal_event(buses, session_id, goal, event_store=svc.store.events)
     return goal
 
 
@@ -652,7 +652,7 @@ async def clear_session_goal(
 ):
     cleared = await svc.clear_goal(session_id)
     if cleared:
-        await _emit_goal_event(buses, session_id, None, event_store=svc.store)
+        await _emit_goal_event(buses, session_id, None, event_store=svc.store.events)
     return {"status": "cleared", "session_id": session_id}
 
 

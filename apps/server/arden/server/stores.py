@@ -131,7 +131,7 @@ class Stores:
     @staticmethod
     async def _reconcile_session_store(session_store: SessionStore) -> None:
         await session_store.ensure_startup_recovery_indexes()
-        await session_store.reconcile_due_session_event_retention()
+        await session_store.events.reconcile_due_session_event_retention()
         await session_store.mark_interrupted_chat_runs()
         await session_store.release_interrupted_queued_receipts()
         await session_store.prune_expired_chat_idempotency_keys()

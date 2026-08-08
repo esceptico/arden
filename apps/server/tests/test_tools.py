@@ -1381,7 +1381,7 @@ async def test_durable_large_result_recovers_without_nested_serialization(
         result_preview=bounded.preview,
         outcome=bounded.outcome.to_dict() if bounded.outcome else None,
     )
-    await session_store.record_session_event(
+    await session_store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id="recovered-session",
@@ -1657,7 +1657,10 @@ async def test_terminal_recovery_falls_back_to_exact_payload_file_without_manife
     ctx.services["store"] = session_store
     executor = ArdenToolExecutor(ToolExecutor().with_registry(registry), ctx)
     await executor.execute("large_result", {}, "call-recovery-fallback")
-    assert await session_store.get_tool_result_for_call(run_id="run-1", tool_call_id="call-recovery-fallback") is None
+    assert (
+        await session_store.events.get_tool_result_for_call(run_id="run-1", tool_call_id="call-recovery-fallback")
+        is None
+    )
     pending = PendingToolCall(
         tool_call=AgentToolCall(
             id="call-recovery-fallback",

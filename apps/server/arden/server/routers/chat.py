@@ -166,7 +166,7 @@ async def chat_events(
             run_registry,
             stream=stream,
             after_seq=effective_after_seq,
-            event_store=session_service.store,
+            event_store=session_service.store.events,
         ),
         media_type="text/event-stream",
         headers={
@@ -226,10 +226,10 @@ async def get_session_workflow_events(
     its FleetView cards after a reload (the live workflows store is in-memory and
     is otherwise lost when the transcript is rebuilt from history)."""
     store = session_service.store
-    records = await store.list_session_events(session_id, after_seq=0, limit=50000)
+    records = await store.events.list_session_events(session_id, after_seq=0, limit=50000)
     # Bound to the transcript checkpoint so rehydration never overlaps the live
     # SSE tail (which re-delivers events beyond the checkpoint on reconnect).
-    checkpoint_seq = await store.get_latest_session_checkpoint_seq(session_id)
+    checkpoint_seq = await store.events.get_latest_session_checkpoint_seq(session_id)
     return {"events": reconstruct_workflow_events(records, session_id, max_seq=checkpoint_seq)}
 
 

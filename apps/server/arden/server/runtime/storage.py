@@ -64,8 +64,8 @@ class StorageRuntime:
         service = self._require_session_service()
         config = self._get_config()
         try:
-            await service.store.prune_expired_tool_results()
-            referenced = await service.store.list_tool_result_content_hashes()
+            await service.store.events.prune_expired_tool_results()
+            referenced = await service.store.events.list_tool_result_content_hashes()
             reclaim_status = await service.store.database_reclaim_status()
             report = await asyncio.to_thread(
                 enforce_storage_budget,
@@ -118,7 +118,7 @@ class StorageRuntime:
                     if not _contains_action(fresh, action.kind, action.resource_id):
                         receipts.append({**asdict(action), "status": "skipped_after_revalidation"})
                         continue
-                    referenced = await service.store.list_tool_result_content_hashes()
+                    referenced = await service.store.events.list_tool_result_content_hashes()
                     await asyncio.to_thread(
                         execute_storage_file_action,
                         config.arden_dir,
@@ -216,9 +216,7 @@ class StorageRuntime:
 
     async def _run_periodically(self, interval_seconds: float) -> None:
         while True:
-            self._status["next_maintenance_at"] = (
-                datetime.now(UTC) + timedelta(seconds=interval_seconds)
-            ).isoformat()
+            self._status["next_maintenance_at"] = (datetime.now(UTC) + timedelta(seconds=interval_seconds)).isoformat()
             await asyncio.sleep(interval_seconds)
             try:
                 await self.run_once()
@@ -228,7 +226,7 @@ class StorageRuntime:
     async def _build_plan(self, request: StoragePlanRequest | StorageExecuteRequest) -> StorageCleanupPlan:
         service = self._require_session_service()
         config = self._get_config()
-        referenced = await service.store.list_tool_result_content_hashes()
+        referenced = await service.store.events.list_tool_result_content_hashes()
         reclaim_status = await service.store.database_reclaim_status()
         inventory = await asyncio.to_thread(
             inspect_storage,

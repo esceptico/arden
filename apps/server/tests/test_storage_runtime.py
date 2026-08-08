@@ -16,13 +16,16 @@ from arden.storage_budget import StorageCleanupPlan, StoragePlanAction, StorageS
 _TARGET_GB = 0.01
 
 
+class _Events:
+    async def list_tool_result_content_hashes(self) -> set[str]:
+        return set()
+
+
 class _Store:
     def __init__(self, sessions: list[StorageSessionCandidate] | None = None):
         self.receipts: list[dict] = []
         self.sessions = sessions or []
-
-    async def list_tool_result_content_hashes(self) -> set[str]:
-        return set()
+        self.events = _Events()
 
     async def database_reclaim_status(self) -> dict:
         return {"mode": "incremental"}

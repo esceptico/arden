@@ -239,13 +239,6 @@ async def test_area_page_has_one_owner_including_archived_areas(store: SessionSt
         await store.update_area(second["area_id"], page_path="topics/health.md")
 
 
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_chat_model_persists_and_updates(store: SessionStore):
     state = _make_state(session_id="s-model")
@@ -1102,6 +1095,7 @@ async def test_run_sidecars_resolve_exact_initiating_and_meta_turns(store: Sessi
     assert await store.get_run_sidecars_for_turn(session_id="other", turn_id="turn-1") is None
     assert await store.get_run_sidecars_for_turn(session_id="s-1", turn_id="missing") is None
 
+
 @pytest.mark.asyncio
 async def test_list_tool_call_outcomes_returns_only_requested_session_calls(store: SessionStore):
     for run_id, session_id, call_id in (
@@ -1148,7 +1142,6 @@ async def test_list_interrupted_chat_runs_returns_restart_candidates(store: Sess
     assert resumed["ended_at"] is None
 
 
-
 @pytest.mark.asyncio
 async def test_latest_session_checkpoint_uses_chat_run_last_seq(store: SessionStore):
     await store.record_chat_run_started("run-1", "sess-1")
@@ -1158,8 +1151,8 @@ async def test_latest_session_checkpoint_uses_chat_run_last_seq(store: SessionSt
     await store.record_chat_run_started("run-other", "sess-2")
     await store.record_chat_run_status("run-other", "running", last_seq=99)
 
-    assert await store.get_latest_session_checkpoint_seq("sess-1") == 12
-    assert await store.get_latest_session_checkpoint_seq("missing") == 0
+    assert await store.events.get_latest_session_checkpoint_seq("sess-1") == 12
+    assert await store.events.get_latest_session_checkpoint_seq("missing") == 0
 
 
 @pytest.mark.asyncio
@@ -1503,17 +1496,6 @@ async def test_awaited_child_completion_atomically_resolves_parent_suspension(st
     assert suspension["resolution"] == {"status": "completed", "result": "child result"}
 
 
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.asyncio
 async def test_marks_running_background_agents_interrupted_on_startup(store: SessionStore):
     await store.record_background_agent_started(
@@ -1637,17 +1619,17 @@ async def test_marks_running_agent_sessions_interrupted_on_startup(store: Sessio
 
 @pytest.mark.asyncio
 async def test_session_events_round_trip_with_sequence(store: SessionStore):
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=7, session_id="sess-1", event=ThinkingEvent(status="processing")),
     )
 
-    events = await store.list_session_events("sess-1", after_seq=6)
+    events = await store.events.list_session_events("sess-1", after_seq=6)
 
     assert [record.seq for record in events] == [7]
     assert events[0].session_id == "sess-1"
     assert isinstance(events[0].event, ThinkingEvent)
     assert events[0].event.status == "processing"
-    assert await store.get_latest_session_event_seq("sess-1") == 7
+    assert await store.events.get_latest_session_event_seq("sess-1") == 7
 
 
 @pytest.mark.asyncio
@@ -1662,7 +1644,7 @@ async def test_large_tool_result_event_spills_raw_content_to_manifest(store: Ses
         scope="internal",
     )
 
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=12,
             session_id="sess-raw",
@@ -1693,15 +1675,64 @@ async def test_large_tool_result_event_spills_raw_content_to_manifest(store: Ses
     manifest = manifest_rows[0]
     assert manifest["session_id"] == "sess-raw"
     assert manifest["tool_call_id"] == "call-raw"
-    assert await asyncio.to_thread(read_raw_tool_result, manifest["blob_path"], compression=manifest["compression"]) == raw
+    assert (
+        await asyncio.to_thread(read_raw_tool_result, manifest["blob_path"], compression=manifest["compression"]) == raw
+    )
 
     tool_calls = await store.list_tool_calls(run_id="run-1")
     assert tool_calls[0]["result_ref"] == payload["raw_ref"]
 
-    events = await store.list_session_events("sess-raw", after_seq=0)
+    events = await store.events.list_session_events("sess-raw", after_seq=0)
     assert events[0].event.tool_call_id == "call-raw"
     assert events[0].event.raw_ref == payload["raw_ref"]
     assert events[0].event.content != raw
+
+
+@pytest.mark.asyncio
+async def test_event_batch_commits_event_manifest_call_ref_and_retention_state(store: SessionStore):
+    raw = "batch evidence\n" * ((RAW_TOOL_RESULT_INLINE_MAX_BYTES // len("batch evidence\n")) + 10)
+    await store.record_tool_call_started(
+        run_id="run-batch",
+        session_id="sess-batch",
+        tool_call_id="call-batch",
+        tool_name="bash",
+        action="read",
+        scope="internal",
+    )
+
+    await store.events.record_session_events(
+        [
+            StreamRecord(
+                seq=1,
+                session_id="sess-batch",
+                event=ToolCallResultEvent(
+                    tool_call_id="call-batch",
+                    name="bash",
+                    content=raw,
+                    preview="batch evidence",
+                ),
+            ),
+            StreamRecord(seq=2, session_id="sess-batch", event=ThinkingEvent(status="done")),
+        ]
+    )
+
+    event_count = await store.read_conn.execute_fetchall(
+        "SELECT COUNT(*) AS count FROM session_events WHERE session_id = 'sess-batch'"
+    )
+    manifests = await store.read_conn.execute_fetchall(
+        "SELECT tool_result_id FROM tool_results WHERE session_id = 'sess-batch'"
+    )
+    tool_calls = await store.read_conn.execute_fetchall(
+        "SELECT result_ref FROM tool_calls WHERE session_id = 'sess-batch' AND tool_call_id = 'call-batch'"
+    )
+    retention = await store.read_conn.execute_fetchall(
+        "SELECT writes_since_prune FROM session_event_retention_state WHERE session_id = 'sess-batch'"
+    )
+
+    assert event_count[0]["count"] == 2
+    assert len(manifests) == 1
+    assert tool_calls[0]["result_ref"] == manifests[0]["tool_result_id"]
+    assert retention[0]["writes_since_prune"] == 2
 
 
 @pytest.mark.asyncio
@@ -1709,7 +1740,7 @@ async def test_large_file_search_result_gets_short_retention(store: SessionStore
     raw = "search evidence\n" * 5000
     before = datetime.now(UTC)
 
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id="sess-search",
@@ -1734,7 +1765,7 @@ async def test_large_file_search_result_gets_short_retention(store: SessionStore
 @pytest.mark.asyncio
 async def test_tool_result_manifest_obeys_declared_expiry_and_prunes_durably(store: SessionStore):
     raw = "expiring evidence\n" * 5000
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id="sess-expiring",
@@ -1753,8 +1784,8 @@ async def test_tool_result_manifest_obeys_declared_expiry_and_prunes_durably(sto
     )
     await store.conn.commit()
 
-    assert await store.prune_expired_tool_results(now=future - timedelta(seconds=1)) == 0
-    assert content_sha256 in await store.list_tool_result_content_hashes()
+    assert await store.events.prune_expired_tool_results(now=future - timedelta(seconds=1)) == 0
+    assert content_sha256 in await store.events.list_tool_result_content_hashes()
 
     after_expiry = datetime.now(UTC) - timedelta(seconds=1)
     await store.conn.execute(
@@ -1762,13 +1793,13 @@ async def test_tool_result_manifest_obeys_declared_expiry_and_prunes_durably(sto
         (after_expiry.isoformat(), tool_result_id),
     )
     await store.conn.commit()
-    assert await store.prune_expired_tool_results(now=after_expiry) == 1
-    assert content_sha256 not in await store.list_tool_result_content_hashes()
+    assert await store.events.prune_expired_tool_results(now=after_expiry) == 1
+    assert content_sha256 not in await store.events.list_tool_result_content_hashes()
 
 
 @pytest.mark.asyncio
 async def test_small_tool_result_event_stays_inline(store: SessionStore):
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=13,
             session_id="sess-small",
@@ -1817,7 +1848,7 @@ async def test_tool_result_live_data_stays_rich_while_durable_data_is_allowliste
     assert live_payload["data"]["structuredContent"]["results"][0]["secret"] == "must-not-persist"
     assert live_payload["data"]["_meta"]["bearer"] == "must-not-persist"
 
-    await store.record_session_event(StreamRecord(seq=15, session_id="sess-rich", event=event))
+    await store.events.record_session_event(StreamRecord(seq=15, session_id="sess-rich", event=event))
 
     rows = await store.read_conn.execute_fetchall(
         "SELECT event_json FROM session_events WHERE session_id = 'sess-rich'"
@@ -1847,7 +1878,7 @@ async def test_research_provenance_round_trips_in_durable_tool_result_data(store
         },
         "workspace_ref": "research-1:_provenance.json",
     }
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=17,
             session_id="sess-provenance",
@@ -1879,7 +1910,7 @@ async def test_durable_tool_result_data_is_allowlisted_without_a_tool_call_id(st
         },
     )
 
-    await store.record_session_event(StreamRecord(seq=16, session_id="sess-no-call", event=event))
+    await store.events.record_session_event(StreamRecord(seq=16, session_id="sess-no-call", event=event))
 
     rows = await store.read_conn.execute_fetchall(
         "SELECT event_json FROM session_events WHERE session_id = 'sess-no-call'"
@@ -1894,7 +1925,7 @@ async def test_offloaded_tool_result_event_registers_existing_raw_blob(store: Se
     raw = "offloaded raw line\n" * 5000
     blob = persist_raw_tool_result(raw)
 
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=14,
             session_id="sess-offload",
@@ -1923,11 +1954,13 @@ async def test_offloaded_tool_result_event_registers_existing_raw_blob(store: Se
     )
     assert len(manifest_rows) == 1
     manifest = manifest_rows[0]
-    assert await asyncio.to_thread(read_raw_tool_result, manifest["blob_path"], compression=manifest["compression"]) == raw
+    assert (
+        await asyncio.to_thread(read_raw_tool_result, manifest["blob_path"], compression=manifest["compression"]) == raw
+    )
 
     # Replaying the same result under a new transport sequence must reuse the
     # manifest ID instead of emitting a pointer to an INSERT-ignored row.
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=15,
             session_id="sess-offload",
@@ -1960,7 +1993,7 @@ async def test_session_resume_rehydrates_pruned_offload_file_from_manifest(store
     tool_call_id = "call-rehydrate"
     raw = "durable raw result\n" * 5000
     blob = persist_raw_tool_result(raw)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=session_id,
@@ -2004,7 +2037,7 @@ async def test_session_resume_rehydrates_distinct_raw_and_payload_files(store: S
     raw = "durable raw result\n" * 5_000
     exact_payload = ToolResult(content=raw, preview="raw").serialized_payload()
     blob = persist_raw_tool_result(exact_payload)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=session_id,
@@ -2050,7 +2083,7 @@ async def test_session_resume_rejects_unreadable_durable_tool_result(store: Sess
     session_id = "sess-corrupt-result"
     tool_call_id = "call-corrupt-result"
     blob = persist_raw_tool_result("durable result")
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=session_id,
@@ -2098,7 +2131,7 @@ async def test_active_search_result_pins_expired_manifest_until_context_drops_it
     tool_call_id = "call-search"
     raw = "search evidence\n" * 5000
     blob = persist_raw_tool_result(raw)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=session_id,
@@ -2127,13 +2160,13 @@ async def test_active_search_result_pins_expired_manifest_until_context_drops_it
     )
     await store.conn.commit()
 
-    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+    assert await store.events.prune_expired_tool_results(now=datetime.now(UTC)) == 0
     loaded = await store.load_session(session_id)
     assert loaded is not None
     assert path.read_text() == raw
 
     await store.save_session(state, [{"role": "user", "content": "new epoch", "client_id": "new-user"}])
-    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 1
+    assert await store.events.prune_expired_tool_results(now=datetime.now(UTC)) == 1
 
 
 @pytest.mark.asyncio
@@ -2153,7 +2186,7 @@ async def test_invalid_active_projection_fails_closed_when_pruning_tool_results(
     tool_call_id = "call-invalid-projection"
     raw = "recoverable evidence\n" * 500
     blob = persist_raw_tool_result(raw)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=session_id,
@@ -2190,7 +2223,7 @@ async def test_invalid_active_projection_fails_closed_when_pruning_tool_results(
     await store.conn.commit()
     path.unlink(missing_ok=True)
 
-    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+    assert await store.events.prune_expired_tool_results(now=datetime.now(UTC)) == 0
     recovered = await store.load_session(session_id)
     assert recovered is not None
     assert recovered.messages[0]["tool_call_id"] == tool_call_id
@@ -2213,7 +2246,7 @@ async def test_compacted_result_ref_survives_branch_and_source_deletion(
     tool_call_id = "call-compacted-search"
     raw = "compacted search evidence\n" * 5_000
     blob = persist_raw_tool_result(raw)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=source_id,
@@ -2255,7 +2288,7 @@ async def test_compacted_result_ref_survives_branch_and_source_deletion(
     await store.conn.commit()
 
     assert compacted[1]["compaction"]["tool_result_refs"] == [tool_call_id]
-    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+    assert await store.events.prune_expired_tool_results(now=datetime.now(UTC)) == 0
 
     def fail_cache_copy(*_args):
         raise OSError("simulated branch cache miss")
@@ -2273,7 +2306,7 @@ async def test_compacted_result_ref_survives_branch_and_source_deletion(
     assert branched.messages[1]["compaction"]["tool_result_refs"] == [tool_call_id]
     assert str(branch_path) in branched.messages[1]["content"]
     assert str(source_path) not in branched.messages[1]["content"]
-    assert await store.prune_expired_tool_results(now=datetime.now(UTC)) == 0
+    assert await store.events.prune_expired_tool_results(now=datetime.now(UTC)) == 0
 
     assert await service.permanently_delete_current(source_id)
     branch_path.unlink(missing_ok=True)
@@ -2365,7 +2398,7 @@ async def test_branch_rolls_back_when_referenced_background_result_is_missing(
     missing_agent_ref = _agent_ref(source_id, missing_task_id)
     tool_call_id = "call-before-rollback"
     blob = persist_raw_tool_result("branch rollback evidence")
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=1,
             session_id=source_id,
@@ -3330,11 +3363,11 @@ async def test_prune_session_events_keeps_newest_n(store: SessionStore):
     state = _make_state()
     await store.save_session(state, [])
     for seq in range(1, 26):
-        await store.record_session_event(
+        await store.events.record_session_event(
             StreamRecord(seq=seq, session_id="test-session", event=ThinkingEvent(status=f"s{seq}"))
         )
 
-    deleted = await store.prune_session_events("test-session", keep=10)
+    deleted = await store.events.prune_session_events("test-session", keep=10)
     assert deleted == 15
 
     rows = await store.read_conn.execute_fetchall(
@@ -3348,11 +3381,11 @@ async def test_prune_session_events_noop_when_under_cap(store: SessionStore):
     state = _make_state()
     await store.save_session(state, [])
     for seq in range(1, 6):
-        await store.record_session_event(
+        await store.events.record_session_event(
             StreamRecord(seq=seq, session_id="test-session", event=ThinkingEvent(status=f"s{seq}"))
         )
 
-    deleted = await store.prune_session_events("test-session", keep=10)
+    deleted = await store.events.prune_session_events("test-session", keep=10)
     assert deleted == 0
     rows = await store.read_conn.execute_fetchall(
         "SELECT COUNT(*) AS c FROM session_events WHERE session_id = 'test-session'"
@@ -3362,7 +3395,7 @@ async def test_prune_session_events_noop_when_under_cap(store: SessionStore):
 
 @pytest.mark.asyncio
 async def test_event_retention_counter_survives_restart(tmp_path: Path, monkeypatch):
-    import arden.context.store as store_module
+    import arden.context.session_event_store as store_module
 
     monkeypatch.setattr(store_module, "SESSION_EVENT_PRUNE_INTERVAL", 3)
     monkeypatch.setattr(store_module, "SESSION_EVENT_DURABLE_RETENTION", 2)
@@ -3373,7 +3406,7 @@ async def test_event_retention_counter_survives_restart(tmp_path: Path, monkeypa
     first = SessionStore(conn, read_conn)
     await first.init_schema()
     for seq in (1, 2):
-        await first.record_session_event(
+        await first.events.record_session_event(
             StreamRecord(seq=seq, session_id="restart-session", event=ThinkingEvent(status=f"s{seq}"))
         )
     await read_conn.close()
@@ -3383,7 +3416,7 @@ async def test_event_retention_counter_survives_restart(tmp_path: Path, monkeypa
     read_conn = await database.connect(db, readonly=True)
     restarted = SessionStore(conn, read_conn)
     await restarted.init_schema()
-    await restarted.record_session_event(
+    await restarted.events.record_session_event(
         StreamRecord(seq=3, session_id="restart-session", event=ThinkingEvent(status="s3"))
     )
 
@@ -3746,7 +3779,7 @@ async def test_cold_archived_session_round_trips_full_transcript(store: SessionS
         {"role": "assistant", "content": "keep this answer", "client_id": "a-cold"},
     ]
     await store.save_session(state, messages)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=1, session_id=state.session_id, event=ThinkingEvent(status="evidence"))
     )
     assert await store.archive_session(state.session_id)
@@ -3832,7 +3865,7 @@ async def test_clear_cold_session_cannot_be_undone_by_restore(store: SessionStor
 async def test_permanent_delete_removes_all_session_owned_rows(store: SessionStore):
     state = _make_state(session_id="purge-session")
     await store.save_session(state, [{"role": "user", "content": "delete me", "client_id": "u-purge"}])
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=1, session_id=state.session_id, event=ThinkingEvent(status="delete me"))
     )
     assert await store.archive_session(state.session_id)

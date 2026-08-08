@@ -118,7 +118,7 @@ async def _recover_durable_tool_calls(
             )
             recovered[tool_call_id] = prepare_result(result, tool_call_id) if prepare_result else result
             continue
-        stored_result = await store.get_tool_result_for_call(run_id=run_id, tool_call_id=tool_call_id)
+        stored_result = await store.events.get_tool_result_for_call(run_id=run_id, tool_call_id=tool_call_id)
         content = (stored_result or {}).get("content")
         if not content:
             result_path = find_result_payload_file(tool_call_id) or find_result_file(tool_call_id)
@@ -911,7 +911,7 @@ async def resume_suspended_chat_run(
         stored_automation_id = metadata.get("automation_id") if isinstance(metadata, dict) else None
         automation_id = stored_automation_id if isinstance(stored_automation_id, str) else None
 
-        await prime_bus_cursor_from_store(buses, session_id, session_service.store)
+        await prime_bus_cursor_from_store(buses, session_id, session_service.store.events)
         bus = buses.get_or_create(session_id)
         ctx = await prepare_chat(
             build_deps(),
@@ -964,7 +964,7 @@ async def respawn_background_agent(
         return False
 
     deps = build_deps()
-    await prime_bus_cursor_from_store(buses, session_id, session_service.store)
+    await prime_bus_cursor_from_store(buses, session_id, session_service.store.events)
     bus = buses.get_or_create(session_id)
     _wire_background_registry(bg_registry, session_service, session_id)
 
@@ -1175,7 +1175,7 @@ async def _submit_chat_message_locked(
 
     deps = build_deps()
     cursor_service = session_service or deps.session_service
-    await prime_bus_cursor_from_store(buses, session_id, cursor_service.store)
+    await prime_bus_cursor_from_store(buses, session_id, cursor_service.store.events)
     bus = buses.get_or_create(session_id)
     ctx = await prepare_chat(
         deps,

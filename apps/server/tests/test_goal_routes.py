@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,7 +27,7 @@ class _EmptyEventStore:
 class _GoalSessionService:
     def __init__(self):
         self.goal: dict | None = None
-        self.store = _EmptyEventStore()
+        self.store = SimpleNamespace(events=_EmptyEventStore())
 
     async def load(self, session_id: str | None = None):
         state = SessionState(session_id=session_id or "sess-1", started_at=datetime.now(UTC))

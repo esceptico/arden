@@ -200,7 +200,7 @@ async def automation_events(
 ):
     effective_after_seq = _effective_after_seq(after_seq, last_event_id)
     session_service = getattr(runtime, "session_service", None)
-    event_store = session_service.store if session_service else None
+    event_store = session_service.store.events if session_service else None
     return SSEStreamingResponse(
         _automation_event_stream(bus_registry, after_seq=effective_after_seq, event_store=event_store),
         media_type="text/event-stream",

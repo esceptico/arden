@@ -61,6 +61,11 @@ class _EmptyEventStore:
         return True
 
 
+class _EmptySessionStore:
+    def __init__(self) -> None:
+        self.events = _EmptyEventStore()
+
+
 class _ChatRunServiceContract:
     async def get_goal(self, session_id: str) -> None:
         return None
@@ -499,16 +504,16 @@ async def test_event_stream_replays_persisted_events_after_bus_recreation(tmp_pa
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
     store = SessionStore(conn, read_conn)
     await store.init_schema()
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=1, session_id="sess-1", event=TextMessageStartEvent(message_id="a-1"))
     )
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=2, session_id="sess-1", event=TextMessageContentEvent(message_id="a-1", delta="old"))
     )
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=3, session_id="sess-1", event=TextMessageEndEvent(message_id="a-1", content="old"))
     )
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(
             seq=4,
             session_id="sess-1",
@@ -517,7 +522,7 @@ async def test_event_stream_replays_persisted_events_after_bus_recreation(tmp_pa
     )
     buses = BusRegistry()
 
-    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=0, event_store=store)
+    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=0, event_store=store.events)
     try:
         chunks = [await anext(stream), await anext(stream), await anext(stream)]
     finally:
@@ -550,12 +555,12 @@ async def test_event_stream_uses_persisted_checkpoint_as_cursor_boundary(tmp_pat
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=7)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=7, session_id="sess-1", event=ThinkingEvent(status="checkpoint-evidence")),
     )
     buses = BusRegistry()
 
-    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=7, event_store=store)
+    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=7, event_store=store.events)
     next_chunk = asyncio.create_task(anext(stream))
     try:
         for _ in range(100):
@@ -597,12 +602,12 @@ async def test_event_stream_reset_advances_cursor_to_persisted_checkpoint(tmp_pa
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=7)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=7, session_id="sess-1", event=ThinkingEvent(status="checkpoint-evidence")),
     )
     buses = BusRegistry()
 
-    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=2, event_store=store)
+    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=2, event_store=store.events)
     try:
         chunk = await anext(stream)
     finally:
@@ -628,12 +633,12 @@ async def test_event_stream_seeds_persisted_cursor_without_client_cursor(tmp_pat
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=7)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=7, session_id="sess-1", event=ThinkingEvent(status="checkpoint-evidence")),
     )
-    buses = BusRegistry(record_events=store.record_session_events)
+    buses = BusRegistry(record_events=store.events.record_session_events)
 
-    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, event_store=store)
+    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, event_store=store.events)
     next_chunk = asyncio.create_task(anext(stream))
     try:
         for _ in range(100):
@@ -674,15 +679,15 @@ async def test_event_stream_replays_persisted_raw_events_above_checkpoint(tmp_pa
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=2)
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=3, session_id="sess-1", event=ThinkingEvent(status="noncanonical-1")),
     )
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=4, session_id="sess-1", event=ThinkingEvent(status="noncanonical-2")),
     )
     buses = BusRegistry()
 
-    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=2, event_store=store)
+    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=2, event_store=store.events)
     try:
         chunks = [await anext(stream), await anext(stream)]
     finally:
@@ -707,7 +712,7 @@ async def test_event_stream_resets_instead_of_replaying_persisted_checkpointed_e
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
     store = SessionStore(conn, read_conn)
     await store.init_schema()
-    await store.record_session_event(
+    await store.events.record_session_event(
         StreamRecord(seq=2, session_id="sess-1", event=ThinkingEvent(status="checkpointed")),
     )
     buses = BusRegistry()
@@ -717,7 +722,7 @@ async def test_event_stream_resets_instead_of_replaying_persisted_checkpointed_e
     bus.mark_checkpoint()
     await bus.emit(ThinkingEvent(status="live-tail"))
 
-    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=1, event_store=store)
+    stream = _event_stream("sess-1", buses, RunRegistry(), stream=True, after_seq=1, event_store=store.events)
     try:
         reset_chunk = await anext(stream)
         tail_chunk = await anext(stream)
@@ -978,7 +983,7 @@ async def test_concurrent_first_messages_share_one_top_level_run(monkeypatch):
     registry = RunRegistry()
 
     class FakeSessionService(_ChatRunServiceContract):
-        store = _EmptyEventStore()
+        store = _EmptySessionStore()
 
         async def load(self, session_id=None):
             state = SessionState(session_id=session_id or "sess-1", started_at=datetime.now(UTC))
@@ -1039,7 +1044,7 @@ async def test_submit_cancelled_during_setup_does_not_start_task(monkeypatch):
     registry = RunRegistry()
 
     class FakeSessionService(_ChatRunServiceContract):
-        store = _EmptyEventStore()
+        store = _EmptySessionStore()
 
         def __init__(self):
             self.failed_events = []
@@ -1673,7 +1678,7 @@ async def test_submit_message_after_cancel_starts_new_run(monkeypatch):
     registry.cancel_run(old_run.run_id)
 
     class FakeSessionService(_ChatRunServiceContract):
-        store = _EmptyEventStore()
+        store = _EmptySessionStore()
 
         async def load(self, session_id=None):
             state = SessionState(
@@ -1801,7 +1806,7 @@ async def test_pre_task_setup_failure_clears_prepared_run(monkeypatch):
     class FakeSessionService(_ChatRunServiceContract):
         def __init__(self):
             self.statuses = []
-            self.store = _EmptyEventStore()
+            self.store = _EmptySessionStore()
 
         async def load(self, session_id=None):
             state = SessionState(session_id=session_id or "sess-1", started_at=datetime.now(UTC), name="Existing")
@@ -1873,7 +1878,7 @@ async def test_pre_start_cancelled_task_emits_terminal_fallback():
     registry = RunRegistry()
 
     class FakeSessionService(_ChatRunServiceContract):
-        store = _EmptyEventStore()
+        store = _EmptySessionStore()
 
         def __init__(self):
             self.failed_events = []
@@ -1949,7 +1954,9 @@ async def test_submit_chat_message_primes_bus_cursor_from_durable_events(tmp_pat
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
     store = SessionStore(conn, read_conn)
     await store.init_schema()
-    await store.record_session_event(StreamRecord(seq=187, session_id="sess-1", event=ThinkingEvent(status="old")))
+    await store.events.record_session_event(
+        StreamRecord(seq=187, session_id="sess-1", event=ThinkingEvent(status="old"))
+    )
 
     class FakeSessionService(_ChatRunServiceContract):
         def __init__(self, store):
@@ -1978,7 +1985,7 @@ async def test_submit_chat_message_primes_bus_cursor_from_durable_events(tmp_pat
     monkeypatch.setattr(chat_service, "run_chat", hold_run)
 
     registry = RunRegistry()
-    buses = BusRegistry(record_events=store.record_session_events)
+    buses = BusRegistry(record_events=store.events.record_session_events)
     session_service = FakeSessionService(store)
     deps = ChatDeps(
         chat_model="gpt-5.2",

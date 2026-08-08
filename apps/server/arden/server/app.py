@@ -66,7 +66,7 @@ _logger = get_logger(__name__)
 
 
 async def _create_bus_registry(runtime: Runtime) -> BusRegistry:
-    event_store = runtime.session_service.store if runtime.session_service else None
+    event_store = runtime.session_service.store.events if runtime.session_service else None
     bus_registry = BusRegistry(record_events=event_store.record_session_events if event_store else None)
     # Producers start during Runtime.connect() and may emit onto the global bus
     # before its HTTP stream is opened. Seed that bus from durable state now so
@@ -206,7 +206,7 @@ async def _redeliver_background_completions(
                         )
 
             registry.on_result = _redeliver
-            await prime_bus_cursor_from_store(bus_registry, session_id, runtime.session_service.store)
+            await prime_bus_cursor_from_store(bus_registry, session_id, runtime.session_service.store.events)
             await registry.deliver_result(
                 task_id=completion["task_id"],
                 agent_ref=completion["agent_ref"],
@@ -670,7 +670,7 @@ async def lifespan(app: FastAPI):
 
             deps = runtime.build_operator_deps()
             if bus_registry:
-                event_store = runtime.session_service.store if runtime.session_service else None
+                event_store = runtime.session_service.store.events if runtime.session_service else None
                 await prime_bus_cursor_from_store(bus_registry, AUTOMATION_BUS_KEY, event_store)
                 bus = bus_registry.get_or_create(AUTOMATION_BUS_KEY)
                 run_result = await run_agent_streaming(deps, request, bus, automation.task_id)

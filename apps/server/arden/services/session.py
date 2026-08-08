@@ -713,7 +713,7 @@ class SessionService:
             messages_before=len(messages),
             reason="session_branch",
         )
-        tool_result_ids = self.store.active_tool_result_ids(messages)
+        tool_result_ids = self.store.events.active_tool_result_ids(messages)
         background_result_refs = self.store.active_background_result_ids(messages)
         messages = rewrite_result_paths(messages, session_id, new_state.session_id)
         metadata = {"last_input_tokens": data.last_input_tokens} if data.last_input_tokens else None
@@ -730,7 +730,7 @@ class SessionService:
         except Exception:
             _logger.warning("Failed to copy branch tool-result cache", exc_info=True)
         try:
-            await self.store._restore_active_tool_result_files(new_state.session_id, messages)
+            await self.store.events.restore_active_tool_result_files(new_state.session_id, messages)
         except Exception:
             _logger.warning("Failed to restore branch tool-result cache", exc_info=True)
         await self._announce_activity(new_state, messages)
