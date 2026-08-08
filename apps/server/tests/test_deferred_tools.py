@@ -449,7 +449,7 @@ async def test_hidden_tool_recovery_names_the_exposed_loader():
 
 
 @pytest.mark.asyncio
-async def test_native_deferred_middleware_rehydrates_discovery_from_structured_history():
+async def test_native_deferred_middleware_does_not_reuse_prior_run_discovery():
     registry = _registry()
     run = RunContext(run_id="new-run", deferred_tools_enabled=True)
     middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
@@ -478,13 +478,14 @@ async def test_native_deferred_middleware_rehydrates_discovery_from_structured_h
 
     prepared = await middleware(request, _identity)
 
-    assert run.loaded_tools == {"slack_search"}
-    assert "slack_search" in {tool["function"]["name"] for tool in prepared.tools}
+    assert run.loaded_tools == set()
+    assert "slack_search" not in {tool["function"]["name"] for tool in prepared.tools}
+    assert "slack_search" in {tool["function"]["name"] for tool in prepared.deferred_tools}
     assert "tool_search" not in {tool["function"]["name"] for tool in prepared.tools}
 
 
 @pytest.mark.asyncio
-async def test_native_wiki_mutation_discovery_also_exposes_required_reader():
+async def test_native_wiki_mutation_loaded_in_current_run_also_exposes_required_reader():
     registry = _registry()
     for name, policy in (
         ("wiki_read_page", READ_INTERNAL_DEFERRED),
@@ -501,28 +502,9 @@ async def test_native_wiki_mutation_discovery_also_exposes_required_reader():
             ),
             source="_wiki",
         )
-    run = RunContext(run_id="new-run", deferred_tools_enabled=True)
+    run = RunContext(run_id="run", deferred_tools_enabled=True, loaded_tools={"wiki_edit_page"})
     middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
-    request = replace(
-        _request(registry),
-        model="gpt-5.5",
-        messages=[
-            {
-                "role": "assistant",
-                "content": "",
-                "provider_tool_calls": [
-                    {
-                        "id": "tsc_wiki",
-                        "name": "tool_search",
-                        "arguments": {"tools": ["wiki_edit_page"]},
-                        "result": "Matched tools: wiki_edit_page",
-                        "done": True,
-                        "loaded_tool_names": ["wiki_edit_page"],
-                    }
-                ],
-            }
-        ],
-    )
+    request = replace(_request(registry), model="gpt-5.5")
 
     prepared = await middleware(request, _identity)
     visible = {tool["function"]["name"] for tool in prepared.tools}
@@ -532,7 +514,7 @@ async def test_native_wiki_mutation_discovery_also_exposes_required_reader():
 
 
 @pytest.mark.asyncio
-async def test_native_deferred_middleware_rehydrates_discovery_after_compaction():
+async def test_native_deferred_middleware_does_not_reuse_prior_run_compaction_state():
     registry = _registry()
     run = RunContext(run_id="new-run", deferred_tools_enabled=True)
     middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
@@ -552,9 +534,10 @@ async def test_native_deferred_middleware_rehydrates_discovery_after_compaction(
 
     prepared = await middleware(request, _identity)
 
-    assert "slack_search" in run.loaded_tools
+    assert run.loaded_tools == set()
+    assert "slack_search" not in {tool["function"]["name"] for tool in prepared.tools}
+    assert "slack_search" in {tool["function"]["name"] for tool in prepared.deferred_tools}
     assert "removed_tool" not in run.loaded_tools
-    assert "slack_search" in {tool["function"]["name"] for tool in prepared.tools}
 
 
 @pytest.mark.asyncio
@@ -1164,6 +1147,8 @@ def test_native_deferred_prompt_lists_exact_tool_names_without_group_loader():
 
     assert prompt is not None
     assert "provider-native search tool" in prompt
+    assert "start deferred in each run" in prompt
+    assert "already exposed as callable" in prompt
     assert 'tool_search(query="select:slack_search")' not in prompt
     assert "slack_search" in prompt
     assert "load_tools" not in prompt

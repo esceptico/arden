@@ -2,7 +2,6 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from arden.agent.model_request import ModelRequest, ModelRequestNext
-from arden.agent.types.llm import provider_tool_calls_from_history
 from arden.llm.models import supports_native_deferred_tools
 from arden.tools.core.context import RunContext
 from arden.tools.core.registry import ToolRegistry
@@ -19,25 +18,6 @@ _DEFERRED_TOOL_DEPENDENCIES: dict[str, frozenset[str]] = {
 def _schema_name(schema: dict) -> str | None:
     name = schema.get("function", {}).get("name")
     return name if isinstance(name, str) else None
-
-
-def _discovered_tool_names(messages: list[dict]) -> set[str]:
-    """Recover native tool-search discoveries from structured history/compaction state."""
-    names: set[str] = set()
-    for message in messages:
-        for call in provider_tool_calls_from_history(message):
-            names.update(call.loaded_tool_names)
-
-        compaction = message.get("compaction")
-        if not isinstance(compaction, dict):
-            continue
-        rehydration = compaction.get("rehydration")
-        if not isinstance(rehydration, dict):
-            continue
-        loaded = rehydration.get("loaded_tools")
-        if isinstance(loaded, list):
-            names.update(name for name in loaded if isinstance(name, str))
-    return names
 
 
 def _with_allowed_dependencies(names: set[str], allowed: set[str]) -> set[str]:
@@ -73,10 +53,6 @@ class DeferredToolsModelRequestMiddleware:
             name for name in allowed if isinstance(name, str) and is_deferred_tool(name, self._registry)
         }
         if native_deferred:
-            # Native discovery receipts are conversation state. Rehydrate only
-            # names still permitted by the current request/registry snapshot.
-            discovered = _discovered_tool_names(request.messages) & allowed_deferred
-            self._run.loaded_tools.update(_with_allowed_dependencies(discovered, allowed_deferred))
             self._run.loaded_tools.update(
                 _with_allowed_dependencies(self._run.loaded_tools & allowed_deferred, allowed_deferred)
             )
