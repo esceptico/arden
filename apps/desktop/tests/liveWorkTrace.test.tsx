@@ -46,8 +46,13 @@ test("live work trace keeps one chronological three-row window", async () => {
         role: "reasoning",
         content: "**Plan report**\n\n**Write report**",
       }],
+      ["assistant-live", {
+        id: "assistant-live",
+        role: "assistant",
+        content: "Streaming answer",
+      }],
     ]),
-    order: ["user-1", "reasoning-old", "activity-1", "reasoning-new"],
+    order: ["user-1", "reasoning-old", "activity-1", "reasoning-new", "assistant-live"],
   });
 
   const host = document.createElement("div");
@@ -59,13 +64,18 @@ test("live work trace keeps one chronological three-row window", async () => {
         <TurnGroup
           turnId="user-1"
           userId="user-1"
-          childIds={["reasoning-old", "activity-1", "reasoning-new"]}
+          childIds={["reasoning-old", "activity-1", "reasoning-new", "assistant-live"]}
         />,
       );
     });
 
+    const trace = host.querySelector<HTMLElement>(".board-trace")!;
+    const assistant = host.querySelector<HTMLElement>('[data-id="assistant-live"]')!;
     const rows = Array.from(host.querySelectorAll(".board-trace-row"));
     expect(rows).toHaveLength(3);
+    expect(trace.dataset.done).toBeUndefined();
+    expect(trace.textContent).toContain("Working");
+    expect(trace.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(host.textContent).not.toContain("Old reasoning");
     expect(host.textContent).not.toContain("Old tool");
     expect(rows.map((row) => row.textContent?.trim())).toEqual([
@@ -73,6 +83,7 @@ test("live work trace keeps one chronological three-row window", async () => {
       "Plan report",
       "Write report",
     ]);
+    expect(host.textContent).toContain("Streaming answer");
   } finally {
     await act(async () => root.unmount());
     host.remove();

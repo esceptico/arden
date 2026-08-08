@@ -139,7 +139,7 @@ test("Chat ports the mock's Worked disclosure instead of wrapping it in a Marker
   expect(turn).not.toContain("<Marker");
   expect(message).toContain("hideActivityHeader");
   expect(css).toMatch(/\.board-trace\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*max-content minmax\(0, 1fr\);/s);
-  expect(css).toMatch(/\.board-trace::after\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*height:\s*1px;[^}]*margin-top:\s*14px;[^}]*background:\s*var\(--edge\);/s);
+  expect(css).toMatch(/\.board-trace\[data-done="true"\]::after\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*height:\s*1px;[^}]*margin-top:\s*14px;[^}]*background:\s*var\(--edge\);/s);
   expect(css).toMatch(/\.board-trace__toggle\s*\{[^}]*width:\s*max-content;[^}]*height:\s*28px;[^}]*padding:\s*0 7px 0 2px;/s);
   expect(css).not.toMatch(/\.board-trace__toggle:hover\s*\{[^}]*background:/s);
 });

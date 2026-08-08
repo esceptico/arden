@@ -104,7 +104,7 @@ export function TurnGroup({
   // Live runs measure durationMs directly; history derives it from message
   // stamps. Falls back to plain "Worked" when neither yields a time.
   const wasStopped = childSummaries.some((child) => child.activityLabel === "Stopped");
-  const headerLabel = turnHeaderLabel(turn?.durationMs, wasStopped);
+  const headerLabel = isDone ? turnHeaderLabel(turn?.durationMs, wasStopped) : "Working";
   const activityCount = childSummaries.reduce(
     (total, child) => total + (child.role === "activity" ? child.activityCount : 0),
     0,
@@ -167,9 +167,13 @@ export function TurnGroup({
     </div>
   );
   const workBlock = hasWork ? (
-    <section className="board-trace" aria-label={headerLabel}>
+    <section
+      className="board-trace"
+      aria-label={headerLabel}
+      data-done={isDone ? "true" : undefined}
+    >
       <ActivityHeader
-        done
+        done={isDone}
         label={wasStopped ? "Stopped" : undefined}
         count={activityCount}
         durationMs={turn?.durationMs}
@@ -236,7 +240,7 @@ export function TurnGroup({
     <section className="board-turn flex flex-col gap-1.5" data-turn-id={turnId}>
       {userId && <Message id={userId} />}
 
-      {isDone && workBlock}
+      {workBlock}
 
       {layout.afterWorkIds.map((id) => {
         const isFinal = isDone && id === layout.finalAssistantId;
@@ -249,8 +253,6 @@ export function TurnGroup({
           />
         );
       })}
-
-      {!isDone && workBlock}
     </section>
   );
 }
