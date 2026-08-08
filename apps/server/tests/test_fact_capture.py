@@ -29,6 +29,7 @@ from arden.memory.facts.capture.store import (
 from arden.memory.facts.ledger import FactLedger
 from arden.memory.facts.plan_store import FactPlanStore
 from arden.memory.facts.service import FactService
+from arden.tools.fact_capture import _result
 
 pytestmark = pytest.mark.asyncio
 
@@ -137,6 +138,20 @@ async def test_capture_creates_facts_and_advances(watermarks, facts) -> None:
     (row,) = await watermarks.list_for_consumer(CONSUMER_ID)
     assert row.last_seq == 2
     assert not await capture.has_work()
+
+    internal_session_id = "internal-session-uuid"
+    similar = FactCaptureBatch(
+        session_id=internal_session_id,
+        from_seq=0,
+        to_seq=1,
+        turns=(_turn(1, "user", "My sister Anna lives in Lisbon."),),
+        near_duplicates=(fact,),
+    )
+    receipt = _result(similar)
+    assert internal_session_id not in similar.markdown
+    assert fact.fact_id not in similar.markdown
+    assert fact.text in similar.markdown
+    assert receipt.data == {"completed": False}
 
 
 async def test_no_change_advances_without_facts(watermarks, facts) -> None:

@@ -75,7 +75,7 @@ def _result(state: FactCaptureBatch | FactCaptureResult) -> ToolResult:
             f"{state.markdown}"
         ),
         preview="Capture decision required",
-        data={"completed": False, "session_id": state.session_id},
+        data={"completed": False},
     )
 
 
