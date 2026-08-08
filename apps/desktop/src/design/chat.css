@@ -311,7 +311,7 @@
    as one timeline thread, not a block indented under the header text. */
 .board-chat .board-trace-row {
   padding: var(--space-1-5) var(--space-0-5);
-  border-radius: var(--r-house);
+  border-radius: var(--r-row);
 }
 
 .board-trace-row__details { padding-left: var(--space-1); }

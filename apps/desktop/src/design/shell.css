@@ -38,7 +38,7 @@
   /* UNIFORM rhythm (the user's explicit call): components stand one small,
      CONSISTENT step apart — no oversized "meaningful" breaks between groups. */
   --workspace-rail-group-gap: var(--space-2);
-  --workspace-rail-row-radius: 6px;
+  --workspace-rail-row-radius: var(--r-row);
   --workspace-rail-icon-lane: 1.25rem;
   /* Shallow product-UI type ladder: color and proximity do more work than
      size, so hierarchy stays legible without making the rail noisy. */

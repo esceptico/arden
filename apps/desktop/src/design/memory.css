@@ -1608,7 +1608,7 @@ body.memory-diff-receded #app {
 .memory-switcher__input::placeholder { color: var(--muted); }
 .memory-switcher__results { padding: var(--space-2); overflow: auto; }
 .memory-switcher__empty { min-height: 5rem; display: grid; place-items: center; color: var(--muted); font-size: var(--text-sm); }
-.memory-switcher__row { width: 100%; min-width: 0; padding: var(--space-2) var(--space-2-5); display: flex; align-items: flex-start; gap: var(--space-2); border-radius: var(--r-house); color: var(--ink-soft); text-align: left; }
+.memory-switcher__row { width: 100%; min-width: 0; padding: var(--space-2) var(--space-2-5); display: flex; align-items: flex-start; gap: var(--space-2); border-radius: var(--r-row); color: var(--ink-soft); text-align: left; }
 .memory-switcher__row:hover,
 .memory-switcher__row[aria-selected="true"] { color: var(--ink); background: var(--state-selected-bg); }
 .memory-switcher__row-icon { width: .875rem; height: .875rem; margin-top: 1px; flex: none; color: var(--faint); }

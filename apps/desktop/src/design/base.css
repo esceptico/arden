@@ -408,7 +408,7 @@
   --r-menu-square: var(--r-shell-square);
   --r-menu: var(--r-menu-round);
   --r-panel: var(--r-shell);
-  --r-dense-row: var(--r-panel);
+  --r-dense-row: var(--r-row);
   --r-control: var(--r-pill);
   --r-row: var(--r-control);
   --r-cluster: var(--r-control);
