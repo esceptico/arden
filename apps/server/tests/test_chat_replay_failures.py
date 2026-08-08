@@ -2,7 +2,12 @@ import asyncio
 
 import pytest
 
-from arden.events.sse import ApprovalNeededEvent, ConnectionNeededEvent, ThinkingEvent
+from arden.events.sse import (
+    ApprovalNeededEvent,
+    ConnectionNeededEvent,
+    ReasoningMessageContentEvent,
+    ReasoningMessageStartEvent,
+)
 from arden.server.bus import ReplaySubscription, StreamRecord
 from arden.server.chat_replay import ChatReplayPlanner, ChatReplayUnavailableError
 from arden.server.state import RunRegistry
@@ -39,7 +44,6 @@ def _subscription(record: StreamRecord) -> ReplaySubscription:
 
 @pytest.mark.asyncio
 async def test_replay_rejects_an_incomplete_durable_tail():
-    record = StreamRecord(seq=2, session_id="session-1", event=ThinkingEvent(status="working"))
     planner = ChatReplayPlanner(
         session_id="session-1",
         run_registry=RunRegistry(),
@@ -51,11 +55,57 @@ async def test_replay_rejects_an_incomplete_durable_tail():
         match="chat replay for session 'session-1' is incomplete at sequence 2",
     ):
         await planner.build(
-            _subscription(record),
+            ReplaySubscription(snapshot=[], queue=asyncio.Queue()),
             after_seq=0,
             replay_upper_seq=2,
             checkpoint_seq=0,
         )
+
+
+@pytest.mark.asyncio
+async def test_replay_accepts_ephemeral_buffered_tail_after_durable_event():
+    durable = StreamRecord(
+        seq=1,
+        session_id="session-1",
+        event=ReasoningMessageStartEvent(message_id="reasoning-1"),
+    )
+    ephemeral = StreamRecord(
+        seq=2,
+        session_id="session-1",
+        event=ReasoningMessageContentEvent(message_id="reasoning-1", delta="working"),
+    )
+    planner = ChatReplayPlanner(
+        session_id="session-1",
+        run_registry=RunRegistry(),
+        event_store=_EventReplayStore(durable),
+    )
+
+    plan = await planner.build(
+        ReplaySubscription(snapshot=[durable, ephemeral], queue=asyncio.Queue()),
+        after_seq=0,
+        replay_upper_seq=2,
+        checkpoint_seq=0,
+    )
+
+    assert plan.records == (durable, ephemeral)
+
+
+@pytest.mark.asyncio
+async def test_replay_at_captured_cursor_is_empty():
+    planner = ChatReplayPlanner(
+        session_id="session-1",
+        run_registry=RunRegistry(),
+        event_store=_IncompleteReplayStore(),
+    )
+
+    plan = await planner.build(
+        ReplaySubscription(snapshot=[], queue=asyncio.Queue()),
+        after_seq=2,
+        replay_upper_seq=2,
+        checkpoint_seq=0,
+    )
+
+    assert plan.records == ()
 
 
 @pytest.mark.asyncio

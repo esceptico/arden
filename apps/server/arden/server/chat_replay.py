@@ -85,7 +85,23 @@ class ChatReplayPlanner:
             after_seq=after_seq,
             replay_upper_seq=replay_upper_seq,
         )
-        records = subscription.snapshot if durable_records is None else durable_records
+        records = subscription.snapshot
+        if durable_records is not None:
+            records = self._merge_records(
+                durable_records,
+                subscription.snapshot,
+                replay_upper_seq=replay_upper_seq,
+            )
+            durable_reaches_boundary = bool(durable_records) and durable_records[-1].seq == replay_upper_seq
+            complete_buffered_tail = (
+                not subscription.replay_gap and bool(records) and records[-1].seq == replay_upper_seq
+            )
+            if after_seq is not None and after_seq < replay_upper_seq and (
+                not durable_reaches_boundary and not complete_buffered_tail
+            ):
+                raise ChatReplayUnavailableError(
+                    f"chat replay for session {self.session_id!r} is incomplete at sequence {replay_upper_seq}"
+                )
         reset = None
         if durable_records is None and subscription.replay_gap and after_seq is not None:
             reset = ChatReplayReset(
@@ -113,15 +129,22 @@ class ChatReplayPlanner:
             after_seq=after_seq,
             limit=10000,
         )
-        bounded = [record for record in records if record.seq <= replay_upper_seq]
-        # session_events is intentionally sparse because ephemeral deltas are
-        # not persisted. Only the durable tail reaching the captured live
-        # boundary distinguishes a complete replay from a writer still draining.
-        if not bounded or bounded[-1].seq != replay_upper_seq:
-            raise ChatReplayUnavailableError(
-                f"chat replay for session {self.session_id!r} is incomplete at sequence {replay_upper_seq}"
-            )
-        return bounded
+        return [record for record in records if record.seq <= replay_upper_seq]
+
+    @staticmethod
+    def _merge_records(
+        durable: list[StreamRecord],
+        buffered: list[StreamRecord],
+        *,
+        replay_upper_seq: int,
+    ) -> list[StreamRecord]:
+        # The durable ledger omits token deltas, and its writer may still be
+        # draining. The subscription snapshot is the exact in-memory suffix at
+        # the captured boundary. Durable records win for duplicate sequences
+        # because persistence may replace large result bodies with references.
+        by_seq = {record.seq: record for record in buffered if record.seq <= replay_upper_seq}
+        by_seq.update({record.seq: record for record in durable})
+        return [by_seq[seq] for seq in sorted(by_seq)]
 
     async def _filter_records(self, records: list[StreamRecord]) -> tuple[StreamRecord, ...]:
         filtered: list[StreamRecord] = []
