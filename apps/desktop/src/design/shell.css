@@ -249,16 +249,18 @@
      heading→heading pitch — one rhythm, measured, not per-box margins. */
   position: relative;
   margin: var(--space-2) 0 var(--space-3);
-  padding: var(--space-3) var(--space-1) 0 var(--interactive-row-inline-padding);
+  /* Right padding 6px parks the 28px icon button so its GLYPH (6px internal
+     inset) lands on the same 12px content column as text and rule edges. */
+  padding: var(--space-3) var(--space-1-5) 0 var(--interactive-row-inline-padding);
 }
 
-/* Separators align with the CONTENT column (12px text inset), not the
-   rail box — a full-bleed rule overshoots everything it separates. */
+/* ONE content column: separators, text, and trailing glyphs all share the
+   12px inset — a single alignment value, optical not box-edge. */
 .workspace-rail__section-header::before {
   content: "";
   position: absolute;
   top: 0;
-  inset-inline: var(--interactive-row-inline-padding) var(--space-1);
+  inset-inline: var(--interactive-row-inline-padding);
   border-top: 1px solid var(--edge);
 }
 
@@ -549,7 +551,7 @@
   content: "";
   position: absolute;
   top: 0;
-  inset-inline: var(--interactive-row-inline-padding) var(--space-1);
+  inset-inline: var(--interactive-row-inline-padding);
   border-top: 1px solid var(--edge);
 }
 
@@ -569,7 +571,10 @@
      space-1 margin lands its center on the filter's vertical axis. */
   width: var(--icon-button-size);
   height: var(--icon-button-size);
-  margin-right: var(--space-1);
+  /* Lands the moon GLYPH on the shared 12px content column — measured, not
+     derived: this icon renders smaller inside its 28px button than the
+     header filter does. */
+  margin-right: 0;
   place-items: center;
   border-radius: var(--r-icon);
   color: var(--muted);
