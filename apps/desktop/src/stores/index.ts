@@ -197,6 +197,7 @@ export const useStore = create<State & Actions>((set) => ({
   pendingImages: [],
   serverConfig: null,
   serverModels: null,
+  serverConfigError: null,
   automations: null,
   automationsOpen: false,
   automationTargetId: null,
@@ -481,6 +482,7 @@ export const useStore = create<State & Actions>((set) => ({
 
   setServerConfig: (serverConfig) => set({ serverConfig }),
   setServerModels: (serverModels) => set({ serverModels }),
+  setServerConfigError: (serverConfigError) => set({ serverConfigError }),
   setAutomations: (automations) => set({ automations }),
   openAutomations: (taskId, options) =>
     set({

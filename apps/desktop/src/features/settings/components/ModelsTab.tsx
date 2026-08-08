@@ -17,6 +17,7 @@ import { DialogLayer } from "@/components/workspace/DialogLayer";
 import { useTimeoutFlag } from "@/lib/hooks";
 import { ICON } from "@/lib/icons";
 import { SettingsConnectionHint, SettingsInlineError } from "@/features/settings/components/SettingsNotice";
+import { settingsErrorMessage } from "@/features/settings/lib/settingsLoadState";
 import { SaveStatus } from "@/features/settings/components/SaveStatus";
 import {
   SettingsSection,
@@ -61,6 +62,7 @@ export function ModelsTab() {
   const connected = useStore((s) => s.connected);
   const cfg = useStore((s) => s.serverConfig);
   const models = useStore((s) => s.serverModels);
+  const loadError = useStore((s) => s.serverConfigError);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, fireSaved] = useTimeoutFlag(1500);
@@ -75,7 +77,7 @@ export function ModelsTab() {
       <div className="grid gap-3">
         <SettingsInlineError
           title="Couldn't load models"
-          message="The server is reachable, but the model list did not load."
+          message={loadError ? settingsErrorMessage(loadError) : "The server model list did not load."}
           action={
             <Button size="sm" onClick={() => void fetchServerConfig()}>
               Retry

@@ -475,6 +475,7 @@ export interface State {
   pendingImages: ImageBlock[];
   serverConfig: ServerConfig | null;
   serverModels: ModelsResponse | null;
+  serverConfigError: string | null;
   automations: Automation[] | null;
   automationsOpen: boolean;
   automationTargetId: string | null;
@@ -670,6 +671,7 @@ export interface Actions {
   clearPendingImages: () => void;
   setServerConfig: (cfg: ServerConfig | null) => void;
   setServerModels: (models: ModelsResponse | null) => void;
+  setServerConfigError: (error: string | null) => void;
   setAutomations: (automations: Automation[] | null) => void;
   openAutomations: (taskId?: string | null, options?: { run: "latest" }) => void;
   closeAutomations: () => void;

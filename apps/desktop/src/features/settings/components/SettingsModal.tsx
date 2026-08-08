@@ -40,6 +40,9 @@ import { ScrollArea } from "@/components/ui/ScrollArea";
 import { Tab as TabItem, Tabs } from "@/components/ui/Tabs";
 import { TabPanels, useTabDirection } from "@/components/ui/TabPanels";
 import { ContextMenu, type ContextMenuPosition } from "@/components/ui/ContextMenu";
+import { Button } from "@/components/ui/Button";
+import { SettingsInlineError } from "@/features/settings/components/SettingsNotice";
+import { settingsErrorMessage } from "@/features/settings/lib/settingsLoadState";
 import {
   DURATION_RIGHT_PANEL_HIDE,
   DISTANCE_RAIL_HIDE,
@@ -209,6 +212,7 @@ export function SettingsModal({
   const error = useStore((s) => s.connectionError);
   const setConnectionDraft = useStore((s) => s.setConnectionDraft);
   const serverConfig = useStore((s) => s.serverConfig);
+  const serverConfigError = useStore((s) => s.serverConfigError);
   const connected = useStore((s) => s.connected);
   const sidebarWidth = useStore((s) => s.prefs.sidebarWidth);
   const formRef = useRef<HTMLFormElement>(null);
@@ -398,6 +402,17 @@ export function SettingsModal({
               intro={activeTab.intro}
               wide={activeTab.group === "capabilities" || activeTab.group === "data"}
             >
+              {serverConfigError && !serverConfig && active !== "connection" && (
+                <SettingsInlineError
+                  title="Couldn't load server settings"
+                  message={settingsErrorMessage(serverConfigError)}
+                  action={
+                    <Button size="sm" onClick={() => void fetchServerConfig()}>
+                      Retry
+                    </Button>
+                  }
+                />
+              )}
               {active === "connection" && (
                 <ConnectionTab
                   formRef={formRef}

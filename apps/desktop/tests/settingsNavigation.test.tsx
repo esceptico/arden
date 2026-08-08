@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { SettingsModal } from "@/features/settings/components/SettingsModal";
+import { fetchServerConfig } from "@/actions/server";
 import { getState, setState } from "@/stores";
 
 let root: Root | null = null;
@@ -24,7 +25,7 @@ afterEach(async () => {
   root = null;
   window.ardenDesktop = originalDesktop;
   getState().setPref("theme", originalTheme);
-  setState({ settingsOpen: false, settingsTab: null });
+  setState({ settingsOpen: false, settingsTab: null, serverConfig: null, serverModels: null, serverConfigError: null });
   document.body.replaceChildren();
 });
 
@@ -97,4 +98,57 @@ test("Appearance navigation and its controls remain clickable", async () => {
   expect(dark).not.toBeNull();
   await act(async () => dark?.click());
   expect(getState().prefs.theme).toBe("dark");
+});
+
+test("Settings exposes a failed config load", async () => {
+  window.ardenDesktop = {
+    api: {
+      request: async (_config, request) => {
+        if (request.path === "/config") {
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            contentType: "application/json",
+            data: { detail: "model catalog is corrupt" },
+            text: "",
+          };
+        }
+        if (request.path === "/models") {
+          return bridgeResponse({
+            models: [],
+            groups: [],
+            reasoning_efforts: {},
+            chat_model: "test",
+            research_model: "test",
+            workflow_model: "test",
+            memory_model: "test",
+          });
+        }
+        return bridgeResponse({ providers: [] });
+      },
+    },
+  } as Window["ardenDesktop"];
+
+  const app = document.createElement("div");
+  app.id = "app";
+  const host = document.createElement("div");
+  document.body.append(app, host);
+  root = createRoot(host);
+  setState({
+    settingsOpen: true,
+    settingsTab: "models",
+    serverConfig: null,
+    serverConfigError: null,
+  });
+  await fetchServerConfig();
+
+  await act(async () => {
+    root?.render(<SettingsModal />);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
+
+  expect(document.body.textContent).toContain("Couldn't load server settings");
+  expect(document.body.textContent).toContain("model catalog is corrupt");
+  expect(getState().serverConfig).toBeNull();
 });
