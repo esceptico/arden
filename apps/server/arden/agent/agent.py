@@ -82,6 +82,21 @@ def _validated_finish_reason(response: CompletionResponse) -> FinishReason:
     return reason
 
 
+def _with_budget_reminder(messages: list[dict], reminder: str) -> list[dict]:
+    if not messages or messages[0].get("role") != Role.SYSTEM:
+        return [{"role": Role.SYSTEM, "content": reminder}, *messages]
+
+    system_message = {**messages[0]}
+    content = system_message.get("content")
+    if isinstance(content, str):
+        system_message["content"] = f"{content}\n\n{reminder}"
+    elif isinstance(content, list):
+        system_message["content"] = [*content, {"type": "text", "text": reminder}]
+    else:
+        raise ValueError("system message content must be text or content blocks")
+    return [system_message, *messages[1:]]
+
+
 @dataclass
 class RunBudget:
     tool_calls: int = 0
@@ -625,11 +640,8 @@ class Agent:
             if self.prompt_cache_key is not None:
                 kwargs["prompt_cache_key"] = self.prompt_cache_key
             model_messages = request_messages if request_messages is not None else messages
-            model_messages = (
-                [*model_messages, {"role": Role.SYSTEM, "content": budget_reminder}]
-                if budget_reminder
-                else model_messages
-            )
+            if budget_reminder:
+                model_messages = _with_budget_reminder(model_messages, budget_reminder)
             if deferred_tools:
                 kwargs["deferred_tools"] = deferred_tools
             async for item in self.client.stream(model_messages, model, tools, **kwargs):

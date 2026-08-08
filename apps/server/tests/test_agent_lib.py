@@ -1249,16 +1249,25 @@ async def test_token_budget_reminder_is_sent_when_budget_is_low():
     budget = RunBudget(total=1000, output_tokens=900)
     llm = FakeLLM([_response(text="done")])
     agent = _make_agent(llm, FakeExecutor({}), budget=budget)
+    messages = _msgs()
+    messages[0]["content"] = [{"type": "text", "text": "sys"}]
 
-    await agent.run(_msgs())
+    await agent.run(messages)
 
     assert llm.last_messages is not None
-    assert llm.last_messages[-1] == {
+    assert [message["role"] for message in llm.last_messages].count(Role.SYSTEM) == 1
+    assert llm.last_messages[0] == {
         "role": Role.SYSTEM,
-        "content": (
-            "Output-token budget pressure: 100 of 1000 tokens remain. "
-            "Wrap up now; do not start broad new work. Preserve a useful final answer."
-        ),
+        "content": [
+            {"type": "text", "text": "sys"},
+            {
+                "type": "text",
+                "text": (
+                    "Output-token budget pressure: 100 of 1000 tokens remain. "
+                    "Wrap up now; do not start broad new work. Preserve a useful final answer."
+                ),
+            },
+        ],
     }
 
 
