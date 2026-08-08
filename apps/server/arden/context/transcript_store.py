@@ -458,5 +458,3 @@ class TranscriptStore:
             }
             for row in rows
         ]
-
-

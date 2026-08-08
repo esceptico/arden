@@ -203,4 +203,3 @@ class BackgroundStartStore:
             )
             await self._conn.commit()
         return disposition
-

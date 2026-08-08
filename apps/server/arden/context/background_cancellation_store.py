@@ -230,4 +230,3 @@ class BackgroundCancellationStore:
         )
         await self._conn.commit()
         return len(rows)
-

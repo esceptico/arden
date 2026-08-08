@@ -222,4 +222,3 @@ class ChatRunStore:
         )
         await self._conn.commit()
         return cursor.rowcount
-
