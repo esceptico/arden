@@ -11,6 +11,7 @@ import {
   type Ref,
 } from "react";
 import clsx from "clsx";
+import { RollingToken } from "@/components/ui/RollingToken";
 import { textLaneOpacity } from "@/lib/textLane";
 
 const clamp = (value: number, min: number, max: number) =>
@@ -63,8 +64,6 @@ interface SliderComfortableProps {
 }
 
 type SliderStyle = CSSProperties & {
-  "--slider-fill-x": string;
-  "--slider-marker-x": string;
   "--slider-marker-opacity": number;
 };
 
@@ -131,10 +130,6 @@ export function SliderComfortable({
   latestFormatRef.current = formatValue;
 
   const safeStep = Number.isFinite(step) && step > 0 ? step : 1;
-  const nativeStep =
-    snapSliderInput(boundedValue, min, max, safeStep) === boundedValue
-      ? safeStep
-      : Math.min(safeStep, 1);
   const pipValues = useMemo(() => {
     const count = Math.max(1, Math.round((max - min) / safeStep) + 1);
     const values = Array.from({ length: count }, (_, index) =>
@@ -143,11 +138,11 @@ export function SliderComfortable({
     return values.filter((pipValue, index) => index === 0 || pipValue !== values[index - 1]);
   }, [max, min, safeStep]);
 
-  const progress = max === min ? 0 : (boundedValue - min) / (max - min);
-  const initialStop = `${progress * 100}%`;
+  // No inline geometry style: the vars are registered <length> types, so a
+  // percent string is INVALID and collapses to the 0px fallback — React
+  // re-applying it on every value change parked a ghost blade at the left
+  // edge mid-drag. The mount-time syncInstant owns the geometry before paint.
   const initialStyle: SliderStyle = {
-    "--slider-fill-x": initialStop,
-    "--slider-marker-x": `calc(${initialStop} - var(--range-marker-width) / 2)`,
     "--slider-marker-opacity": 1,
   };
 
@@ -168,13 +163,25 @@ export function SliderComfortable({
       const next = clamp(requestedValue, min, max);
       const ratio = max === min ? 0 : (next - min) / (max - min);
       const controlRect = root.getBoundingClientRect();
-      const edgeInset = variant === "pips" ? readCssLength(root, "--range-edge-inset") : 0;
       const markerWidth = readCssLength(root, "--range-marker-width");
       const textClearance = readCssLength(root, "--range-text-clearance");
       const opacityDistance = readCssLength(root, "--range-opacity-distance");
-      const usableWidth = Math.max(0, controlRect.width - edgeInset * 2);
-      const stopCenter = edgeInset + ratio * usableWidth;
+      const fillInset = readCssLength(root, "--range-fill-inset");
+      const gripPad = readCssLength(root, "--range-grip-pad");
+      const fillMin = readCssLength(root, "--range-fill-min");
+      // Fill grows LINEARLY from its minimum capsule — a clamp would kink the
+      // grip's travel and the stop ticks could never align with it.
+      const fillTravel = Math.max(0, controlRect.width - fillInset * 2 - fillMin);
+      const gripCenterAt = (r: number) =>
+        fillInset + fillMin + r * fillTravel - gripPad - markerWidth / 2;
+      const stopCenter = gripCenterAt(ratio);
       const markerLeft = stopCenter - markerWidth / 2;
+      // At the minimum stop the fill capsule IS the mark; the grip dissolves.
+      const snappedRatio =
+        max === min
+          ? 0
+          : (snapSliderInput(next, min, max, safeStep) - min) / (max - min);
+      root.dataset.atMin = String(snappedRatio <= 0.001);
 
       range.value = String(next);
       range.setAttribute("aria-valuenow", String(next));
@@ -198,15 +205,16 @@ export function SliderComfortable({
       root.style.setProperty("--slider-marker-opacity", String(markerOpacity));
 
       if (variant === "pips") {
-        const active = Math.round((next - min) / safeStep);
         pipRefs.current.forEach((pip, index) => {
           if (!pip) return;
           const pipRatio = pipValues.length === 1 ? 0 : index / (pipValues.length - 1);
-          const pipX = controlRect.left + edgeInset + pipRatio * usableWidth;
-          const clearOfText =
-            (!labelRect || pipX > labelRect.right + textClearance) &&
-            (!valueRect || pipX < valueRect.left - textClearance);
-          pip.dataset.visible = String(index > active && clearOfText);
+          const pipX = gripCenterAt(pipRatio);
+          pip.style.left = `${pipX}px`;
+          const absX = controlRect.left + pipX;
+          const underText =
+            (labelRect ? absX < labelRect.right + textClearance : false) ||
+            (valueRect ? absX > valueRect.left - textClearance : false);
+          pip.dataset.dim = String(underText);
         });
       }
     },
@@ -227,6 +235,9 @@ export function SliderComfortable({
 
   useLayoutEffect(() => {
     lastEmittedRef.current = boundedValue;
+    // Mid-drag the geometry is owned by the pointer (raw follow); snapping
+    // it back here would fight the hand. finishPointer reconciles.
+    if (pointerActiveRef.current && rootRef.current?.classList.contains("is-dragging")) return;
     syncGeometry(boundedValue);
   }, [boundedValue, formatValue, syncGeometry]);
 
@@ -272,11 +283,23 @@ export function SliderComfortable({
 
   const handleInput = useCallback(
     (event: FormEvent<HTMLInputElement>) => {
-      const next = snapSliderInput(Number(event.currentTarget.value), min, max, safeStep);
+      const raw = clamp(Number(event.currentTarget.value), min, max);
+      const next = snapSliderInput(raw, min, max, safeStep);
+      const dragging = rootRef.current?.classList.contains("is-dragging") ?? false;
+      if (dragging) {
+        // free drag: geometry follows the pointer raw; the value snaps live
+        // (digits roll as stops are crossed); release settles the geometry
+        syncGeometry(raw);
+        if (next !== lastEmittedRef.current) {
+          lastEmittedRef.current = next;
+          latestOnChangeRef.current(next);
+        }
+        return;
+      }
       event.currentTarget.value = String(next);
       emitValue(next);
     },
-    [emitValue, max, min, safeStep],
+    [emitValue, max, min, safeStep, syncGeometry],
   );
 
   const handleRangeKeyDown = useCallback(
@@ -297,7 +320,8 @@ export function SliderComfortable({
       else if (event.key === "End") next = max;
       if (next === null) return;
       event.preventDefault();
-      emitValue(next, true);
+      // animated: keyboard moves settle to the stop like release does
+      emitValue(next);
     },
     [disabled, emitValue, max, min, safeStep],
   );
@@ -373,7 +397,7 @@ export function SliderComfortable({
                 pipRefs.current[index] = node;
               }}
               className="arden-slider__pip"
-              data-visible="false"
+              data-dim="false"
             />
           ))}
         </span>
@@ -386,7 +410,7 @@ export function SliderComfortable({
         role="slider"
         min={min}
         max={max}
-        step={nativeStep}
+        step="any"
         defaultValue={boundedValue}
         disabled={disabled}
         aria-label={ariaLabel ?? label}
@@ -438,7 +462,7 @@ export function SliderComfortable({
           className="arden-slider__value"
           onClick={disabled ? undefined : beginEdit}
         >
-          {valueLabel}
+          <RollingToken value={valueLabel} />
         </span>
       )}
     </div>

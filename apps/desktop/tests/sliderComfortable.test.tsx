@@ -47,13 +47,9 @@ test("renders one native, accessible range with the formatted label and value", 
   expect(html).toContain('aria-valuemax="8000"');
   expect(html).toContain('aria-valuenow="512"');
   expect(html).toContain('aria-label="Tokens"');
-  expect(html).toContain('step="64"');
+  // the native input is continuous (free drag); snapping happens on emit
+  expect(html).toContain('step="any"');
   expect(html).toContain("512 tokens");
-
-  const offGrid = renderToStaticMarkup(
-    <SliderComfortable value={1500} onChange={() => {}} min={256} max={8000} step={64} />,
-  );
-  expect(offGrid).toContain('step="1"');
 });
 
 test("readout keeps the mock's intrinsic height so the slider centers it", () => {
@@ -85,7 +81,7 @@ test("out-of-range controlled values keep the readout and ARIA on the same bound
   );
   expect(html).toContain('aria-valuenow="16"');
   expect(html).toContain('data-value="16"');
-  expect(html).toContain(">16</span>");
+  expect(html).toContain('aria-valuetext="16"');
   expect(html).not.toContain('aria-valuenow="20"');
 });
 
@@ -204,7 +200,7 @@ test("exact entry clamps but does not snap to the pointer grid", async () => {
   expect(await edit(200, { min: 10, max: 1000, step: 10 }, "99999", "Enter")).toBe(1000);
 });
 
-test("exact off-grid entry updates the native step after the controlled rerender", async () => {
+test("native step stays continuous across exact off-grid entry", async () => {
   const { el, root, restore } = mount();
   function Harness() {
     const [value, setValue] = useState(120);
@@ -221,12 +217,13 @@ test("exact off-grid entry updates the native step after the controlled rerender
   }
 
   await act(async () => root.render(<Harness />));
-  expect(el.querySelector<HTMLInputElement>('input[type="range"]')!.step).toBe("10");
+  expect(el.querySelector<HTMLInputElement>('input[type="range"]')!.step).toBe("any");
   await act(async () => el.querySelector<HTMLElement>(".arden-slider__value")!.click());
   const editor = el.querySelector<HTMLInputElement>('input[type="number"]')!;
   await act(async () => setInputValue(editor, "123"));
   await act(async () => fireKey(editor, "Enter"));
-  expect(el.querySelector<HTMLInputElement>('input[type="range"]')!.step).toBe("1");
+  expect(el.querySelector<HTMLInputElement>('input[type="range"]')!.step).toBe("any");
+  expect(el.querySelector<HTMLInputElement>('input[type="range"]')!.getAttribute("aria-valuenow")).toBe("123");
 
   await act(async () => root.unmount());
   restore();
@@ -319,10 +316,12 @@ test("measured pips and scrubber share the mock endpoint geometry", async () => 
     });
     const control = el.querySelector<HTMLElement>(".arden-slider")!;
     const slider = el.querySelector<HTMLInputElement>('input[type="range"]')!;
-    control.style.setProperty("--range-edge-inset", "14.5px");
     control.style.setProperty("--range-marker-width", "2px");
     control.style.setProperty("--range-text-clearance", "4px");
     control.style.setProperty("--range-opacity-distance", "8px");
+    control.style.setProperty("--range-fill-inset", "4px");
+    control.style.setProperty("--range-grip-pad", "10px");
+    control.style.setProperty("--range-fill-min", "32px");
     control.getBoundingClientRect = () =>
       ({ left: 0, right: 390, top: 0, bottom: 32, width: 390, height: 32, x: 0, y: 0, toJSON() {} }) as DOMRect;
     await act(async () => setInputValue(slider, String(next)));
@@ -335,8 +334,9 @@ test("measured pips and scrubber share the mock endpoint geometry", async () => 
     return geometry;
   };
 
-  expect(await run("pips", 1, 16)).toEqual({ fill: "375.5px", marker: "374.5px" });
-  expect(await run("scrubber", 0, 100)).toEqual({ fill: "390px", marker: "389px" });
+  // grip center at ratio 1 = inset(4) + min(32) + travel(390−8−32) − pad(10) − w/2(1) = 375
+  expect(await run("pips", 1, 16)).toEqual({ fill: "375px", marker: "374px" });
+  expect(await run("scrubber", 0, 100)).toEqual({ fill: "375px", marker: "374px" });
 });
 
 test("shared CSS owns the exact mock shape, material, focus, and motion", () => {
@@ -349,15 +349,19 @@ test("shared CSS owns the exact mock shape, material, focus, and motion", () => 
   expect(source).toContain("onLostPointerCapture={finishPointer}");
   expect(source).not.toContain("motion/react");
   expect(source).not.toContain("hover-tooltip");
-  expect(foundation).toMatch(/\.arden-slider\)\s*\{[\s\S]*?height:\s*2rem;/);
+  expect(foundation).toMatch(/\.arden-slider\)\s*\{[\s\S]*?height:\s*2.5rem;/);
   expect(foundation).toMatch(/\.arden-slider\)\s*\{[\s\S]*?border:\s*0;/);
   expect(foundation).toMatch(/\.arden-slider\)\s*\{[\s\S]*?border-radius:\s*var\(--r-control\);/);
-  expect(foundation).toMatch(/\.arden-slider\)\s*\{[\s\S]*?box-shadow:\s*var\(--shadow-2\);/);
+  // track ring + fill panel material (weather-os form)
+  expect(foundation).toMatch(/\.arden-slider\)\s*\{[\s\S]*?background:\s*var\(--surface-muted\);/);
+  expect(foundation).toContain("border-radius: calc(var(--r-control) - var(--range-fill-inset))");
   expect(foundation).toContain("--slider-fill-x var(--motion-tab-shift) var(--smooth-out)");
   expect(foundation).toContain("inset 0 0 0 1px color-mix(in oklab, var(--ink) 16%, transparent)");
   for (const token of [
-    "--range-edge-inset: .90625rem;",
-    "--range-marker-width: .125rem;",
+    "--range-marker-width: .1875rem;",
+    "--range-fill-inset: .25rem;",
+    "--range-grip-pad: .625rem;",
+    "--range-fill-min: 2rem;",
     "--range-text-clearance: .25rem;",
     "--range-opacity-distance: .5rem;",
     "--range-drag-threshold: .1875rem;",

@@ -4,7 +4,7 @@ import { SliderComfortable } from "@/components/ui/Slider";
 /** Pips for small discrete ranges (clicking a pip is exact), a scrubber for
  *  large ones — the readable breakpoint is ~16 pips. */
 export function sliderVariant(min: number, max: number, step: number): "pips" | "scrubber" {
-  return Math.round((max - min) / step) + 1 <= 16 ? "pips" : "scrubber";
+  return Math.round((max - min) / step) + 1 <= 20 ? "pips" : "scrubber";
 }
 
 /** Labelled text/password input for settings forms. Thin convenience wrapper

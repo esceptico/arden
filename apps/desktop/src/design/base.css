@@ -341,7 +341,10 @@
   --memory-tree-indent-step: 1rem;
   --memory-tree-twisty-size: 1rem;
   --range-edge-inset: .90625rem;
-  --range-marker-width: .125rem;
+  --range-marker-width: .1875rem;
+  --range-fill-inset: .25rem;
+  --range-grip-pad: .625rem;
+  --range-fill-min: 2rem;
   --range-text-clearance: .25rem;
   --range-opacity-distance: .5rem;
   --range-drag-threshold: .1875rem;

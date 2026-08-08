@@ -81,6 +81,7 @@ export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null
             value={draft.compression_threshold}
             min={10}
             max={100}
+            step={10}
             onChange={(n) => update({ compression_threshold: n })}
           />
 
@@ -88,9 +89,9 @@ export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null
             label="Max messages"
             help="Hard cap on the number of raw messages kept before compression kicks in."
             value={draft.max_messages}
-            min={10}
+            min={100}
             max={1000}
-            step={10}
+            step={50}
             onChange={(n) => update({ max_messages: n })}
           />
 
@@ -100,6 +101,7 @@ export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null
             value={draft.compression_keep_ratio}
             min={0}
             max={100}
+            step={10}
             onChange={(n) => update({ compression_keep_ratio: n })}
           />
 
@@ -108,9 +110,9 @@ export function ContextTab({ serverConfig }: { serverConfig: ServerConfig | null
             suffix="tokens"
             help="Upper bound on each compression summary."
             value={draft.summary_max_tokens}
-            min={256}
+            min={500}
             max={8000}
-            step={64}
+            step={500}
             onChange={(n) => update({ summary_max_tokens: n })}
           />
         </div>

@@ -19,16 +19,20 @@ test("sidebar uses compact, grouped row rhythm", async () => {
   expect(css).toContain("--workspace-rail-group-row-height: 1.625rem;");
   expect(css).toContain("--workspace-rail-session-row-height: 1.75rem;");
   expect(css).toContain("--workspace-rail-sibling-gap: var(--space-0-5);");
-  expect(css).toContain("--workspace-rail-group-gap: var(--space-3);");
-  expect(css).toContain("--workspace-rail-row-radius: 6px;");
+  // Uniform rhythm (2026-08-09): one small consistent step between groups,
+  // and the row radius rides the central settings-driven token.
+  expect(css).toContain("--workspace-rail-group-gap: var(--space-2);");
+  expect(css).toContain("--workspace-rail-row-radius: var(--r-row);");
   expect(css).toContain("--workspace-rail-icon-lane: 1.25rem;");
   expect(css).toContain("--workspace-rail-section-size: var(--text-label);");
   expect(css).toContain("--workspace-rail-label-size: var(--text-label);");
   expect(css).toContain("--workspace-rail-meta-size: var(--text-2xs);");
   expect(css).toContain("--workspace-rail-label-leading: var(--leading-label);");
-  expect(css).toContain("--workspace-rail-selected-bg: color-mix(in oklab, var(--ink) 4%, transparent);");
+  // Selection is a pronounced pill (7%); the section header floats its rule
+  // with measured, even baseline pitch (2026-08-09 rail redesign).
+  expect(css).toContain("--workspace-rail-selected-bg: color-mix(in oklab, var(--ink) 7%, transparent);");
   expect(css).toContain("height: 1.75rem;");
-  expect(css).toContain("margin: var(--space-3) 0 var(--space-1);");
+  expect(css).toContain("margin: var(--space-2) 0 var(--space-3);");
   expect(css).toContain("font-weight: var(--weight-medium);");
   expect(css).toContain(".workspace-rail__session-body {");
   expect(css).toContain(".workspace-rail__session-rest {");

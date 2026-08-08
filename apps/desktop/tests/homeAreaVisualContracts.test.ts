@@ -218,7 +218,9 @@ test("Home, Chat, and Area use the mock's exact visible icon variants", () => {
   // it with state instead of showing the closing icon while already closed.
   expect(inspector).toContain("<SidebarToggle");
   expect(inspector).toContain('side="right"');
-  expect(sidebar).not.toContain("strokeWidth");
+  // The area rows' user-picked mark (2026-08-09) renders at strokeWidth 2,
+  // matching the chat rail's group icons.
+  expect(sidebar).toContain("AiContentGenerator01");
   expect(chat).not.toContain("strokeWidth");
   expect(reasoning).not.toContain("strokeWidth");
   expect(assistant).not.toContain("strokeWidth");

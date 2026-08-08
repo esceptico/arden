@@ -316,8 +316,9 @@ export function StorageTab() {
               suffix="days"
               help="How long an auto-created backup file stays eligible before cleanup may remove it. Kept backups never expire."
               value={limits.backupDays}
-              min={1}
+              min={15}
               max={180}
+              step={15}
               onChange={(next) => editLimits({ backupDays: next })}
             />
             {serverConfig.storage_allow_current_cleanup && (
@@ -327,8 +328,9 @@ export function StorageTab() {
                   suffix="days"
                   help="A current chat is only a cleanup candidate once it has been untouched this long."
                   value={limits.inactiveDays}
-                  min={1}
-                  max={365}
+                  min={30}
+                  max={360}
+                  step={30}
                   onChange={(next) => editLimits({ inactiveDays: next })}
                 />
                 <NumberField
@@ -336,8 +338,9 @@ export function StorageTab() {
                   suffix="chats"
                   help="Floor on current chats. Cleanup stops before it would take you under this many."
                   value={limits.minimumCurrent}
-                  min={1}
+                  min={100}
                   max={1000}
+                  step={100}
                   onChange={(next) => editLimits({ minimumCurrent: next })}
                 />
               </>
