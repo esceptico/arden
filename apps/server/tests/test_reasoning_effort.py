@@ -407,13 +407,13 @@ def test_roles_sharing_a_model_no_longer_share_its_effort():
     config = Config(
         memory=False,
         chat_model="gpt-5.2",
-        research_model="gpt-5.2",
-        workflow_model="gpt-5.2",
-        memory_model="gpt-5.2",
-        auxiliary_model="gpt-5.2",
+        model_roles={
+            "research": {"model": "gpt-5.2", "reasoning_effort": "high"},
+            "workflow": {"model": "gpt-5.2"},
+            "memory": {"model": "gpt-5.2"},
+            "auxiliary": {"model": "gpt-5.2", "reasoning_effort": "medium"},
+        },
         model_reasoning_efforts={"gpt-5.2": "low"},
-        research_reasoning_effort="high",
-        auxiliary_reasoning_effort="medium",
     )
 
     assert config.reasoning_effort_for_role("research", "gpt-5.2") == "high"
@@ -429,16 +429,15 @@ def test_role_effort_falls_back_when_unsupported_by_its_model():
     config = Config(
         memory=False,
         chat_model="gpt-5.2",
-        research_model="gpt-5.2",
+        model_roles={"research": {"model": "gpt-5.2", "reasoning_effort": "not-a-real-effort"}},
         model_reasoning_efforts={"gpt-5.2": "low"},
-        research_reasoning_effort="not-a-real-effort",
     )
 
     assert config.reasoning_effort_for_role("research", "gpt-5.2") == "low"
 
 
 def test_role_patch_is_validated_against_its_own_role_model():
-    config = Config(memory=False, chat_model="gpt-5.2", research_model="gpt-5.2")
+    config = Config(memory=False, chat_model="gpt-5.2", model_roles={"research": {"model": "gpt-5.2"}})
 
     fields = {"model_roles": {"research": {"reasoning_effort": "max"}}}
     with pytest.raises(HTTPException):
@@ -460,26 +459,6 @@ def test_unknown_role_in_a_patch_is_rejected():
         _validate_reasoning_patch({"model_roles": {"nonsense": {"model": "gpt-5.2"}}}, config)
 
 
-def test_legacy_flat_role_keys_migrate_into_role_setups():
-    """Settings written before roles were objects must keep their models."""
-    config = Config(
-        memory=False,
-        chat_model="gpt-5.2",
-        research_model="gpt-5.2",
-        workflow_model="gpt-5.2",
-        memory_model="gpt-5.2",
-        research_reasoning_effort="high",
-        model_reasoning_efforts={"gpt-5.2": "low"},
-    )
-
-    assert config.role_setup("research").model == "gpt-5.2"
-    assert config.role_setup("research").reasoning_effort == "high"
-    assert config.role_setup("workflow").reasoning_effort is None
-    # The flat names still read, so the 40-odd call sites never had to change.
-    assert config.memory_model == "gpt-5.2"
-    assert config.auxiliary_model == "gpt-5.2"
-
-
 def test_roles_unset_still_fall_back_to_the_chat_model():
     config = Config(memory=False, chat_model="gpt-5.2")
 
@@ -493,13 +472,15 @@ def test_auxiliary_model_starts_from_memory_but_remains_independent():
     inherited = Config(
         memory=False,
         chat_model="gpt-5.2",
-        memory_model="claude-sonnet-4-6",
+        model_roles={"memory": {"model": "claude-sonnet-4-6"}},
     )
     explicit = Config(
         memory=False,
         chat_model="gpt-5.2",
-        memory_model="claude-sonnet-4-6",
-        auxiliary_model="gpt-5.2",
+        model_roles={
+            "memory": {"model": "claude-sonnet-4-6"},
+            "auxiliary": {"model": "gpt-5.2"},
+        },
     )
 
     assert inherited.auxiliary_model == "claude-sonnet-4-6"

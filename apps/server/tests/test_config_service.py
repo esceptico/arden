@@ -1,3 +1,6 @@
+import asyncio
+import json
+import os
 from copy import deepcopy
 
 import pytest
@@ -40,6 +43,7 @@ async def test_config_service_rolls_back_nested_settings_and_reloads_runtime(mon
 
     monkeypatch.setattr(config_module, "load_user_settings", load_settings)
     monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
 
     service = ConfigService(on_config_change=reload_config)
 
@@ -51,6 +55,145 @@ async def test_config_service_rolls_back_nested_settings_and_reloads_runtime(mon
         {"provider_keys": {"openai": "new-key"}},
         {"provider_keys": {"openai": "old-key"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_config_service_surfaces_reload_and_rollback_failures(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted = {"provider_keys": {"openai": "old-key"}}
+    reload_count = 0
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            raise RuntimeError("reload failed")
+        raise OSError("rollback reload failed")
+
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
+    service = ConfigService(on_config_change=reload_config)
+
+    with pytest.raises(BaseExceptionGroup, match="Config reload and rollback both failed") as raised:
+        await service.connect_provider("openai", "new-key")
+
+    assert [str(error) for error in raised.value.exceptions] == ["reload failed", "rollback reload failed"]
+    assert persisted == {"provider_keys": {"openai": "old-key"}}
+
+
+@pytest.mark.asyncio
+async def test_config_service_finishes_rollback_before_propagating_cancellation(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted = {"provider_keys": {"openai": "old-key"}}
+    reload_started = asyncio.Event()
+    reload_count = 0
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            reload_started.set()
+            await asyncio.Future()
+
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
+    service = ConfigService(on_config_change=reload_config)
+    update = asyncio.create_task(service.connect_provider("openai", "new-key"))
+    await reload_started.wait()
+    update.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await update
+
+    assert reload_count == 2
+    assert persisted == {"provider_keys": {"openai": "old-key"}}
+
+
+@pytest.mark.asyncio
+async def test_config_updates_serialize_through_reload_and_rollback(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted: dict = {}
+    first_reload_started = asyncio.Event()
+    release_first_reload = asyncio.Event()
+    reload_count = 0
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            first_reload_started.set()
+            await release_first_reload.wait()
+            raise RuntimeError("first reload failed")
+
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
+    service = ConfigService(on_config_change=reload_config)
+    first = asyncio.create_task(service.update(max_messages=200))
+    await first_reload_started.wait()
+    second = asyncio.create_task(service.update(summary_max_tokens=2048))
+    await asyncio.sleep(0)
+
+    assert persisted == {"max_messages": 200}
+    release_first_reload.set()
+    with pytest.raises(RuntimeError, match="first reload failed"):
+        await first
+    await second
+
+    assert reload_count == 3
+    assert persisted == {"summary_max_tokens": 2048}
+
+
+@pytest.mark.asyncio
+async def test_failed_rollback_preserves_the_last_known_good_backup(tmp_path, monkeypatch):
+    import arden.settings as settings_module
+
+    monkeypatch.setattr(settings_module, "ARDEN_DIR", tmp_path)
+    settings_module.save_user_settings({"max_messages": 120})
+    primary = tmp_path / "settings.json"
+    backup = tmp_path / "settings.json.bak"
+    replace = os.replace
+    primary_replaces = 0
+
+    def fail_rollback_replace(source, destination) -> None:
+        nonlocal primary_replaces
+        if destination == primary:
+            primary_replaces += 1
+            if primary_replaces == 2:
+                raise OSError("rollback replace failed")
+        replace(source, destination)
+
+    async def reload_config() -> None:
+        raise RuntimeError("reload failed")
+
+    monkeypatch.setattr(settings_module.os, "replace", fail_rollback_replace)
+    service = ConfigService(on_config_change=reload_config)
+
+    with pytest.raises(BaseExceptionGroup, match="Config reload and rollback both failed"):
+        await service.update(max_messages=200)
+
+    assert json.loads(primary.read_text()) == {"max_messages": 200}
+    assert json.loads(backup.read_text()) == {"max_messages": 120}
 
 
 @pytest.mark.asyncio
@@ -324,16 +467,12 @@ async def test_config_service_deletes_custom_model_and_clears_active_fields(monk
 
 
 @pytest.mark.asyncio
-async def test_writing_role_setups_retires_the_flat_legacy_keys(monkeypatch):
-    """Config READS the old scalars so an existing install keeps its models, but
-    once the role objects are written the file should have one source of truth."""
+async def test_writing_role_setups_persists_only_the_canonical_shape(monkeypatch):
     import arden.services.config as config_module
 
     persisted = {
         "chat_model": "gpt-5.2",
-        "research_model": "gpt-5.2",
-        "research_reasoning_effort": "high",
-        "memory_model": "gpt-5.2",
+        "model_roles": {"memory": {"model": "gpt-5.2", "reasoning_effort": None}},
     }
 
     def load_settings() -> dict:
@@ -353,6 +492,4 @@ async def test_writing_role_setups_retires_the_flat_legacy_keys(monkeypatch):
     await service.update(model_roles={"research": {"model": "gpt-5.2", "reasoning_effort": "low"}})
 
     assert persisted["model_roles"] == {"research": {"model": "gpt-5.2", "reasoning_effort": "low"}}
-    for stale in ("research_model", "research_reasoning_effort", "memory_model"):
-        assert stale not in persisted
     assert persisted["chat_model"] == "gpt-5.2"

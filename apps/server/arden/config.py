@@ -80,17 +80,7 @@ ROLE_NAMES = ("research", "workflow", "memory", "auxiliary")
 
 
 class RoleModelSetup(BaseModel):
-    """Everything a background role needs to make a call, kept together.
-
-    Roles used to be a row of parallel scalars — research_model,
-    research_reasoning_effort, and one more top-level field per knob after
-    that. One object per role means the next knob (output ceiling, provider
-    routing, a thinking budget) lands in one place for all of them.
-
-    Effort here overrides the per-model map: research, workflows, auxiliary
-    tasks, and memory routinely share a model, and sharing its single effort
-    entry made the role rows move together.
-    """
+    """One model and effort configuration for a background role."""
 
     model: str | None = None
     reasoning_effort: str | None = None
@@ -161,10 +151,7 @@ class Config(BaseSettings):
 
     # Model IDs
     chat_model: str | None = None
-    # Per-role setup (research | workflow | memory | auxiliary). The
-    # `<role>_model` and
-    # `<role>_reasoning_effort` properties below read out of here, so the rest
-    # of the codebase never learned about the move.
+    # Per-role setup (research | workflow | memory | auxiliary).
     model_roles: dict[str, RoleModelSetup] = Field(default_factory=dict)
     embedding_model: str | None = None
 
@@ -232,35 +219,6 @@ class Config(BaseSettings):
     api_key_hash: str | None = None
 
     # --- Validators ---
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_legacy_role_keys(cls, data):
-        """Settings written before roles were objects carry `research_model` and
-        friends at the top level. Read them into `model_roles` so an existing
-        install keeps its models; the next save writes only the new shape."""
-        if not isinstance(data, dict):
-            return data
-        roles = dict(data.get("model_roles") or {})
-        for role in ROLE_NAMES:
-            legacy = {
-                "model": data.pop(f"{role}_model", None),
-                "reasoning_effort": data.pop(f"{role}_reasoning_effort", None),
-            }
-            carried = {k: v for k, v in legacy.items() if v is not None}
-            if not carried:
-                continue
-            existing = roles.get(role) or {}
-            if not isinstance(existing, dict):
-                existing = existing.model_dump()
-            roles[role] = {**carried, **{k: v for k, v in existing.items() if v is not None}}
-        if "auxiliary" not in roles and (memory := roles.get("memory")):
-            memory_model = RoleModelSetup.model_validate(memory).model
-            if memory_model:
-                roles["auxiliary"] = {"model": memory_model}
-        if roles:
-            data["model_roles"] = roles
-        return data
 
     def role_setup(self, role: str) -> RoleModelSetup:
         return self.model_roles.get(role) or RoleModelSetup()

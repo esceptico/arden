@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from copy import deepcopy
@@ -17,7 +18,7 @@ from arden.llm.models import (
     remove_custom_model,
 )
 from arden.logging import get_logger
-from arden.settings import load_user_settings, save_user_settings
+from arden.settings import load_user_settings, restore_user_settings, save_user_settings
 
 _logger = get_logger(__name__)
 
@@ -25,21 +26,40 @@ _logger = get_logger(__name__)
 class ConfigService:
     def __init__(self, on_config_change: Callable[[], Awaitable[None]]):
         self._on_config_change = on_config_change
+        self._mutation_lock = asyncio.Lock()
 
     async def _with_rollback(self, mutate: Callable[[dict], None]) -> None:
-        settings = load_user_settings()
-        backup = deepcopy(settings)
-        mutate(settings)
-        save_user_settings(settings)
-        try:
-            await self._on_config_change()
-        except Exception:
-            save_user_settings(backup)
+        async with self._mutation_lock:
+            settings = load_user_settings()
+            backup = deepcopy(settings)
+            mutate(settings)
+            save_user_settings(settings)
             try:
                 await self._on_config_change()
-            except Exception:
-                _logger.exception("Failed to reload runtime after config rollback")
-            raise
+            except BaseException as primary_error:
+                rollback_task = asyncio.create_task(self._restore_config(backup))
+                cancellation: asyncio.CancelledError | None = None
+                while not rollback_task.done():
+                    try:
+                        await asyncio.shield(rollback_task)
+                    except asyncio.CancelledError as error:
+                        cancellation = error
+                    except BaseException:
+                        break
+                try:
+                    rollback_task.result()
+                except BaseException as rollback_error:
+                    raise BaseExceptionGroup(
+                        "Config reload and rollback both failed",
+                        [primary_error, rollback_error],
+                    ) from None
+                if cancellation is not None:
+                    raise cancellation from primary_error
+                raise
+
+    async def _restore_config(self, settings: dict) -> None:
+        restore_user_settings(settings)
+        await self._on_config_change()
 
     async def update(self, **fields) -> None:
         persist = {k: v for k, v in fields.items() if k in PERSIST_KEYS}
@@ -52,14 +72,6 @@ class ConfigService:
                     settings.pop(key, None)
                 else:
                     settings[key] = value
-            if "model_roles" in persist:
-                # Roles moved from a scalar per knob into one object each. Config
-                # still READS the old keys so an existing install keeps its
-                # models; drop them once the new shape lands so the file has a
-                # single source of truth.
-                for role in ROLE_NAMES:
-                    settings.pop(f"{role}_model", None)
-                    settings.pop(f"{role}_reasoning_effort", None)
 
         await self._with_rollback(mutate)
 
@@ -326,10 +338,6 @@ class ConfigService:
 def _remove_model_selections(settings: dict, model_ids: set[str]) -> None:
     if settings.get("chat_model") in model_ids:
         settings.pop("chat_model")
-    for role in ROLE_NAMES:
-        legacy_key = f"{role}_model"
-        if settings.get(legacy_key) in model_ids:
-            settings.pop(legacy_key)
 
     roles = settings.get("model_roles")
     if roles is None:
