@@ -12,12 +12,14 @@ export function Message({
   sourceTurnId,
   sourceCount,
   hideActivityHeader = false,
+  traceRowLimit,
 }: {
   id: string;
   isFinal?: boolean;
   sourceTurnId?: string;
   sourceCount?: number;
   hideActivityHeader?: boolean;
+  traceRowLimit?: number;
 }) {
   const role = useStore((s) => s.messages.get(id)?.role);
   if (!role) return null;
@@ -31,9 +33,11 @@ export function Message({
         sourceCount={sourceCount}
       />
     );
-    case "reasoning": return <ReasoningMessage id={id} />;
+    case "reasoning": return <ReasoningMessage id={id} rowLimit={traceRowLimit} />;
     case "tool": return <ToolMessage id={id} />;
-    case "activity": return <ActivityMessage id={id} hideHeader={hideActivityHeader} />;
+    case "activity": return (
+      <ActivityMessage id={id} hideHeader={hideActivityHeader} rowLimit={traceRowLimit} />
+    );
     case "todo": return <TodoMessage id={id} />;
     case "error": return <ErrorMessage id={id} />;
     case "status": return <StatusMessage id={id} />;

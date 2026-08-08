@@ -14,6 +14,16 @@ export interface TurnLayoutResult {
   finalAssistantId: string | null;
 }
 
+export interface RollingWorkEntry {
+  id: string;
+  rowCount: number;
+}
+
+export interface RollingWorkWindowEntry {
+  id: string;
+  rowLimit: number;
+}
+
 export function turnLayout({
   children,
   isDone,
@@ -27,10 +37,14 @@ export function turnLayout({
   };
 
   if (!isDone) {
-    const hasWork = children.some((child) => isWorkRole(child.role));
+    const workIds = children
+      .filter((child) => isLiveWorkRole(child.role))
+      .map((child) => child.id);
     return {
-      workIds: hasWork ? childIds : [],
-      afterWorkIds: hasWork ? [] : childIds,
+      workIds,
+      afterWorkIds: children
+        .filter((child) => !isLiveWorkRole(child.role))
+        .map((child) => child.id),
       finalAssistantId: lastAssistantId(),
     };
   }
@@ -80,4 +94,26 @@ export function turnLayout({
 
 function isWorkRole(role: string | null): boolean {
   return role === "activity";
+}
+
+function isLiveWorkRole(role: string | null): boolean {
+  return role === "activity" || role === "reasoning";
+}
+
+/** Keep one rolling row budget across reasoning and tool groups. */
+export function rollingWorkWindow(
+  entries: RollingWorkEntry[],
+  maxRows: number,
+): RollingWorkWindowEntry[] {
+  let remaining = maxRows;
+  const visible: RollingWorkWindowEntry[] = [];
+
+  for (let index = entries.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const entry = entries[index];
+    const rowLimit = Math.min(Math.max(1, entry.rowCount), remaining);
+    visible.unshift({ id: entry.id, rowLimit });
+    remaining -= rowLimit;
+  }
+
+  return visible;
 }

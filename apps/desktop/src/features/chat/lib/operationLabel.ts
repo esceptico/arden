@@ -10,6 +10,7 @@ export type StepIconKey =
   | "folder"
   | "terminal"
   | "brain"
+  | "book"
   | "list"
   | "mail"
   | "slack"
@@ -96,8 +97,8 @@ const TOOL_META: Record<string, ToolMeta> = {
   fact_history: { verb: "Read fact history", icon: "brain" },
   fact_plan_changes: { verb: "Planned memory changes", icon: "brain" },
   fact_commit_changes: { verb: "Updated memory", icon: "brain" },
-  wiki_read_page: { verb: "Read a page", icon: "brain" },
-  wiki_list_pages: { verb: "Listed pages", icon: "brain" },
+  wiki_read_page: { verb: "Read a page", icon: "book" },
+  wiki_list_pages: { verb: "Listed pages", icon: "book" },
 
   // Sessions
   session_search_transcripts: { verb: "Searched transcripts", icon: "history" },
@@ -109,7 +110,8 @@ const TOOL_META: Record<string, ToolMeta> = {
 const PREFIX_ICON: ReadonlyArray<readonly [RegExp, StepIconKey]> = [
   [/^slack_/, "slack"],
   [/^calendar_/, "calendar"],
-  [/^fact_|^wiki_/, "brain"],
+  [/^fact_/, "brain"],
+  [/^wiki_/, "book"],
   [/^web_/, "globe"],
   [/^research/, "brain"],
   [/^email_/, "mail"],
@@ -176,7 +178,7 @@ function humanize(s: string | undefined): string | null {
 }
 
 const ICON_KEYS: ReadonlySet<string> = new Set([
-  "search", "globe", "file", "edit", "file-plus", "folder", "terminal", "brain",
+  "search", "globe", "file", "edit", "file-plus", "folder", "terminal", "brain", "book",
   "list", "mail", "slack", "calendar", "clock", "bell", "image", "wrench", "history", "dot",
 ]);
 

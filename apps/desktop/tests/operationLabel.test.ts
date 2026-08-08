@@ -17,6 +17,7 @@ test("known tools get corpus-specific labels + category icons", () => {
   expect(operationLabel(item({ kind: "calendar_search" }))).toMatchObject({ verb: "Checked the calendar", iconKey: "calendar" });
   expect(operationLabel(item({ kind: "session_search_transcripts" }))).toMatchObject({ verb: "Searched transcripts", iconKey: "history" });
   expect(operationLabel(item({ kind: "fact_search" }))).toMatchObject({ verb: "Searched memory", iconKey: "brain" });
+  expect(operationLabel(item({ kind: "wiki_read_page" }))).toMatchObject({ verb: "Read a page", iconKey: "book" });
   expect(operationLabel(item({ kind: "load_tools" }))).toMatchObject({ verb: "Loaded tools", iconKey: "wrench" });
   expect(operationLabel(item({ kind: "tool_search" }))).toMatchObject({ verb: "Searched tools", iconKey: "search" });
 });

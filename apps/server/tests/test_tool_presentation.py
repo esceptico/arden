@@ -32,6 +32,7 @@ def test_unlisted_tools_fall_back_to_source_icon_then_none():
     # Not in _BY_NAME, but the source gives a category icon.
     assert tool_presentation("slack_reactions", "slack") == ("slack", None)
     assert tool_presentation("some_gmail_tool", "gmail") == ("mail", None)
+    assert tool_presentation("wiki_read_page", "_wiki") == ("book", None)
     # Uncategorized → no icon (client renders a neutral dot).
     assert tool_presentation("frobnicate", "user") == (None, None)
     assert tool_presentation("frobnicate", None) == (None, None)

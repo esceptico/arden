@@ -2470,7 +2470,7 @@ test("loadHistory restores currentRunId for active sessions", async () => {
   }
 });
 
-test("loadHistory lets replayed tools continue the active trailing history group", async () => {
+test("loadHistory starts replayed tools below trailing reasoning", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const messages: HistoryMessage[] = [
     { role: "user", content: "watch it", id: "user-1" },
@@ -2526,8 +2526,8 @@ test("loadHistory lets replayed tools continue the active trailing history group
     await loadHistory("active-history-session");
     const loadedActivityId = getState().order.find((id) => getState().messages.get(id)?.role === "activity");
     expect(getState().messages.get(loadedActivityId!)?.activity).toMatchObject({
-      done: false,
-      label: "Calling",
+      done: true,
+      label: "Called",
     });
     handleServerEvent({
       type: "TOOL_CALL_START",
@@ -2540,15 +2540,13 @@ test("loadHistory lets replayed tools continue the active trailing history group
 
     const state = getState();
     const activityIds = state.order.filter((id) => state.messages.get(id)?.role === "activity");
-    expect(activityIds).toHaveLength(1);
-    expect(state.messages.get(activityIds[0])?.activity).toMatchObject({
+    expect(activityIds).toHaveLength(2);
+    expect(state.messages.get(activityIds[1])?.activity).toMatchObject({
       done: false,
       label: "Calling",
     });
-    expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual([
-      "tool-1",
-      "tool-2",
-    ]);
+    expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual(["tool-1"]);
+    expect(state.messages.get(activityIds[1])?.activity?.items.map((item) => item.id)).toEqual(["tool-2"]);
   } finally {
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   }
@@ -2631,7 +2629,7 @@ test("loadHistory starts replayed tools after a trailing hidden meta boundary", 
   }
 });
 
-test("live tools keep appending after canonical reload merged hidden-split activity groups", async () => {
+test("live tools append to the newest post-reasoning activity group", async () => {
   const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
   const messages: HistoryMessage[] = [
     { role: "user", content: "watch it", id: "user-1" },
@@ -2702,17 +2700,14 @@ test("live tools keep appending after canonical reload merged hidden-split activ
 
     const state = getState();
     const activityIds = state.order.filter((id) => state.messages.get(id)?.role === "activity");
-    expect(activityIds).toHaveLength(1);
-    expect(state.activeActivityId).toBe(activityIds[0]);
-    expect(state.messages.get(activityIds[0])?.activity).toMatchObject({
+    expect(activityIds).toHaveLength(2);
+    expect(state.activeActivityId).toBe(activityIds[1]);
+    expect(state.messages.get(activityIds[1])?.activity).toMatchObject({
       label: "Calling",
       done: false,
     });
-    expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual([
-      "tool-1",
-      "tool-2",
-      "tool-3",
-    ]);
+    expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual(["tool-1"]);
+    expect(state.messages.get(activityIds[1])?.activity?.items.map((item) => item.id)).toEqual(["tool-2", "tool-3"]);
   } finally {
     (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
   }

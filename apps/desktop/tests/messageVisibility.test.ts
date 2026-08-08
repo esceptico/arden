@@ -9,7 +9,7 @@ test("hides reasoning without hiding tool activity", () => {
   })).toEqual(["user-1", "activity-1", "assistant-1"]);
 });
 
-test("shows reasoning when opted in, leaving activity grouping alone", () => {
+test("shows reasoning when opted in and keeps later tools below it", () => {
   expect(visibleMessageIds({
     ids: ["user-1", "reasoning-1", "activity-1", "assistant-1"],
     roles: ["user", "reasoning", "activity", "assistant"],
@@ -19,7 +19,7 @@ test("shows reasoning when opted in, leaving activity grouping alone", () => {
   expect(messageDisplayPolicy({ role: "reasoning", showReasoning: true })).toEqual({
     hiddenInTranscript: false,
     breaksTurn: false,
-    breaksActivity: false,
+    breaksActivity: true,
   });
 });
 

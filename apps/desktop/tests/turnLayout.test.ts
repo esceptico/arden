@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { turnLayout } from "@/features/chat/lib/turnLayout";
+import { rollingWorkWindow, turnLayout } from "@/features/chat/lib/turnLayout";
 
-test("keeps active turns together in stream order", () => {
+test("keeps live assistant text outside the work trace", () => {
   const layout = turnLayout({
     children: [
       { id: "assistant-1", role: "assistant" },
@@ -13,10 +13,21 @@ test("keeps active turns together in stream order", () => {
   });
 
   expect(layout).toEqual({
-    workIds: ["assistant-1", "activity-1", "assistant-2", "activity-2"],
-    afterWorkIds: [],
+    workIds: ["activity-1", "activity-2"],
+    afterWorkIds: ["assistant-1", "assistant-2"],
     finalAssistantId: "assistant-2",
   });
+});
+
+test("shares the three-row live cap across reasoning and tool groups", () => {
+  expect(rollingWorkWindow([
+    { id: "reasoning-old", rowCount: 1 },
+    { id: "tools", rowCount: 2 },
+    { id: "reasoning-new", rowCount: 2 },
+  ], 3)).toEqual([
+    { id: "tools", rowLimit: 1 },
+    { id: "reasoning-new", rowLimit: 2 },
+  ]);
 });
 
 test("keeps live reasoning inside the tool trace", () => {

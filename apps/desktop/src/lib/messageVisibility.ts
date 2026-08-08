@@ -19,15 +19,16 @@ export function messageDisplayPolicy(message: MessageVisibilityInput): MessageDi
     message.role === "assistant" && (message.content ?? "").trim().length === 0;
   const isMetaUser = message.role === "user" && message.isMeta === true;
   const isTodoState = message.role === "todo";
-  const isContinuation = isReasoning || isEmptyAssistant || isTodoState;
-  // Opting reasoning into the transcript changes only what is drawn; it stays
-  // a continuation so activity grouping is untouched.
+  const isHiddenContinuation = isReasoning || isEmptyAssistant || isTodoState;
+  const keepsActivityOpen = isEmptyAssistant || isTodoState;
+  // Opting reasoning into the transcript changes only what is drawn. It still
+  // belongs to the same turn, but it separates tool groups chronologically.
   const isRevealedReasoning = isReasoning && message.showReasoning === true;
 
   return {
-    hiddenInTranscript: (isContinuation && !isRevealedReasoning) || isMetaUser,
+    hiddenInTranscript: (isHiddenContinuation && !isRevealedReasoning) || isMetaUser,
     breaksTurn: isMetaUser,
-    breaksActivity: isMetaUser || !isContinuation,
+    breaksActivity: isMetaUser || !keepsActivityOpen,
   };
 }
 

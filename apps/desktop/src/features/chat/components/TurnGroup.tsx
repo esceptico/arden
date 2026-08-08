@@ -6,7 +6,8 @@ import { isAgent } from "@/lib/agent";
 import { Message } from "@/features/chat/components/Message";
 import { ActivityHeader } from "@/features/chat/components/ActivityHeader";
 import { ItemButton } from "@/features/chat/components/ActivityRows";
-import { turnLayout } from "@/features/chat/lib/turnLayout";
+import { parseReasoningSteps } from "@/features/chat/lib/reasoningSteps";
+import { rollingWorkWindow, turnLayout } from "@/features/chat/lib/turnLayout";
 import { turnHeaderLabel } from "@/features/chat/lib/turnHeader";
 import { turnHasActiveChildAgent } from "@/features/chat/lib/turnActiveAgents";
 import {
@@ -38,18 +39,22 @@ export function TurnGroup({
     useShallow((s) =>
       childIds.map((id) => {
         const message = s.messages.get(id);
-        return `${message?.role ?? ""}\t${message?.activity?.label ?? ""}\t${message?.activity?.items.length ?? 0}`;
+        const reasoningRows = message?.role === "reasoning"
+          ? Math.max(1, parseReasoningSteps(message.content).length)
+          : 0;
+        return `${message?.role ?? ""}\t${message?.activity?.label ?? ""}\t${message?.activity?.items.length ?? 0}\t${reasoningRows}`;
       }),
     ),
   );
   const childSummaries = useMemo(
     () =>
       childSummaryKeys.map((key) => {
-        const [role, activityLabel, activityCount] = key.split("\t");
+        const [role, activityLabel, activityCount, reasoningRows] = key.split("\t");
         return {
           role: role || null,
           activityLabel: activityLabel || null,
           activityCount: Number(activityCount) || 0,
+          reasoningRows: Number(reasoningRows) || 0,
         };
       }),
     [childSummaryKeys],
@@ -106,6 +111,22 @@ export function TurnGroup({
   );
 
   const showInterim = !isDone || expanded;
+  const workRows = useMemo(() => {
+    if (isDone) return layout.workIds.map((id) => ({ id, rowLimit: undefined }));
+    const countById = new Map(
+      childIds.map((id, index) => {
+        const child = childSummaries[index];
+        const rowCount = child?.role === "activity"
+          ? child.activityCount
+          : child?.reasoningRows ?? 0;
+        return [id, rowCount] as const;
+      }),
+    );
+    return rollingWorkWindow(
+      layout.workIds.map((id) => ({ id, rowCount: countById.get(id) ?? 0 })),
+      3,
+    );
+  }, [childIds, childSummaries, isDone, layout.workIds]);
   // Agents are deliverables, not plumbing: when the settled turn collapses
   // into "Worked", their rows stay visible below the header instead of
   // vanishing with the tool calls. Only when collapsed — expanded shows them
@@ -134,8 +155,14 @@ export function TurnGroup({
   }, [agentItemsSig, childIds]);
   const interimList = (
     <div className="board-trace__list">
-      {layout.workIds.map((id) => (
-        <Message key={id} id={id} isFinal={false} hideActivityHeader />
+      {workRows.map(({ id, rowLimit }) => (
+        <Message
+          key={id}
+          id={id}
+          isFinal={false}
+          hideActivityHeader
+          traceRowLimit={rowLimit}
+        />
       ))}
     </div>
   );

@@ -75,9 +75,9 @@ _BY_SOURCE: dict[str, str] = {
     "google_drive": "folder",
     "web": "globe",
     "_facts": "brain",
-    "_wiki": "brain",
+    "_wiki": "book",
     "_fact_maintenance": "brain",
-    "_wiki_maintenance": "brain",
+    "_wiki_maintenance": "book",
     "_sessions": "history",
 }
 

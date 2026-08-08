@@ -24,7 +24,13 @@ import {
  *  model round, usually one part, so that wrapper spent two levels of indent
  *  to show one line. The step's own label is the row; its body is the detail
  *  line beneath, exactly like a tool call's. */
-export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: string }) {
+export const ReasoningMessage = memo(function ReasoningMessage({
+  id,
+  rowLimit,
+}: {
+  id: string;
+  rowLimit?: number;
+}) {
   const message = useMessage(id);
   const isLast = useIsLast(id);
   const running = useStore((s) => s.running);
@@ -34,6 +40,8 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
   // Only run the rAF loop when the user can actually see it.
   const smoothContent = useSmoothStreamedContent(message?.content ?? "", isStreaming);
   const steps = useMemo(() => parseReasoningSteps(smoothContent), [smoothContent]);
+  const visibleSteps = rowLimit === undefined ? steps : steps.slice(-rowLimit);
+  const visibleStepOffset = steps.length - visibleSteps.length;
   if (!message) return null;
 
   return (
@@ -47,19 +55,20 @@ export const ReasoningMessage = memo(function ReasoningMessage({ id }: { id: str
       data-source-focus={sourceFocused ? "true" : undefined}
       data-source-index={message.sourceIndex}
     >
-      {steps.map((step, index) => {
-        const active = isStreaming && index === steps.length - 1;
-        const open = expandedStep === index;
+      {visibleSteps.map((step, index) => {
+        const active = isStreaming && index === visibleSteps.length - 1;
+        const stepIndex = visibleStepOffset + index;
+        const open = expandedStep === stepIndex;
         return (
           <ThinkingStep
-            key={index}
+            key={stepIndex}
             node={<Brain01 size={14} />}
-            last={index === steps.length - 1}
+            last={index === visibleSteps.length - 1}
             className="board-trace-row rounded-[var(--r-row)] px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
           >
             <button
               type="button"
-              onClick={() => setExpandedStep(open ? null : index)}
+              onClick={() => setExpandedStep(open ? null : stepIndex)}
               aria-expanded={step.body ? open : undefined}
               disabled={!step.body}
               className="flex w-full min-w-0 items-center gap-1.5 border-0 bg-transparent p-0 text-left disabled:cursor-default"

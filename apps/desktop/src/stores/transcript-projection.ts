@@ -267,6 +267,7 @@ export function applyChatEventToTranscript(
 
     case "REASONING_MESSAGE_START":
       if (!event.depth) {
+        endActivity(s);
         s.appendMessage({
           id: event.message_id,
           role: "reasoning",
@@ -581,6 +582,7 @@ export function rebuildTranscriptFromHistory(
     if (msg.role === "tool") return;
 
     if (msg.reasoning_content) {
+      activeActivityId = null;
       items.push({
         id: `${stableId}-reasoning`,
         role: "reasoning",

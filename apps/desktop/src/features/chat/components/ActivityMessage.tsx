@@ -20,9 +20,11 @@ import {
 export const ActivityMessage = memo(function ActivityMessage({
   id,
   hideHeader = false,
+  rowLimit,
 }: {
   id: string;
   hideHeader?: boolean;
+  rowLimit?: number;
 }) {
   const message = useMessage(id);
   const sourceFocused = useSourceFocused(id);
@@ -44,7 +46,7 @@ export const ActivityMessage = memo(function ActivityMessage({
   // the items to swap out (43 → 3) before the height finished shrinking,
   // producing a visible flicker.
   const collapsed = hideHeader ? false : !expanded;
-  const max = done ? undefined : 3;
+  const max = rowLimit ?? (done ? undefined : 3);
   // Count over post-lift rows so the header matches what ActivityTail renders —
   // workflow and html-widget tool calls are lifted into cards, not counted
   // as calls.

@@ -198,7 +198,7 @@ test("does not mutate a finalized activity group after a tool burst", async () =
   ]);
 });
 
-test("keeps one activity group across top-level reasoning events", async () => {
+test("starts a new activity group after top-level reasoning", async () => {
   handleServerEvent({
     type: "RUN_STARTED",
     run_id: "run-1",
@@ -243,11 +243,14 @@ test("keeps one activity group across top-level reasoning events", async () => {
 
   const state = getState();
   const activityIds = state.order.filter((id) => state.messages.get(id)?.role === "activity");
-  expect(activityIds).toHaveLength(1);
-  expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual([
-    "tool-1",
-    "tool-2",
+  expect(state.order.map((id) => state.messages.get(id)?.role)).toEqual([
+    "activity",
+    "reasoning",
+    "activity",
   ]);
+  expect(activityIds).toHaveLength(2);
+  expect(state.messages.get(activityIds[0])?.activity?.items.map((item) => item.id)).toEqual(["tool-1"]);
+  expect(state.messages.get(activityIds[1])?.activity?.items.map((item) => item.id)).toEqual(["tool-2"]);
 });
 
 test("keeps one activity group across empty assistant placeholders", async () => {
@@ -312,10 +315,9 @@ test("recovers the trailing activity group when the active pointer was lost", as
           },
         },
       ],
-      ["reasoning-1", { id: "reasoning-1", role: "reasoning", title: "Reasoning", content: "hidden" }],
       ["assistant-empty", { id: "assistant-empty", role: "assistant", content: "" }],
     ]),
-    order: ["activity-1", "reasoning-1", "assistant-empty"],
+    order: ["activity-1", "assistant-empty"],
     activeActivityId: null,
   });
 
