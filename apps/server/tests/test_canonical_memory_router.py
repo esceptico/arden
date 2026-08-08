@@ -144,20 +144,20 @@ def test_wiki_page_timestamps_are_cached_by_repository_head(tmp_path: Path, monk
         service = client.app.state.runtime.wiki_service
         service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
         first_head = service.repository.head
-        history = service.repository.history
-        traversed_heads: list[str | None] = []
+        inspect_commit = service.repository.inspect_commit
+        inspected_commits: list[str] = []
 
-        def counting_history(**kwargs):
-            traversed_heads.append(kwargs.get("start"))
-            return history(**kwargs)
+        def counting_inspect(commit_id: str):
+            inspected_commits.append(commit_id)
+            return inspect_commit(commit_id)
 
-        monkeypatch.setattr(service.repository, "history", counting_history)
+        monkeypatch.setattr(service.repository, "inspect_commit", counting_inspect)
 
         first = client.get("/admin/wiki/pages")
         second = client.get("/admin/wiki/pages")
         assert first.status_code == second.status_code == 200
         assert first.json() == second.json()
-        assert traversed_heads == [first_head]
+        assert inspected_commits == [first_head]
 
         service.create_page(path="two.md", title="Two", page_id="two", expected_head=first_head)
         second_head = service.repository.head
@@ -166,7 +166,7 @@ def test_wiki_page_timestamps_are_cached_by_repository_head(tmp_path: Path, monk
 
         assert changed.status_code == unchanged.status_code == 200
         assert changed.json() == unchanged.json()
-        assert traversed_heads == [first_head, second_head]
+        assert inspected_commits == [first_head, second_head, first_head]
         assert [page["page_id"] for page in changed.json()["pages"]] == ["one", "two"]
         assert all(page["created_at"] and page["updated_at"] for page in changed.json()["pages"])
 
@@ -176,19 +176,19 @@ def test_concurrent_wiki_page_timestamp_misses_share_one_history_walk(tmp_path: 
         service = client.app.state.runtime.wiki_service
         service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
         head = service.repository.head
-        history = service.repository.history
+        inspect_commit = service.repository.inspect_commit
         started = Event()
         release = Event()
-        traversals: list[str | None] = []
+        traversals: list[str] = []
 
-        def blocking_history(**kwargs):
-            traversals.append(kwargs.get("start"))
+        def blocking_inspect(commit_id: str):
+            traversals.append(commit_id)
             started.set()
             if not release.wait(timeout=1):
                 raise TimeoutError("timestamp test did not release history")
-            return history(**kwargs)
+            return inspect_commit(commit_id)
 
-        monkeypatch.setattr(service.repository, "history", blocking_history)
+        monkeypatch.setattr(service.repository, "inspect_commit", blocking_inspect)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             first = pool.submit(service.page_timestamps, head, {"one"})
@@ -204,17 +204,17 @@ def test_wiki_page_timestamp_failure_does_not_poison_cache(tmp_path: Path, monke
     with _client(tmp_path) as client:
         service = client.app.state.runtime.wiki_service
         service.create_page(path="one.md", title="One", page_id="one", expected_head=None)
-        history = service.repository.history
+        inspect_commit = service.repository.inspect_commit
         attempts = 0
 
-        def flaky_history(**kwargs):
+        def flaky_inspect(commit_id: str):
             nonlocal attempts
             attempts += 1
             if attempts == 1:
                 raise CorruptRepositoryError("broken history")
-            return history(**kwargs)
+            return inspect_commit(commit_id)
 
-        monkeypatch.setattr(service.repository, "history", flaky_history)
+        monkeypatch.setattr(service.repository, "inspect_commit", flaky_inspect)
 
         assert client.get("/admin/wiki/pages").status_code == 503
         assert client.get("/admin/wiki/pages").status_code == 200
@@ -222,7 +222,7 @@ def test_wiki_page_timestamp_failure_does_not_poison_cache(tmp_path: Path, monke
         assert attempts == 2
 
 
-def test_wiki_page_timestamp_cache_retains_only_requested_pages(tmp_path: Path, monkeypatch) -> None:
+def test_wiki_page_timestamp_cache_derives_complete_head_once(tmp_path: Path, monkeypatch) -> None:
     with _client(tmp_path) as client:
         service = client.app.state.runtime.wiki_service
         archived = service.create_page(path="archived.md", title="Archived", page_id="archived", expected_head=None)
@@ -238,24 +238,24 @@ def test_wiki_page_timestamp_cache_retains_only_requested_pages(tmp_path: Path, 
             expected_head=service.repository.head,
         )
         head = service.repository.head
-        history = service.repository.history
+        inspect_commit = service.repository.inspect_commit
         traversals = 0
 
-        def counting_history(**kwargs):
+        def counting_inspect(commit_id: str):
             nonlocal traversals
             traversals += 1
-            return history(**kwargs)
+            return inspect_commit(commit_id)
 
-        monkeypatch.setattr(service.repository, "history", counting_history)
+        monkeypatch.setattr(service.repository, "inspect_commit", counting_inspect)
 
         detail = client.get(f"/admin/wiki/pages/{active.page.page_id}")
         assert detail.status_code == 200
-        assert traversals == 1
+        assert traversals == 3
         assert service.page_timestamps(head, {"active"})["active"][0] is not None
-        assert traversals == 1
+        assert traversals == 3
 
         assert service.page_timestamps(head, {"archived"})["archived"][0] is not None
-        assert traversals == 2
+        assert traversals == 3
 
 
 def test_wiki_crud_history_diff_links_and_recursive_metadata(tmp_path: Path) -> None:

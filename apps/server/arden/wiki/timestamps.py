@@ -25,33 +25,30 @@ class WikiPageTimestampCache:
             return dict.fromkeys(page_ids, (None, None))
 
         with self._lock:
-            cached = self._by_head.get(head, {})
-            missing = page_ids - cached.keys()
-            if not missing:
-                self._by_head.move_to_end(head)
-                return {page_id: cached.get(page_id, (None, None)) for page_id in page_ids}
-            # Derivation stays under the same lock so concurrent requests for
-            # one uncached head cannot repeat the complete history walk.
-            derived = self._derive(head, missing)
-            cached = self._by_head.setdefault(head, {})
-            cached.update(derived)
+            cached = self._by_head.get(head)
+            if cached is None:
+                # Derivation stays under the same lock so concurrent requests
+                # for one uncached head cannot repeat the commit walk.
+                cached = self._derive(head)
+                self._by_head[head] = cached
             self._by_head.move_to_end(head)
             while len(self._by_head) > self._max_heads:
                 self._by_head.popitem(last=False)
             return {page_id: cached.get(page_id, (None, None)) for page_id in page_ids}
 
-    def _derive(self, head: str, page_ids: set[str]) -> dict[str, PageTimestamps]:
-        mutable: dict[str, list[datetime | None]] = {page_id: [None, None] for page_id in page_ids}
-        for commit in self._repository.history(start=head):
+    def _derive(self, head: str) -> dict[str, PageTimestamps]:
+        mutable: dict[str, list[datetime | None]] = {}
+        cursor: str | None = head
+        while cursor is not None:
+            commit = self._repository.inspect_commit(cursor)
             for change in commit.changes:
                 version = change.after or change.before
-                if version is None or version.resource_id not in mutable:
+                if version is None:
                     continue
-                times = mutable[version.resource_id]
+                times = mutable.setdefault(version.resource_id, [None, None])
                 if times[1] is None:
                     times[1] = commit.timestamp
                 if change.action == "create":
                     times[0] = commit.timestamp
-            if all(created is not None and updated is not None for created, updated in mutable.values()):
-                break
+            cursor = commit.parent_id
         return {page_id: (times[0], times[1]) for page_id, times in mutable.items()}
