@@ -109,6 +109,12 @@ class _StubSessionService:
         )
         return SessionData(state=state, messages=list(self._messages), last_input_tokens=self._last_input_tokens)
 
+    async def get_goal(self, session_id: str) -> None:
+        return None
+
+    async def get_todo_override(self, session_id: str) -> None:
+        return None
+
     def create(
         self,
         name: str | None = None,
@@ -320,6 +326,10 @@ async def test_resume_suspended_chat_run_schedules_original_run(monkeypatch):
     svc = _StubSessionService(history)
 
     class Store:
+        @property
+        def events(self):
+            return self
+
         async def get_chat_run(self, run_id):
             return {
                 "run_id": run_id,
