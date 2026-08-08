@@ -127,7 +127,7 @@ async def test_agent_cancellation():
 async def store(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    s = SessionStore(conn, read_conn)
+    s = SessionStore(conn, read_conn, event_conn=conn)
     await s.init_schema()
     yield s
     await read_conn.close()

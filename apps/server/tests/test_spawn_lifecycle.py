@@ -522,7 +522,7 @@ async def test_spawn_persists_child_agent_session(monkeypatch, tmp_path: Path):
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     session_service = SessionService(store)
     try:
@@ -711,7 +711,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     session_service = SessionService(store)
     try:

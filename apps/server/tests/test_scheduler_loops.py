@@ -35,7 +35,7 @@ async def session_service(tmp_path: Path):
     from arden.services.session import SessionService
 
     conn = await database.connect(tmp_path / "sessions.db")
-    s = SessionStore(conn)
+    s = SessionStore(conn, event_conn=conn)
     await s.init_schema()
     service = SessionService(s)
     await service.provision(name="active chat", session_id="sess-1")
@@ -1553,7 +1553,7 @@ async def test_post_mode_persists_assistant_message_to_target_session(store: Aut
 
     # Tmp session DB.
     session_conn = await database.connect(tmp_path / "sessions.db")
-    session_store = SessionStore(session_conn)
+    session_store = SessionStore(session_conn, event_conn=session_conn)
     await session_store.init_schema()
     session_service = SessionService(session_store)
 

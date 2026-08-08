@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+import arden.context.session_event_store as session_event_store
 import arden.database as database
 from arden.agent import ToolResult, Usage
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
@@ -27,14 +28,16 @@ from arden.services.session import SessionService
 @pytest_asyncio.fixture
 async def store(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
+    event_conn = await database.connect(tmp_path / "sessions.db")
     completion_conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    s = SessionStore(conn, read_conn, completion_conn)
+    s = SessionStore(conn, read_conn, completion_conn, event_conn=event_conn)
     await s.init_schema()
     await OutboxStore(completion_conn).init_schema()
     yield s
     await read_conn.close()
     await completion_conn.close()
+    await event_conn.close()
     await conn.close()
 
 
@@ -1736,6 +1739,112 @@ async def test_event_batch_commits_event_manifest_call_ref_and_retention_state(s
 
 
 @pytest.mark.asyncio
+async def test_concurrent_event_batches_isolate_failed_transaction(store: SessionStore):
+    raw = "failed batch evidence\n" * ((RAW_TOOL_RESULT_INLINE_MAX_BYTES // len("failed batch evidence\n")) + 10)
+    await store.record_tool_call_started(
+        run_id="run-isolated",
+        session_id="sess-isolated",
+        tool_call_id="call-isolated",
+        tool_name="bash",
+        action="read",
+        scope="internal",
+    )
+    await store.events.record_session_event(
+        StreamRecord(seq=1, session_id="sess-isolated", event=ThinkingEvent(status="existing"))
+    )
+
+    failed_batch = store.events.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="sess-isolated",
+            event=ToolCallResultEvent(
+                tool_call_id="call-isolated",
+                name="bash",
+                content=raw,
+            ),
+        )
+    )
+    valid_batch = store.events.record_session_event(
+        StreamRecord(seq=2, session_id="sess-isolated", event=ThinkingEvent(status="valid"))
+    )
+
+    results = await asyncio.gather(failed_batch, valid_batch, return_exceptions=True)
+
+    assert sum(isinstance(result, sqlite3.IntegrityError) for result in results) == 1
+    events = await store.read_conn.execute_fetchall(
+        "SELECT seq FROM session_events WHERE session_id = 'sess-isolated' ORDER BY seq"
+    )
+    manifests = await store.read_conn.execute_fetchall(
+        "SELECT tool_result_id FROM tool_results WHERE session_id = 'sess-isolated'"
+    )
+    tool_calls = await store.read_conn.execute_fetchall(
+        "SELECT result_ref FROM tool_calls WHERE session_id = 'sess-isolated' AND tool_call_id = 'call-isolated'"
+    )
+    retention = await store.read_conn.execute_fetchall(
+        "SELECT writes_since_prune FROM session_event_retention_state WHERE session_id = 'sess-isolated'"
+    )
+
+    assert [row["seq"] for row in events] == [1, 2]
+    assert manifests == []
+    assert tool_calls[0]["result_ref"] is None
+    assert retention[0]["writes_since_prune"] == 2
+
+
+@pytest.mark.asyncio
+async def test_event_writer_rolls_back_when_cancelled_during_begin(store: SessionStore, monkeypatch):
+    begin_completed = asyncio.Event()
+    release_begin = asyncio.Event()
+    original_execute = store.events._write_conn.execute
+
+    async def delayed_execute(sql, parameters=None):
+        result = await original_execute(sql, parameters)
+        if sql == "BEGIN IMMEDIATE":
+            begin_completed.set()
+            await release_begin.wait()
+        return result
+
+    monkeypatch.setattr(store.events._write_conn, "execute", delayed_execute)
+    cancelled_write = asyncio.create_task(
+        store.events.record_session_event(
+            StreamRecord(seq=1, session_id="sess-cancelled", event=ThinkingEvent(status="cancelled"))
+        )
+    )
+
+    await asyncio.wait_for(begin_completed.wait(), timeout=1)
+    cancelled_write.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_write
+
+    release_begin.set()
+    await store.events.record_session_event(
+        StreamRecord(seq=1, session_id="sess-cancelled", event=ThinkingEvent(status="recovered"))
+    )
+
+    events = await store.events.list_session_events("sess-cancelled")
+    assert [event.event.status for event in events] == ["recovered"]
+
+
+@pytest.mark.asyncio
+async def test_event_retention_failure_does_not_retry_committed_batch(store: SessionStore, monkeypatch):
+    async def fail_retention(_session_id, _keep):
+        raise RuntimeError("retention failed")
+
+    monkeypatch.setattr(session_event_store, "SESSION_EVENT_PRUNE_INTERVAL", 1)
+    monkeypatch.setattr(store.events, "_prune_session_events", fail_retention)
+
+    await store.events.record_session_event(
+        StreamRecord(seq=1, session_id="sess-retention-failure", event=ThinkingEvent(status="committed"))
+    )
+
+    events = await store.events.list_session_events("sess-retention-failure")
+    retention = await store.read_conn.execute_fetchall(
+        "SELECT writes_since_prune FROM session_event_retention_state WHERE session_id = 'sess-retention-failure'"
+    )
+    assert [event.event.status for event in events] == ["committed"]
+    assert retention[0]["writes_since_prune"] == 1
+
+
+@pytest.mark.asyncio
 async def test_large_file_search_result_gets_short_retention(store: SessionStore):
     raw = "search evidence\n" * 5000
     before = datetime.now(UTC)
@@ -2771,7 +2880,7 @@ async def test_repeated_checkpoint_reconstruction_survives_cache_corruption_and_
     db = tmp_path / "checkpoint-restart.db"
     conn = await database.connect(db)
     read_conn = await database.connect(db, readonly=True)
-    first_store = SessionStore(conn, read_conn)
+    first_store = SessionStore(conn, read_conn, event_conn=conn)
     await first_store.init_schema()
     state = _make_state("checkpoint-restart")
     original = [
@@ -2799,7 +2908,7 @@ async def test_repeated_checkpoint_reconstruction_survives_cache_corruption_and_
 
     restarted_conn = await database.connect(db)
     restarted_read = await database.connect(db, readonly=True)
-    restarted = SessionStore(restarted_conn, restarted_read)
+    restarted = SessionStore(restarted_conn, restarted_read, event_conn=restarted_conn)
     try:
         await restarted.init_schema()
         loaded = await restarted.load_session(state.session_id)
@@ -3403,7 +3512,7 @@ async def test_event_retention_counter_survives_restart(tmp_path: Path, monkeypa
 
     conn = await database.connect(db)
     read_conn = await database.connect(db, readonly=True)
-    first = SessionStore(conn, read_conn)
+    first = SessionStore(conn, read_conn, event_conn=conn)
     await first.init_schema()
     for seq in (1, 2):
         await first.events.record_session_event(
@@ -3414,7 +3523,7 @@ async def test_event_retention_counter_survives_restart(tmp_path: Path, monkeypa
 
     conn = await database.connect(db)
     read_conn = await database.connect(db, readonly=True)
-    restarted = SessionStore(conn, read_conn)
+    restarted = SessionStore(conn, read_conn, event_conn=conn)
     await restarted.init_schema()
     await restarted.events.record_session_event(
         StreamRecord(seq=3, session_id="restart-session", event=ThinkingEvent(status="s3"))

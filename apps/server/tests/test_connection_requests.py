@@ -34,7 +34,7 @@ from arden.tools.core.registry import ToolRegistry
 async def session_store(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     yield store
     await read_conn.close()

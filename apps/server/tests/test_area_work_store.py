@@ -16,7 +16,7 @@ from arden.services.session import SessionService
 @pytest_asyncio.fixture
 async def work_env(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
-    sessions_store = SessionStore(conn)
+    sessions_store = SessionStore(conn, event_conn=conn)
     await sessions_store.init_schema()
     sessions = SessionService(sessions_store)
     work = AreaWorkStore(conn)
@@ -548,7 +548,7 @@ async def test_agent_report_loses_to_a_newer_user_edit(work_env) -> None:
 async def test_schema_restart_archive_restore_and_report_replay_are_idempotent(tmp_path: Path) -> None:
     db_path = tmp_path / "restart.db"
     conn = await database.connect(db_path)
-    sessions = SessionService(SessionStore(conn))
+    sessions = SessionService(SessionStore(conn, event_conn=conn))
     await sessions.store.init_schema()
     work = AreaWorkStore(conn)
     await work.init_schema()
@@ -559,7 +559,7 @@ async def test_schema_restart_archive_restore_and_report_replay_are_idempotent(t
     await conn.close()
 
     reopened = await database.connect(db_path)
-    sessions = SessionService(SessionStore(reopened))
+    sessions = SessionService(SessionStore(reopened, event_conn=reopened))
     await sessions.store.init_schema()
     work = AreaWorkStore(reopened)
     await work.init_schema()

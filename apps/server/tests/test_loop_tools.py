@@ -52,7 +52,7 @@ async def store_and_svc(tmp_path: Path):
     store = AutomationStore(conn)
     await store.init_schema()
     session_conn = await database.connect(tmp_path / "sessions.db")
-    session_store = SessionStore(session_conn)
+    session_store = SessionStore(session_conn, event_conn=session_conn)
     await session_store.init_schema()
     session_service = SessionService(session_store)
     await session_service.provision(name="active chat", session_id="sess-1")
@@ -526,7 +526,7 @@ async def test_create_automation_message_trigger_resolves_channels(tmp_path: Pat
     store = AutomationStore(conn)
     await store.init_schema()
     session_conn = await database.connect(tmp_path / "sessions.db")
-    session_store = SessionStore(session_conn)
+    session_store = SessionStore(session_conn, event_conn=session_conn)
     await session_store.init_schema()
     svc = AutomationService(
         store=store,
@@ -570,7 +570,7 @@ async def test_update_automation_to_message_trigger_resolves_channels(tmp_path: 
     store = AutomationStore(conn)
     await store.init_schema()
     session_conn = await database.connect(tmp_path / "sessions.db")
-    session_store = SessionStore(session_conn)
+    session_store = SessionStore(session_conn, event_conn=session_conn)
     await session_store.init_schema()
     svc = AutomationService(
         store=store,

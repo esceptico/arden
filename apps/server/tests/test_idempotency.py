@@ -33,7 +33,7 @@ async def store(tmp_path: Path):
 @pytest_asyncio.fixture
 async def session_service(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
-    store = SessionStore(conn)
+    store = SessionStore(conn, event_conn=conn)
     await store.init_schema()
     service = SessionService(store)
     await service.provision(name="active chat", session_id="sess-1")

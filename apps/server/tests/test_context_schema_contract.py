@@ -14,7 +14,7 @@ from arden.context.store import SessionStore
 async def _store(tmp_path: Path) -> tuple[aiosqlite.Connection, aiosqlite.Connection, SessionStore]:
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    return conn, read_conn, SessionStore(conn, read_conn)
+    return conn, read_conn, SessionStore(conn, read_conn, event_conn=conn)
 
 
 @pytest.mark.asyncio
@@ -29,9 +29,7 @@ async def test_fresh_schema_failure_rolls_back_every_object(tmp_path: Path, monk
         with pytest.raises(aiosqlite.OperationalError):
             await store.init_schema()
 
-        objects = await conn.execute_fetchall(
-            "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
-        )
+        objects = await conn.execute_fetchall("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
         assert objects == []
     finally:
         await read_conn.close()

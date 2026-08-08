@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import aiosqlite
@@ -31,7 +33,10 @@ from arden.core.tool_result_files import (
     result_payload_file_path,
 )
 from arden.events.sse import event_from_payload
+from arden.logging import get_logger
 from arden.server.bus import StreamRecord
+
+_logger = get_logger(__name__)
 
 _DURABLE_TOOL_RESULT_DATA_KEYS = (
     "child_agent",
@@ -49,9 +54,25 @@ _DURABLE_TOOL_RESULT_DATA_KEYS = (
 class SessionEventStore:
     """Own event replay, retention, and durable raw-result recovery."""
 
-    def __init__(self, conn: aiosqlite.Connection, read_conn: aiosqlite.Connection):
-        self.conn = conn
-        self.read_conn = read_conn
+    def __init__(self, write_conn: aiosqlite.Connection, read_conn: aiosqlite.Connection):
+        self._write_conn = write_conn
+        self._read_conn = read_conn
+        self._write_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[None]:
+        try:
+            await self._write_conn.execute("BEGIN IMMEDIATE")
+            yield
+            await self._write_conn.commit()
+        except BaseException:
+            await asyncio.shield(self._write_conn.rollback())
+            raise
+
+    @asynccontextmanager
+    async def _locked_transaction(self) -> AsyncIterator[None]:
+        async with self._write_lock, self._transaction():
+            yield
 
     @staticmethod
     def active_tool_result_ids(messages: list[dict]) -> set[str]:
@@ -87,7 +108,7 @@ class SessionEventStore:
         if not missing:
             return
         placeholders = ",".join("?" for _ in missing)
-        rows = await self.read_conn.execute_fetchall(
+        rows = await self._read_conn.execute_fetchall(
             f"""
             SELECT tool_call_id, blob_path, compression
             FROM tool_results
@@ -192,7 +213,7 @@ class SessionEventStore:
         )
 
     async def list_tool_result_content_hashes(self) -> set[str]:
-        rows = await self.read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
+        rows = await self._read_conn.execute_fetchall("SELECT DISTINCT content_sha256 FROM tool_results")
         return {row["content_sha256"] for row in rows}
 
     async def prune_expired_tool_results(self, *, limit: int = 1000, now: datetime | None = None) -> int:
@@ -201,67 +222,67 @@ class SessionEventStore:
         if limit <= 0:
             return 0
         cutoff = (now or datetime.now(UTC)).isoformat()
-        cursor = await self.conn.execute(
-            """
-            DELETE FROM tool_results
-            WHERE tool_result_id IN (
-                SELECT tool_result_id
-                FROM tool_results
-                WHERE expires_at IS NOT NULL AND expires_at <= ?
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM sessions AS active_session
-                      WHERE active_session.session_id = tool_results.session_id
-                        AND CASE
-                            WHEN json_valid(active_session.messages)
-                            THEN json_type(active_session.messages) <> 'array'
-                            ELSE 1
-                        END
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM sessions AS active_session,
-                           json_each(
-                               CASE
-                                   WHEN json_valid(active_session.messages) THEN active_session.messages
-                                   ELSE '[]'
-                               END
-                           ) AS active_message
-                      WHERE active_session.session_id = tool_results.session_id
-                        AND json_extract(active_message.value, '$.role') = 'tool'
-                        AND json_extract(active_message.value, '$.tool_call_id') = tool_results.tool_call_id
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM sessions AS active_session,
-                           json_each(
-                               CASE
-                                   WHEN json_valid(active_session.messages) THEN active_session.messages
-                                   ELSE '[]'
-                               END
-                           ) AS active_message,
-                           json_each(
-                               CASE
-                                   WHEN json_type(active_message.value, '$.compaction.tool_result_refs') = 'array'
-                                   THEN json_extract(active_message.value, '$.compaction.tool_result_refs')
-                                   ELSE '[]'
-                               END
-                           ) AS active_ref
-                      WHERE active_session.session_id = tool_results.session_id
-                        AND CAST(active_ref.value AS TEXT) = tool_results.tool_call_id
-                  )
-                ORDER BY expires_at, tool_result_id
-                LIMIT ?
+        async with self._locked_transaction():
+            cursor = await self._write_conn.execute(
+                """
+                DELETE FROM tool_results
+                WHERE tool_result_id IN (
+                    SELECT tool_result_id
+                    FROM tool_results
+                    WHERE expires_at IS NOT NULL AND expires_at <= ?
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM sessions AS active_session
+                          WHERE active_session.session_id = tool_results.session_id
+                            AND CASE
+                                WHEN json_valid(active_session.messages)
+                                THEN json_type(active_session.messages) <> 'array'
+                                ELSE 1
+                            END
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM sessions AS active_session,
+                               json_each(
+                                   CASE
+                                       WHEN json_valid(active_session.messages) THEN active_session.messages
+                                       ELSE '[]'
+                                   END
+                               ) AS active_message
+                          WHERE active_session.session_id = tool_results.session_id
+                            AND json_extract(active_message.value, '$.role') = 'tool'
+                            AND json_extract(active_message.value, '$.tool_call_id') = tool_results.tool_call_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM sessions AS active_session,
+                               json_each(
+                                   CASE
+                                       WHEN json_valid(active_session.messages) THEN active_session.messages
+                                       ELSE '[]'
+                                   END
+                               ) AS active_message,
+                               json_each(
+                                   CASE
+                                       WHEN json_type(active_message.value, '$.compaction.tool_result_refs') = 'array'
+                                       THEN json_extract(active_message.value, '$.compaction.tool_result_refs')
+                                       ELSE '[]'
+                                   END
+                               ) AS active_ref
+                          WHERE active_session.session_id = tool_results.session_id
+                            AND CAST(active_ref.value AS TEXT) = tool_results.tool_call_id
+                      )
+                    ORDER BY expires_at, tool_result_id
+                    LIMIT ?
+                )
+                """,
+                (cutoff, limit),
             )
-            """,
-            (cutoff, limit),
-        )
-        await self.conn.commit()
         return cursor.rowcount
 
     async def get_tool_result_for_call(self, *, run_id: str, tool_call_id: str) -> dict | None:
         now = datetime.now(UTC).isoformat()
-        rows = await self.read_conn.execute_fetchall(
+        rows = await self._read_conn.execute_fetchall(
             """
             SELECT result.*
             FROM tool_calls AS call
@@ -422,62 +443,73 @@ class SessionEventStore:
             return rows, tool_result_rows, tool_call_ref_updates, per_session
 
         rows, tool_result_rows, tool_call_ref_updates, per_session = await asyncio.to_thread(_build_rows)
-        if tool_result_rows:
-            await self.conn.executemany(
-                """
-                INSERT OR IGNORE INTO tool_results (
-                    tool_result_id, session_id, run_id, tool_call_id, tool_name,
-                    content_sha256, content_bytes, stored_bytes, compression,
-                    blob_ref, blob_path, preview, retention_class, expires_at,
-                    source_event_seq, created_at
+        async with self._write_lock:
+            async with self._transaction():
+                if tool_result_rows:
+                    await self._write_conn.executemany(
+                        """
+                        INSERT OR IGNORE INTO tool_results (
+                            tool_result_id, session_id, run_id, tool_call_id, tool_name,
+                            content_sha256, content_bytes, stored_bytes, compression,
+                            blob_ref, blob_path, preview, retention_class, expires_at,
+                            source_event_seq, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        tool_result_rows,
+                    )
+                if tool_call_ref_updates:
+                    await self._write_conn.executemany(
+                        """
+                        UPDATE tool_calls
+                        SET result_ref = ?
+                        WHERE session_id = ? AND tool_call_id = ?
+                        """,
+                        tool_call_ref_updates,
+                    )
+                await self._write_conn.executemany(
+                    """
+                    INSERT INTO session_events (
+                        session_id, seq, event_type, event_json, run_id, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                tool_result_rows,
-            )
-        if tool_call_ref_updates:
-            await self.conn.executemany(
-                """
-                UPDATE tool_calls
-                SET result_ref = ?
-                WHERE session_id = ? AND tool_call_id = ?
-                """,
-                tool_call_ref_updates,
-            )
-        await self.conn.executemany(
-            """
-            INSERT INTO session_events (
-                session_id, seq, event_type, event_json, run_id, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        await self.conn.executemany(
-            """
-            INSERT INTO session_event_retention_state(session_id, writes_since_prune)
-            VALUES (?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                writes_since_prune = writes_since_prune + excluded.writes_since_prune
-            """,
-            tuple(per_session.items()),
-        )
-        await self.conn.commit()
-
-        due = await self.read_conn.execute_fetchall(
-            f"""
-            SELECT session_id
-            FROM session_event_retention_state
-            WHERE session_id IN ({",".join("?" for _ in per_session)})
-              AND writes_since_prune >= ?
-            """,
-            (*per_session, SESSION_EVENT_PRUNE_INTERVAL),
-        )
-        for row in due:
-            await self.prune_session_events(row["session_id"], SESSION_EVENT_DURABLE_RETENTION)
+                await self._write_conn.executemany(
+                    """
+                    INSERT INTO session_event_retention_state(session_id, writes_since_prune)
+                    VALUES (?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        writes_since_prune = writes_since_prune + excluded.writes_since_prune
+                    """,
+                    tuple(per_session.items()),
+                )
+            try:
+                due = await self._write_conn.execute_fetchall(
+                    f"""
+                    SELECT session_id
+                    FROM session_event_retention_state
+                    WHERE session_id IN ({",".join("?" for _ in per_session)})
+                      AND writes_since_prune >= ?
+                    """,
+                    (*per_session, SESSION_EVENT_PRUNE_INTERVAL),
+                )
+                for row in due:
+                    async with self._transaction():
+                        await self._prune_session_events(row["session_id"], SESSION_EVENT_DURABLE_RETENTION)
+            except Exception:
+                _logger.exception(
+                    "session_event_retention_failed",
+                    session_ids=sorted(per_session),
+                )
 
     async def prune_session_events(self, session_id: str, keep: int = SESSION_EVENT_DURABLE_RETENTION) -> int:
-        cursor = await self.conn.execute(
+        async with self._locked_transaction():
+            return await self._prune_session_events(session_id, keep)
+
+    async def _prune_session_events(self, session_id: str, keep: int) -> int:
+        cursor = await self._write_conn.execute(
             """
             DELETE FROM session_events
             WHERE session_id = ?
@@ -490,7 +522,7 @@ class SessionEventStore:
             """,
             (session_id, session_id, keep),
         )
-        await self.conn.execute(
+        await self._write_conn.execute(
             """
             INSERT INTO session_event_retention_state(session_id, writes_since_prune)
             VALUES (?, 0)
@@ -498,11 +530,10 @@ class SessionEventStore:
             """,
             (session_id,),
         )
-        await self.conn.commit()
         return cursor.rowcount
 
     async def reconcile_due_session_event_retention(self) -> int:
-        rows = await self.read_conn.execute_fetchall(
+        rows = await self._read_conn.execute_fetchall(
             """
             SELECT session_id
             FROM session_event_retention_state
@@ -523,7 +554,7 @@ class SessionEventStore:
         after_seq: int = 0,
         limit: int = 10000,
     ) -> list[StreamRecord]:
-        rows = await self.read_conn.execute_fetchall(
+        rows = await self._read_conn.execute_fetchall(
             """
             SELECT seq, event_json
             FROM session_events
@@ -543,14 +574,14 @@ class SessionEventStore:
         ]
 
     async def get_latest_session_event_seq(self, session_id: str) -> int:
-        rows = await self.read_conn.execute_fetchall(
+        rows = await self._read_conn.execute_fetchall(
             "SELECT COALESCE(MAX(seq), 0) AS latest_seq FROM session_events WHERE session_id = ?",
             (session_id,),
         )
         return int(rows[0]["latest_seq"] or 0)
 
     async def get_latest_session_checkpoint_seq(self, session_id: str) -> int:
-        rows = await self.read_conn.execute_fetchall(
+        rows = await self._read_conn.execute_fetchall(
             "SELECT COALESCE(MAX(last_seq), 0) AS latest_seq "
             "FROM chat_runs WHERE session_id = ? AND last_seq IS NOT NULL",
             (session_id,),

@@ -27,7 +27,7 @@ async def store(tmp_path: Path):
 @pytest_asyncio.fixture
 async def session_service(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
-    s = SessionStore(conn)
+    s = SessionStore(conn, event_conn=conn)
     await s.init_schema()
     yield SessionService(s)
     await conn.close()

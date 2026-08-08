@@ -24,7 +24,7 @@ async def store(tmp_path: Path):
     conn = await database.connect(tmp_path / "sessions.db")
     completion_conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    s = SessionStore(conn, read_conn, completion_conn)
+    s = SessionStore(conn, read_conn, completion_conn, event_conn=conn)
     await s.init_schema()
     yield s
     await read_conn.close()

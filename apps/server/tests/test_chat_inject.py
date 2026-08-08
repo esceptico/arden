@@ -105,7 +105,7 @@ async def test_tools_result_resolves_durable_approval(tmp_path):
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     registry = RunRegistry()
     run = registry.create_run("s-1")
@@ -173,7 +173,7 @@ async def test_tools_result_resolves_durable_approval_without_active_future(tmp_
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     registry = RunRegistry()
     run = registry.create_run("s-1")
@@ -209,7 +209,7 @@ async def test_tools_result_resolves_durable_approval_without_active_run(tmp_pat
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     registry = RunRegistry()
     await store.record_tool_approval_requested(
@@ -244,7 +244,7 @@ async def test_tools_result_resumes_run_after_offline_approval(tmp_path):
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.record_tool_approval_requested(
         run_id="run-1",
@@ -313,7 +313,7 @@ async def test_tools_result_durable_fallback_conflicts_for_terminal_approval(tmp
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     registry = RunRegistry()
     run = registry.create_run("s-1")
@@ -355,7 +355,7 @@ async def test_tools_result_active_future_conflicts_for_terminal_durable_approva
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     registry = RunRegistry()
     run = registry.create_run("s-1")
@@ -502,7 +502,7 @@ async def test_event_stream_replays_persisted_events_after_bus_recreation(tmp_pa
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.events.record_session_event(
         StreamRecord(seq=1, session_id="sess-1", event=TextMessageStartEvent(message_id="a-1"))
@@ -551,7 +551,7 @@ async def test_event_stream_uses_persisted_checkpoint_as_cursor_boundary(tmp_pat
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=7)
@@ -598,7 +598,7 @@ async def test_event_stream_reset_advances_cursor_to_persisted_checkpoint(tmp_pa
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=7)
@@ -629,7 +629,7 @@ async def test_event_stream_seeds_persisted_cursor_without_client_cursor(tmp_pat
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=7)
@@ -675,7 +675,7 @@ async def test_event_stream_replays_persisted_raw_events_above_checkpoint(tmp_pa
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.record_chat_run_started("run-1", "sess-1")
     await store.record_chat_run_status("run-1", "running", last_seq=2)
@@ -710,7 +710,7 @@ async def test_event_stream_resets_instead_of_replaying_persisted_checkpointed_e
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.events.record_session_event(
         StreamRecord(seq=2, session_id="sess-1", event=ThinkingEvent(status="checkpointed")),
@@ -1379,7 +1379,7 @@ async def test_cancel_before_enqueue_tombstone_prevents_later_injection(tmp_path
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     service = SessionService(store)
     state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
@@ -1422,7 +1422,7 @@ async def test_ingested_queue_retry_does_not_return_stale_queued_status(tmp_path
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     service = SessionService(store)
     state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
@@ -1470,7 +1470,7 @@ async def test_automation_submission_does_not_queue_when_target_is_busy(tmp_path
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     service = SessionService(store)
     await service.save(
@@ -1509,7 +1509,7 @@ async def test_automation_provenance_does_not_break_legacy_chat_replay(tmp_path)
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     service = SessionService(store)
     state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
@@ -1565,7 +1565,7 @@ async def test_recreated_automation_does_not_reuse_a_legacy_iteration_receipt(tm
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     service = SessionService(store)
     state = SessionState(session_id="sess-1", started_at=datetime.now(UTC))
@@ -1952,7 +1952,7 @@ async def test_submit_chat_message_primes_bus_cursor_from_durable_events(tmp_pat
 
     conn = await database.connect(tmp_path / "sessions.db")
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
-    store = SessionStore(conn, read_conn)
+    store = SessionStore(conn, read_conn, event_conn=conn)
     await store.init_schema()
     await store.events.record_session_event(
         StreamRecord(seq=187, session_id="sess-1", event=ThinkingEvent(status="old"))

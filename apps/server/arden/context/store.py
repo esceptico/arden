@@ -168,6 +168,8 @@ class SessionStore:
         conn: aiosqlite.Connection,
         read_conn: aiosqlite.Connection | None = None,
         chat_completion_conn: aiosqlite.Connection | None = None,
+        *,
+        event_conn: aiosqlite.Connection,
     ):
         self.conn = conn
         self.read_conn = read_conn or conn
@@ -195,7 +197,7 @@ class SessionStore:
         self.background_cancellations = BackgroundCancellationStore(conn, self._background_event_lock)
         self.chat_runs = ChatRunStore(conn, self.read_conn, chat_completion_conn)
         self.chat_idempotency = ChatIdempotencyStore(conn, self.read_conn)
-        self.events = SessionEventStore(conn, self.read_conn)
+        self.events = SessionEventStore(event_conn, self.read_conn)
 
     async def _session_write_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
