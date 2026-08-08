@@ -1689,6 +1689,58 @@ async def test_terminal_recovery_falls_back_to_exact_payload_file_without_manife
 
 
 @pytest.mark.asyncio
+async def test_terminal_recovery_rejects_untyped_manifest_content(session_store: SessionStore, tmp_path, monkeypatch):
+    import arden.core.raw_tool_results as raw_tool_results
+
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "blobs")
+    blob = raw_tool_results.persist_raw_tool_result("legacy raw content")
+    await session_store.record_tool_call_started(
+        run_id="run-1",
+        session_id="recovery-session",
+        tool_call_id="call-untyped",
+        tool_name="bash",
+        action="read",
+        scope="internal",
+    )
+    await session_store.events.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="recovery-session",
+            event=ToolCallResultEvent(
+                tool_call_id="call-untyped",
+                name="bash",
+                content="bounded preview",
+                preview="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    await session_store.record_tool_call_finished(
+        run_id="run-1",
+        tool_call_id="call-untyped",
+        status="success",
+        result_preview="bounded",
+        outcome={"status": "succeeded"},
+    )
+    pending = PendingToolCall(
+        tool_call=AgentToolCall(
+            id="call-untyped",
+            type="function",
+            function=FunctionCall(name="bash", arguments="{}"),
+        ),
+        name="bash",
+        args={},
+    )
+
+    recovered = await _recover_durable_tool_calls(session_store, "run-1", [pending])
+
+    result = recovered["call-untyped"]
+    assert result.outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert result.outcome.error.code == "durable_result_corrupt"
+    assert "legacy raw content" not in result.content
+
+
+@pytest.mark.asyncio
 async def test_arden_tool_executor_rejects_registered_tool_outside_run_allowlist():
     called = False
 
@@ -1931,10 +1983,9 @@ async def test_offloaded_result_persisted_to_file(session_store: SessionStore):
     assert str(path) in result.content
     assert path.exists()
     assert path.read_text() == big
-    # offload is session-scoped, not a global pile (the 5GB runaway came from a
-    # flat global store), and locatable by id without the session.
+    # Offload is session-scoped, not a global pile (the 5GB runaway came from a
+    # flat global store).
     assert path.parent == trf.session_results_dir("sess-1")
-    assert trf.find_result_file("call-7") == path
 
 
 def test_prune_offload_store_drops_old_keeps_recent(monkeypatch, tmp_path):
@@ -1958,7 +2009,6 @@ def test_prune_offload_store_drops_old_keeps_recent(monkeypatch, tmp_path):
     assert not old_payload.exists()
     assert new.exists()
     assert not (trf.RESULTS_BASE / "old-sess").exists()  # empty session dir swept
-    assert trf.find_result_file("call-new") == new  # still locatable by id
 
 
 @pytest.mark.asyncio

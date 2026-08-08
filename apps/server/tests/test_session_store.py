@@ -12,6 +12,7 @@ import pytest_asyncio
 import arden.context.session_event_store as session_event_store
 import arden.database as database
 from arden.agent import ToolResult, Usage
+from arden.agent.types.tools import ToolResultPayloadError
 from arden.constants import RAW_TOOL_RESULT_INLINE_MAX_BYTES
 from arden.context.models import BackgroundStartDisposition, SessionState
 from arden.context.store import SessionDataCorruptionError, SessionStore, StaleSessionContextError
@@ -2182,6 +2183,104 @@ async def test_session_resume_rehydrates_distinct_raw_and_payload_files(store: S
     assert loaded is not None
     assert raw_path.read_text() == raw
     assert payload_path.read_text() == exact_payload
+
+
+@pytest.mark.asyncio
+async def test_terminal_result_recovery_prefers_exact_envelope_outcome(store: SessionStore):
+    result = ToolResult(content="exact result", preview="exact").with_default_outcome()
+    blob = persist_raw_tool_result(result.serialized_payload())
+    await store.record_tool_call_started(
+        run_id="run-exact",
+        session_id="sess-exact",
+        tool_call_id="call-exact",
+        tool_name="bash",
+        action="read",
+        scope="internal",
+    )
+    await store.events.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="sess-exact",
+            event=ToolCallResultEvent(
+                tool_call_id="call-exact",
+                name="bash",
+                content="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    await store.record_tool_call_finished(
+        run_id="run-exact",
+        tool_call_id="call-exact",
+        status="success",
+        outcome={"status": "invalid-stale-value"},
+    )
+
+    recovered = await store.events.get_tool_result_for_call(run_id="run-exact", tool_call_id="call-exact")
+
+    assert recovered == result
+
+
+@pytest.mark.asyncio
+async def test_terminal_result_recovery_rejects_untyped_manifest(store: SessionStore):
+    blob = persist_raw_tool_result("legacy raw content")
+    await store.record_tool_call_started(
+        run_id="run-untyped",
+        session_id="sess-untyped",
+        tool_call_id="call-untyped",
+        tool_name="bash",
+        action="read",
+        scope="internal",
+    )
+    await store.events.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="sess-untyped",
+            event=ToolCallResultEvent(
+                tool_call_id="call-untyped",
+                name="bash",
+                content="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+
+    with pytest.raises(ToolResultPayloadError, match="not a typed ToolResult envelope"):
+        await store.events.get_tool_result_for_call(run_id="run-untyped", tool_call_id="call-untyped")
+
+
+@pytest.mark.asyncio
+async def test_terminal_result_recovery_verifies_manifest_hash(store: SessionStore):
+    result = ToolResult(content="exact result", preview="exact").with_default_outcome()
+    blob = persist_raw_tool_result(result.serialized_payload())
+    await store.record_tool_call_started(
+        run_id="run-hash",
+        session_id="sess-hash",
+        tool_call_id="call-hash",
+        tool_name="bash",
+        action="read",
+        scope="internal",
+    )
+    await store.events.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id="sess-hash",
+            event=ToolCallResultEvent(
+                tool_call_id="call-hash",
+                name="bash",
+                content="bounded",
+                data=blob.to_internal_data(),
+            ),
+        )
+    )
+    await store.conn.execute(
+        "UPDATE tool_results SET content_sha256 = ? WHERE session_id = ? AND tool_call_id = ?",
+        ("0" * 64, "sess-hash", "call-hash"),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(ToolResultPayloadError, match="hash does not match"):
+        await store.events.get_tool_result_for_call(run_id="run-hash", tool_call_id="call-hash")
 
 
 @pytest.mark.asyncio

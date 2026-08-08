@@ -5,10 +5,12 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
+from arden.agent.types.tool_outcomes import ToolOutcome
 from arden.agent.types.tools import ToolResult, ToolResultPayloadError
 from arden.constants import (
     RAW_SEARCH_RESULT_RETENTION_DAYS,
@@ -17,7 +19,6 @@ from arden.constants import (
     SESSION_EVENT_PRUNE_INTERVAL,
 )
 from arden.context.errors import SessionDataCorruptionError
-from arden.context.store_rows import tool_result_payload
 from arden.core.raw_tool_results import (
     RawToolResultBlob,
     internal_blob_from_data,
@@ -280,11 +281,13 @@ class SessionEventStore:
             )
         return cursor.rowcount
 
-    async def get_tool_result_for_call(self, *, run_id: str, tool_call_id: str) -> dict | None:
+    async def get_tool_result_for_call(self, *, run_id: str, tool_call_id: str) -> ToolResult | None:
         now = datetime.now(UTC).isoformat()
         rows = await self._read_conn.execute_fetchall(
             """
-            SELECT result.*
+            SELECT
+                result.*,
+                call.outcome_json AS call_outcome_json
             FROM tool_calls AS call
             JOIN tool_results AS result ON result.tool_result_id = call.result_ref
             WHERE call.run_id = ? AND call.tool_call_id = ?
@@ -298,7 +301,18 @@ class SessionEventStore:
             return None
         row = rows[0]
         content = await asyncio.to_thread(read_raw_tool_result, row["blob_path"], compression=row["compression"])
-        return tool_result_payload(row, content=content)
+        if hashlib.sha256(content.encode("utf-8")).hexdigest() != row["content_sha256"]:
+            raise ToolResultPayloadError("durable tool result content hash does not match its manifest")
+        decoded = ToolResult.from_serialized_payload(content)
+        if decoded is None:
+            raise ToolResultPayloadError("durable tool result is not a typed ToolResult envelope")
+        if decoded.outcome is not None or not row["call_outcome_json"]:
+            return decoded
+        outcome = ToolOutcome.decode(json.loads(row["call_outcome_json"]))
+        try:
+            return replace(decoded, outcome=outcome)
+        except ValueError as exc:
+            raise ToolResultPayloadError("durable tool result conflicts with its recorded outcome") from exc
 
     @staticmethod
     def _raw_tool_result_pointer_content(*, preview: str, tool_result_id: str, content_bytes: int) -> str:

@@ -93,33 +93,9 @@ def tool_call_payload(row: aiosqlite.Row) -> dict:
         "status": row["status"],
         "result_preview": row["result_preview"],
         "result_ref": row["result_ref"],
-        "outcome": json.loads(row["outcome_json"])
-        if "outcome_json" in columns and row["outcome_json"]
-        else None,
+        "outcome": json.loads(row["outcome_json"]) if "outcome_json" in columns and row["outcome_json"] else None,
         "started_at": row["started_at"],
         "ended_at": row["ended_at"],
-    }
-
-
-def tool_result_payload(row: aiosqlite.Row, *, content: str | None = None) -> dict:
-    return {
-        "tool_result_id": row["tool_result_id"],
-        "session_id": row["session_id"],
-        "run_id": row["run_id"],
-        "tool_call_id": row["tool_call_id"],
-        "tool_name": row["tool_name"],
-        "content_sha256": row["content_sha256"],
-        "content_bytes": row["content_bytes"],
-        "stored_bytes": row["stored_bytes"],
-        "compression": row["compression"],
-        "blob_ref": row["blob_ref"],
-        "blob_path": row["blob_path"],
-        "preview": row["preview"],
-        "retention_class": row["retention_class"],
-        "expires_at": row["expires_at"],
-        "source_event_seq": row["source_event_seq"],
-        "created_at": row["created_at"],
-        "content": content,
     }
 
 

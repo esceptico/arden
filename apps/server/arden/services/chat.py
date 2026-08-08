@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -11,6 +11,8 @@ from arden.agent.llm.parsing import trailing_incomplete_tool_step
 from arden.agent.types.events import Result, ToolCompleted
 from arden.agent.types.llm import CompletionResponse
 from arden.agent.types.tool_call import PendingToolCall
+from arden.agent.types.tool_outcomes import ToolOutcomePayloadError
+from arden.agent.types.tools import ToolResultPayloadError
 from arden.areas.agent import is_custodian_task_id
 from arden.automation.prompts import AUTOMATION_SUFFIX, CUSTODIAN_SUFFIX
 from arden.constants import CONVERSATION_GAP_THRESHOLD
@@ -27,7 +29,7 @@ from arden.core.factory import AgentConfig, create_agent
 from arden.core.naming import generate_conversation_name
 from arden.core.prompts import INIT_INSTRUCTION, build_system_blocks
 from arden.core.spawn_spec import SpawnSpec
-from arden.core.tool_result_files import find_result_file, find_result_payload_file
+from arden.core.tool_result_files import result_payload_file_path
 from arden.core.usage_tracker import UsageTracker
 from arden.events.internal import RunCompleted, RunFailed
 from arden.events.sse import (
@@ -118,34 +120,46 @@ async def _recover_durable_tool_calls(
             )
             recovered[tool_call_id] = prepare_result(result, tool_call_id) if prepare_result else result
             continue
-        stored_result = await store.events.get_tool_result_for_call(run_id=run_id, tool_call_id=tool_call_id)
-        content = (stored_result or {}).get("content")
-        if not content:
-            result_path = find_result_payload_file(tool_call_id) or find_result_file(tool_call_id)
-            if result_path is not None:
+        try:
+            result = await store.events.get_tool_result_for_call(run_id=run_id, tool_call_id=tool_call_id)
+            if result is None:
+                result_path = result_payload_file_path(row["session_id"], tool_call_id)
                 try:
-                    content = await asyncio.to_thread(result_path.read_text, encoding="utf-8")
-                except OSError:
-                    content = None
-        content = content or row.get("result_preview") or "Tool call completed."
-        outcome = ToolOutcome.decode(row["outcome"]) if row.get("outcome") else None
-        decoded = ToolResult.from_serialized_payload(content)
-        if decoded is not None:
-            result = ToolResult(
-                content=decoded.content,
-                preview=decoded.preview,
-                is_error=decoded.is_error,
-                data=decoded.data,
-                model_content=decoded.model_content,
-                source_refs=decoded.source_refs,
-                outcome=decoded.outcome or outcome,
+                    payload = await asyncio.to_thread(result_path.read_text, encoding="utf-8")
+                except FileNotFoundError:
+                    pass
+                else:
+                    result = ToolResult.from_serialized_payload(payload)
+                    if result is None:
+                        raise ToolResultPayloadError("recovery payload file is not a tool result envelope")
+            if result is not None and result.outcome is None and row.get("outcome") is not None:
+                outcome = ToolOutcome.decode(row["outcome"])
+                try:
+                    result = replace(result, outcome=outcome)
+                except ValueError as exc:
+                    raise ToolResultPayloadError("saved tool result conflicts with its recorded outcome") from exc
+        except (
+            EOFError,
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            ToolOutcomePayloadError,
+            ToolResultPayloadError,
+        ):
+            result = ToolResult.failure(
+                code="durable_result_corrupt",
+                message="The tool finished before restart, but its exact saved result is unreadable.",
+                preview="Saved tool result is unreadable",
+                status=ToolOutcomeStatus.UNCERTAIN,
+                recovery_action="Verify external state before deciding whether to run the tool again.",
             )
-        else:
-            result = ToolResult(
-                content=content,
-                preview=row.get("result_preview") or "Recovered tool result",
-                is_error=row["status"] != "success",
-                outcome=outcome,
+        if result is None:
+            result = ToolResult.failure(
+                code="durable_result_missing",
+                message="The tool finished before restart, but its exact saved result is unavailable.",
+                preview="Saved tool result is unavailable",
+                status=ToolOutcomeStatus.UNCERTAIN,
+                recovery_action="Verify external state before deciding whether to run the tool again.",
             )
         recovered[tool_call_id] = prepare_result(result, tool_call_id) if prepare_result else result
     return recovered

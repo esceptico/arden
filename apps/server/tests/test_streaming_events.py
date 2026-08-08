@@ -19,7 +19,7 @@ from arden.agent import (
     Usage,
 )
 from arden.agent.types.events import ToolCompleted
-from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolSourceRef
+from arden.agent.types.tools import ToolEffect, ToolOutcome, ToolOutcomeStatus, ToolResult, ToolSourceRef
 from arden.context.models import SessionData, SessionState
 from arden.core import spawner as spawner_module
 from arden.core.public_refs import public_ref
@@ -159,8 +159,11 @@ def test_text_boundary_events_convert_to_sse():
 async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_safe_calls():
     class EventStore:
         async def get_tool_result_for_call(self, *, run_id, tool_call_id):
-            assert (run_id, tool_call_id) == ("run-1", "c1")
-            return {"content": "durable result"}
+            assert run_id == "run-1"
+            if tool_call_id == "c1":
+                return ToolResult(content="durable result", preview="durable result")
+            assert tool_call_id == "c6"
+            return None
 
     class Store(_BackgroundCompletionStoreMixin):
         events = EventStore()
@@ -205,9 +208,17 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
                     "result_preview": None,
                     "outcome": None,
                 },
+                {
+                    "session_id": "session-1",
+                    "tool_call_id": "c6",
+                    "tool_name": "bash",
+                    "status": "success",
+                    "result_preview": "preview is not exact evidence",
+                    "outcome": {"status": "succeeded"},
+                },
             ]
 
-    calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 6)]
+    calls = [SimpleNamespace(tool_call=SimpleNamespace(id=f"c{i}")) for i in range(1, 7)]
     prepared = []
 
     def prepare_result(result, tool_call_id):
@@ -216,12 +227,121 @@ async def test_recovery_reuses_terminal_calls_blocks_ambiguous_calls_and_leaves_
 
     recovered = await _recover_durable_tool_calls(Store(), "run-1", calls, prepare_result=prepare_result)
 
-    assert set(recovered) == {"c1", "c2"}
+    assert set(recovered) == {"c1", "c2", "c6"}
     assert recovered["c1"].content == "durable result"
     assert recovered["c1"].outcome.status == ToolOutcomeStatus.SUCCEEDED
     assert recovered["c2"].outcome.status == ToolOutcomeStatus.UNCERTAIN
     assert recovered["c2"].outcome.error.code == "execution_state_uncertain"
-    assert prepared == ["c1", "c2"]
+    assert recovered["c6"].outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert recovered["c6"].outcome.error.code == "durable_result_missing"
+    assert "preview is not exact evidence" not in recovered["c6"].content
+    assert prepared == ["c1", "c2", "c6"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_marks_truncated_durable_blob_as_corrupt():
+    class EventStore:
+        async def get_tool_result_for_call(self, *, run_id, tool_call_id):
+            raise EOFError("truncated gzip stream")
+
+    class Store(_BackgroundCompletionStoreMixin):
+        events = EventStore()
+
+        async def list_tool_calls(self, *, run_id):
+            return [
+                {
+                    "tool_call_id": "c1",
+                    "tool_name": "bash",
+                    "status": "success",
+                    "result_preview": "not exact",
+                    "outcome": {"status": "succeeded"},
+                }
+            ]
+
+    calls = [SimpleNamespace(tool_call=SimpleNamespace(id="c1"))]
+
+    recovered = await _recover_durable_tool_calls(Store(), "run-1", calls)
+
+    assert recovered["c1"].outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert recovered["c1"].outcome.error.code == "durable_result_corrupt"
+
+
+@pytest.mark.asyncio
+async def test_recovery_marks_non_utf8_payload_cache_as_corrupt(tmp_path, monkeypatch):
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    payload_path = tool_result_files.result_payload_file_path("session-1", "c1")
+    payload_path.parent.mkdir(parents=True)
+    payload_path.write_bytes(b"\xff\xfe")
+
+    class EventStore:
+        async def get_tool_result_for_call(self, *, run_id, tool_call_id):
+            return None
+
+    class Store(_BackgroundCompletionStoreMixin):
+        events = EventStore()
+
+        async def list_tool_calls(self, *, run_id):
+            return [
+                {
+                    "session_id": "session-1",
+                    "tool_call_id": "c1",
+                    "tool_name": "bash",
+                    "status": "success",
+                    "result_preview": "not exact",
+                    "outcome": {"status": "succeeded"},
+                }
+            ]
+
+    calls = [SimpleNamespace(tool_call=SimpleNamespace(id="c1"))]
+
+    recovered = await _recover_durable_tool_calls(Store(), "run-1", calls)
+
+    assert recovered["c1"].outcome.status == ToolOutcomeStatus.UNCERTAIN
+    assert recovered["c1"].outcome.error.code == "durable_result_corrupt"
+
+
+@pytest.mark.asyncio
+async def test_recovery_payload_cache_is_scoped_to_its_session(tmp_path, monkeypatch):
+    import arden.core.tool_result_files as tool_result_files
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    tool_result_files.persist_result_payload(
+        "session-a",
+        "shared-call",
+        ToolResult(content="wrong session", preview="wrong").serialized_payload(),
+    )
+    tool_result_files.persist_result_payload(
+        "session-b",
+        "shared-call",
+        ToolResult(content="right session", preview="right").serialized_payload(),
+    )
+
+    class EventStore:
+        async def get_tool_result_for_call(self, *, run_id, tool_call_id):
+            return None
+
+    class Store(_BackgroundCompletionStoreMixin):
+        events = EventStore()
+
+        async def list_tool_calls(self, *, run_id):
+            return [
+                {
+                    "session_id": "session-b",
+                    "tool_call_id": "shared-call",
+                    "tool_name": "bash",
+                    "status": "success",
+                    "result_preview": "right",
+                    "outcome": {"status": "succeeded"},
+                }
+            ]
+
+    calls = [SimpleNamespace(tool_call=SimpleNamespace(id="shared-call"))]
+
+    recovered = await _recover_durable_tool_calls(Store(), "run-1", calls)
+
+    assert recovered["shared-call"].content == "right session"
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,8 @@ outputs forever, never converging. `prune_offload_store` bounds growth by age so
 it can't accumulate again. Long-term raw evidence is stored separately via
 core.raw_tool_results and the tool_results manifest.
 
-tool_call_ids are globally unique, so `find_result_file` can still locate a file
-from the id alone for recovery and diagnostics when the caller lacks a session.
+Every lookup requires its owning session. Tool-call IDs are only unique within
+their run and must never select another session's cached payload.
 """
 
 import re
@@ -71,20 +71,6 @@ def persist_result_payload(session_id: str, tool_call_id: str, content: str) -> 
     _ensure_ignore_marker()
     path.write_text(content, encoding="utf-8")
     return path
-
-
-def find_result_file(tool_call_id: str) -> Path | None:
-    """Locate an offloaded result by globally unique id."""
-    if not RESULTS_BASE.exists():
-        return None
-    return next(RESULTS_BASE.glob(f"**/{tool_call_id}.txt"), None)
-
-
-def find_result_payload_file(tool_call_id: str) -> Path | None:
-    """Locate an exact serialized ToolResult envelope by globally unique id."""
-    if not RESULTS_BASE.exists():
-        return None
-    return next(RESULTS_BASE.glob(f"**/{tool_call_id}.payload.json"), None)
 
 
 def clone_result_files(source_session_id: str, target_session_id: str, tool_call_ids: set[str]) -> None:
