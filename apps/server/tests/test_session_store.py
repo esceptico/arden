@@ -66,6 +66,14 @@ async def _provision_agent_session(store: SessionStore, session_id: str, agent_r
     )
 
 
+async def _background_events(store: SessionStore, session_id: str) -> list[dict]:
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT * FROM background_agent_events WHERE session_id = ? ORDER BY seq ASC",
+        (session_id,),
+    )
+    return [{**dict(row), "terminal": bool(row["terminal"])} for row in rows]
+
+
 @pytest.mark.asyncio
 async def test_session_public_ref_is_stable_and_conflicts_fail(store: SessionStore):
     original = _make_state("stable-ref", name="Original title")
@@ -1249,7 +1257,7 @@ async def test_background_agent_run_lifecycle(store: SessionStore):
     assert runs[0]["result_ref"] == "bg_results/bg-1.txt"
     assert await store.get_background_agent_result("sess-1", "bg-1") == "full result"
 
-    events = await store.list_background_agent_events("sess-1", after_seq=0)
+    events = await _background_events(store, "sess-1")
     assert [e["status"] for e in events] == ["started", "activity", "completed"]
     assert events[-1]["terminal"] is True
 
@@ -1294,7 +1302,7 @@ async def test_background_completion_claim_is_atomic_and_idempotent(store: Sessi
     assert second["completion_id"] == "bg:bg-1:completed"
     assert second["status"] == "completed"
     assert await store.get_background_agent_result("sess-1", "bg-1") == "first result"
-    events = await store.list_background_agent_events("sess-1")
+    events = await _background_events(store, "sess-1")
     assert [event["status"] for event in events] == ["started", "completed"]
     assert [row["completion_id"] for row in await store.list_undelivered_background_completions()] == [
         "bg:bg-1:completed"
@@ -1306,7 +1314,7 @@ async def test_background_completion_claim_is_atomic_and_idempotent(store: Sessi
         completion_id="bg:bg-1:completed",
     )
     run = (await store.list_background_agent_runs("sess-1"))[0]
-    events = await store.list_background_agent_events("sess-1")
+    events = await _background_events(store, "sess-1")
     assert run["notified_at"] is not None
     assert events[-1]["delivered_at"] is not None
     assert await store.list_undelivered_background_completions() == []
@@ -1354,7 +1362,7 @@ async def test_background_agent_cancel_request_is_session_scoped_and_evented(sto
 
     assert (await store.list_background_agent_runs("sess-1"))[0]["status"] == "cancel_requested"
     assert (await store.list_background_agent_runs("sess-2"))[0]["status"] == "running"
-    events = await store.list_background_agent_events("sess-1")
+    events = await _background_events(store, "sess-1")
     assert [e["status"] for e in events] == ["started", "cancel_requested"]
     assert events[-1]["terminal"] is False
 
@@ -1454,7 +1462,7 @@ async def test_late_descendant_inherits_existing_session_cancellation(store: Ses
     assert row["status"] == "cancelled"
     assert row["terminal_cause"] == "user_cancelled"
     assert row["completion_id"].startswith("cancel-before-start:")
-    events = await store.list_background_agent_events("parent::child")
+    events = await _background_events(store, "parent::child")
     assert [(event["status"], event["terminal"]) for event in events] == [("cancelled", True)]
     scope = await store.read_conn.execute_fetchall(
         "SELECT cause FROM execution_cancellation_scopes WHERE session_id = 'parent::grandchild'"
@@ -1543,7 +1551,7 @@ async def test_startup_preserves_durable_cancel_cause(store: SessionStore):
 
     await store.mark_interrupted_background_agent_runs()
     run = (await store.list_background_agent_runs("sess-1"))[0]
-    events = await store.list_background_agent_events("sess-1")
+    events = await _background_events(store, "sess-1")
 
     assert run["status"] == "cancelled"
     assert run["detail"] == "user_cancelled"
@@ -2744,7 +2752,7 @@ async def test_compacted_background_result_survives_branch_and_source_deletion(s
     assert cloned["notified_at"] is not None
     assert cloned["completion_id"].startswith(f"branch:{branch_id}:")
     assert cloned["spawn_spec"] is None
-    assert await store.list_background_agent_events(branch_id) == []
+    assert await _background_events(store, branch_id) == []
 
     assert await service.permanently_delete_current(source_id)
     assert await store.get_background_agent_result(branch_id, task_id) == "durable branch evidence"

@@ -65,21 +65,6 @@ def background_agent_payload(row: aiosqlite.Row) -> dict:
     }
 
 
-def background_agent_event_payload(row: aiosqlite.Row) -> dict:
-    return {
-        "session_id": row["session_id"],
-        "seq": row["seq"],
-        "task_id": row["task_id"],
-        "status": row["status"],
-        "detail": row["detail"],
-        "result_ref": row["result_ref"],
-        "terminal": bool(row["terminal"]),
-        "created_at": row["created_at"],
-        "event_id": dict(row).get("event_id"),
-        "delivered_at": dict(row).get("delivered_at"),
-    }
-
-
 def tool_call_payload(row: aiosqlite.Row) -> dict:
     columns = set(row.keys())
     return {

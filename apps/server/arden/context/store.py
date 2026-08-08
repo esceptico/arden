@@ -1979,19 +1979,6 @@ class SessionStore:
             include_terminal=include_terminal,
         )
 
-    async def list_background_agent_events(
-        self,
-        session_id: str,
-        *,
-        after_seq: int = 0,
-        limit: int = 10000,
-    ) -> list[dict]:
-        return await self.background_agents.list_background_agent_events(
-            session_id,
-            after_seq=after_seq,
-            limit=limit,
-        )
-
     async def mark_interrupted_background_agent_runs(self) -> int:
         return await self.background_cancellations.mark_interrupted_background_agent_runs()
 

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import aiosqlite
 
-from arden.context.store_rows import background_agent_event_payload, background_agent_payload
+from arden.context.store_rows import background_agent_payload
 from arden.core.public_refs import is_public_ref
 
 
@@ -318,22 +318,3 @@ class BackgroundAgentStore:
                 (session_id,),
             )
         return [background_agent_payload(row) for row in rows]
-
-    async def list_background_agent_events(
-        self,
-        session_id: str,
-        *,
-        after_seq: int = 0,
-        limit: int = 10000,
-    ) -> list[dict]:
-        rows = await self._read_conn.execute_fetchall(
-            """
-            SELECT * FROM background_agent_events
-            WHERE session_id = ? AND seq > ?
-            ORDER BY seq ASC
-            LIMIT ?
-            """,
-            (session_id, after_seq, limit),
-        )
-        return [background_agent_event_payload(row) for row in rows]
-
