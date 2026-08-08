@@ -2399,7 +2399,8 @@ async def test_compacted_result_ref_survives_branch_and_source_deletion(
     assert compacted[1]["compaction"]["tool_result_refs"] == [tool_call_id]
     assert await store.events.prune_expired_tool_results(now=datetime.now(UTC)) == 0
 
-    def fail_cache_copy(*_args):
+    def fail_cache_copy(_source_session_id, target_session_id, _tool_call_ids):
+        tool_result_files.persist_result(target_session_id, tool_call_id, "partial copy")
         raise OSError("simulated branch cache miss")
 
     monkeypatch.setattr(session_service_module, "clone_result_files", fail_cache_copy)
@@ -2431,6 +2432,162 @@ async def test_compacted_result_ref_survives_branch_and_source_deletion(
         (branch_id, tool_call_id),
     )
     assert len(branch_manifests) == 1
+
+
+@pytest.mark.asyncio
+async def test_branch_rejects_corrupt_tool_result_manifest_without_persisting_branch(
+    store: SessionStore,
+    tmp_path,
+    monkeypatch,
+):
+    import arden.core.raw_tool_results as raw_tool_results
+    import arden.core.tool_result_files as tool_result_files
+    import arden.services.session as session_service_module
+
+    monkeypatch.setattr(tool_result_files, "RESULTS_BASE", tmp_path / "tool-results")
+    monkeypatch.setattr(raw_tool_results, "RAW_TOOL_RESULTS_BASE", tmp_path / "raw-results")
+    source_id = "source-with-corrupt-offload"
+    tool_call_id = "call-corrupt-offload"
+    raw = "corruptible branch evidence\n" * 5_000
+    await store.events.record_session_event(
+        StreamRecord(
+            seq=1,
+            session_id=source_id,
+            event=ToolCallResultEvent(
+                tool_call_id=tool_call_id,
+                name="file_search_text",
+                content=raw,
+            ),
+        )
+    )
+    source_path = tool_result_files.persist_result(source_id, tool_call_id, raw)
+    tool_result_files.persist_result_payload(source_id, tool_call_id, raw)
+    await store.save_session(
+        _make_state(source_id, name="Source"),
+        [
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": f"Use file_read(path={str(source_path)!r}).",
+                "client_id": "tool-1",
+            }
+        ],
+    )
+    manifests = await store.read_conn.execute_fetchall(
+        "SELECT blob_path FROM tool_results WHERE session_id = ? AND tool_call_id = ?",
+        (source_id, tool_call_id),
+    )
+    Path(manifests[0]["blob_path"]).unlink()
+
+    def fail_cache_copy(*_args):
+        raise OSError("simulated branch cache miss")
+
+    monkeypatch.setattr(session_service_module, "clone_result_files", fail_cache_copy)
+
+    with pytest.raises(SessionDataCorruptionError, match="cannot be rehydrated"):
+        await SessionService(store).branch(source_id, name="Rejected branch")
+
+    sessions = await store.list_sessions()
+    branch_manifests = await store.read_conn.execute_fetchall(
+        "SELECT session_id FROM tool_results WHERE session_id <> ?",
+        (source_id,),
+    )
+    assert [session["name"] for session in sessions] == ["Source"]
+    assert branch_manifests == []
+
+
+@pytest.mark.asyncio
+async def test_branch_propagates_cache_implementation_error_without_persisting_branch(
+    store: SessionStore,
+    monkeypatch,
+):
+    import arden.services.session as session_service_module
+
+    source_id = "source-with-cache-error"
+    await store.save_session(
+        _make_state(source_id, name="Source"),
+        [{"role": "user", "content": "hello", "client_id": "user-1"}],
+    )
+
+    def fail_cache_copy(*_args):
+        raise RuntimeError("cache implementation failed")
+
+    monkeypatch.setattr(session_service_module, "clone_result_files", fail_cache_copy)
+
+    with pytest.raises(RuntimeError, match="cache implementation failed"):
+        await SessionService(store).branch(source_id, name="Rejected branch")
+
+    sessions = await store.list_sessions()
+    assert [session["name"] for session in sessions] == ["Source"]
+
+
+@pytest.mark.asyncio
+async def test_branch_cancellation_after_commit_removes_persisted_branch(
+    store: SessionStore,
+    monkeypatch,
+):
+    source_id = "source-cancelled-after-commit"
+    await store.save_session(
+        _make_state(source_id, name="Source"),
+        [{"role": "user", "content": "hello", "client_id": "user-1"}],
+    )
+    original_create_branch = store.create_session_branch
+
+    async def commit_then_cancel(**kwargs):
+        await original_create_branch(**kwargs)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(store, "create_session_branch", commit_then_cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await SessionService(store).branch(source_id, name="Cancelled branch")
+
+    sessions = await store.list_sessions()
+    assert [session["name"] for session in sessions] == ["Source"]
+
+
+@pytest.mark.asyncio
+async def test_branch_reports_original_and_cleanup_failures(
+    store: SessionStore,
+    monkeypatch,
+):
+    import arden.services.session as session_service_module
+
+    source_id = "source-cleanup-failure"
+    await store.save_session(
+        _make_state(source_id, name="Source"),
+        [{"role": "user", "content": "hello", "client_id": "user-1"}],
+    )
+    original_create_branch = store.create_session_branch
+    original_purge = store.purge_session
+    branch_id = None
+
+    async def commit_then_fail(**kwargs):
+        nonlocal branch_id
+        branch_id = kwargs["state"].session_id
+        await original_create_branch(**kwargs)
+        raise RuntimeError("branch failed")
+
+    async def fail_database_cleanup(*_args, **_kwargs):
+        raise OSError("database cleanup failed")
+
+    def fail_file_cleanup(*_args):
+        raise OSError("file cleanup failed")
+
+    monkeypatch.setattr(store, "create_session_branch", commit_then_fail)
+    monkeypatch.setattr(store, "purge_session", fail_database_cleanup)
+    monkeypatch.setattr(session_service_module, "purge_session_results", fail_file_cleanup)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await SessionService(store).branch(source_id, name="Failed cleanup branch")
+
+    assert [str(error) for error in raised.value.exceptions] == [
+        "branch failed",
+        "database cleanup failed",
+        "file cleanup failed",
+    ]
+    assert branch_id is not None
+    await original_purge(branch_id, require_archived=False)
 
 
 @pytest.mark.asyncio

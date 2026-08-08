@@ -717,22 +717,37 @@ class SessionService:
         background_result_refs = self.store.active_background_result_ids(messages)
         messages = rewrite_result_paths(messages, session_id, new_state.session_id)
         metadata = {"last_input_tokens": data.last_input_tokens} if data.last_input_tokens else None
-        await self.store.create_session_branch(
-            source_session_id=session_id,
-            state=new_state,
-            messages=messages,
-            tool_call_ids=tool_result_ids,
-            background_agent_refs=background_result_refs,
-            metadata=metadata,
-        )
         try:
-            await asyncio.to_thread(clone_result_files, session_id, new_state.session_id, tool_result_ids)
-        except Exception:
-            _logger.warning("Failed to copy branch tool-result cache", exc_info=True)
-        try:
+            await self.store.create_session_branch(
+                source_session_id=session_id,
+                state=new_state,
+                messages=messages,
+                tool_call_ids=tool_result_ids,
+                background_agent_refs=background_result_refs,
+                metadata=metadata,
+            )
+            try:
+                await asyncio.to_thread(clone_result_files, session_id, new_state.session_id, tool_result_ids)
+            except OSError:
+                _logger.warning("branch_tool_result_cache_copy_failed", exc_info=True)
+                await asyncio.to_thread(purge_session_results, new_state.session_id)
             await self.store.events.restore_active_tool_result_files(new_state.session_id, messages)
-        except Exception:
-            _logger.warning("Failed to restore branch tool-result cache", exc_info=True)
+        except BaseException as branch_error:
+            cleanup_errors: list[BaseException] = []
+            try:
+                await asyncio.shield(self.store.purge_session(new_state.session_id, require_archived=False))
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            try:
+                await asyncio.shield(asyncio.to_thread(purge_session_results, new_state.session_id))
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            if cleanup_errors:
+                raise BaseExceptionGroup(
+                    "branch creation failed and cleanup was incomplete",
+                    [branch_error, *cleanup_errors],
+                )
+            raise
         await self._announce_activity(new_state, messages)
         return new_state
 
