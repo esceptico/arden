@@ -208,7 +208,7 @@ test("Home, Chat, and Area use the mock's exact visible icon variants", () => {
   expect(sidebar).toContain("ZapIcon");
   expect(sidebar).toContain("Brain01");
   expect(chat).toContain("ArrowLeft02");
-  expect(reasoning).toContain("Brain01");
+  expect(reasoning).toContain("AiBrain01");
   expect(assistant).toContain("BookOpen01");
   expect(actions).toContain("PencilEdit02");
   for (const variant of ["Globe02", "File01", "PencilEdit02", "LeftToRightListBullet", "Bot", "Stop"]) {

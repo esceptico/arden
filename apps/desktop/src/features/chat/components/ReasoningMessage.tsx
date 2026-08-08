@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { Brain01, ChevronDown } from "@/components/icons";
+import { AiBrain01, ChevronDown } from "@/components/icons";
 import clsx from "clsx";
 import { useStore } from "@/stores";
 import { Markdown } from "@/components/ui/Markdown";
@@ -62,7 +62,7 @@ export const ReasoningMessage = memo(function ReasoningMessage({
         return (
           <ThinkingStep
             key={stepIndex}
-            node={<Brain01 size={14} />}
+            node={<AiBrain01 size={14} />}
             last={index === visibleSteps.length - 1}
             className="board-trace-row rounded-[var(--r-row)] px-0.5 py-1.5 transition-colors hover:bg-surface-soft/60"
           >
