@@ -35,7 +35,9 @@
   --workspace-rail-group-row-height: 1.625rem;
   --workspace-rail-session-row-height: 1.75rem;
   --workspace-rail-sibling-gap: var(--space-0-5);
-  --workspace-rail-group-gap: var(--space-3);
+  /* UNIFORM rhythm (the user's explicit call): components stand one small,
+     CONSISTENT step apart — no oversized "meaningful" breaks between groups. */
+  --workspace-rail-group-gap: var(--space-2);
   --workspace-rail-row-radius: 6px;
   --workspace-rail-icon-lane: 1.25rem;
   /* Shallow product-UI type ladder: color and proximity do more work than
@@ -46,8 +48,10 @@
   --workspace-rail-label-leading: var(--leading-label);
   --workspace-rail-meta-size: var(--text-2xs);
   --workspace-rail-meta-leading: var(--leading-metadata);
-  --workspace-rail-hover-bg: color-mix(in oklab, var(--ink) 2%, transparent);
-  --workspace-rail-selected-bg: color-mix(in oklab, var(--ink) 4%, transparent);
+  /* Selection is a pronounced pill (the fill IS the whole selection
+     vocabulary — no dots, no bars — so it can afford this weight). */
+  --workspace-rail-hover-bg: color-mix(in oklab, var(--ink) 3%, transparent);
+  --workspace-rail-selected-bg: color-mix(in oklab, var(--ink) 7%, transparent);
   --workspace-rail-top-inset: 3rem;
 
   position: relative;
@@ -100,6 +104,19 @@
   width: var(--icon-size);
   height: var(--icon-size);
   color: var(--muted);
+}
+
+/* Icon travels with its label: hover/selected rows brighten as one unit,
+   not label-only. */
+.workspace-rail .workspace-rail__nav-row:hover svg,
+.workspace-rail .workspace-rail__nav-row[data-active="true"] svg {
+  color: currentColor;
+}
+
+/* Icon stroke matched to the 13px/400 label stems — the default 1.5 stroke
+   reads a full step heavier than the text it sits beside. */
+.workspace-rail svg {
+  stroke-width: 1.25;
 }
 
 .workspace-rail .workspace-rail__nav-row > span:first-child {
@@ -172,7 +189,7 @@
   display: grid;
   width: 100%;
   min-height: var(--workspace-rail-nav-row-height);
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: var(--workspace-rail-icon-lane) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   padding-inline: var(--interactive-row-inline-padding);
@@ -191,7 +208,20 @@
 
 .home-area-list__row[data-active="true"] { background: var(--workspace-rail-selected-bg); }
 
-.home-area-list__row > span {
+.home-area-list__row-icon {
+  display: grid;
+  width: var(--workspace-rail-icon-lane);
+  height: var(--workspace-rail-icon-lane);
+  place-items: center;
+  color: var(--muted);
+}
+
+.home-area-list__row:hover .home-area-list__row-icon,
+.home-area-list__row[data-active="true"] .home-area-list__row-icon {
+  color: currentColor;
+}
+
+.home-area-list__row > span + span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -212,14 +242,23 @@
   flex: none;
   align-items: center;
   justify-content: space-between;
-  margin: var(--space-3) 0 var(--space-1);
-  padding: 0 var(--space-1) 0 var(--interactive-row-inline-padding);
+  /* The rule floats with EQUAL visual air on both sides. Gaps are measured
+     text-edge → rule, not box → rule: the row above contributes ~8px of its
+     own slack below its label, so the margin is smaller than the padding. */
+  /* Bottom margin tuned so title→first-heading BASELINE pitch equals the
+     heading→heading pitch — one rhythm, measured, not per-box margins. */
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-3) var(--space-1) 0 var(--interactive-row-inline-padding);
+  border-top: 1px solid var(--edge);
 }
 
 .workspace-rail__section-title {
   margin: 0;
+  /* Notion-proportion eyebrow: one size step below the rows but SEMIBOLD,
+     so the label is quiet yet unmistakably legible. 12px = ui-font − 2
+     (between --text-2xs and --text-label; neither token hits it). */
   color: var(--muted);
-  font: var(--weight-heading) var(--workspace-rail-section-size)/var(--workspace-rail-section-leading) var(--sans);
+  font: var(--weight-semibold) calc(var(--ui-font-size) - 2px)/var(--leading-label) var(--sans);
 }
 
 .workspace-rail__section-actions {

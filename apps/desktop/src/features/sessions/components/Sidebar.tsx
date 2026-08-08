@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import {
+  AiContentGenerator01,
   Brain01,
   BubbleChat,
   House,
@@ -181,16 +182,21 @@ export function Sidebar() {
                   });
                 }}
               >
+                {/* User-picked area mark (AiContentGenerator01) — the chat
+                    rail keeps Folder for its groups by explicit choice. */}
+                <span className="home-area-list__row-icon" aria-hidden>
+                  <AiContentGenerator01 size={ICON.MD} strokeWidth={2} />
+                </span>
                 <span>{area.title}</span>
-                <small data-tone={area.ask_count > 0 ? "warning" : area.live ? "live" : undefined}>
-                  {area.ask_count > 0
-                    ? "needs you"
-                    : area.paused
-                      ? "paused"
-                      : area.live
-                        ? "running"
-                        : "quiet"}
-                </small>
+                {/* Quiet is the default, not a status — printing it on every
+                    row buries the rows that actually need attention. */}
+                {area.ask_count > 0 ? (
+                  <small data-tone="warning">needs you</small>
+                ) : area.paused ? (
+                  <small>paused</small>
+                ) : area.live ? (
+                  <small data-tone="live">running</small>
+                ) : null}
               </button>
             ))}
           </nav>

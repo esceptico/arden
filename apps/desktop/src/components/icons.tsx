@@ -47,6 +47,7 @@ export const AlertCircle = defineIcon(Hugeicons.AlertCircle, "AlertCircle");
 export const Activity01 = defineIcon(Hugeicons.Activity01Icon, "Activity01");
 export const AiBrain01 = defineIcon(Hugeicons.AiBrain01Icon, "AiBrain01");
 export const AiChat02 = defineIcon(Hugeicons.AiChat02Icon, "AiChat02");
+export const AiContentGenerator01 = defineIcon(Hugeicons.AiContentGenerator01Icon, "AiContentGenerator01");
 export const AiMagic = defineIcon(Hugeicons.AiMagicIcon, "AiMagic");
 export const Archive = defineIcon(Hugeicons.Archive, "Archive");
 export const Archive01 = defineIcon(Hugeicons.Archive01Icon, "Archive01");
