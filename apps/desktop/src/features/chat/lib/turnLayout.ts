@@ -27,9 +27,10 @@ export function turnLayout({
   };
 
   if (!isDone) {
+    const hasWork = children.some((child) => isWorkRole(child.role));
     return {
-      workIds: [],
-      afterWorkIds: childIds,
+      workIds: hasWork ? childIds : [],
+      afterWorkIds: hasWork ? [] : childIds,
       finalAssistantId: lastAssistantId(),
     };
   }

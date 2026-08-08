@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { turnLayout } from "@/features/chat/lib/turnLayout";
 
-test("keeps active turns in stream order instead of hoisting streaming assistant text", () => {
+test("keeps active turns together in stream order", () => {
   const layout = turnLayout({
     children: [
       { id: "assistant-1", role: "assistant" },
@@ -13,9 +13,26 @@ test("keeps active turns in stream order instead of hoisting streaming assistant
   });
 
   expect(layout).toEqual({
-    workIds: [],
-    afterWorkIds: ["assistant-1", "activity-1", "assistant-2", "activity-2"],
+    workIds: ["assistant-1", "activity-1", "assistant-2", "activity-2"],
+    afterWorkIds: [],
     finalAssistantId: "assistant-2",
+  });
+});
+
+test("keeps live reasoning inside the tool trace", () => {
+  const layout = turnLayout({
+    children: [
+      { id: "reasoning-1", role: "reasoning" },
+      { id: "activity-1", role: "activity" },
+      { id: "reasoning-2", role: "reasoning" },
+    ],
+    isDone: false,
+  });
+
+  expect(layout).toEqual({
+    workIds: ["reasoning-1", "activity-1", "reasoning-2"],
+    afterWorkIds: [],
+    finalAssistantId: null,
   });
 });
 
