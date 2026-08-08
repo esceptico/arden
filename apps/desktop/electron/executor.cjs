@@ -15,6 +15,7 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
 class StaleLease extends Error {}
+class ResultRejected extends Error {}
 
 function createExecutorClient({
   getConfig,
@@ -114,10 +115,20 @@ function createExecutorClient({
           error_code: errorCode ?? null,
         });
         if (response.status === 403) throw new StaleLease();
-        if (response.status < 500) return response;
+        if (response.ok || response.status === 409) return response;
+        if (response.status < 500) {
+          throw new ResultRejected(`results POST rejected: ${response.status}`);
+        }
         throw new Error(`results POST failed: ${response.status}`);
       } catch (error) {
-        if (error instanceof StaleLease || disposed || attempt >= RESULT_RETRY_DELAYS_MS.length) throw error;
+        if (
+          error instanceof StaleLease ||
+          error instanceof ResultRejected ||
+          disposed ||
+          attempt >= RESULT_RETRY_DELAYS_MS.length
+        ) {
+          throw error;
+        }
         log(`result delivery failed (attempt ${attempt + 1}) — retrying: ${error?.message ?? error}`);
         await new Promise(resolve => setTimeout(resolve, RESULT_RETRY_DELAYS_MS[attempt]));
       }

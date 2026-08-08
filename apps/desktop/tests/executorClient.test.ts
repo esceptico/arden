@@ -330,6 +330,47 @@ describe("executor client", () => {
     hold.resolve();
   });
 
+  test("a rejected success result is reported as a failed tool result", async () => {
+    const store = makeStateStore({ executorId: "exec_1", token: "device-token", cursor: 0 });
+    const results: Array<Record<string, unknown>> = [];
+    const hold = deferred();
+    const client = makeClient({
+      getConfig: () => ({ serverUrl: "http://server", apiKey: "" }),
+      stateStore: store,
+      fetchImpl: async (url: URL, init?: RequestInit) => {
+        const target = String(url);
+        if (target.includes("/executor/results")) {
+          results.push(JSON.parse(String(init?.body)));
+          if (results.length === 1) return jsonResponse(422, { detail: "sensitive input".repeat(100_000) });
+          return jsonResponse(200, {});
+        }
+        if (init?.method === "POST") return jsonResponse(200, {});
+        return streamResponse(
+          [
+            sse("lease", { lease_id: "lease_1" }),
+            sse("command", {
+              seq: 1,
+              type: "execute_tool",
+              invocation_id: "inv-rejected",
+              payload: executePayload("inv-rejected", "quick", {}),
+            }),
+          ],
+          hold,
+        );
+      },
+    });
+    client.registerHandler("quick", async () => ({ status: "succeeded", payload: { content: "done", preview: "ok" } }));
+    client.start();
+
+    await until(() => results.length === 2);
+    expect(results[0].status).toBe("succeeded");
+    expect(results[1].status).toBe("failed");
+    expect(results[1].error_code).toBe("tool_error");
+    expect((results[1].result as { content: string }).content).toContain("422");
+    expect((results[1].result as { content: string }).content).not.toContain("sensitive input");
+    hold.resolve();
+  });
+
   test("rejects malformed commands before invoking a desktop handler", async () => {
     const store = makeStateStore({ executorId: "exec_1", token: "device-token", cursor: 0 });
     const posts: Array<{ path: string; body: Record<string, unknown> }> = [];

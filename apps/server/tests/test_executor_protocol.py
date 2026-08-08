@@ -417,13 +417,32 @@ def test_result_flow_over_http(http):
     )
     assert started.status_code == 200
 
+    result_payload = {
+        "content": "ok",
+        "preview": "Done",
+        "source_refs": [
+            {
+                "provider": "filesystem",
+                "kind": "file",
+                "ref": "/tmp/x",
+                "title": "x",
+            }
+        ],
+        "observations": [{"id": "file:/tmp/x", "version": "v1", "content_read": True}],
+        "file_discovery": {
+            "version": 1,
+            "observed": [{"path": "/tmp/x", "kind": "file"}],
+            "discovered_roots": ["/tmp"],
+            "missed_roots": [],
+        },
+    }
     result = client.post(
         "/executor/results",
         json={
             "lease_id": lease_id,
             "invocation_id": "inv-http",
             "status": "succeeded",
-            "result": {"content": "ok", "preview": "Done"},
+            "result": result_payload,
         },
         headers=headers,
     )
@@ -436,7 +455,7 @@ def test_result_flow_over_http(http):
             "lease_id": lease_id,
             "invocation_id": "inv-http",
             "status": "succeeded",
-            "result": {"content": "ok", "preview": "Done"},
+            "result": result_payload,
         },
         headers=headers,
     )

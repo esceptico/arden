@@ -95,13 +95,13 @@ class DeviceObservedPath(_DeviceResultModel):
 
 class DeviceFileDiscovery(_DeviceResultModel):
     version: Literal[1]
-    observed: tuple[DeviceObservedPath, ...] = Field(default=(), max_length=10_000)
-    discovered_roots: tuple[str, ...] = Field(default=(), max_length=10_000)
-    missed_roots: tuple[str, ...] = Field(default=(), max_length=10_000)
+    observed: list[DeviceObservedPath] = Field(default_factory=list, max_length=10_000)
+    discovered_roots: list[str] = Field(default_factory=list, max_length=10_000)
+    missed_roots: list[str] = Field(default_factory=list, max_length=10_000)
 
     @field_validator("discovered_roots", "missed_roots")
     @classmethod
-    def exact_roots(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+    def exact_roots(cls, values: list[str]) -> list[str]:
         if any(
             not value
             or value != value.strip()
@@ -119,9 +119,9 @@ class DeviceResultEnvelope(_DeviceResultModel):
     content: str = Field(max_length=_MAX_DEVICE_CONTENT_CHARS)
     preview: str = Field(min_length=1, max_length=2_000)
     data: dict[str, JsonValue] | None = None
-    source_refs: tuple[DeviceSourceRef, ...] = Field(default=(), max_length=50)
+    source_refs: list[DeviceSourceRef] = Field(default_factory=list, max_length=50)
     effect: DeviceEffect | None = None
-    observations: tuple[DeviceResourceObservation, ...] = Field(default=(), max_length=10_000)
+    observations: list[DeviceResourceObservation] = Field(default_factory=list, max_length=10_000)
     file_discovery: DeviceFileDiscovery | None = None
 
     @model_validator(mode="after")
