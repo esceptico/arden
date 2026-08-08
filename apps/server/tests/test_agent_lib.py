@@ -13,8 +13,10 @@ from arden.agent import (
     AgentHooks,
     Choice,
     CompletionResponse,
+    FinishReason,
     FunctionCall,
     Message,
+    ProviderResponseError,
     ProviderToolCall,
     Result,
     Role,
@@ -59,7 +61,7 @@ def _response(
                     reasoning_content=None,
                     provider_tool_calls=provider_tool_calls,
                 ),
-                finish_reason=None,
+                finish_reason=FinishReason.STOP,
             )
         ],
         usage=usage or Usage(prompt_tokens=10, completion_tokens=5),
@@ -883,6 +885,35 @@ async def test_truncated_response_stops_instead_of_looping_on_tool_calls():
     assert result.stop_reason == StopReason.MAX_OUTPUT_LENGTH
     assert llm.call_count == 1  # did not loop
     assert executor.call_log == []  # did not execute the truncated tool call
+
+
+@pytest.mark.asyncio
+async def test_content_filtered_response_fails_instead_of_ending_turn():
+    blocked = _response()
+    blocked = replace(blocked, choices=[replace(blocked.choices[0], finish_reason=FinishReason.CONTENT_FILTER)])
+    responses = []
+    errors = []
+
+    async def on_response(response):
+        responses.append(response)
+
+    async def on_error(error):
+        errors.append(error)
+
+    messages = _msgs()
+    original = list(messages)
+    agent = _make_agent(
+        FakeLLM([blocked]),
+        FakeExecutor({}),
+        hooks=AgentHooks(on_response=on_response, on_error=on_error),
+    )
+
+    with pytest.raises(ProviderResponseError, match="blocked"):
+        await agent.run(messages)
+
+    assert messages == original
+    assert responses == []
+    assert len(errors) == 1
 
 
 @pytest.mark.asyncio

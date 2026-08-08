@@ -10,6 +10,7 @@ from arden.agent import (
     FinishReason,
     FunctionCall,
     Message,
+    ProviderResponseError,
     ReasoningContentDelta,
     Role,
     ToolCall,
@@ -39,11 +40,11 @@ from arden.observability.judgment import trace_client
 
 def _map_finish_reason(reason: str | None) -> FinishReason:
     if not reason:
-        return FinishReason.STOP
+        raise ProviderResponseError("OpenAI response is missing its terminal reason")
     try:
         return FinishReason(reason)
-    except ValueError:
-        return FinishReason.STOP
+    except ValueError as exc:
+        raise ProviderResponseError(f"Unsupported OpenAI terminal reason: {reason!r}") from exc
 
 
 class OpenAIClient(CompletionClient, EmbeddingClient):
@@ -261,7 +262,7 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
 
         content_parts: list[str] = []
         tool_call_chunks: dict[int, dict] = {}
-        finish_reason = FinishReason.STOP
+        finish_reason: FinishReason | None = None
         usage_chunk = None
         reasoning_parts: list[str] = []
 
@@ -351,6 +352,8 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
             tool_calls=tool_calls,
             reasoning_content=reasoning,
         )
+        if finish_reason is None:
+            raise ProviderResponseError("OpenAI stream ended without a terminal reason")
 
         yield CompletionResponse(
             choices=[Choice(message=message, finish_reason=finish_reason)],

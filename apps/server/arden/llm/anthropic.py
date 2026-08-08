@@ -10,6 +10,7 @@ from arden.agent import (
     FinishReason,
     FunctionCall,
     Message,
+    ProviderResponseError,
     ProviderToolCall,
     ReasoningContentDelta,
     Role,
@@ -42,6 +43,14 @@ _FINISH_REASONS: dict[str, FinishReason] = {
     "max_tokens": FinishReason.LENGTH,
     "stop_sequence": FinishReason.STOP,
 }
+
+
+def _finish_reason(value: str | None) -> FinishReason:
+    try:
+        return _FINISH_REASONS[value]
+    except KeyError as exc:
+        raise ProviderResponseError(f"Unsupported Anthropic terminal reason: {value or 'missing'}") from exc
+
 
 _THINKING_BUDGETS: dict[str, int] = {
     "minimal": 1024,
@@ -494,7 +503,7 @@ class AnthropicClient(CompletionClient):
             choices=[
                 Choice(
                     message=message,
-                    finish_reason=_FINISH_REASONS.get(response.stop_reason),
+                    finish_reason=_finish_reason(response.stop_reason),
                 )
             ],
             usage=usage,

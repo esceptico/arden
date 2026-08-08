@@ -13,6 +13,7 @@ from arden.agent import (
     FinishReason,
     FunctionCall,
     Message,
+    ProviderResponseError,
     Role,
     ToolCall,
     Usage,
@@ -270,7 +271,7 @@ class GeminiClient(CompletionClient, EmbeddingClient):
         usage = self._parse_usage(response.usage_metadata)
         candidates = response.candidates
         if not candidates:
-            return self._empty_response(model, usage)
+            raise ProviderResponseError("Gemini response has no candidates")
 
         candidate = candidates[0]
         parts = candidate.content.parts if candidate.content else []
@@ -286,14 +287,6 @@ class GeminiClient(CompletionClient, EmbeddingClient):
 
         return CompletionResponse(
             choices=[Choice(message=message, finish_reason=finish_reason)],
-            usage=usage,
-            model=model,
-        )
-
-    def _empty_response(self, model: str, usage: Usage) -> CompletionResponse:
-        message = Message(role=Role.ASSISTANT, content=None, tool_calls=None, reasoning_content=None)
-        return CompletionResponse(
-            choices=[Choice(message=message, finish_reason=FinishReason.STOP)],
             usage=usage,
             model=model,
         )
@@ -328,10 +321,15 @@ class GeminiClient(CompletionClient, EmbeddingClient):
             "STOP": FinishReason.STOP,
             "MAX_TOKENS": FinishReason.LENGTH,
             "SAFETY": FinishReason.CONTENT_FILTER,
+            "FinishReason.SAFETY": FinishReason.CONTENT_FILTER,
             "FinishReason.STOP": FinishReason.STOP,
             "FinishReason.MAX_TOKENS": FinishReason.LENGTH,
         }
-        return mapping.get(str(reason) if reason else "STOP", FinishReason.STOP)
+        key = str(reason) if reason else ""
+        try:
+            return mapping[key]
+        except KeyError as exc:
+            raise ProviderResponseError(f"Unsupported Gemini terminal reason: {key or 'missing'}") from exc
 
     def _parse_usage(self, usage_meta) -> Usage:
         if not usage_meta:

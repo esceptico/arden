@@ -31,6 +31,10 @@ class ProviderToolPayloadError(ValueError):
     """A native provider tool call or its stored envelope is invalid."""
 
 
+class ProviderResponseError(RuntimeError):
+    """A provider response cannot be interpreted as a completed model turn."""
+
+
 def _freeze_json(value: Any, *, path: str) -> JsonValue:
     if value is None or isinstance(value, bool | str):
         return value

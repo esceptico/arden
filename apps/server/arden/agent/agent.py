@@ -32,6 +32,7 @@ from arden.agent.types.events import (
 from arden.agent.types.llm import (
     CompletionResponse,
     FinishReason,
+    ProviderResponseError,
     ProviderToolCall,
     ReasoningContentDelta,
     Role,
@@ -68,6 +69,17 @@ AgentEvent = (
 def _tool_name(tool: dict) -> str | None:
     name = tool.get("function", tool).get("name")
     return name if isinstance(name, str) else None
+
+
+def _validated_finish_reason(response: CompletionResponse) -> FinishReason:
+    reason = response.choices[0].finish_reason
+    if reason is None:
+        raise ProviderResponseError("LLM response is missing its terminal reason")
+    if reason == FinishReason.CONTENT_FILTER:
+        raise ProviderResponseError("The provider blocked the model response")
+    if reason not in {FinishReason.STOP, FinishReason.TOOL_CALLS, FinishReason.LENGTH}:
+        raise ProviderResponseError(f"Unsupported LLM terminal reason: {reason!r}")
+    return reason
 
 
 @dataclass
@@ -233,7 +245,9 @@ class Agent:
                 ):
                     yield event
 
-                response_message = self._last_response.choices[0].message
+                response_choice = self._last_response.choices[0]
+                response_message = response_choice.message
+                finish_reason = response_choice.finish_reason
                 if reason := self._budget_stop_reason(started_at):
                     if response_message.tool_calls:
                         self._append_budget_denials(messages, response_message.tool_calls, reason)
@@ -243,7 +257,7 @@ class Agent:
                 # Model hit its per-response max_tokens mid-generation. Tool calls in a
                 # truncated response are unreliable, and looping just re-truncates (a
                 # runaway). Surface the partial text and stop.
-                if self._last_response.choices[0].finish_reason == FinishReason.LENGTH:
+                if finish_reason == FinishReason.LENGTH:
                     result_text = (response_message.content or "").strip()
                     yield self._result(result_text, StopReason.MAX_OUTPUT_LENGTH, step, messages)
                     return
@@ -718,6 +732,9 @@ class Agent:
                             yield self._provider_tool_started(item)
                 elif isinstance(item, CompletionResponse):
                     response = item
+            if response is None:
+                raise RuntimeError("LLM stream ended without a CompletionResponse")
+            _validated_finish_reason(response)
         except asyncio.CancelledError:
             if event := close_text():
                 yield event
@@ -728,11 +745,6 @@ class Agent:
             if self.hooks.on_error:
                 await self.hooks.on_error(exc)
             raise
-
-        if response is None:
-            if event := close_text():
-                yield event
-            raise RuntimeError("LLM stream ended without a CompletionResponse")
 
         for state in streamed_tool_inputs.values():
             tool_id = state["tool_id"]
