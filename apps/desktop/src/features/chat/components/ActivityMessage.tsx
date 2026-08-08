@@ -14,7 +14,6 @@ import {
   foregroundRunLabel,
   selectForegroundApprovalCount,
   selectForegroundConnectionLabel,
-  selectForegroundConnectionPhase,
   workingLabelText,
 } from "@/features/chat/lib/foregroundRunStatus";
 
@@ -34,7 +33,6 @@ export const ActivityMessage = memo(function ActivityMessage({
   const activeActivityId = useStore((s) => s.activeActivityId);
   const approvalPending = useStore(selectForegroundApprovalCount) > 0;
   const connectionLabel = useStore(selectForegroundConnectionLabel);
-  const connectionPhase = useStore(selectForegroundConnectionPhase);
   const workflows = useWorkflows(currentSessionId);
   if (!message?.activity || message.activity.items.length === 0) return null;
   const { items, done } = message.activity;
@@ -60,7 +58,6 @@ export const ActivityMessage = memo(function ActivityMessage({
         activityMessage: message,
         approvalPending,
         connectionLabel,
-        connectionPhase,
       }))
     : undefined;
 

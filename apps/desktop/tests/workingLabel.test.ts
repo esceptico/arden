@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import {
   foregroundRunLabel,
-  workingLabelText,
   selectForegroundApprovalCount,
   selectForegroundConnectionLabel,
 } from "@/features/chat/lib/foregroundRunStatus";
@@ -118,13 +117,6 @@ test("actionable waits override tool and model phases", () => {
     verb: "Connect",
     target: "Google Calendar",
   });
-});
-
-test("transport loss reports reconnection without exposing provider prose", () => {
-  const label = foregroundRunLabel({ connectionPhase: "reconnecting" });
-  expect(label).toEqual({ verb: "Reconnecting", target: "" });
-  expect(workingLabelText(label)).toBe("Reconnecting");
-  expect(foregroundRunLabel({ connectionPhase: "connecting" })).toEqual(label);
 });
 
 test("wait phases belong only to the active run", () => {

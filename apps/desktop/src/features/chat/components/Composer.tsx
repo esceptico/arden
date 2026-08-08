@@ -26,7 +26,6 @@ import {
   foregroundRunLabel,
   selectForegroundApprovalCount,
   selectForegroundConnectionLabel,
-  selectForegroundConnectionPhase,
   workingLabelText,
 } from "@/features/chat/lib/foregroundRunStatus";
 import { filterCommands, useCommandList, type CommandEntry } from "@/features/chat/lib/commands";
@@ -49,7 +48,6 @@ export function Composer() {
   const thinkingIntensity = useStore((s) => s.prefs.thinkingIntensity);
   const pendingApprovalCount = useStore(selectForegroundApprovalCount);
   const pendingConnectionLabel = useStore(selectForegroundConnectionLabel);
-  const connectionPhase = useStore(selectForegroundConnectionPhase);
   const editingId = useStore((s) => s.editingId);
   const setEditingId = useStore((s) => s.setEditingId);
   const skipApprovals = useStore((s) => s.skipApprovals);
@@ -162,11 +160,9 @@ export function Composer() {
       activityMessage,
       approvalPending: pendingApprovalCount > 0,
       connectionLabel: pendingConnectionLabel,
-      connectionPhase,
     }),
     [
       activityMessage,
-      connectionPhase,
       pendingApprovalCount,
       pendingConnectionLabel,
     ],
