@@ -9,6 +9,7 @@ const { parseApiResponseBody } = require("./api-response.cjs");
 const { createExecutorClient } = require("./executor.cjs");
 const { registerDeviceTools } = require("./executor-tools.cjs");
 const { createMainProcessFetch } = require("./main-process-fetch.cjs");
+const { consumeResponseBody } = require("./response-body-reader.cjs");
 // The parser is an ESM module (shared with the Vite renderer, which can't
 // import CommonJS source). Kick off the import at load; await the cached
 // promise where it's used. CJS can't `require` ESM or top-level await.
@@ -246,20 +247,17 @@ async function streamEvents(connectionId, webContents, configInput, sessionId, a
       throw new Error(`event stream failed: ${response.status}`);
     }
 
-    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const { createSseFrameParser } = await sseFrameParserModule;
     const parser = createSseFrameParser();
 
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    await consumeResponseBody(response.body, signal, value => {
       for (const event of parser.push(decoder.decode(value, { stream: true }))) {
         if (!webContents.isDestroyed()) {
           webContents.send("events:data", { connectionId, event });
         }
       }
-    }
+    });
   } catch (error) {
     if (!signal.aborted && !webContents.isDestroyed()) {
       terminalSent = true;
