@@ -130,6 +130,7 @@ def test_prepared_report_is_pinned_and_includes_resolved_link_neighbors(tmp_path
 
 def test_prepared_report_hides_storage_identifiers_from_model_evidence(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
+    automation_id = "area:internal-area-id:wiki-maintainer"
     page = create_page(
         page_id="internal-page-id",
         title="One",
@@ -142,8 +143,8 @@ def test_prepared_report_hides_storage_identifiers_from_model_evidence(tmp_path:
     repo.commit(
         ChangeSet(
             operations=(Create("internal-page-id", "topics/one.md", page.to_bytes()),),
-            actor="User",
-            origin="desktop",
+            actor=f"Automation {automation_id}",
+            origin=f"wiki.automation.{automation_id}",
             reason="seed page",
             idempotency_key="seed-internal-page",
         )
@@ -163,6 +164,32 @@ def test_prepared_report_hides_storage_identifiers_from_model_evidence(tmp_path:
     assert "a" * 64 not in report.markdown
     assert "b" * 64 not in report.markdown
     assert "c" * 64 not in report.markdown
+    assert automation_id not in report.markdown
+    assert f"wiki.automation.{automation_id}" not in report.markdown
+    assert "internal-area-id" not in report.markdown
+    assert "Source: scheduled automation" in report.markdown
+
+
+def test_prepared_report_preserves_user_area_authority(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    page = create_page(page_id="area-page", title="Area", body=b"User-owned content.\n")
+    repo.commit(
+        ChangeSet(
+            operations=(Create("area-page", "topics/area.md", page.to_bytes()),),
+            actor="user:area",
+            origin="area",
+            reason="attach Area page",
+            idempotency_key="seed-area-page",
+        )
+    )
+    service = WikiService(repo)
+    feed = service.changes_since(None)
+    maintenance = WikiMaintenance.__new__(WikiMaintenance)
+    maintenance._wiki = service
+
+    report = maintenance._prepare(feed, feed.commits[0])
+
+    assert "Source: user" in report.markdown
 
 
 def test_model_diff_preserves_hash_like_user_prose() -> None:

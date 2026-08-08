@@ -279,7 +279,7 @@ class WikiMaintenance:
                 "Only the supplied Markdown evidence is available. User edits are authoritative: preserve their "
                 "intent, make no speculative insights, and never edit a generated region. Do not rename, move, "
                 "archive, or combine pages. If two pages may describe the same subject, choose no_change.",
-                f"Actor: {commit.actor}; origin: {commit.origin}",
+                f"Source: {self._model_provenance_category(commit)}",
             )
         )
         pieces: list[tuple[str, str, int]] = [("header", header, _MAX_HEADER_BYTES)]
@@ -364,6 +364,16 @@ class WikiMaintenance:
             markdown=markdown,
             page_tokens=page_tokens,
         )
+
+    @staticmethod
+    def _model_provenance_category(commit: WikiChangeCommit) -> str:
+        if commit.origin.startswith("wiki.automation."):
+            return "scheduled automation"
+        if commit.actor == "User" or commit.actor.startswith("user:"):
+            return "user"
+        if commit.origin == "wiki.agent":
+            return "agent"
+        return "system"
 
     def _bounded_markdown(self, pieces: Sequence[tuple[str, str, int]]) -> str:
         total = 0
