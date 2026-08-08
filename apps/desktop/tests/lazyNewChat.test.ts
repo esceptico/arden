@@ -14,7 +14,6 @@ const CONTEXT_BUDGET = {
   message_count: 0,
 };
 let failCreation = false;
-let failHistory = false;
 let delayedAreaId: string | null | undefined;
 let releaseDelayedCreation: (() => void) | null = null;
 const originalDesktop = window.ardenDesktop;
@@ -26,7 +25,6 @@ function response(data: unknown) {
 beforeEach(() => {
   requests.length = 0;
   failCreation = false;
-  failHistory = false;
   delayedAreaId = undefined;
   releaseDelayedCreation = null;
   setState({
@@ -66,7 +64,6 @@ beforeEach(() => {
           });
         }
         if (request.path.startsWith("/session/history")) {
-          if (failHistory) throw new Error("history failed");
           return response({ messages: [], active_run_id: null, context_budget: CONTEXT_BUDGET });
         }
         if (request.path === "/chat/message") return response({ run_id: "run-1" });
@@ -198,14 +195,14 @@ test.each([
   expect(JSON.parse(sent?.body ?? "{}").session_id).toBe("created-area-a");
 });
 
-test("first send does not wait on empty-history hydration", async () => {
-  failHistory = true;
+test("first send marks the new empty history ready without fetching it", async () => {
   goToNewSessionHome("area-1");
 
   expect(await sendMessage("hello")).toBe(true);
 
   expect(requests.some((request) => request.path.startsWith("/session/history"))).toBe(false);
   expect(requests.some((request) => request.path === "/chat/message")).toBe(true);
+  expect(getState().sessionView.historyLoadedFor).toBe("created-area-1");
 });
 
 test("archiving the pending Area moves the draft to Inbox", async () => {

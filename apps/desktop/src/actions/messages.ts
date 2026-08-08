@@ -47,6 +47,7 @@ async function resolveHomeMessageSession(): Promise<string | null> {
       && !latest.settingsOpen;
     if (stillOwnsDraft && latest.currentSessionId === null) {
       latest.setCurrentSession(sessionId);
+      getState().setHistory([]);
     }
     return sessionId;
   } catch (error) {
