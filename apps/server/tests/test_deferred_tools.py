@@ -504,13 +504,49 @@ async def test_native_wiki_mutation_loaded_in_current_run_also_exposes_required_
         )
     run = RunContext(run_id="run", deferred_tools_enabled=True, loaded_tools={"wiki_edit_page"})
     middleware = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
-    request = replace(_request(registry), model="gpt-5.5")
+    request = replace(
+        _request(registry),
+        model="gpt-5.5",
+        messages=[{"role": "system", "content": [{"type": "text", "text": "system"}]}],
+    )
 
     prepared = await middleware(request, _identity)
     visible = {tool["function"]["name"] for tool in prepared.tools}
+    assert len(prepared.messages[0]["content"]) == 2
+    note = prepared.messages[0]["content"][-1]["text"]
 
     assert {"wiki_edit_page", "wiki_read_page"} <= run.loaded_tools
     assert {"wiki_edit_page", "wiki_read_page"} <= visible
+    assert "Call these tools directly; do not search for them again" in note
+    assert "wiki_edit_page, wiki_read_page" in note
+    assert request.messages == [{"role": "system", "content": [{"type": "text", "text": "system"}]}]
+
+
+@pytest.mark.asyncio
+async def test_native_compaction_keeps_loaded_tool_direct_call_guidance():
+    registry = _registry()
+    run = RunContext(run_id="run", deferred_tools_enabled=True, loaded_tools={"slack_search"})
+    deferred = DeferredToolsModelRequestMiddleware(registry=registry, run=run, get_services=dict)
+    compaction = CompactionModelRequestMiddleware(
+        compactor=AlwaysCompacts(),
+        get_rehydration_state=lambda: run.to_rehydration_state(),
+        apply_rehydration_state=run.apply_rehydration_state,
+    )
+    request = replace(_request(registry), model="gpt-5.5")
+
+    prepared = await apply_model_request_middlewares(request, (deferred, compaction))
+
+    assert run.loaded_tools == {"slack_search"}
+    assert prepared.messages == [
+        {
+            "role": "system",
+            "content": (
+                "compacted\n\n## ALREADY CALLABLE TOOLS\n"
+                "Call these tools directly; do not search for them again: slack_search. "
+                "A native search returns no match for an already-callable tool."
+            ),
+        }
+    ]
 
 
 @pytest.mark.asyncio
