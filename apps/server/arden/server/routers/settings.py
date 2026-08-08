@@ -34,7 +34,8 @@ def _config_response(rt: Runtime) -> dict:
     memory_connected = rt.fact_service is not None
     web_client = rt.integrations.get_client("web")
     web_provider = getattr(web_client, "provider", "unknown") if web_client else "none"
-    reasoning_efforts = list(get_model(config.chat_model).reasoning_efforts) if config.chat_model else []
+    chat_model = get_model(config.chat_model) if config.chat_model else None
+    reasoning_efforts = list(chat_model.reasoning_efforts) if chat_model else []
     reasoning_effort = config.reasoning_effort_for(config.chat_model)
     known_models = get_models_fn()
     model_reasoning_efforts = {
@@ -98,12 +99,7 @@ def _config_response(rt: Runtime) -> dict:
         "connected": memory_connected,
     }
 
-    # Resolve the chat model's hard token ceiling so the desktop can render
-    # the budget dial against absolute numbers (no second round-trip).
-    try:
-        chat_model_max_context = get_model(config.chat_model).max_context_tokens
-    except Exception:
-        chat_model_max_context = 0
+    chat_model_max_context = chat_model.max_context_tokens if chat_model else 0
     compaction_token_limit = int(chat_model_max_context * config.compression_threshold) if chat_model_max_context else 0
     compaction_token_trigger = int(compaction_token_limit * COMPRESSION_TOKEN_HEADROOM) if compaction_token_limit else 0
 

@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from arden.config import Config
 from arden.integrations.mutations import IDEMPOTENCY_LEDGER_SERVICE
-from arden.llm.models import EmbeddingModel, Provider
+from arden.llm.models import DEFAULTS, EmbeddingModel, Provider
+from arden.server.routers import settings as settings_router
 from arden.server.runtime.config import RuntimeConfig
 from arden.server.runtime.core import Runtime
 from arden.server.runtime.knowledge import KnowledgeRuntime
@@ -125,6 +126,39 @@ def test_custom_embedding_request_requires_supported_dimensions():
         dimensions=1024,
     )
     assert request.dimensions == 1024
+
+
+def test_config_response_resolves_the_chat_model_once(monkeypatch):
+    model = DEFAULTS[0]
+    runtime = Runtime(Config(memory=False, chat_model=model.id))
+    lookups: list[str] = []
+
+    def get_model(model_id: str):
+        lookups.append(model_id)
+        return model
+
+    monkeypatch.setattr(settings_router, "get_model", get_model)
+    response = settings_router._config_response(runtime)
+
+    assert lookups == [model.id]
+    assert response["chat_model_max_context"] == model.max_context_tokens
+
+
+def test_config_response_has_explicit_zero_budget_without_a_chat_model(monkeypatch):
+    import arden.config as config_module
+
+    monkeypatch.setattr(config_module, "_has_openai_codex_auth", lambda: False)
+    runtime = Runtime(Config(memory=False, chat_model=None))
+
+    def fail_lookup(_model_id: str):
+        raise AssertionError("no model lookup expected")
+
+    monkeypatch.setattr(settings_router, "get_model", fail_lookup)
+    response = settings_router._config_response(runtime)
+
+    assert response["chat_model_max_context"] == 0
+    assert response["compaction_token_limit"] == 0
+    assert response["compaction_token_trigger"] == 0
 
 
 @pytest.mark.asyncio
