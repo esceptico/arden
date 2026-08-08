@@ -571,10 +571,9 @@
      space-1 margin lands its center on the filter's vertical axis. */
   width: var(--icon-button-size);
   height: var(--icon-button-size);
-  /* Lands the moon GLYPH on the shared 12px content column — measured, not
-     derived: this icon renders smaller inside its 28px button than the
-     header filter does. */
-  margin-right: 0;
+  /* 6px parks the visible glyph (16px in a 28px button) on the shared 12px
+     content column: button edge 6 + internal inset 6 = 12. */
+  margin-right: var(--space-1-5);
   place-items: center;
   border-radius: var(--r-icon);
   color: var(--muted);
