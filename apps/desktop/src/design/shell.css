@@ -258,7 +258,7 @@
   content: "";
   position: absolute;
   top: 0;
-  inset-inline: var(--interactive-row-inline-padding);
+  inset-inline: var(--interactive-row-inline-padding) var(--space-1);
   border-top: 1px solid var(--edge);
 }
 
@@ -549,7 +549,7 @@
   content: "";
   position: absolute;
   top: 0;
-  inset-inline: var(--interactive-row-inline-padding);
+  inset-inline: var(--interactive-row-inline-padding) var(--space-1);
   border-top: 1px solid var(--edge);
 }
 
