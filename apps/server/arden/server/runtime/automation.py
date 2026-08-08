@@ -202,14 +202,12 @@ class AutomationRuntime:
             timedelta(0),
         )
 
-    async def notify_wiki_changed(
+    async def notify_wiki_dependents(
         self,
         paths: list[str],
-        revision: str | None,
         *,
         source_areas_by_path: dict[str, set[str]],
     ) -> None:
-        await self.scheduler.emit_automation_event(MemoryChangedEvent(paths=paths, revision=revision))
         changed = set(paths)
         for record in await self.stores.sessions.list_areas():
             page_path = record.get("page_path")
@@ -220,6 +218,9 @@ class AutomationRuntime:
             ):
                 continue
             await self.request_area_wake(record["area_id"], f"topic page edited ({page_path})")
+
+    async def emit_memory_changed(self, paths: list[str], revision: str | None) -> None:
+        await self.scheduler.emit_automation_event(MemoryChangedEvent(paths=paths, revision=revision))
 
     async def _on_area_run_completed(self, run_completed: RunCompleted) -> bool:
         """Project one trusted custodian report after durable chat completion."""

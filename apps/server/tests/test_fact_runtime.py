@@ -684,11 +684,15 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
             await asyncio.sleep(0)
             self.last_state = SimpleNamespace(wiki_head="new-head")
 
-    notifications: list[tuple[list[str], str | None, dict[str, set[str]]]] = []
+    memory_notifications: list[tuple[list[str], str | None]] = []
+    dependent_notifications: list[tuple[list[str], dict[str, set[str]]]] = []
 
     class _Automation:
-        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
-            notifications.append((paths, revision, source_areas_by_path))
+        async def emit_memory_changed(self, paths, revision) -> None:
+            memory_notifications.append((paths, revision))
+
+        async def notify_wiki_dependents(self, paths, *, source_areas_by_path) -> None:
+            dependent_notifications.append((paths, source_areas_by_path))
             await asyncio.sleep(0)
 
         async def request_fact_synthesis(self) -> bool:
@@ -701,7 +705,7 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
     projection = _Projection()
     runtime.wiki_page_projection = projection
     runtime.automation = _Automation()
-    runtime._wiki_change_head = "old-head"
+    runtime.wiki_projection.head = "old-head"
     revisions: list[tuple[str | None, str]] = []
 
     class _Watermarks:
@@ -716,7 +720,8 @@ async def test_concurrent_wiki_projection_notifies_one_head_once(tmp_path, monke
         runtime.project_wiki_change(),
     )
 
-    assert notifications == [(["topics/dex.md"], "new-head", {"topics/dex.md": {"dex"}})]
+    assert memory_notifications == [(["topics/dex.md"], "new-head")]
+    assert dependent_notifications == [(["topics/dex.md"], {"topics/dex.md": {"dex"}})]
     assert revisions == [("old-head", "new-head")]
     assert projection.sync_calls == 2
 
@@ -754,7 +759,10 @@ async def test_latest_external_page_edit_is_not_suppressed_by_older_self_edit(
     notifications: list[dict[str, set[str]]] = []
 
     class _Automation:
-        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+        async def emit_memory_changed(self, paths, revision) -> None:
+            return None
+
+        async def notify_wiki_dependents(self, paths, *, source_areas_by_path) -> None:
             notifications.append(source_areas_by_path)
 
     class _Watermarks:
@@ -767,7 +775,7 @@ async def test_latest_external_page_edit_is_not_suppressed_by_older_self_edit(
     runtime.wiki_service = SimpleNamespace(repository=_Repository())
     runtime.wiki_page_projection = _Projection()
     runtime.automation = _Automation()
-    runtime._wiki_change_head = "old-head"
+    runtime.wiki_projection.head = "old-head"
     runtime._wiki_maintenance_store = _Watermarks()
     monkeypatch.setattr(runtime, "project_wiki_health", health)
 
@@ -798,7 +806,10 @@ async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkey
     notifications: list[list[str]] = []
 
     class _Automation:
-        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+        async def emit_memory_changed(self, paths, revision) -> None:
+            return None
+
+        async def notify_wiki_dependents(self, paths, *, source_areas_by_path) -> None:
             notifications.append(paths)
 
         async def request_fact_synthesis(self) -> bool:
@@ -816,14 +827,14 @@ async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkey
     runtime.wiki_service = SimpleNamespace(repository=_Repository())
     runtime.wiki_page_projection = _Projection()
     runtime.automation = _Automation()
-    runtime._wiki_change_head = "old-head"
+    runtime.wiki_projection.head = "old-head"
     runtime._wiki_maintenance_store = _Watermarks()
     monkeypatch.setattr(runtime, "project_wiki_health", failed_health)
 
     with pytest.raises(RuntimeError, match="health projection failed"):
         await runtime.project_wiki_change()
 
-    assert runtime._wiki_change_head == "old-head"
+    assert runtime.wiki_projection.head == "old-head"
     assert notifications == []
     assert revisions == []
 
@@ -835,7 +846,7 @@ async def test_failed_wiki_projection_keeps_watermark_for_retry(tmp_path, monkey
 
     assert notifications == [["topics/dex.md"]]
     assert revisions == [("old-head", "new-head")]
-    assert runtime._wiki_change_head == "new-head"
+    assert runtime.wiki_projection.head == "new-head"
 
 
 @pytest.mark.asyncio
@@ -875,7 +886,10 @@ async def test_new_common_page_requests_fact_synthesis_but_automation_and_readme
     requested = 0
 
     class _Automation:
-        async def notify_wiki_changed(self, paths, revision, *, source_areas_by_path) -> None:
+        async def emit_memory_changed(self, paths, revision) -> None:
+            return None
+
+        async def notify_wiki_dependents(self, paths, *, source_areas_by_path) -> None:
             return None
 
         async def request_fact_synthesis(self) -> bool:
@@ -893,7 +907,7 @@ async def test_new_common_page_requests_fact_synthesis_but_automation_and_readme
     runtime.wiki_service = SimpleNamespace(repository=_Repository())
     runtime.wiki_page_projection = _Projection()
     runtime.automation = _Automation()
-    runtime._wiki_change_head = "old-head"
+    runtime.wiki_projection.head = "old-head"
     runtime._wiki_maintenance_store = _Watermarks()
     monkeypatch.setattr(runtime, "project_wiki_health", health)
 
@@ -926,9 +940,74 @@ async def test_committed_wiki_projection_is_durably_queued_without_inline_projec
 
 
 @pytest.mark.asyncio
-async def test_committed_wiki_projection_enqueue_failure_falls_back_inline(tmp_path, monkeypatch) -> None:
+async def test_committed_wiki_change_emits_before_projection_without_later_duplicate(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
-    projected: list[str] = []
+    revision = "new-head"
+    change = SimpleNamespace(before=None, after=SimpleNamespace(path="daily/2026-08-09.md"))
+    commit = SimpleNamespace(actor="automation:daily-notes", origin="wiki.agent", changes=(change,))
+    calls: list[object] = []
+
+    class _Repository:
+        head = revision
+
+        def history(self, *, start, stop_before):
+            assert (start, stop_before) == (revision, "old-head")
+            return (commit,)
+
+    class _Outbox:
+        async def enqueue_wiki_projection(self, value: str) -> bool:
+            calls.append(("queued", value))
+            return True
+
+    class _Automation:
+        async def emit_memory_changed(self, paths, event_revision) -> None:
+            calls.append(("emitted", paths, event_revision))
+
+        async def notify_wiki_dependents(self, paths, *, source_areas_by_path) -> None:
+            calls.append(("dependents", paths, source_areas_by_path))
+
+        async def request_fact_synthesis(self) -> bool:
+            calls.append("synthesis")
+            return True
+
+    class _Projection:
+        async def sync(self, **_kwargs) -> None:
+            return None
+
+    class _Watermarks:
+        async def record_projection_revision(self, *, expected_revision, revision) -> None:
+            calls.append(("watermark", expected_revision, revision))
+
+    runtime.wiki_projection.head = "old-head"
+    runtime.wiki_service = SimpleNamespace(repository=_Repository())
+    runtime.stores = SimpleNamespace(outbox=_Outbox())
+    runtime.automation = _Automation()
+
+    assert await runtime.project_wiki_change_after_commit() is True
+    assert calls == [
+        ("queued", revision),
+        ("emitted", ["daily/2026-08-09.md"], revision),
+    ]
+
+    runtime.wiki_page_projection = _Projection()
+    runtime._wiki_maintenance_store = _Watermarks()
+
+    async def health() -> str:
+        return revision
+
+    monkeypatch.setattr(runtime, "project_wiki_health", health)
+    await runtime.project_wiki_change()
+
+    assert [call for call in calls if isinstance(call, tuple) and call[0] == "emitted"] == [
+        ("emitted", ["daily/2026-08-09.md"], revision)
+    ]
+    assert ("dependents", ["daily/2026-08-09.md"], {}) in calls
+    assert ("watermark", "old-head", revision) in calls
+
+
+@pytest.mark.asyncio
+async def test_committed_wiki_projection_enqueue_failure_is_surfaced(tmp_path) -> None:
+    runtime = Runtime(_config(tmp_path))
 
     class _Outbox:
         async def enqueue_wiki_projection(self, _value: str) -> bool:
@@ -937,20 +1016,15 @@ async def test_committed_wiki_projection_enqueue_failure_falls_back_inline(tmp_p
     runtime.stores = SimpleNamespace(outbox=_Outbox())
     runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head="a" * 64))
 
-    async def project() -> None:
-        projected.append("projected")
-
-    monkeypatch.setattr(runtime, "project_wiki_change", project)
-
-    assert await runtime.project_wiki_change_after_commit() is False
-    assert projected == ["projected"]
+    with pytest.raises(RuntimeError, match="outbox unavailable"):
+        await runtime.project_wiki_change_after_commit()
 
 
 @pytest.mark.asyncio
 async def test_any_automation_reconciles_a_wiki_head_it_changed(tmp_path, monkeypatch) -> None:
     runtime = Runtime(_config(tmp_path))
     runtime.wiki_service = SimpleNamespace(repository=SimpleNamespace(head="new"))
-    runtime._wiki_change_head = "old"
+    runtime.wiki_projection.head = "old"
     calls: list[str] = []
 
     async def project() -> None:
@@ -1374,13 +1448,13 @@ async def test_contended_wiki_projection_defers_instead_of_raising(tmp_path, mon
 
     runtime.wiki_service = SimpleNamespace(repository=_Repository())
     runtime.wiki_page_projection = _Projection()
-    runtime._wiki_change_head = "old-head"
+    runtime.wiki_projection.head = "old-head"
     runtime._wiki_maintenance_store = _Watermarks()
     monkeypatch.setattr(runtime, "project_wiki_health", contended_health)
 
     await runtime.project_wiki_change()  # must not raise
 
-    assert runtime._wiki_change_head == "old-head"
+    assert runtime.wiki_projection.head == "old-head"
     assert attempts > 0
 
 

@@ -74,6 +74,8 @@ class WikiProjectionRuntime:
         self._host = host
         self._health_lock = asyncio.Lock()
         self._projection_lock = asyncio.Lock()
+        self._memory_event_lock = asyncio.Lock()
+        self._memory_event_head: str | None = None
         self.head: str | None = None
 
     async def after_automation_finished(
@@ -211,6 +213,7 @@ class WikiProjectionRuntime:
         if revision is None:
             raise RuntimeError("Committed wiki projection has no revision")
         await host.stores.outbox.enqueue_wiki_projection(revision)
+        await self._emit_memory_change_through(revision)
         return True
 
     async def enqueue_startup(self) -> bool:
@@ -255,9 +258,11 @@ class WikiProjectionRuntime:
             )
             paths, source_areas_by_path, common_page_created = _changed_paths(commits)
             if paths and host.automation is not None:
-                await host.automation.notify_wiki_changed(
+                if final_head is None:
+                    raise RuntimeError("Wiki projection produced changes without a revision")
+                await self._emit_memory_change_through(final_head)
+                await host.automation.notify_wiki_dependents(
                     sorted(paths),
-                    final_head,
                     source_areas_by_path=source_areas_by_path,
                 )
                 if common_page_created:
@@ -268,6 +273,24 @@ class WikiProjectionRuntime:
                     revision=final_head,
                 )
             self.head = final_head
+
+    async def _emit_memory_change_through(self, revision: str) -> None:
+        host = self._host
+        if host.wiki_service is None or host.automation is None:
+            return
+        async with self._memory_event_lock:
+            previous_head = self._memory_event_head if self._memory_event_head is not None else self.head
+            if revision == previous_head:
+                return
+            commits = await asyncio.to_thread(
+                host.wiki_service.repository.history,
+                start=revision,
+                stop_before=previous_head,
+            )
+            paths, _source_areas_by_path, _common_page_created = _changed_paths(commits)
+            if paths:
+                await host.automation.emit_memory_changed(sorted(paths), revision)
+            self._memory_event_head = revision
 
     @staticmethod
     def _superseded(detail: str) -> None:

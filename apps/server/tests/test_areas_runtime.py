@@ -209,9 +209,9 @@ async def test_wiki_change_does_not_wake_its_originating_custodian(tmp_path: Pat
 
     runtime.request_area_wake = request_area_wake
 
-    await runtime.notify_wiki_changed(
+    await runtime.emit_memory_changed(["topics/dex.md", "topics/visa.md"], "revision")
+    await runtime.notify_wiki_dependents(
         ["topics/dex.md", "topics/visa.md"],
-        "revision",
         source_areas_by_path={"topics/dex.md": {"dex"}},
     )
 
