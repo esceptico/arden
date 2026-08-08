@@ -2,6 +2,7 @@ from typing import Any
 
 import httpx
 
+from arden.llm.codex_catalog import decode_codex_catalog
 from arden.llm.models import Model, Pricing, Provider, replace_provider_models
 from arden.llm.openai_codex_auth import (
     CODEX_BASE_URL,
@@ -15,43 +16,18 @@ _logger = get_logger(__name__)
 
 
 def parse_codex_catalog(payload: object) -> list[Model]:
-    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
-        return []
-
-    models: list[Model] = []
-    for raw in payload["models"]:
-        if not isinstance(raw, dict):
-            continue
-        if raw.get("visibility") != "list" or raw.get("supported_in_api") is not True:
-            continue
-        slug = raw.get("slug")
-        context_window = raw.get("context_window")
-        if not isinstance(slug, str) or not slug or not isinstance(context_window, int):
-            continue
-        if context_window <= 0:
-            continue
-
-        reasoning_efforts = tuple(
-            effort
-            for item in raw.get("supported_reasoning_levels", [])
-            if isinstance(item, dict) and isinstance((effort := item.get("effort")), str)
+    return [
+        Model(
+            id=f"openai-codex/{spec.slug}",
+            provider=Provider.OPENAI_CODEX,
+            max_context_tokens=spec.context_window,
+            max_output_tokens=spec.max_output_tokens,
+            pricing=Pricing(0, 0),
+            reasoning_efforts=spec.reasoning_efforts,
+            native_deferred_tools=spec.native_deferred_tools,
         )
-        max_output_tokens = raw.get("max_output_tokens")
-        if not isinstance(max_output_tokens, int) or max_output_tokens <= 0:
-            max_output_tokens = 128_000
-
-        models.append(
-            Model(
-                id=f"openai-codex/{slug}",
-                provider=Provider.OPENAI_CODEX,
-                max_context_tokens=context_window,
-                max_output_tokens=max_output_tokens,
-                pricing=Pricing(0, 0),
-                reasoning_efforts=reasoning_efforts,
-                native_deferred_tools=raw.get("supports_search_tool") is True,
-            )
-        )
-    return models
+        for spec in decode_codex_catalog(payload)
+    ]
 
 
 async def _fetch_catalog(client: Any) -> list[Model]:

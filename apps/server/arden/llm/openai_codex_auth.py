@@ -20,7 +20,7 @@ from arden.settings import ARDEN_DIR
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 ISSUER = "https://auth.openai.com"
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
-CODEX_CLIENT_VERSION = "0.144.0"
+CODEX_CLIENT_VERSION = "0.147.0"
 OAUTH_PORT = 1455
 OAUTH_CALLBACK_PATH = "/auth/callback"
 TOKEN_PATH = ARDEN_DIR / "openai-codex-auth.json"

@@ -1,9 +1,11 @@
 import json
-from dataclasses import dataclass, field, replace
+from collections import Counter
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from arden.atomic_file import write_private_atomic
 from arden.logging import get_logger
@@ -180,263 +182,86 @@ def _generated_models_path() -> Path:
     return Path(__file__).with_name("generated_models.json")
 
 
-def _model_from_generated_entry(entry: dict) -> Model:
-    provider = Provider(entry["provider"])
-    model_id = entry["id"]
+class ModelCatalogError(RuntimeError):
+    """The packaged model catalog does not satisfy its current contract."""
+
+
+class _GeneratedModelSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    id: str = Field(min_length=1, max_length=256)
+    provider: Literal["anthropic", "openai", "openai-codex", "google", "openrouter"]
+    context_window: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    price_in: float = Field(ge=0, allow_inf_nan=False)
+    price_out: float = Field(ge=0, allow_inf_nan=False)
+    price_cache_read: float = Field(ge=0, allow_inf_nan=False)
+    price_cache_write: float = Field(ge=0, allow_inf_nan=False)
+    reasoning_efforts: list[str]
+    native_deferred_tools: bool
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if value != value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("model ID must be trimmed and contain no control characters")
+        return value
+
+
+def _model_from_generated_spec(spec: _GeneratedModelSpec) -> Model:
+    provider = Provider(spec.provider)
     return Model(
-        id=model_id,
+        id=spec.id,
         provider=provider,
-        max_context_tokens=int(entry["context_window"]),
-        max_output_tokens=int(entry.get("max_output_tokens", 8192)),
+        max_context_tokens=spec.context_window,
+        max_output_tokens=spec.max_output_tokens,
         pricing=Pricing(
-            price_in=float(entry.get("price_in", 0)),
-            price_out=float(entry.get("price_out", 0)),
-            price_cache_read=float(entry.get("price_cache_read", 0)),
-            price_cache_write=float(entry.get("price_cache_write", 0)),
+            price_in=spec.price_in,
+            price_out=spec.price_out,
+            price_cache_read=spec.price_cache_read,
+            price_cache_write=spec.price_cache_write,
         ),
-        reasoning_efforts=tuple(entry.get("reasoning_efforts", ())),
-        native_deferred_tools=bool(
-            entry.get("native_deferred_tools")
-            or provider == Provider.ANTHROPIC
-            or (provider == Provider.OPENAI and model_id.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")))
-        ),
+        reasoning_efforts=tuple(spec.reasoning_efforts),
+        native_deferred_tools=spec.native_deferred_tools,
     )
 
 
 def _load_generated_models() -> list[Model]:
     path = _generated_models_path()
     if not path.exists():
-        return []
+        raise ModelCatalogError(f"Packaged model catalog is missing at {path}")
     try:
-        raw = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        _logger.warning("Failed to read generated models from %s", path, exc_info=True)
-        return []
-    if not isinstance(raw, list):
-        _logger.warning("Skipping generated models from %s: expected list", path)
-        return []
-    return [_model_from_generated_entry(entry) for entry in raw if isinstance(entry, dict)]
+        raw = json.loads(
+            path.read_text(),
+            parse_constant=_reject_nonfinite_json,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (json.JSONDecodeError, OSError, ValueError) as error:
+        raise ModelCatalogError(f"Packaged model catalog at {path} is unreadable or invalid JSON") from error
+    if not isinstance(raw, list) or not raw:
+        raise ModelCatalogError(f"Packaged model catalog at {path} must be a non-empty JSON array")
+    try:
+        specs = [_GeneratedModelSpec.model_validate(entry) for entry in raw]
+    except ValidationError as error:
+        raise ModelCatalogError(f"Packaged model catalog at {path} has an invalid entry: {error}") from error
+
+    model_ids = [spec.id for spec in specs]
+    duplicates = sorted(model_id for model_id, count in Counter(model_ids).items() if count > 1)
+    if duplicates:
+        raise ModelCatalogError(f"Packaged model catalog contains duplicate IDs: {', '.join(duplicates)}")
+    providers = {spec.provider for spec in specs}
+    expected_providers = {"anthropic", "openai", "openai-codex", "google", "openrouter"}
+    if providers != expected_providers:
+        missing = ", ".join(sorted(expected_providers - providers))
+        raise ModelCatalogError(f"Packaged model catalog is missing providers: {missing}")
+    return [_model_from_generated_spec(spec) for spec in specs]
 
 
-# Prices are per million tokens.
-FALLBACK_DEFAULTS = [
-    # --- Anthropic ---
-    Model(
-        "claude-opus-4-7",
-        provider=Provider.ANTHROPIC,
-        max_context_tokens=1_000_000,
-        max_output_tokens=128_000,
-        pricing=Pricing(price_in=5, price_out=25, price_cache_read=0.50, price_cache_write=6.25),
-        reasoning_efforts=("low", "medium", "high", "xhigh", "max"),
-    ),
-    Model(
-        "claude-opus-4-6",
-        provider=Provider.ANTHROPIC,
-        max_context_tokens=200_000,
-        max_output_tokens=128_000,
-        pricing=Pricing(price_in=5, price_out=25, price_cache_read=0.50, price_cache_write=6.25),
-        reasoning_efforts=("low", "medium", "high", "max"),
-    ),
-    Model(
-        "claude-sonnet-4-6",
-        provider=Provider.ANTHROPIC,
-        max_context_tokens=200_000,
-        max_output_tokens=64_000,
-        pricing=Pricing(price_in=3, price_out=15, price_cache_read=0.30, price_cache_write=3.75),
-        reasoning_efforts=("low", "medium", "high", "max"),
-    ),
-    Model(
-        "claude-haiku-4-5-20251001",
-        provider=Provider.ANTHROPIC,
-        max_context_tokens=200_000,
-        max_output_tokens=64_000,
-        pricing=Pricing(price_in=1, price_out=5, price_cache_read=0.10, price_cache_write=1.25),
-        reasoning_efforts=("high", "max"),
-    ),
-    # --- OpenAI ---
-    Model(
-        "gpt-5.5",
-        provider=Provider.OPENAI,
-        max_context_tokens=1_050_000,
-        max_output_tokens=128_000,
-        pricing=Pricing(price_in=5, price_out=30),
-        reasoning_efforts=("none", "low", "medium", "high", "xhigh"),
-    ),
-    Model(
-        "gpt-5.4",
-        provider=Provider.OPENAI,
-        max_context_tokens=1_050_000,
-        max_output_tokens=128_000,
-        pricing=Pricing(price_in=2.50, price_out=15),
-        reasoning_efforts=("none", "low", "medium", "high", "xhigh"),
-    ),
-    Model(
-        "gpt-5.4-mini",
-        provider=Provider.OPENAI,
-        max_context_tokens=400_000,
-        max_output_tokens=128_000,
-        pricing=Pricing(price_in=0.75, price_out=4.50),
-        reasoning_efforts=("none", "low", "medium", "high", "xhigh"),
-    ),
-    Model(
-        "gpt-5.4-nano",
-        provider=Provider.OPENAI,
-        max_context_tokens=400_000,
-        max_output_tokens=128_000,
-        pricing=Pricing(price_in=0.20, price_out=1.25),
-        reasoning_efforts=("none", "low", "medium", "high"),
-    ),
-    Model(
-        "gpt-5.2",
-        provider=Provider.OPENAI,
-        max_context_tokens=128_000,
-        max_output_tokens=16384,
-        pricing=Pricing(price_in=1.75, price_out=14),
-        reasoning_efforts=("minimal", "low", "medium", "high", "xhigh"),
-    ),
-    # --- OpenAI account auth via Codex endpoint ---
-    Model(
-        "openai-codex/gpt-5.6-sol",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=372_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
-        native_deferred_tools=True,
-    ),
-    Model(
-        "openai-codex/gpt-5.6-terra",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=372_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
-        native_deferred_tools=True,
-    ),
-    Model(
-        "openai-codex/gpt-5.6-luna",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=372_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh", "max"),
-        native_deferred_tools=True,
-    ),
-    Model(
-        "openai-codex/gpt-5.5",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=272_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh"),
-        native_deferred_tools=True,
-    ),
-    Model(
-        "openai-codex/gpt-5.4",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=272_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh"),
-        native_deferred_tools=True,
-    ),
-    Model(
-        "openai-codex/gpt-5.4-mini",
-        provider=Provider.OPENAI_CODEX,
-        max_context_tokens=272_000,
-        max_output_tokens=128_000,
-        reasoning_efforts=("low", "medium", "high", "xhigh"),
-        native_deferred_tools=True,
-    ),
-    # --- Google ---
-    Model(
-        "gemini-3.1-pro-preview",
-        provider=Provider.GOOGLE,
-        max_context_tokens=1_000_000,
-        max_output_tokens=65_536,
-        pricing=Pricing(price_in=2, price_out=12),
-        reasoning_efforts=("low", "medium", "high"),
-    ),
-    Model(
-        "gemini-3.1-flash-lite-preview",
-        provider=Provider.GOOGLE,
-        max_context_tokens=1_000_000,
-        max_output_tokens=65_536,
-        pricing=Pricing(price_in=0.25, price_out=1.50),
-        reasoning_efforts=("low", "medium", "high"),
-    ),
-    Model(
-        "gemini-3-flash-preview",
-        provider=Provider.GOOGLE,
-        max_context_tokens=1_000_000,
-        max_output_tokens=65_536,
-        pricing=Pricing(price_in=0.50, price_out=3),
-        reasoning_efforts=("low", "high"),
-    ),
-    # --- OpenRouter ---
-    Model(
-        "qwen/qwen3.5-35b-a3b",
-        provider=Provider.OPENROUTER,
-        max_context_tokens=262_144,
-        max_output_tokens=65_536,
-        pricing=Pricing(price_in=0.1625, price_out=1.30),
-    ),
-    Model(
-        "qwen/qwen3.5-27b",
-        provider=Provider.OPENROUTER,
-        max_context_tokens=262_144,
-        max_output_tokens=65_536,
-        pricing=Pricing(price_in=0.195, price_out=1.56),
-    ),
-    Model(
-        "qwen/qwen3.5-122b-a10b",
-        provider=Provider.OPENROUTER,
-        max_context_tokens=262_144,
-        max_output_tokens=65_536,
-        pricing=Pricing(price_in=0.26, price_out=2.08),
-    ),
-    Model(
-        "minimax/minimax-m2.5",
-        provider=Provider.OPENROUTER,
-        max_context_tokens=196_608,
-        max_output_tokens=196_608,
-        pricing=Pricing(price_in=0.295, price_out=1.20),
-    ),
-    Model(
-        "arcee-ai/trinity-large-preview:free",
-        provider=Provider.OPENROUTER,
-        max_context_tokens=131_000,
-        max_output_tokens=16_384,
-    ),
-    Model(
-        "x-ai/grok-4.1-fast",
-        provider=Provider.OPENROUTER,
-        max_context_tokens=2_000_000,
-        max_output_tokens=30_000,
-        pricing=Pricing(price_in=0.20, price_out=0.50),
-    ),
-]
-
-_CODEX_API_MODEL_IDS = {
-    "gpt-5.4-mini",
-    "gpt-5.4",
-    "gpt-5.5",
-    "gpt-5.6-luna",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-}
+def _load_default_models() -> list[Model]:
+    return _load_generated_models()
 
 
-def _derive_codex_models(generated: list[Model]) -> list[Model]:
-    # models.dev has no Codex provider. Reuse its metadata only for models the
-    # Codex catalog marks as supported in the API.
-    return [
-        replace(m, id=f"openai-codex/{m.id}", provider=Provider.OPENAI_CODEX, pricing=Pricing(0, 0))
-        for m in generated
-        if m.provider == Provider.OPENAI and m.id in _CODEX_API_MODEL_IDS
-    ]
-
-
-_GENERATED = _load_generated_models()
-OAUTH_DEFAULTS = _derive_codex_models(_GENERATED) or [
-    m for m in FALLBACK_DEFAULTS if m.provider == Provider.OPENAI_CODEX
-]
-DEFAULTS = (_GENERATED or [m for m in FALLBACK_DEFAULTS if m.provider != Provider.OPENAI_CODEX]) + OAUTH_DEFAULTS
+DEFAULTS = _load_default_models()
 
 
 @dataclass(frozen=True)

@@ -1,11 +1,16 @@
 import json
 from collections.abc import Iterable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from arden.llm.codex_catalog import decode_codex_catalog
+from arden.llm.openai_codex_auth import CODEX_CLIENT_VERSION
+
 MODELS_DEV_URL = "https://models.dev/api.json"
 OUT_PATH = Path(__file__).resolve().parents[1] / "arden" / "llm" / "generated_models.json"
+CODEX_CACHE_PATH = Path.home() / ".codex" / "models_cache.json"
+CODEX_CACHE_MAX_AGE = timedelta(days=1)
 PROVIDERS = ("openai", "anthropic", "google", "openrouter")
 REASONING_EFFORT_OVERRIDES = {
     "claude-opus-4-7": ["low", "medium", "high", "xhigh", "max"],
@@ -102,8 +107,67 @@ def fetch_models_dev() -> dict:
     return data
 
 
+def runtime_model_entry(model: dict) -> dict:
+    provider = model["provider"]
+    model_id = model["id"]
+    return {
+        "id": model_id,
+        "provider": provider,
+        "context_window": model["context_window"],
+        "max_output_tokens": model["max_output_tokens"],
+        "price_in": model["price_in"],
+        "price_out": model["price_out"],
+        "price_cache_read": model["price_cache_read"],
+        "price_cache_write": model["price_cache_write"],
+        "reasoning_efforts": model["reasoning_efforts"],
+        "native_deferred_tools": provider == "anthropic"
+        or (provider == "openai" and model_id.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))),
+    }
+
+
+def load_codex_cache(path: Path = CODEX_CACHE_PATH, *, now: datetime | None = None) -> dict:
+    try:
+        payload = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as error:
+        raise RuntimeError(f"Codex model cache at {path} is unavailable or invalid") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Codex model cache at {path} must be a JSON object")
+    if payload.get("client_version") != CODEX_CLIENT_VERSION:
+        raise RuntimeError(f"Codex model cache at {path} does not match client {CODEX_CLIENT_VERSION}")
+    try:
+        fetched_at = datetime.fromisoformat(payload["fetched_at"].replace("Z", "+00:00"))
+    except (KeyError, AttributeError, ValueError) as error:
+        raise RuntimeError(f"Codex model cache at {path} has an invalid fetched_at timestamp") from error
+    if fetched_at.tzinfo is None:
+        raise RuntimeError(f"Codex model cache at {path} has an invalid fetched_at timestamp")
+    age = (now or datetime.now(UTC)) - fetched_at
+    if age < timedelta(0) or age > CODEX_CACHE_MAX_AGE:
+        raise RuntimeError(f"Codex model cache at {path} is stale")
+    return payload
+
+
+def codex_model_entries(payload: object) -> list[dict]:
+    return [
+        {
+            "id": f"openai-codex/{spec.slug}",
+            "provider": "openai-codex",
+            "context_window": spec.context_window,
+            "max_output_tokens": spec.max_output_tokens,
+            "price_in": 0.0,
+            "price_out": 0.0,
+            "price_cache_read": 0.0,
+            "price_cache_write": 0.0,
+            "reasoning_efforts": list(spec.reasoning_efforts),
+            "native_deferred_tools": spec.native_deferred_tools,
+        }
+        for spec in decode_codex_catalog(payload)
+    ]
+
+
 def main() -> None:
-    models = sorted(iter_filtered_models(fetch_models_dev()), key=lambda m: (m["provider"], m["id"]))
+    models = [runtime_model_entry(model) for model in iter_filtered_models(fetch_models_dev())]
+    models.extend(codex_model_entries(load_codex_cache()))
+    models.sort(key=lambda model: (model["provider"], model["id"]))
     OUT_PATH.write_text(json.dumps(models, indent=2) + "\n")
 
     counts: dict[str, int] = {}

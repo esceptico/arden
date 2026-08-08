@@ -202,7 +202,7 @@ async def test_client_advertises_compatible_codex_version(monkeypatch):
     client = await OpenAICodexClient()._client()
 
     assert client.default_headers["originator"] == "codex_cli_rs"
-    assert client.default_headers["User-Agent"].startswith("codex_cli_rs/0.144.0 ")
+    assert client.default_headers["User-Agent"].startswith("codex_cli_rs/0.147.0 ")
     await client.close()
 
 

@@ -142,3 +142,10 @@ def test_get_config_propagates_settings_corruption(monkeypatch):
         config_module.get_config()
 
     assert raised.value is error
+
+
+def test_configured_default_models_must_exist(monkeypatch):
+    monkeypatch.setattr(config_module, "get_models", lambda: {})
+
+    with pytest.raises(RuntimeError, match="missing configured defaults"):
+        config_module._validate_default_models()

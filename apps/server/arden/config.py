@@ -76,6 +76,26 @@ MODEL_DEFAULTS = {
 OPENAI_CODEX_DEFAULT_CHAT = "openai-codex/gpt-5.5"
 OPENAI_CODEX_DEFAULT_MEMORY = "openai-codex/gpt-5.4-mini"
 
+
+def _validate_default_models() -> None:
+    chat_models = get_models()
+    embedding_models = get_embedding_models()
+    required_chat = {OPENAI_CODEX_DEFAULT_CHAT, OPENAI_CODEX_DEFAULT_MEMORY}
+    required_embedding: set[str] = set()
+    for chat, memory, embedding in MODEL_DEFAULTS.values():
+        required_chat.update((chat, memory))
+        if embedding:
+            required_embedding.add(embedding)
+
+    missing_chat = sorted(required_chat - chat_models.keys())
+    missing_embedding = sorted(required_embedding - embedding_models.keys())
+    if missing_chat or missing_embedding:
+        missing = ", ".join(missing_chat + missing_embedding)
+        raise RuntimeError(f"Packaged model catalog is missing configured defaults: {missing}")
+
+
+_validate_default_models()
+
 ROLE_NAMES = ("research", "workflow", "memory", "auxiliary")
 
 

@@ -1,27 +1,9 @@
 from arden.llm.models import (
-    FALLBACK_DEFAULTS,
+    DEFAULTS,
     Model,
     ModelRegistry,
-    Pricing,
     Provider,
-    _derive_codex_models,
 )
-
-
-def test_codex_models_include_supported_openai_models():
-    generated = [
-        Model("gpt-5.6-sol", Provider.OPENAI, 272_000),
-        Model("gpt-5.6-luna", Provider.OPENAI, 272_000),
-        Model("gpt-5.6-terra", Provider.OPENAI, 272_000),
-        Model("gpt-5.3-codex-spark", Provider.OPENAI, 272_000),
-    ]
-
-    derived = _derive_codex_models(generated)
-
-    assert derived == [
-        Model(f"openai-codex/{name}", Provider.OPENAI_CODEX, 272_000, pricing=Pricing(0, 0))
-        for name in ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra")
-    ]
 
 
 def test_registry_replaces_only_target_provider():
@@ -52,10 +34,10 @@ def test_registry_reads_explicit_deferred_tool_capability():
     assert registry.supports_native_deferred_tools("missing") is False
 
 
-def test_codex_fallback_matches_supported_api_models():
-    fallback = {model.id: model for model in FALLBACK_DEFAULTS if model.provider == Provider.OPENAI_CODEX}
+def test_packaged_catalog_includes_supported_codex_models():
+    codex = {model.id: model for model in DEFAULTS if model.provider == Provider.OPENAI_CODEX}
 
-    assert set(fallback) == {
+    assert set(codex) == {
         "openai-codex/gpt-5.4",
         "openai-codex/gpt-5.4-mini",
         "openai-codex/gpt-5.5",
@@ -63,4 +45,13 @@ def test_codex_fallback_matches_supported_api_models():
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
     }
-    assert all(model.native_deferred_tools for model in fallback.values())
+    assert all(model.native_deferred_tools for model in codex.values())
+    assert {model.max_context_tokens for model in codex.values()} == {272_000}
+    assert codex["openai-codex/gpt-5.6-sol"].reasoning_efforts == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+    )
