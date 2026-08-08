@@ -537,8 +537,16 @@ def _pair_tool_search_outputs(
             raise ProviderToolPayloadError("OpenAI tool_search_output.call_id does not match tool_search_call.call_id")
         return [_with_tool_search_matches(calls[0], names)]
 
-    if any(call_id is None for call_id in call_ids) or any(call_id is None for call_id, _names in outputs):
-        raise ProviderToolPayloadError("OpenAI multiple tool searches require call_id on every call and output")
+    output_call_ids = [call_id for call_id, _names in outputs]
+    if all(call_id is None for call_id in call_ids) and all(call_id is None for call_id in output_call_ids):
+        return [
+            _with_tool_search_matches(call, names)
+            for call, (_output_call_id, names) in zip(calls, outputs, strict=True)
+        ]
+    if any(call_id is None for call_id in call_ids) or any(call_id is None for call_id in output_call_ids):
+        raise ProviderToolPayloadError(
+            "OpenAI multiple tool searches must either omit call_id from every call and output or provide every call_id"
+        )
     concrete_call_ids = [call_id for call_id in call_ids if call_id is not None]
     if len(set(concrete_call_ids)) != len(concrete_call_ids):
         raise ProviderToolPayloadError("OpenAI returned duplicate tool_search_call.call_id values")

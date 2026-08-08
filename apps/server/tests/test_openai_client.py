@@ -930,7 +930,7 @@ def test_responses_parser_pairs_each_tool_search_output_with_its_call():
     ]
 
 
-def test_responses_parser_rejects_ambiguous_multiple_tool_searches():
+def test_responses_parser_pairs_ordered_tool_searches_without_call_ids():
     response = SimpleNamespace(
         status="completed",
         usage=_Usage(),
@@ -940,24 +940,68 @@ def test_responses_parser_rejects_ambiguous_multiple_tool_searches():
                     "type": "tool_search_call",
                     "id": f"tsc_{index}",
                     "status": "completed",
-                    "arguments": {},
+                    "arguments": {"paths": [path]},
                 }
             )
-            for index in (1, 2)
+            for index, path in ((1, "wiki_list_pages"), (2, "wiki_create_page"))
         ]
         + [
             _FakeItem(
                 {
                     "type": "tool_search_output",
                     "status": "completed",
-                    "tools": [],
+                    "tools": [{"type": "function", "name": name}],
                 }
             )
-            for _index in (1, 2)
+            for name in ("wiki_list_pages", "wiki_create_page")
         ],
     )
 
-    with pytest.raises(ProviderToolPayloadError, match="require call_id"):
+    parsed = parse_responses_response(response, "gpt-5.5")
+
+    calls = parsed.choices[0].message.provider_tool_calls
+    assert calls is not None
+    assert [(call.id, call.loaded_tool_names) for call in calls] == [
+        ("tsc_1", ("wiki_list_pages",)),
+        ("tsc_2", ("wiki_create_page",)),
+    ]
+
+
+def test_responses_parser_rejects_partial_tool_search_call_ids():
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "search_1",
+                    "status": "completed",
+                    "arguments": {},
+                }
+            ),
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_2",
+                    "status": "completed",
+                    "arguments": {},
+                }
+            ),
+            _FakeItem(
+                {
+                    "type": "tool_search_output",
+                    "call_id": "search_1",
+                    "status": "completed",
+                    "tools": [],
+                }
+            ),
+            _FakeItem({"type": "tool_search_output", "status": "completed", "tools": []}),
+        ],
+    )
+
+    with pytest.raises(ProviderToolPayloadError, match="either omit call_id from every"):
         parse_responses_response(response, "gpt-5.5")
 
 
