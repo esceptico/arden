@@ -6,7 +6,7 @@ from arden.automation.prompts import AUTOMATION_SUFFIX, CUSTODIAN_SUFFIX
 from arden.context.prompts import MERGE_SUMMARY_PROMPT_TEMPLATE, SUMMARIZE_PROMPT_TEMPLATE
 from arden.core.agent_types import resolve_agent_type
 from arden.core.naming import SESSION_NAMING_PROMPT
-from arden.core.prompts import BASE_SYSTEM_PROMPT, RESEARCH_PROMPTS, UNTRUSTED_DATA_RULE
+from arden.core.prompts import BASE_SYSTEM_PROMPT, FILE_DISCOVERY_RULE, RESEARCH_PROMPTS, UNTRUSTED_DATA_RULE
 from arden.events.triggers import EventApproaching, MessageReceived
 from arden.memory.facts.completion_renderer import _SYNTHESIS_SYSTEM_PROMPT
 from arden.orchestra.engine import _FORMATTER_PROMPT, WORKFLOW_AGENT_PROMPT
@@ -34,6 +34,12 @@ def test_prompts_that_consume_runtime_data_share_the_untrusted_data_rule():
     ]
 
     assert all(UNTRUSTED_DATA_RULE in prompt for prompt in prompts)
+
+
+def test_foreground_and_research_prompts_share_bounded_file_discovery():
+    prompts = [BASE_SYSTEM_PROMPT, *RESEARCH_PROMPTS.values()]
+
+    assert all(FILE_DISCOVERY_RULE in prompt for prompt in prompts)
 
 
 def test_runtime_context_wrappers_mark_embedded_data_and_authority():

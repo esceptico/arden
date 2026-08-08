@@ -38,6 +38,18 @@ def test_build_system_blocks_native_deferred_prompt_omits_group_loader():
     assert "load the relevant group" not in text
 
 
+def test_both_tool_loading_modes_keep_bounded_file_discovery():
+    prompts = [
+        _text(build_system_blocks(source_details={})),
+        _text(build_system_blocks(source_details={}, native_deferred_tools=True)),
+    ]
+
+    for prompt in prompts:
+        assert "output_mode='files_only') or file_search_text(output_mode='count'" in prompt
+        assert "continue with next_cursor" in prompt
+        assert "Never repeat an unchanged file-search page" in prompt
+
+
 def test_build_system_blocks_records_deterministic_context_manifest():
     first = []
     second = []
