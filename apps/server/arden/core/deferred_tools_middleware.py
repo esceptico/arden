@@ -27,32 +27,6 @@ def _with_allowed_dependencies(names: set[str], allowed: set[str]) -> set[str]:
     return expanded
 
 
-def _with_callable_deferred_note(messages: list[dict], names: set[str]) -> list[dict]:
-    if not names:
-        return messages
-
-    note = (
-        "## ALREADY CALLABLE TOOLS\n"
-        "Call these tools directly; do not search for them again: "
-        + ", ".join(sorted(names))
-        + ". A native search returns no match for an already-callable tool."
-    )
-    projected = list(messages)
-    if not projected or projected[0].get("role") != "system":
-        return [{"role": "system", "content": note}, *projected]
-
-    system = dict(projected[0])
-    content = system.get("content")
-    if isinstance(content, str):
-        system["content"] = f"{content.rstrip()}\n\n{note}"
-    elif isinstance(content, list):
-        system["content"] = [*content, {"type": "text", "text": note}]
-    else:
-        raise TypeError("system message content must be text or content blocks")
-    projected[0] = system
-    return projected
-
-
 class DeferredToolsModelRequestMiddleware:
     """Replace the request tool list with always-visible + run-loaded tools."""
 
@@ -90,16 +64,9 @@ class DeferredToolsModelRequestMiddleware:
         )
         if native_deferred:
             names.discard("load_tools")
-            # Provider-native search is a reserved special tool, not Arden's
-            # function-form loader. Never expose both in one request.
-            names.discard("tool_search")
         else:
             names.discard("tool_search")
-        deferred_names = {
-            name
-            for name in allowed
-            if name not in names and isinstance(name, str) and is_deferred_tool(name, self._registry)
-        }
+        deferred_names = allowed_deferred if native_deferred else allowed_deferred - names
         return replace(
             request,
             tools=self._registry.get_schemas(capabilities=capabilities, names=names),
@@ -118,15 +85,4 @@ class DeferredToolsModelRequestMiddleware:
 
         prepared = self._area_visible_tools(request)
         prepared = await next_request(prepared)
-        prepared = self._area_visible_tools(prepared)
-        if supports_native_deferred_tools(prepared.model):
-            callable_deferred = {
-                name
-                for schema in prepared.tools
-                if (name := _schema_name(schema)) is not None and is_deferred_tool(name, self._registry)
-            }
-            prepared = replace(
-                prepared,
-                messages=_with_callable_deferred_note(prepared.messages, callable_deferred),
-            )
-        return prepared
+        return self._area_visible_tools(prepared)

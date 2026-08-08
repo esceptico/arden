@@ -195,7 +195,7 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
                 **kwargs,
             )
             response = await self._client.responses.create(**request)
-            return parse_responses_response(response, model)
+            return parse_responses_response(response, model, client_tool_catalog=deferred_tools)
 
         request = self._prepare(
             messages,
@@ -237,7 +237,12 @@ class OpenAIClient(CompletionClient, EmbeddingClient):
                 deferred_tools=deferred_tools,
                 **kwargs,
             )
-            async for item in complete_responses_completion(self._client, request, model=model):
+            async for item in complete_responses_completion(
+                self._client,
+                request,
+                model=model,
+                deferred_tools=deferred_tools,
+            ):
                 yield item
             return
 

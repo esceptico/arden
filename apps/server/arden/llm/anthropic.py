@@ -44,6 +44,8 @@ _FINISH_REASONS: dict[str, FinishReason] = {
     "stop_sequence": FinishReason.STOP,
 }
 
+_TOOL_SEARCH_BETA = "advanced-tool-use-2025-11-20"
+
 
 def _finish_reason(value: str | None) -> FinishReason:
     try:
@@ -130,7 +132,15 @@ class AnthropicClient(CompletionClient):
         history = ModelHistory.from_raw(messages)
         system, api_messages = self._split_system(history)
         api_messages = self._convert_messages(api_messages)
-        api_tools = self._convert_tools(tools, deferred_tools) if tools or deferred_tools else None
+        client_tool_search = bool(
+            deferred_tools
+            and any((tool.get("function", tool)).get("name") == "tool_search" for tool in (tools or []))
+        )
+        api_tools = (
+            self._convert_tools(tools, deferred_tools if client_tool_search else None)
+            if tools or deferred_tools
+            else None
+        )
         api_tool_choice = self._resolve_tool_choice(api_tools, tool_choice, response_format)
 
         if response_format is not None:
@@ -151,6 +161,8 @@ class AnthropicClient(CompletionClient):
             reasoning_effort=reasoning_effort,
             **kwargs,
         )
+        if client_tool_search:
+            request["extra_headers"] = {"anthropic-beta": _TOOL_SEARCH_BETA}
         return model, request
 
     async def _completion(
@@ -413,10 +425,15 @@ class AnthropicClient(CompletionClient):
         return {"role": Role.ASSISTANT, "content": content_blocks or ""}
 
     def _append_tool_result(self, result: list[dict], message: ToolHistoryMessage) -> None:
+        content: str | list[dict]
+        if message.tool_references:
+            content = [{"type": "tool_reference", "tool_name": name} for name in message.tool_references]
+        else:
+            content = tool_result_content_for_model(message.content_text, message.outcome)
         block = {
             "type": "tool_result",
             "tool_use_id": message.tool_call_id,
-            "content": tool_result_content_for_model(message.content_text, message.outcome),
+            "content": content,
         }
         # Merge consecutive tool results into one user message
         if result and result[-1]["role"] == Role.USER and isinstance(result[-1]["content"], list):
@@ -427,28 +444,21 @@ class AnthropicClient(CompletionClient):
         result.append({"role": Role.USER, "content": [block]})
 
     def _convert_tools(self, tools: list[dict] | None, deferred_tools: list[dict] | None = None) -> list[dict]:
-        result = [
-            {
-                "name": (fn := tool.get("function", tool))["name"],
+        deferred_names = {
+            (tool.get("function", tool)).get("name")
+            for tool in (deferred_tools or [])
+        }
+        result = []
+        for tool in tools or []:
+            fn = tool.get("function", tool)
+            converted = {
+                "name": fn["name"],
                 "description": fn.get("description", ""),
                 "input_schema": _flatten_root_combinator(fn.get("parameters", {"type": "object", "properties": {}})),
             }
-            for tool in (tools or [])
-            if not (deferred_tools and (tool.get("function", tool)).get("name") == "tool_search")
-        ]
-        if deferred_tools:
-            result.insert(0, {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"})
-            result.extend(
-                {
-                    "name": (fn := tool.get("function", tool))["name"],
-                    "description": fn.get("description", ""),
-                    "input_schema": _flatten_root_combinator(
-                        fn.get("parameters", {"type": "object", "properties": {}})
-                    ),
-                    "defer_loading": True,
-                }
-                for tool in deferred_tools
-            )
+            if fn["name"] in deferred_names:
+                converted["defer_loading"] = True
+            result.append(converted)
         return result
 
     def _make_schema_tool(self, model_class: type[BaseModel]) -> dict:

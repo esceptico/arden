@@ -31,7 +31,7 @@
       "high",
       "max"
     ],
-    "native_deferred_tools": true
+    "native_deferred_tools": false
   },
   {
     "id": "claude-haiku-4-5-20251001",
@@ -46,7 +46,7 @@
       "high",
       "max"
     ],
-    "native_deferred_tools": true
+    "native_deferred_tools": false
   },
   {
     "id": "claude-opus-4-1",

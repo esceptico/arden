@@ -73,6 +73,22 @@ def test_first_party_filter_does_not_require_structured_output():
     assert runtime_model_entry(models[0])["native_deferred_tools"] is True
 
 
+def test_anthropic_haiku_uses_classic_tool_loading():
+    model = {
+        "id": "claude-haiku-test",
+        "provider": "anthropic",
+        "context_window": 200_000,
+        "max_output_tokens": 32_000,
+        "price_in": 1.0,
+        "price_out": 5.0,
+        "price_cache_read": 0.1,
+        "price_cache_write": 1.25,
+        "reasoning_efforts": ["low", "high"],
+    }
+
+    assert runtime_model_entry(model)["native_deferred_tools"] is False
+
+
 def test_codex_cache_converts_to_packaged_runtime_entry():
     entries = codex_model_entries(
         {

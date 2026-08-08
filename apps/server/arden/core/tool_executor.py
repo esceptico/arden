@@ -216,14 +216,14 @@ class ArdenToolExecutor:
                 message=(
                     f"Tool {name!r} is deferred and has not been loaded in this run. "
                     + (
-                        f"Use the provider-native tool search for {name!r} first, then retry."
+                        f"Use tool_search for {name!r} first, then retry."
                         if loader == "tool_search"
                         else f"Call load_tools(names=['{name}']) first, then retry."
                     )
                 ),
                 preview="Tool not loaded",
                 recovery_action=(
-                    f"Search for {name!r} with the provider-native tool search, then retry."
+                    f"Search for {name!r} with tool_search, then retry."
                     if loader == "tool_search"
                     else f"Load {name!r} with {loader}, then retry."
                 ),

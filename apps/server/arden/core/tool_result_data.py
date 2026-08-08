@@ -53,6 +53,20 @@ class ResearchProvenance(BaseModel):
     )
 
 
+class ToolReferences(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    tool_references: list[str]
+
+    @model_validator(mode="after")
+    def valid_names(self) -> Self:
+        if not self.tool_references or any(not name.strip() for name in self.tool_references):
+            raise ValueError("tool references must contain non-empty tool names")
+        if len(set(self.tool_references)) != len(self.tool_references):
+            raise ValueError("tool references must be unique")
+        return self
+
+
 def persistable_tool_result_data(
     data: dict | None,
     source_refs: Iterable[ToolSourceRef] | None = None,
@@ -65,6 +79,10 @@ def persistable_tool_result_data(
             )
         if "provenance" in data:
             persisted["provenance"] = ResearchProvenance.model_validate(data["provenance"]).model_dump(mode="json")
+        if "tool_references" in data:
+            persisted.update(
+                ToolReferences.model_validate({"tool_references": data["tool_references"]}).model_dump(mode="json")
+            )
 
     if source_refs is not None:
         refs = normalize_source_refs(source_refs)

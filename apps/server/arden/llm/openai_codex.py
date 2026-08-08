@@ -56,7 +56,12 @@ class OpenAICodexClient(CompletionClient):
                 **kwargs,
             )
             final_response: CompletionResponse | None = None
-            async for item in buffered_stream_responses_completion(client, request, model=model):
+            async for item in buffered_stream_responses_completion(
+                client,
+                request,
+                model=model,
+                deferred_tools=deferred_tools,
+            ):
                 if isinstance(item, CompletionResponse):
                     final_response = item
             if final_response is None:
@@ -92,7 +97,12 @@ class OpenAICodexClient(CompletionClient):
                 deferred_tools=deferred_tools,
                 **kwargs,
             )
-            async for item in stream_responses_completion(client, request, model=model):
+            async for item in stream_responses_completion(
+                client,
+                request,
+                model=model,
+                deferred_tools=deferred_tools,
+            ):
                 yield item
         finally:
             await client.close()
@@ -150,5 +160,6 @@ class OpenAICodexClient(CompletionClient):
         response,
         model: str,
         output_items: list[dict[str, Any]] | None = None,
+        deferred_tools: list[dict] | None = None,
     ) -> CompletionResponse:
-        return parse_responses_response(response, model, output_items)
+        return parse_responses_response(response, model, output_items, client_tool_catalog=deferred_tools)

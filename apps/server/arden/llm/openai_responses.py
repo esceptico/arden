@@ -2,6 +2,7 @@ import warnings
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -37,6 +38,21 @@ from arden.llm.history import (
 )
 
 REASONING_INCLUDE = ["reasoning.encrypted_content"]
+
+_CLIENT_TOOL_SEARCH_SPEC = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search deferred tool metadata and expose matching tools for the next model call.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Exact tool name, select:<names>, or search terms."},
+            "limit": {"type": "number", "description": "Maximum matches. Defaults to 5."},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+}
 
 
 @contextmanager
@@ -88,14 +104,23 @@ def prepare_responses_request(
         request["store"] = store
     if instructions:
         request["instructions"] = instructions
+    deferred_names = {
+        name for tool in (deferred_tools or []) if (name := _tool_schema_name(tool)) is not None
+    }
+    discovered_names = _client_tool_names_from_history(input_items)
     api_tools = [
         _convert_tool(tool)
         for tool in (tools or [])
-        if not (deferred_tools and _tool_schema_name(tool) == "tool_search")
+        if not (
+            deferred_tools
+            and (
+                _tool_schema_name(tool) == "tool_search"
+                or _tool_schema_name(tool) in deferred_names & discovered_names
+            )
+        )
     ]
     if deferred_tools:
-        api_tools.extend(_convert_tool(tool, defer_loading=True) for tool in deferred_tools)
-        api_tools.append({"type": "tool_search"})
+        api_tools.append(deepcopy(_CLIENT_TOOL_SEARCH_SPEC))
     if api_tools:
         request["tools"] = api_tools
         request["tool_choice"] = _convert_tool_choice(tool_choice)
@@ -126,15 +151,25 @@ def prepare_responses_request(
     return request
 
 
+def _client_tool_names_from_history(items: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for item in items:
+        if item.get("type") != "tool_search_output" or item.get("execution") != "client":
+            continue
+        names.update(_tool_names(item.get("tools"), path="OpenAI client tool_search_output.tools"))
+    return names
+
+
 async def complete_responses_completion(
     client,
     request: dict[str, Any],
     *,
     model: str,
+    deferred_tools: list[dict] | None = None,
 ) -> AsyncGenerator[str | ReasoningContentDelta | ToolCallStreamDelta | ProviderToolCall | CompletionResponse]:
     with _suppress_pydantic_serializer_warnings():
         response = await client.responses.create(**request)
-    parsed = parse_responses_response(response, model)
+    parsed = parse_responses_response(response, model, client_tool_catalog=deferred_tools)
     for item in _completion_response_items(parsed):
         yield item
 
@@ -144,13 +179,16 @@ async def buffered_stream_responses_completion(
     request: dict[str, Any],
     *,
     model: str,
+    deferred_tools: list[dict] | None = None,
 ) -> AsyncGenerator[str | ReasoningContentDelta | ToolCallStreamDelta | ProviderToolCall | CompletionResponse]:
     request = {**request, "stream": True}
     attempts = 2
 
     for attempt in range(1, attempts + 1):
         try:
-            parsed = await _collect_streamed_responses_completion(client, request, model=model)
+            parsed = await _collect_streamed_responses_completion(
+                client, request, model=model, deferred_tools=deferred_tools
+            )
             for item in _completion_response_items(parsed):
                 yield item
             return
@@ -164,6 +202,7 @@ async def stream_responses_completion(
     request: dict[str, Any],
     *,
     model: str,
+    deferred_tools: list[dict] | None = None,
 ) -> AsyncGenerator[str | ReasoningContentDelta | ToolCallStreamDelta | ProviderToolCall | CompletionResponse]:
     request = {**request, "stream": True}
     try:
@@ -182,7 +221,7 @@ async def stream_responses_completion(
     except (httpx.RemoteProtocolError, openai.APIConnectionError) as exc:
         raise RuntimeError("OpenAI response stream disconnected before completion") from exc
 
-    yield collector.to_completion(model)
+    yield _resolve_client_tool_searches(collector.to_completion(model), deferred_tools)
 
 
 def _completion_response_items(
@@ -204,6 +243,7 @@ async def _collect_streamed_responses_completion(
     request: dict[str, Any],
     *,
     model: str,
+    deferred_tools: list[dict] | None = None,
 ) -> CompletionResponse:
     with _suppress_pydantic_serializer_warnings():
         stream = await client.responses.create(**request)
@@ -214,7 +254,7 @@ async def _collect_streamed_responses_completion(
         if collector.done:
             break
 
-    return collector.to_completion(model)
+    return _resolve_client_tool_searches(collector.to_completion(model), deferred_tools)
 
 
 class _ResponsesStreamCollector:
@@ -400,6 +440,8 @@ def parse_responses_response(
     response,
     model: str,
     output_items: list[dict[str, Any]] | None = None,
+    *,
+    client_tool_catalog: list[dict] | None = None,
 ) -> CompletionResponse:
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -407,6 +449,7 @@ def parse_responses_response(
     tool_calls: list[ToolCall] = []
     provider_tool_calls: list[ProviderToolCall] = []
     tool_search_call_ids: list[str | None] = []
+    tool_search_executions: list[object] = []
     tool_search_outputs: list[tuple[str | None, list[str]]] = []
 
     source_items = output_items if output_items is not None else response.output
@@ -452,6 +495,7 @@ def parse_responses_response(
         if item_type == "tool_search_call":
             provider_tool_calls.append(_parse_tool_search_call(data))
             tool_search_call_ids.append(_optional_tool_search_call_id(data, path="OpenAI tool_search_call"))
+            tool_search_executions.append(data.get("execution"))
             continue
 
         if item_type == "tool_search_output":
@@ -465,13 +509,14 @@ def parse_responses_response(
             )
 
     if provider_tool_calls:
-        if not tool_search_outputs:
+        if tool_search_outputs:
+            provider_tool_calls = _pair_tool_search_outputs(
+                provider_tool_calls,
+                tool_search_call_ids,
+                tool_search_outputs,
+            )
+        elif client_tool_catalog is None and any(execution != "client" for execution in tool_search_executions):
             raise ProviderToolPayloadError("OpenAI response contains tool_search_call without tool_search_output")
-        provider_tool_calls = _pair_tool_search_outputs(
-            provider_tool_calls,
-            tool_search_call_ids,
-            tool_search_outputs,
-        )
 
     message = Message(
         role=Role.ASSISTANT,
@@ -485,11 +530,12 @@ def parse_responses_response(
         provider_tool_calls=provider_tool_calls or None,
         openai_response_items=response_items or None,
     )
-    return CompletionResponse(
+    parsed = CompletionResponse(
         choices=[Choice(message=message, finish_reason=_finish_reason(response, tool_calls))],
         usage=_usage(response),
         model=model,
     )
+    return _resolve_client_tool_searches(parsed, client_tool_catalog)
 
 
 def _parse_tool_search_call(data: dict[str, Any], *, done: bool = True) -> ProviderToolCall:
@@ -559,6 +605,107 @@ def _pair_tool_search_outputs(
         _with_tool_search_matches(call, names_by_call_id[call_id])
         for call, call_id in zip(calls, concrete_call_ids, strict=True)
     ]
+
+
+def _resolve_client_tool_searches(
+    response: CompletionResponse,
+    catalog: list[dict] | None,
+) -> CompletionResponse:
+    if catalog is None or not response.choices:
+        return response
+    choice = response.choices[0]
+    message = choice.message
+    calls = message.provider_tool_calls or []
+    if not calls or all(call.loaded_tool_names for call in calls):
+        return response
+    items = deepcopy(message.openai_response_items or [])
+    call_by_id = {call.id: call for call in calls}
+    completed_client_call_ids = {
+        item.get("call_id")
+        for item in items
+        if item.get("type") == "tool_search_output"
+        and item.get("execution") == "client"
+        and isinstance(item.get("call_id"), str)
+    }
+    resolved: dict[str, ProviderToolCall] = {}
+    projected: list[dict] = []
+    for item in items:
+        projected.append(item)
+        if item.get("type") != "tool_search_call":
+            continue
+        item_id = item.get("id")
+        call = call_by_id.get(item_id)
+        if call is None or call.loaded_tool_names:
+            continue
+        if item.get("execution") != "client":
+            raise ProviderToolPayloadError("OpenAI client tool_search_call.execution must be 'client'")
+        call_id = item.get("call_id")
+        if not isinstance(call_id, str) or not call_id.strip():
+            raise ProviderToolPayloadError("OpenAI client tool_search_call.call_id must be a non-empty string")
+        if call_id in completed_client_call_ids:
+            resolved[call.id] = call
+            continue
+        matches = _search_client_tool_catalog(call.arguments_dict(), catalog)
+        names = [_tool_schema_name(schema) for schema in matches]
+        loaded_names = [name for name in names if name is not None]
+        resolved[call.id] = _with_tool_search_matches(call, loaded_names)
+        projected.append(
+            {
+                "type": "tool_search_output",
+                "call_id": call_id,
+                "status": "completed",
+                "execution": "client",
+                "tools": [_convert_tool(schema, defer_loading=True) for schema in matches],
+            }
+        )
+    unresolved = [call.id for call in calls if not call.loaded_tool_names and call.id not in resolved]
+    if unresolved:
+        raise ProviderToolPayloadError(f"OpenAI client tool search calls missing from response items: {unresolved}")
+    provider_calls = [resolved.get(call.id, call) for call in calls]
+    updated_message = replace(
+        message,
+        provider_tool_calls=provider_calls,
+        openai_response_items=projected,
+    )
+    choices = list(response.choices)
+    choices[0] = replace(choice, message=updated_message)
+    return replace(response, choices=choices)
+
+
+def _search_client_tool_catalog(arguments: dict[str, Any], catalog: list[dict]) -> list[dict]:
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ProviderToolPayloadError("OpenAI client tool_search query must be a non-empty string")
+    raw_limit = arguments.get("limit", 5)
+    if not isinstance(raw_limit, int) or isinstance(raw_limit, bool) or raw_limit <= 0:
+        raise ProviderToolPayloadError("OpenAI client tool_search limit must be a positive integer")
+    limit = min(raw_limit, 20)
+    schemas_by_name = {
+        name: schema
+        for schema in catalog
+        if (name := _tool_schema_name(schema)) is not None
+    }
+    normalized = query.strip().lower()
+    if normalized.startswith("select:"):
+        requested = [name.strip() for name in query.split(":", 1)[1].split(",") if name.strip()]
+        return [schemas_by_name[name] for name in requested if name in schemas_by_name][:limit]
+    for name, schema in schemas_by_name.items():
+        if name.lower() == normalized:
+            return [schema]
+    tokens = [token for token in normalized.replace("_", " ").replace("-", " ").split() if token]
+    scored: list[tuple[int, str]] = []
+    for name, schema in schemas_by_name.items():
+        fn = schema.get("function", schema)
+        description = " ".join(str(fn.get("description") or "").lower().split())
+        name_text = name.lower().replace("_", " ").replace("-", " ")
+        score = sum(
+            10 if token in name_text.split() else 5 if token in name_text else 2 if token in description else 0
+            for token in tokens
+        )
+        if score:
+            scored.append((score, name))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [schemas_by_name[name] for _score, name in scored[:limit]]
 
 
 def _tool_search_output_names(data: dict[str, Any]) -> list[str]:

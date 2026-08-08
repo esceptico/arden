@@ -329,9 +329,10 @@ def test_responses_request_uses_native_deferred_tool_search():
         response_format=None,
     )
 
-    assert {"type": "tool_search"} in request["tools"]
-    deferred = next(tool for tool in request["tools"] if tool.get("name") == "slack_search")
-    assert deferred["defer_loading"] is True
+    search = next(tool for tool in request["tools"] if tool.get("type") == "tool_search")
+    assert search["execution"] == "client"
+    assert search["parameters"]["required"] == ["query"]
+    assert not any(tool.get("name") == "slack_search" for tool in request["tools"])
 
 
 def test_responses_request_omits_function_loader_with_native_deferred_tools():
@@ -359,8 +360,8 @@ def test_responses_request_omits_function_loader_with_native_deferred_tools():
     )
 
     assert not any(tool.get("name") == "tool_search" for tool in request["tools"])
-    assert {"type": "tool_search"} in request["tools"]
-    assert next(tool for tool in request["tools"] if tool.get("name") == "slack_search")["defer_loading"] is True
+    assert next(tool for tool in request["tools"] if tool.get("type") == "tool_search")["execution"] == "client"
+    assert not any(tool.get("name") == "slack_search" for tool in request["tools"])
 
 
 def test_responses_deferred_tool_search_preserves_prompt_cache_key():
@@ -380,7 +381,105 @@ def test_responses_deferred_tool_search_preserves_prompt_cache_key():
     )
 
     assert request["prompt_cache_key"] == "session-1"
-    assert {"type": "tool_search"} in request["tools"]
+    assert next(tool for tool in request["tools"] if tool.get("type") == "tool_search")["execution"] == "client"
+
+
+def test_responses_client_tool_search_returns_schema_and_replays_it():
+    catalog = [
+        {
+            "type": "function",
+            "function": {
+                "name": "wiki_create_page",
+                "description": "Create a managed wiki page",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[
+            _FakeItem(
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "search_1",
+                    "execution": "client",
+                    "status": "completed",
+                    "arguments": {"query": "select:wiki_create_page"},
+                }
+            )
+        ],
+    )
+
+    parsed = parse_responses_response(response, "gpt-5.5", client_tool_catalog=catalog)
+    message = parsed.choices[0].message
+    assert message.provider_tool_calls[0].loaded_tool_names == ("wiki_create_page",)
+    assert message.openai_response_items[-1] == {
+        "type": "tool_search_output",
+        "call_id": "search_1",
+        "status": "completed",
+        "execution": "client",
+        "tools": [
+            {
+                "type": "function",
+                "name": "wiki_create_page",
+                "description": "Create a managed wiki page",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+                "strict": False,
+                "defer_loading": True,
+            }
+        ],
+    }
+
+    normalized = normalize_assistant_message(message)
+    request = OpenAIClient(api_key="test")._prepare_responses(
+        messages=[{"role": "user", "content": "create it"}, normalized],
+        model="gpt-5.5",
+        tools=[catalog[0]],
+        deferred_tools=catalog,
+        tool_choice="auto",
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort="high",
+        response_format=None,
+    )
+    assert request["input"][-1]["type"] == "tool_search_output"
+    assert request["input"][-1]["tools"][0]["name"] == "wiki_create_page"
+    assert not any(tool.get("name") == "wiki_create_page" for tool in request["tools"])
+
+
+def test_responses_keeps_run_loaded_tool_callable_after_compaction():
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "wiki_create_page",
+            "description": "Create a managed wiki page",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        },
+    }
+
+    request = OpenAIClient(api_key="test")._prepare_responses(
+        messages=[{"role": "system", "content": "compacted"}, {"role": "user", "content": "continue"}],
+        model="gpt-5.5",
+        tools=[schema],
+        deferred_tools=[schema],
+        tool_choice="auto",
+        temperature=None,
+        max_tokens=None,
+        reasoning_effort="high",
+        response_format=None,
+    )
+
+    assert next(tool for tool in request["tools"] if tool.get("name") == "wiki_create_page")["type"] == "function"
 
 
 def test_responses_stored_tool_search_envelope_does_not_emit_orphan_call():
@@ -1290,3 +1389,57 @@ async def test_responses_stream_emits_tool_search_before_loaded_tool_call():
     assert events[0].id == "tsc_1"
     assert isinstance(events[1], ToolCallStreamDelta)
     assert events[1].tool_id == "call_1"
+
+
+class _ClientToolSearchResponses:
+    async def create(self, **kwargs):
+        call = {
+            "type": "tool_search_call",
+            "id": "tsc_client",
+            "call_id": "search_client",
+            "execution": "client",
+            "status": "completed",
+            "arguments": {"query": "select:wiki_create_page"},
+        }
+        response = SimpleNamespace(status="completed", usage=_Usage(), output=[_FakeItem(call)])
+        return _Stream(
+            [
+                _Event(
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {**call, "status": "in_progress"},
+                    }
+                ),
+                _Event({"type": "response.completed"}, response=response),
+            ]
+        )
+
+
+class _ClientToolSearchOpenAI:
+    def __init__(self):
+        self.responses = _ClientToolSearchResponses()
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_executes_client_tool_search_locally():
+    catalog = [
+        {
+            "type": "function",
+            "function": {"name": "wiki_create_page", "parameters": {"type": "object"}},
+        }
+    ]
+    events = [
+        item
+        async for item in stream_responses_completion(
+            _ClientToolSearchOpenAI(),
+            {"model": "gpt-5.5", "input": "search"},
+            model="gpt-5.5",
+            deferred_tools=catalog,
+        )
+    ]
+
+    assert isinstance(events[0], ProviderToolCall)
+    final = events[-1].choices[0].message
+    assert final.provider_tool_calls[0].loaded_tool_names == ("wiki_create_page",)
+    assert final.openai_response_items[-1]["type"] == "tool_search_output"

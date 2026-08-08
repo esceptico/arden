@@ -96,14 +96,14 @@ Connected MCP servers:
 </deferred_tool_group>
 {% endif %}""")
 
-_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools start deferred in each run to reduce prompt noise. Use the provider's native tool search by exact tool name before calling a hidden tool, even if an older transcript turn searched it. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, sessions, fact history or corrections, skills, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
+_NATIVE_DEFERRED_TOOLS_TEMPLATE = _env.from_string("""Some integration/action tools start deferred in each run to reduce prompt noise. Use `tool_search` by exact tool name before calling a hidden tool, even if an older transcript turn searched it. For direct requests about email, calendar, Slack, wiki pages, automations, notifications, directives, file edits, sessions, fact history or corrections, skills, or MCP-backed apps, search the relevant listed names before using memory, local files, or current_time unless the user asked for those sources.
 MANDATORY PREREQUISITE: search a hidden deferred tool in the current run before calling it. Loading tools does not execute them; it makes selected tools callable on the next model step. If a listed tool is already exposed as callable in the current run, call it directly and do not search it again. Do not use filesystem/time/no-op tool calls to discover or unlock deferred tools.
 
 {% for group in groups %}
 <native_deferred_tool_group name="{{ group.label }}">
 {{ group.description }}
 Tool names: {{ group.tool_names | join(", ") }}.
-Search exact listed tool names with the provider-native search tool.
+Search exact listed tool names with `tool_search`.
 </native_deferred_tool_group>
 {% if not loop.last or mcp_servers %}
 
@@ -561,7 +561,14 @@ async def tool_search(execution: ToolExecution, args: ToolSearchInput) -> ToolRe
     if not matches:
         return ToolResult(content="No matching deferred tools found.", preview="No matches")
 
-    return await load_tools(execution, LoadToolsInput(names=matches))
+    result = await load_tools(execution, LoadToolsInput(names=matches))
+    return ToolResult(
+        content=result.content,
+        preview=result.preview,
+        is_error=result.is_error,
+        data={"tool_references": matches},
+        outcome=result.outcome,
+    )
 
 
 load_tools_tool = tool(

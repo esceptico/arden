@@ -83,7 +83,10 @@ def test_anthropic_request_uses_native_deferred_tool_search():
     _, request = client._prepare(
         messages=[{"role": "user", "content": "search slack"}],
         model="claude-opus-4-7",
-        tools=[{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}],
+        tools=[
+            {"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "tool_search", "parameters": {"type": "object"}}},
+        ],
         deferred_tools=[
             {
                 "type": "function",
@@ -101,17 +104,61 @@ def test_anthropic_request_uses_native_deferred_tool_search():
         response_format=None,
     )
 
-    assert request["tools"][0]["type"] == "tool_search_tool_bm25_20251119"
-    assert request["tools"][0]["name"] == "tool_search_tool_bm25"
-    deferred = next(tool for tool in request["tools"] if tool.get("name") == "slack_search")
-    assert deferred["defer_loading"] is True
+    assert {tool["name"] for tool in request["tools"]} == {"echo", "tool_search"}
+    assert request["extra_headers"] == {"anthropic-beta": "advanced-tool-use-2025-11-20"}
 
 
-def test_anthropic_request_omits_function_loader_with_native_deferred_tools():
+def test_anthropic_classic_loader_does_not_enable_tool_reference_protocol():
+    _, request = AnthropicClient(api_key="test")._prepare(
+        messages=[{"role": "user", "content": "search slack"}],
+        model="claude-haiku-4-5",
+        tools=[{"type": "function", "function": {"name": "load_tools", "parameters": {"type": "object"}}}],
+        deferred_tools=[
+            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}
+        ],
+        tool_choice="auto",
+        temperature=None,
+        max_tokens=4096,
+        reasoning_effort=None,
+        response_format=None,
+    )
+
+    assert {tool["name"] for tool in request["tools"]} == {"load_tools"}
+    assert "extra_headers" not in request
+
+
+def test_anthropic_request_replays_tool_references_and_exposes_loaded_schema():
     client = AnthropicClient(api_key="test")
 
     _, request = client._prepare(
-        messages=[{"role": "user", "content": "search slack"}],
+        messages=[
+            {"role": "user", "content": "search slack"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "search_1",
+                        "type": "function",
+                        "function": {"name": "tool_search", "arguments": '{"query":"select:slack_search"}'},
+                    }
+                ],
+                "anthropic_content": [
+                    {
+                        "type": "tool_use",
+                        "id": "search_1",
+                        "name": "tool_search",
+                        "input": {"query": "select:slack_search"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "search_1",
+                "content": "Loaded 1 deferred tool",
+                "data": {"tool_references": ["slack_search"]},
+            },
+        ],
         model="claude-opus-4-7",
         tools=[
             {
@@ -121,7 +168,15 @@ def test_anthropic_request_omits_function_loader_with_native_deferred_tools():
                     "description": "Search Tools",
                     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
                 },
-            }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "slack_search",
+                    "description": "Search Slack",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                },
+            },
         ],
         deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
@@ -131,10 +186,10 @@ def test_anthropic_request_omits_function_loader_with_native_deferred_tools():
         response_format=None,
     )
 
-    assert request["tools"][0]["type"] == "tool_search_tool_bm25_20251119"
-    assert request["tools"][0]["name"] == "tool_search_tool_bm25"
-    assert not any(tool.get("name") == "tool_search" for tool in request["tools"])
     assert next(tool for tool in request["tools"] if tool.get("name") == "slack_search")["defer_loading"] is True
+    assert request["messages"][2]["content"][0]["content"] == [
+        {"type": "tool_reference", "tool_name": "slack_search"}
+    ]
 
 
 def test_anthropic_deferred_tools_do_not_get_cache_control_breakpoints():
@@ -143,7 +198,11 @@ def test_anthropic_deferred_tools_do_not_get_cache_control_breakpoints():
     _, request = client._prepare(
         messages=[{"role": "user", "content": "search slack"}],
         model="claude-opus-4-7",
-        tools=[{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}],
+        tools=[
+            {"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "tool_search", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}},
+        ],
         deferred_tools=[{"type": "function", "function": {"name": "slack_search", "parameters": {"type": "object"}}}],
         tool_choice="auto",
         temperature=None,
@@ -152,9 +211,9 @@ def test_anthropic_deferred_tools_do_not_get_cache_control_breakpoints():
         response_format=None,
     )
 
-    visible = next(tool for tool in request["tools"] if tool.get("name") == "echo")
+    loader = next(tool for tool in request["tools"] if tool.get("name") == "tool_search")
     deferred = next(tool for tool in request["tools"] if tool.get("name") == "slack_search")
-    assert visible["cache_control"] == {"type": "ephemeral"}
+    assert loader["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in deferred
 
 

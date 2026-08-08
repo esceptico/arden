@@ -120,7 +120,7 @@ def runtime_model_entry(model: dict) -> dict:
         "price_cache_read": model["price_cache_read"],
         "price_cache_write": model["price_cache_write"],
         "reasoning_efforts": model["reasoning_efforts"],
-        "native_deferred_tools": provider == "anthropic"
+        "native_deferred_tools": (provider == "anthropic" and "haiku" not in model_id)
         or (provider == "openai" and model_id.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6"))),
     }
 

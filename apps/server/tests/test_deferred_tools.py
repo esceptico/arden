@@ -413,7 +413,7 @@ async def test_deferred_middleware_uses_native_loading_for_supported_models():
     deferred_names = {t["function"]["name"] for t in prepared.deferred_tools}
 
     assert "load_tools" not in names
-    assert "tool_search" not in names
+    assert "tool_search" in names
     assert "echo" in names
     assert "slack_search" not in names
     assert "wiki_read_page" not in names
@@ -445,7 +445,7 @@ async def test_hidden_tool_recovery_names_the_exposed_loader():
     await middleware(replace(_request(registry), model="gpt-5.5"), _identity)
     native = await executor.execute("slack_search", {"query": "x"}, "native")
     assert native.is_error
-    assert "provider-native tool search" in native.content
+    assert "Use tool_search" in native.content
 
 
 @pytest.mark.asyncio
@@ -481,7 +481,7 @@ async def test_native_deferred_middleware_does_not_reuse_prior_run_discovery():
     assert run.loaded_tools == set()
     assert "slack_search" not in {tool["function"]["name"] for tool in prepared.tools}
     assert "slack_search" in {tool["function"]["name"] for tool in prepared.deferred_tools}
-    assert "tool_search" not in {tool["function"]["name"] for tool in prepared.tools}
+    assert "tool_search" in {tool["function"]["name"] for tool in prepared.tools}
 
 
 @pytest.mark.asyncio
@@ -512,13 +512,12 @@ async def test_native_wiki_mutation_loaded_in_current_run_also_exposes_required_
 
     prepared = await middleware(request, _identity)
     visible = {tool["function"]["name"] for tool in prepared.tools}
-    assert len(prepared.messages[0]["content"]) == 2
-    note = prepared.messages[0]["content"][-1]["text"]
+    deferred = {tool["function"]["name"] for tool in prepared.deferred_tools}
 
     assert {"wiki_edit_page", "wiki_read_page"} <= run.loaded_tools
     assert {"wiki_edit_page", "wiki_read_page"} <= visible
-    assert "Call these tools directly; do not search for them again" in note
-    assert "wiki_edit_page, wiki_read_page" in note
+    assert {"wiki_edit_page", "wiki_read_page"} <= deferred
+    assert prepared.messages == request.messages
     assert request.messages == [{"role": "system", "content": [{"type": "text", "text": "system"}]}]
 
 
@@ -537,16 +536,11 @@ async def test_native_compaction_keeps_loaded_tool_direct_call_guidance():
     prepared = await apply_model_request_middlewares(request, (deferred, compaction))
 
     assert run.loaded_tools == {"slack_search"}
-    assert prepared.messages == [
-        {
-            "role": "system",
-            "content": (
-                "compacted\n\n## ALREADY CALLABLE TOOLS\n"
-                "Call these tools directly; do not search for them again: slack_search. "
-                "A native search returns no match for an already-callable tool."
-            ),
-        }
-    ]
+    assert prepared.messages == [{"role": "system", "content": "compacted"}]
+    assert {"tool_search", "slack_search"} <= {
+        tool["function"]["name"] for tool in prepared.tools
+    }
+    assert "slack_search" in {tool["function"]["name"] for tool in prepared.deferred_tools}
 
 
 @pytest.mark.asyncio
@@ -595,6 +589,7 @@ async def test_tool_search_loads_exact_deferred_names():
 
     assert not result.is_error
     assert "slack_search" in run.loaded_tools
+    assert result.data == {"tool_references": ["slack_search"]}
 
 
 @pytest.mark.asyncio
@@ -617,6 +612,7 @@ async def test_tool_search_preloads_multiple_exact_names():
     assert not result.is_error
     assert run.loaded_tools == {"slack_search", "file_write", "notify"}
     assert "Loaded 3 deferred tool(s)" in result.content
+    assert result.data == {"tool_references": ["slack_search", "file_write", "notify"]}
 
 
 @pytest.mark.asyncio
@@ -661,6 +657,56 @@ async def test_agent_load_tools_reveals_slack_on_next_model_step():
     assert "slack_search" not in first_tools
     assert "load_tools" in second_tools
     assert "slack_search" in second_tools
+
+
+@pytest.mark.asyncio
+async def test_anthropic_client_search_persists_reference_and_reveals_tool():
+    registry = _registry()
+    run = RunContext(run_id="run", deferred_tools_enabled=True)
+    ctx = ToolContext(
+        session_state=SessionState(session_id="test", started_at=datetime.now(UTC)),
+        registry=registry,
+        run=run,
+        io=IOBridge(),
+    )
+    llm = MockCompletionClient(
+        [
+            make_tool_response(
+                "tool_search",
+                {"query": "select:slack_search"},
+                call_id="search_1",
+                model="claude-opus-4-7",
+            ),
+            make_tool_response(
+                "slack_search",
+                {"query": "hello"},
+                call_id="slack_1",
+                model="claude-opus-4-7",
+            ),
+            make_text_response("done", model="claude-opus-4-7"),
+        ]
+    )
+    agent = Agent(
+        tools=registry.get_schemas(),
+        client=MockLLMClient(llm),
+        executor=ArdenToolExecutor(_Executor(registry), ctx),
+        model="claude-opus-4-7",
+        model_request_middlewares=(
+            DeferredToolsModelRequestMiddleware(
+                registry=registry,
+                run=run,
+                get_services=lambda: ctx.services,
+            ),
+        ),
+    )
+
+    result = await agent.run([{"role": "system", "content": "test"}, {"role": "user", "content": "search slack"}])
+
+    assert result.text == "done"
+    assert "slack_search" in run.loaded_tools
+    search_result = next(message for message in llm.calls[1]["messages"] if message.get("tool_call_id") == "search_1")
+    assert search_result["data"] == {"tool_references": ["slack_search"]}
+    assert "slack_search" in {tool["function"]["name"] for tool in llm.calls[1]["tools"]}
 
 
 @pytest.mark.asyncio
@@ -726,7 +772,7 @@ async def test_native_provider_tool_search_reveals_slack_on_next_model_step():
     first_tools = {t["function"]["name"] for t in llm.calls[0]["tools"]}
     first_deferred = {t["function"]["name"] for t in llm.calls[0]["deferred_tools"]}
     second_tools = {t["function"]["name"] for t in llm.calls[1]["tools"]}
-    assert "tool_search" not in first_tools
+    assert "tool_search" in first_tools
     assert "load_tools" not in first_tools
     assert "slack_search" not in first_tools
     assert "slack_search" in first_deferred
@@ -1182,7 +1228,7 @@ def test_native_deferred_prompt_lists_exact_tool_names_without_group_loader():
     )
 
     assert prompt is not None
-    assert "provider-native search tool" in prompt
+    assert "Search exact listed tool names with `tool_search`" in prompt
     assert "start deferred in each run" in prompt
     assert "already exposed as callable" in prompt
     assert 'tool_search(query="select:slack_search")' not in prompt

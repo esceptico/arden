@@ -417,16 +417,16 @@ class Agent:
         self,
         provider_tool_calls: Sequence[ProviderToolCall],
         deferred_tools: list[dict] | None,
-    ) -> set[str]:
-        if not deferred_tools:
-            return set()
+    ) -> bool:
+        if not deferred_tools or not provider_tool_calls:
+            return False
         deferred_names = {name for tool in deferred_tools if (name := _tool_name(tool))}
         loaded_names: set[str] = set()
         for provider_call in provider_tool_calls:
             loaded_names.update(set(provider_call.loaded_tool_names) & deferred_names)
         if loaded_names:
             self._executor.mark_provider_loaded_tools(loaded_names)
-        return loaded_names
+        return True
 
     def _fallback_result_text(self, messages: list[dict], reason: StopReason) -> str:
         tool_outputs = [str(msg.get("content") or "").strip() for msg in messages if msg.get("role") == Role.TOOL]

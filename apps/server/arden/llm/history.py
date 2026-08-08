@@ -98,6 +98,7 @@ class ToolHistoryMessage:
     tool_call_id: str
     content: HistoryContent
     outcome: ToolOutcome | None = None
+    tool_references: tuple[str, ...] = ()
     role: Literal[Role.TOOL] = field(default=Role.TOOL, init=False)
 
     @property
@@ -188,7 +189,26 @@ def _decode_message(raw: Mapping[str, object], *, index: int) -> HistoryMessage:
                 tool_call_id=tool_call_id,
                 content=content,
                 outcome=_decode_outcome(raw.get("outcome")),
+                tool_references=_decode_tool_references(raw.get("data")),
             )
+
+
+def _decode_tool_references(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise _HistoryFieldError("tool.data_invalid")
+    raw = value.get("tool_references")
+    if raw is None:
+        return ()
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise _HistoryFieldError("tool.references_invalid")
+    names = tuple(raw)
+    if not names or any(not isinstance(name, str) or not name.strip() for name in names):
+        raise _HistoryFieldError("tool.references_invalid")
+    if len(set(names)) != len(names):
+        raise _HistoryFieldError("tool.references_duplicate")
+    return names
 
 
 def _decode_content(value: object, *, allow_cache_control: bool = False) -> HistoryContent:
