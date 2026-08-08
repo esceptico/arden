@@ -18,7 +18,7 @@ from arden.agent import (
     ToolCall,
     Usage,
 )
-from arden.agent.types.tools import ToolOutcomeStatus
+from arden.agent.types.tools import tool_result_content_for_model
 from arden.core.content import ContextContent, ImageContent, TextContent, render_context
 from arden.llm.base import CompletionClient, EmbeddingClient
 from arden.llm.history import (
@@ -175,18 +175,12 @@ class GeminiClient(CompletionClient, EmbeddingClient):
         tool_name = tool_name_map.get(message.tool_call_id)
         if tool_name is None:
             raise HistoryDecodeError("Invalid model-history tool result (tool.orphan_result)")
-        content_str = message.content_text
-        try:
-            result_dict = json.loads(content_str)
-        except (json.JSONDecodeError, TypeError):
-            result_dict = {"result": content_str}
-        if message.outcome and message.outcome.status != ToolOutcomeStatus.SUCCEEDED:
-            result_dict["outcome"] = message.outcome.to_dict()
+        response = {"result": tool_result_content_for_model(message.content_text, message.outcome)}
 
         return types.Part(
             function_response=types.FunctionResponse(
                 name=tool_name,
-                response=result_dict,
+                response=response,
             )
         )
 

@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from arden.llm.anthropic import AnthropicClient
 from arden.llm.gemini import GeminiClient
 from arden.llm.history import ModelHistory
@@ -66,3 +68,61 @@ def test_provider_projections_do_not_leak_background_result_ref():
     assert "background_result_ref" not in str(anthropic)
     assert "background_result_ref" not in str(responses)
     assert "background_result_ref" not in str(gemini)
+
+
+@pytest.mark.parametrize("content", ["plain text", "[]", "null", '"text"', '{"value":1}'])
+def test_gemini_projects_tool_content_as_text_without_guessing_json(content: str):
+    history = ModelHistory.from_raw(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "example", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": content},
+        ]
+    )
+
+    _system, converted = GeminiClient(api_key="test")._convert_messages(history)
+    response = converted[-1].parts[0].function_response.response
+
+    assert response == {"result": content}
+
+
+def test_gemini_projects_failed_tool_outcome_inside_result_text():
+    history = ModelHistory.from_raw(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "example", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "failed",
+                "outcome": {
+                    "status": "failed",
+                    "error": {"code": "provider_error", "retryable": False},
+                },
+            },
+        ]
+    )
+
+    _system, converted = GeminiClient(api_key="test")._convert_messages(history)
+    response = converted[-1].parts[0].function_response.response
+
+    assert response["result"].startswith("failed\n\n<tool_outcome>")
+    assert '"status":"failed"' in response["result"]
