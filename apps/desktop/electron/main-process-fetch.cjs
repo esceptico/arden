@@ -17,4 +17,11 @@ function createMainProcessFetch(electronNet) {
   };
 }
 
-module.exports = { createMainProcessFetch };
+function createSessionFetch(electronSession, partition) {
+  if (!electronSession || typeof electronSession.fromPartition !== "function") {
+    throw new TypeError("Electron session.fromPartition is unavailable");
+  }
+  return createMainProcessFetch(electronSession.fromPartition(partition));
+}
+
+module.exports = { createMainProcessFetch, createSessionFetch };

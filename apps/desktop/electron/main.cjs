@@ -8,13 +8,22 @@ const { fileURLToPath } = require("node:url");
 const { parseApiResponseBody } = require("./api-response.cjs");
 const { createExecutorClient } = require("./executor.cjs");
 const { registerDeviceTools } = require("./executor-tools.cjs");
-const { createMainProcessFetch } = require("./main-process-fetch.cjs");
+const { createMainProcessFetch, createSessionFetch } = require("./main-process-fetch.cjs");
 const { consumeResponseBody } = require("./response-body-reader.cjs");
 // The parser is an ESM module (shared with the Vite renderer, which can't
 // import CommonJS source). Kick off the import at load; await the cached
 // promise where it's used. CJS can't `require` ESM or top-level await.
 const sseFrameParserModule = import("./sse-frame-parser.js");
 const mainProcessFetch = createMainProcessFetch(net);
+let apiProcessFetch = null;
+
+function getApiProcessFetch() {
+  // SSE and the executor intentionally keep HTTP responses open. Regular API
+  // reads use a separate in-memory Chromium network session so those streams
+  // cannot consume the connection pool needed by Memory and other screens.
+  apiProcessFetch ??= createSessionFetch(session, "arden-api");
+  return apiProcessFetch;
+}
 
 const devServerUrl = process.env.ARDEN_DESKTOP_DEV_SERVER_URL;
 const isDev = Boolean(devServerUrl);
@@ -203,7 +212,8 @@ async function apiRequest(configInput, requestInput, signal) {
   if (signal) signals.push(signal);
 
   try {
-    const response = await mainProcessFetch(new URL(request.path, config.serverUrl), {
+    const fetchApi = getApiProcessFetch();
+    const response = await fetchApi(new URL(request.path, config.serverUrl), {
       method: request.method,
       headers: apiHeaders(config, request.body),
       body: request.body,
