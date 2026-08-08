@@ -1,6 +1,5 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from copy import deepcopy
 
 from arden.config import PERSIST_KEYS, PROVIDER_KEY_FIELDS, ROLE_NAMES
@@ -10,17 +9,12 @@ from arden.llm.models import (
     Provider,
     add_custom_embedding_model,
     add_custom_model,
-    get_embedding_models,
     get_embedding_models_by_provider,
-    get_models,
     get_models_by_provider,
     remove_custom_embedding_model,
     remove_custom_model,
 )
-from arden.logging import get_logger
 from arden.settings import load_user_settings, restore_user_settings, save_user_settings
-
-_logger = get_logger(__name__)
 
 
 class ConfigService:
@@ -30,32 +24,22 @@ class ConfigService:
 
     async def _with_rollback(self, mutate: Callable[[dict], None]) -> None:
         async with self._mutation_lock:
-            settings = load_user_settings()
-            backup = deepcopy(settings)
-            mutate(settings)
-            save_user_settings(settings)
-            try:
-                await self._on_config_change()
-            except BaseException as primary_error:
-                rollback_task = asyncio.create_task(self._restore_config(backup))
-                cancellation: asyncio.CancelledError | None = None
-                while not rollback_task.done():
-                    try:
-                        await asyncio.shield(rollback_task)
-                    except asyncio.CancelledError as error:
-                        cancellation = error
-                    except BaseException:
-                        break
-                try:
-                    rollback_task.result()
-                except BaseException as rollback_error:
-                    raise BaseExceptionGroup(
-                        "Config reload and rollback both failed",
-                        [primary_error, rollback_error],
-                    ) from None
-                if cancellation is not None:
-                    raise cancellation from primary_error
-                raise
+            await self._mutate_settings_locked(mutate)
+
+    async def _mutate_settings_locked(self, mutate: Callable[[dict], None]) -> dict:
+        settings = load_user_settings()
+        backup = deepcopy(settings)
+        mutate(settings)
+        save_user_settings(settings)
+        try:
+            await self._on_config_change()
+        except BaseException as primary_error:
+            await _raise_after_recovery(
+                primary_error,
+                self._restore_config(backup),
+                "Config reload and rollback both failed",
+            )
+        return backup
 
     async def _restore_config(self, settings: dict) -> None:
         restore_user_settings(settings)
@@ -191,25 +175,28 @@ class ConfigService:
         max_output_tokens: int,
         api_key: str | None = None,
     ) -> Model:
-        if model_id in get_embedding_models():
-            raise ValueError(f"Model ID {model_id!r} is already used by an embedding model")
-        existing_custom = model_id in get_models_by_provider(Provider.CUSTOM)
-        try:
+        async with self._mutation_lock:
+            settings = self._settings_with_custom_key(model_id, api_key)
             model = add_custom_model(
                 model_id=model_id,
                 base_url=base_url,
                 context_window=context_window,
                 max_output_tokens=max_output_tokens,
             )
-            if api_key:
-                await self._set_custom_model_key(model_id, api_key)
-            else:
+            try:
+                if settings is not None:
+                    save_user_settings(settings[0])
                 await self._on_config_change()
-        except Exception:
-            if not existing_custom:
-                await self._remove_custom_model_after_failed_create(model_id)
-            raise
-        return model
+            except BaseException as primary_error:
+                await _raise_after_recovery(
+                    primary_error,
+                    self._revert_custom_create(
+                        lambda: remove_custom_model(model_id),
+                        settings[1] if settings is not None else None,
+                    ),
+                    "Custom model creation and rollback both failed",
+                )
+            return model
 
     async def create_custom_embedding_model(
         self,
@@ -219,120 +206,86 @@ class ConfigService:
         dim: int,
         api_key: str | None = None,
     ) -> EmbeddingModel:
-        if model_id in get_embedding_models():
-            raise ValueError(f"Embedding model {model_id!r} already exists")
-        if model_id in get_models():
-            raise ValueError(f"Model ID {model_id!r} is already used by a chat model")
-        try:
+        async with self._mutation_lock:
+            settings = self._settings_with_custom_key(model_id, api_key)
             model = add_custom_embedding_model(model_id=model_id, base_url=base_url, dim=dim)
-            if api_key:
-                await self._set_custom_model_key(model_id, api_key)
-            else:
+            try:
+                if settings is not None:
+                    save_user_settings(settings[0])
                 await self._on_config_change()
-        except Exception:
-            await self._remove_custom_embedding_model_after_failed_create(model_id)
-            raise
-        return model
+            except BaseException as primary_error:
+                await _raise_after_recovery(
+                    primary_error,
+                    self._revert_custom_create(
+                        lambda: remove_custom_embedding_model(model_id),
+                        settings[1] if settings is not None else None,
+                    ),
+                    "Custom embedding model creation and rollback both failed",
+                )
+            return model
 
-    async def _set_custom_model_key(self, model_id: str, api_key: str) -> None:
-        def mutate(settings: dict) -> None:
-            settings.setdefault("custom_model_keys", {})[model_id] = api_key
-
-        await self._with_rollback(mutate)
-
-    async def _remove_custom_model_after_failed_create(self, model_id: str) -> None:
-        with suppress(Exception):
-            remove_custom_model(model_id)
-        try:
-            await self._on_config_change()
-        except Exception:
-            _logger.exception("Failed to reload runtime after reverting custom model creation")
-
-    async def _remove_custom_embedding_model_after_failed_create(self, model_id: str) -> None:
-        with suppress(Exception):
-            remove_custom_embedding_model(model_id)
-        try:
-            await self._on_config_change()
-        except Exception:
-            _logger.exception("Failed to reload runtime after reverting custom embedding model creation")
+    @staticmethod
+    def _settings_with_custom_key(model_id: str, api_key: str | None) -> tuple[dict, dict] | None:
+        if not api_key:
+            return None
+        settings = load_user_settings()
+        backup = deepcopy(settings)
+        settings.setdefault("custom_model_keys", {})[model_id] = api_key
+        return settings, backup
 
     async def delete_custom_model(self, model_id: str) -> None:
-        existing = get_models_by_provider(Provider.CUSTOM).get(model_id)
-        if existing is None:
-            raise ValueError(f"Not a custom model: {model_id}")
-
-        remove_custom_model(model_id)
-        try:
-            await self._remove_custom_model_settings(model_id)
-        except Exception:
-            await self._restore_custom_model_after_failed_delete(existing)
-            raise
+        async with self._mutation_lock:
+            if model_id not in get_models_by_provider(Provider.CUSTOM):
+                raise ValueError(f"Not a custom model: {model_id}")
+            backup = await self._mutate_settings_locked(
+                lambda settings: _remove_custom_model_settings(settings, model_id)
+            )
+            try:
+                remove_custom_model(model_id)
+            except BaseException as primary_error:
+                await _raise_after_recovery(
+                    primary_error,
+                    self._restore_config(backup),
+                    "Custom model deletion and rollback both failed",
+                )
 
     async def delete_custom_embedding_model(self, model_id: str) -> None:
-        existing = get_embedding_models_by_provider(Provider.CUSTOM).get(model_id)
-        if existing is None:
-            raise ValueError(f"Not a custom embedding model: {model_id}")
-
-        remove_custom_embedding_model(model_id)
-        try:
-            await self._remove_custom_embedding_model_settings(model_id)
-        except Exception:
-            await self._restore_custom_embedding_model_after_failed_delete(existing)
-            raise
-
-    async def _remove_custom_model_settings(self, model_id: str) -> None:
-        def mutate(settings: dict) -> None:
-            custom_keys = settings.get("custom_model_keys", {})
-            custom_keys.pop(model_id, None)
-            if custom_keys:
-                settings["custom_model_keys"] = custom_keys
-            else:
-                settings.pop("custom_model_keys", None)
-
-            _remove_model_selections(settings, {model_id})
-            _remove_model_reasoning_settings(settings, {model_id})
-
-        await self._with_rollback(mutate)
-
-    async def _remove_custom_embedding_model_settings(self, model_id: str) -> None:
-        def mutate(settings: dict) -> None:
-            custom_keys = settings.get("custom_model_keys", {})
-            custom_keys.pop(model_id, None)
-            if custom_keys:
-                settings["custom_model_keys"] = custom_keys
-            else:
-                settings.pop("custom_model_keys", None)
-            if settings.get("embedding_model") == model_id:
-                settings["embedding_model"] = None
-
-        await self._with_rollback(mutate)
-
-    async def _restore_custom_model_after_failed_delete(self, model: Model) -> None:
-        with suppress(Exception):
-            add_custom_model(
-                model_id=model.id,
-                base_url=model.base_url or "",
-                context_window=model.max_context_tokens,
-                max_output_tokens=model.max_output_tokens,
-                api_key_env=model.api_key_env,
+        async with self._mutation_lock:
+            if model_id not in get_embedding_models_by_provider(Provider.CUSTOM):
+                raise ValueError(f"Not a custom embedding model: {model_id}")
+            backup = await self._mutate_settings_locked(
+                lambda settings: _remove_custom_embedding_model_settings(settings, model_id)
             )
+            try:
+                remove_custom_embedding_model(model_id)
+            except BaseException as primary_error:
+                await _raise_after_recovery(
+                    primary_error,
+                    self._restore_config(backup),
+                    "Custom embedding model deletion and rollback both failed",
+                )
+
+    async def _revert_custom_create(
+        self,
+        remove_model: Callable[[], None],
+        settings_backup: dict | None,
+    ) -> None:
+        errors: list[BaseException] = []
+        try:
+            remove_model()
+        except BaseException as error:
+            errors.append(error)
+        if settings_backup is not None:
+            try:
+                restore_user_settings(settings_backup)
+            except BaseException as error:
+                errors.append(error)
         try:
             await self._on_config_change()
-        except Exception:
-            _logger.exception("Failed to reload runtime after restoring custom model deletion")
-
-    async def _restore_custom_embedding_model_after_failed_delete(self, model: EmbeddingModel) -> None:
-        with suppress(Exception):
-            add_custom_embedding_model(
-                model_id=model.id,
-                base_url=model.base_url or "",
-                dim=model.dim,
-                api_key_env=model.api_key_env,
-            )
-        try:
-            await self._on_config_change()
-        except Exception:
-            _logger.exception("Failed to reload runtime after restoring custom embedding model deletion")
+        except BaseException as error:
+            errors.append(error)
+        if errors:
+            raise BaseExceptionGroup("Custom model rollback failed", errors)
 
 
 def _remove_model_selections(settings: dict, model_ids: set[str]) -> None:
@@ -350,6 +303,27 @@ def _remove_model_selections(settings: dict, model_ids: set[str]) -> None:
         settings.pop("model_roles")
 
 
+def _remove_custom_key(settings: dict, model_id: str) -> None:
+    custom_keys = settings.get("custom_model_keys", {})
+    custom_keys.pop(model_id, None)
+    if custom_keys:
+        settings["custom_model_keys"] = custom_keys
+    else:
+        settings.pop("custom_model_keys", None)
+
+
+def _remove_custom_model_settings(settings: dict, model_id: str) -> None:
+    _remove_custom_key(settings, model_id)
+    _remove_model_selections(settings, {model_id})
+    _remove_model_reasoning_settings(settings, {model_id})
+
+
+def _remove_custom_embedding_model_settings(settings: dict, model_id: str) -> None:
+    _remove_custom_key(settings, model_id)
+    if settings.get("embedding_model") == model_id:
+        settings["embedding_model"] = None
+
+
 def _remove_model_reasoning_settings(settings: dict, model_ids: set[str]) -> None:
     per_model = settings.get("model_reasoning_efforts")
     if not isinstance(per_model, dict):
@@ -360,3 +334,31 @@ def _remove_model_reasoning_settings(settings: dict, model_ids: set[str]) -> Non
         settings["model_reasoning_efforts"] = per_model
     else:
         settings.pop("model_reasoning_efforts", None)
+
+
+async def _finish_recovery(recovery: Awaitable[None]) -> asyncio.CancelledError | None:
+    task = asyncio.create_task(recovery)
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancellation = error
+        except BaseException:
+            break
+    task.result()
+    return cancellation
+
+
+async def _raise_after_recovery(
+    primary_error: BaseException,
+    recovery: Awaitable[None],
+    message: str,
+) -> None:
+    try:
+        cancellation = await _finish_recovery(recovery)
+    except BaseException as rollback_error:
+        raise BaseExceptionGroup(message, [primary_error, rollback_error]) from None
+    if cancellation is not None:
+        raise cancellation from primary_error
+    raise primary_error

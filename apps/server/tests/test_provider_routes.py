@@ -1,11 +1,15 @@
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from arden.config import Config
-from arden.llm.models import EmbeddingModel, Provider
+from arden.llm.models import CustomModelInputError, CustomModelsError, EmbeddingModel, Provider
 from arden.server.app import app
 from arden.server.routers import providers as provider_router
+from arden.server.routers import settings as settings_router
+from arden.server.schemas import AddCustomEmbeddingModelRequest, AddCustomModelRequest
 
 
 def test_provider_routes_are_registered_once():
@@ -44,3 +48,47 @@ async def test_custom_embedding_only_provider_is_connected(monkeypatch):
     assert custom["connected"] is True
     assert custom["embedding_models"] == ["local/embed"]
     assert custom["custom_embedding_models"] == [{"id": "local/embed", "base_url": "http://localhost", "dimensions": 3}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "request_payload"),
+    [
+        (
+            settings_router.create_custom_model,
+            AddCustomModelRequest(model_id="local/test", base_url="http://localhost/v1", context_window=8192),
+        ),
+        (
+            settings_router.create_custom_embedding_model,
+            AddCustomEmbeddingModelRequest(
+                model_id="local/embed",
+                base_url="http://localhost/v1",
+                dimensions=1024,
+            ),
+        ),
+    ],
+)
+async def test_custom_model_routes_do_not_misreport_runtime_failures_as_bad_requests(route, request_payload):
+    class FailingConfigService:
+        async def create_custom_model(self, **_kwargs):
+            raise CustomModelsError("models.json is corrupt")
+
+        async def create_custom_embedding_model(self, **_kwargs):
+            raise CustomModelsError("models.json is corrupt")
+
+    with pytest.raises(CustomModelsError, match=r"models\.json is corrupt"):
+        await route(request_payload, FailingConfigService())
+
+
+@pytest.mark.asyncio
+async def test_custom_model_route_reports_invalid_id_as_bad_request():
+    class InvalidConfigService:
+        async def create_custom_model(self, **_kwargs):
+            raise CustomModelInputError("reserved model ID")
+
+    request = AddCustomModelRequest(model_id="embedding", base_url="http://localhost/v1", context_window=8192)
+    with pytest.raises(HTTPException) as raised:
+        await settings_router.create_custom_model(request, InvalidConfigService())
+
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "reserved model ID"

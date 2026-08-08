@@ -3,6 +3,9 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from arden.atomic_file import write_private_atomic
 from arden.logging import get_logger
 from arden.usage import Pricing
 
@@ -17,16 +20,123 @@ def _models_path() -> Path:
     return _models_dir / "models.json"
 
 
-def _read_models_json() -> dict | None:
+class CustomModelsError(RuntimeError):
+    """The custom-model file does not satisfy its current exact contract."""
+
+
+class CustomModelInputError(ValueError):
+    """A requested custom-model value is invalid."""
+
+
+class _CustomChatModelSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    base_url: str = Field(min_length=1)
+    context_window: int = Field(gt=0, le=2_000_000)
+    max_output_tokens: int = Field(default=8192, gt=0)
+    api_key_env: str | None = None
+    price_in: float = Field(default=0, ge=0, allow_inf_nan=False)
+    price_out: float = Field(default=0, ge=0, allow_inf_nan=False)
+    reasoning_efforts: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_output_limit(self):
+        if self.max_output_tokens > self.context_window:
+            raise ValueError("max_output_tokens must not exceed context_window")
+        return self
+
+
+class _CustomEmbeddingModelSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    base_url: str = Field(min_length=1)
+    dim: int = Field(gt=0, le=65_536)
+    api_key_env: str | None = None
+
+
+@dataclass(frozen=True)
+class _CustomModelsFile:
+    chat: dict[str, _CustomChatModelSpec]
+    embedding: dict[str, _CustomEmbeddingModelSpec]
+
+
+def _reject_nonfinite_json(value: str) -> None:
+    raise ValueError(f"invalid JSON constant {value}")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _custom_model_id(value: object, *, kind: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip() or len(value) > 256:
+        raise CustomModelInputError(f"Custom {kind} model ID must contain 1-256 trimmed characters")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise CustomModelInputError(f"Custom {kind} model ID contains control characters")
+    if kind == "chat" and value == "embedding":
+        raise CustomModelInputError("Custom chat model ID 'embedding' is reserved")
+    return value
+
+
+def _decode_custom_models(raw: object) -> _CustomModelsFile:
+    if not isinstance(raw, dict):
+        raise CustomModelsError("Custom models file must be a JSON object")
+    values = dict(raw)
+    embedding_raw = values.pop("embedding", {})
+    if not isinstance(embedding_raw, dict):
+        raise CustomModelsError("Custom embedding models must be a JSON object")
+
+    chat: dict[str, _CustomChatModelSpec] = {}
+    embedding: dict[str, _CustomEmbeddingModelSpec] = {}
+    try:
+        for model_id, entry in values.items():
+            model_id = _custom_model_id(model_id, kind="chat")
+            chat[model_id] = _CustomChatModelSpec.model_validate(entry)
+        for model_id, entry in embedding_raw.items():
+            model_id = _custom_model_id(model_id, kind="embedding")
+            embedding[model_id] = _CustomEmbeddingModelSpec.model_validate(entry)
+    except (CustomModelInputError, ValidationError) as error:
+        raise CustomModelsError(f"Invalid custom model entry: {error}") from error
+    overlap = chat.keys() & embedding.keys()
+    if overlap:
+        raise CustomModelsError(f"Custom model IDs cannot be shared across kinds: {', '.join(sorted(overlap))}")
+    return _CustomModelsFile(chat=chat, embedding=embedding)
+
+
+def _read_custom_models() -> _CustomModelsFile:
     path = _models_path()
     if not path.exists():
-        return None
+        return _CustomModelsFile(chat={}, embedding={})
     try:
-        raw = json.loads(path.read_text())
-        return raw if isinstance(raw, dict) else None
-    except (json.JSONDecodeError, OSError):
-        _logger.warning("Failed to read %s", path, exc_info=True)
-        return None
+        raw = json.loads(
+            path.read_text(),
+            parse_constant=_reject_nonfinite_json,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (json.JSONDecodeError, OSError, ValueError) as error:
+        raise CustomModelsError(f"Custom models file at {path} is unreadable or invalid JSON") from error
+    return _decode_custom_models(raw)
+
+
+def _encode_custom_models(models: _CustomModelsFile) -> bytes:
+    raw = {
+        model_id: spec.model_dump(exclude_defaults=True, exclude_none=True) for model_id, spec in models.chat.items()
+    }
+    if models.embedding:
+        raw["embedding"] = {
+            model_id: spec.model_dump(exclude_defaults=True, exclude_none=True)
+            for model_id, spec in models.embedding.items()
+        }
+    return json.dumps(raw, indent=2, allow_nan=False).encode()
+
+
+def _write_custom_models(models: _CustomModelsFile) -> None:
+    write_private_atomic(_models_path(), _encode_custom_models(models))
 
 
 class Provider(Enum):
@@ -420,64 +530,46 @@ def load_custom_models(base_dir: Path) -> None:
     _models_dir = base_dir
     if _custom_loaded:
         return
-    _custom_loaded = True
 
-    if (raw := _read_models_json()) is None:
-        return
-
-    embedding_raw = {}
-    for model_id, entry in raw.items():
-        if model_id == "embedding":
-            if isinstance(entry, dict):
-                embedding_raw = entry
-            continue
-
-        if not isinstance(entry, dict):
-            _logger.warning("Skipping custom model %s: expected object", model_id)
-            continue
-        if "base_url" not in entry:
-            _logger.warning("Skipping custom model %s: missing base_url", model_id)
-            continue
-        if "context_window" not in entry:
-            _logger.warning("Skipping custom model %s: missing context_window", model_id)
-            continue
-
+    custom = _read_custom_models()
+    chat_models: list[Model] = []
+    embedding_models: list[EmbeddingModel] = []
+    for model_id, entry in custom.chat.items():
+        if model_id in _registry.get_models() or model_id in _registry.get_embedding_models():
+            raise CustomModelsError(f"Custom model ID {model_id!r} conflicts with an existing model")
         model = Model(
             id=model_id,
             provider=Provider.CUSTOM,
-            max_context_tokens=int(entry["context_window"]),
-            max_output_tokens=int(entry.get("max_output_tokens", 8192)),
+            max_context_tokens=entry.context_window,
+            max_output_tokens=entry.max_output_tokens,
             pricing=Pricing(
-                price_in=float(entry.get("price_in", 0)),
-                price_out=float(entry.get("price_out", 0)),
+                price_in=entry.price_in,
+                price_out=entry.price_out,
             ),
-            base_url=entry["base_url"],
-            api_key_env=entry.get("api_key_env"),
-            reasoning_efforts=tuple(entry.get("reasoning_efforts", ())),
+            base_url=entry.base_url,
+            api_key_env=entry.api_key_env,
+            reasoning_efforts=tuple(entry.reasoning_efforts),
         )
-        _registry.add_model(model)
-        _logger.info("Registered custom model: %s (base_url=%s)", model_id, model.base_url)
-
-    for model_id, entry in embedding_raw.items():
-        if not isinstance(entry, dict):
-            _logger.warning("Skipping custom embedding model %s: expected object", model_id)
-            continue
-        if "base_url" not in entry:
-            _logger.warning("Skipping custom embedding model %s: missing base_url", model_id)
-            continue
-        if "dim" not in entry:
-            _logger.warning("Skipping custom embedding model %s: missing dim", model_id)
-            continue
-
+        chat_models.append(model)
+    for model_id, entry in custom.embedding.items():
+        if model_id in _registry.get_models() or model_id in _registry.get_embedding_models():
+            raise CustomModelsError(f"Custom model ID {model_id!r} conflicts with an existing model")
         emb = EmbeddingModel(
             id=model_id,
             provider=Provider.CUSTOM,
-            dim=int(entry["dim"]),
-            base_url=entry["base_url"],
-            api_key_env=entry.get("api_key_env"),
+            dim=entry.dim,
+            base_url=entry.base_url,
+            api_key_env=entry.api_key_env,
         )
+        embedding_models.append(emb)
+
+    for model in chat_models:
+        _registry.add_model(model)
+        _logger.info("Registered custom model: %s (base_url=%s)", model.id, model.base_url)
+    for emb in embedding_models:
         _registry.add_embedding_model(emb)
-        _logger.info("Registered custom embedding model: %s (base_url=%s)", model_id, emb.base_url)
+        _logger.info("Registered custom embedding model: %s (base_url=%s)", emb.id, emb.base_url)
+    _custom_loaded = True
 
 
 def get_model(model_id: str) -> Model:
@@ -523,26 +615,26 @@ def add_custom_model(
     max_output_tokens: int = 8192,
     api_key_env: str | None = None,
 ) -> Model:
-    raw = _read_models_json() or {}
-
-    entry: dict = {"base_url": base_url, "context_window": context_window}
-    if max_output_tokens != 8192:
-        entry["max_output_tokens"] = max_output_tokens
-    if api_key_env:
-        entry["api_key_env"] = api_key_env
-
-    raw[model_id] = entry
-    _models_path().parent.mkdir(exist_ok=True)
-    _models_path().write_text(json.dumps(raw, indent=2))
-
+    model_id = _custom_model_id(model_id, kind="chat")
+    if model_id in get_models() or model_id in get_embedding_models():
+        raise ValueError(f"Model ID {model_id!r} already exists")
+    spec = _CustomChatModelSpec(
+        base_url=base_url,
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
+        api_key_env=api_key_env,
+    )
     model = Model(
         id=model_id,
         provider=Provider.CUSTOM,
-        max_context_tokens=context_window,
-        max_output_tokens=max_output_tokens,
-        base_url=base_url,
-        api_key_env=api_key_env,
+        max_context_tokens=spec.context_window,
+        max_output_tokens=spec.max_output_tokens,
+        base_url=spec.base_url,
+        api_key_env=spec.api_key_env,
     )
+    current = _read_custom_models()
+    updated = _CustomModelsFile(chat={**current.chat, model_id: spec}, embedding=current.embedding)
+    _write_custom_models(updated)
     _registry.add_model(model)
     return model
 
@@ -553,25 +645,20 @@ def add_custom_embedding_model(
     dim: int,
     api_key_env: str | None = None,
 ) -> EmbeddingModel:
-    raw = _read_models_json() or {}
-    embedding_raw = raw.setdefault("embedding", {})
-    if not isinstance(embedding_raw, dict):
-        raise ValueError("Custom embedding model configuration must be an object")
-
-    entry: dict = {"base_url": base_url, "dim": dim}
-    if api_key_env:
-        entry["api_key_env"] = api_key_env
-    embedding_raw[model_id] = entry
-    _models_path().parent.mkdir(exist_ok=True)
-    _models_path().write_text(json.dumps(raw, indent=2))
-
+    model_id = _custom_model_id(model_id, kind="embedding")
+    if model_id in get_models() or model_id in get_embedding_models():
+        raise ValueError(f"Model ID {model_id!r} already exists")
+    spec = _CustomEmbeddingModelSpec(base_url=base_url, dim=dim, api_key_env=api_key_env)
     model = EmbeddingModel(
         id=model_id,
         provider=Provider.CUSTOM,
-        dim=dim,
-        base_url=base_url,
-        api_key_env=api_key_env,
+        dim=spec.dim,
+        base_url=spec.base_url,
+        api_key_env=spec.api_key_env,
     )
+    current = _read_custom_models()
+    updated = _CustomModelsFile(chat=current.chat, embedding={**current.embedding, model_id: spec})
+    _write_custom_models(updated)
     _registry.add_embedding_model(model)
     return model
 
@@ -583,13 +670,13 @@ def remove_custom_model(model_id: str) -> None:
         raise ValueError(f"Not a custom model: {model_id}") from None
     if model.provider != Provider.CUSTOM:
         raise ValueError(f"Not a custom model: {model_id}")
-
+    current = _read_custom_models()
+    if model_id not in current.chat:
+        raise CustomModelsError(f"Custom model {model_id!r} is missing from {_models_path()}")
+    chat = dict(current.chat)
+    del chat[model_id]
+    _write_custom_models(_CustomModelsFile(chat=chat, embedding=current.embedding))
     _registry.remove_model(model_id)
-
-    raw = _read_models_json()
-    if raw is not None:
-        raw.pop(model_id, None)
-        _models_path().write_text(json.dumps(raw, indent=2))
 
 
 def remove_custom_embedding_model(model_id: str) -> None:
@@ -599,14 +686,10 @@ def remove_custom_embedding_model(model_id: str) -> None:
         raise ValueError(f"Not a custom embedding model: {model_id}") from None
     if model.provider != Provider.CUSTOM:
         raise ValueError(f"Not a custom embedding model: {model_id}")
-
-    raw = _read_models_json()
-    if raw is not None:
-        embedding_raw = raw.get("embedding")
-        if isinstance(embedding_raw, dict):
-            embedding_raw.pop(model_id, None)
-            if not embedding_raw:
-                raw.pop("embedding", None)
-        _models_path().write_text(json.dumps(raw, indent=2))
-
+    current = _read_custom_models()
+    if model_id not in current.embedding:
+        raise CustomModelsError(f"Custom embedding model {model_id!r} is missing from {_models_path()}")
+    embedding = dict(current.embedding)
+    del embedding[model_id]
+    _write_custom_models(_CustomModelsFile(chat=current.chat, embedding=embedding))
     _registry.remove_embedding_model(model_id)

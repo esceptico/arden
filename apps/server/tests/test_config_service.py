@@ -5,9 +5,11 @@ from copy import deepcopy
 
 import pytest
 
+import arden.atomic_file as atomic_file
 from arden.config import Config
 from arden.llm.models import EmbeddingModel, Model, Provider
 from arden.services.config import ConfigService
+from arden.usage import Pricing
 
 
 def test_integration_enabled_uses_explicit_service_state():
@@ -186,7 +188,7 @@ async def test_failed_rollback_preserves_the_last_known_good_backup(tmp_path, mo
     async def reload_config() -> None:
         raise RuntimeError("reload failed")
 
-    monkeypatch.setattr(settings_module.os, "replace", fail_rollback_replace)
+    monkeypatch.setattr(atomic_file.os, "replace", fail_rollback_replace)
     service = ConfigService(on_config_change=reload_config)
 
     with pytest.raises(BaseExceptionGroup, match="Config reload and rollback both failed"):
@@ -349,8 +351,6 @@ async def test_config_service_creates_custom_embedding_model_and_stores_api_key(
     monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
     monkeypatch.setattr(config_module, "save_user_settings", save_settings)
     monkeypatch.setattr(config_module, "add_custom_embedding_model", add_model)
-    monkeypatch.setattr(config_module, "get_embedding_models", lambda: {})
-    monkeypatch.setattr(config_module, "get_models", lambda: {})
 
     service = ConfigService(on_config_change=reload_config)
     model = await service.create_custom_embedding_model(
@@ -373,6 +373,260 @@ async def test_config_service_creates_custom_embedding_model_and_stores_api_key(
 
 
 @pytest.mark.asyncio
+async def test_custom_model_create_finishes_rollback_before_cancellation(monkeypatch):
+    import arden.services.config as config_module
+
+    persisted: dict = {}
+    registered: dict[str, Model] = {}
+    reload_started = asyncio.Event()
+    reload_count = 0
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    def add_model(**kwargs) -> Model:
+        model = Model(
+            id=kwargs["model_id"],
+            provider=Provider.CUSTOM,
+            max_context_tokens=kwargs["context_window"],
+            max_output_tokens=kwargs["max_output_tokens"],
+            base_url=kwargs["base_url"],
+        )
+        registered[model.id] = model
+        return model
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            reload_started.set()
+            await asyncio.Future()
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "add_custom_model", add_model)
+    monkeypatch.setattr(config_module, "remove_custom_model", registered.pop)
+
+    service = ConfigService(on_config_change=reload_config)
+    create = asyncio.create_task(
+        service.create_custom_model(
+            model_id="local/test",
+            base_url="http://localhost/v1",
+            context_window=8192,
+            max_output_tokens=2048,
+            api_key="secret",
+        )
+    )
+    await reload_started.wait()
+    create.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await create
+
+    assert registered == {}
+    assert persisted == {}
+    assert reload_count == 2
+
+
+@pytest.mark.asyncio
+async def test_custom_model_create_serializes_through_failed_reload(monkeypatch):
+    import arden.services.config as config_module
+
+    registered: dict[str, Model] = {}
+    first_reload_started = asyncio.Event()
+    release_first_reload = asyncio.Event()
+    add_count = 0
+    reload_count = 0
+
+    def add_model(**kwargs) -> Model:
+        nonlocal add_count
+        add_count += 1
+        if kwargs["model_id"] in registered:
+            raise ValueError("duplicate")
+        model = Model(
+            id=kwargs["model_id"],
+            provider=Provider.CUSTOM,
+            max_context_tokens=kwargs["context_window"],
+            max_output_tokens=kwargs["max_output_tokens"],
+            base_url=kwargs["base_url"],
+        )
+        registered[model.id] = model
+        return model
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            first_reload_started.set()
+            await release_first_reload.wait()
+            raise RuntimeError("reload failed")
+
+    monkeypatch.setattr(config_module, "add_custom_model", add_model)
+    monkeypatch.setattr(config_module, "remove_custom_model", registered.pop)
+    service = ConfigService(on_config_change=reload_config)
+    arguments = {
+        "model_id": "local/test",
+        "base_url": "http://localhost/v1",
+        "context_window": 8192,
+        "max_output_tokens": 2048,
+    }
+    first = asyncio.create_task(service.create_custom_model(**arguments))
+    await first_reload_started.wait()
+    second = asyncio.create_task(service.create_custom_model(**arguments))
+    await asyncio.sleep(0)
+
+    assert add_count == 1
+    release_first_reload.set()
+    with pytest.raises(RuntimeError, match="reload failed"):
+        await first
+    model = await second
+
+    assert add_count == 2
+    assert registered == {model.id: model}
+    assert reload_count == 3
+
+
+@pytest.mark.asyncio
+async def test_custom_model_create_surfaces_cleanup_failure(monkeypatch):
+    import arden.services.config as config_module
+
+    model = Model("local/test", Provider.CUSTOM, 8192, base_url="http://localhost/v1")
+    reload_count = 0
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            raise RuntimeError("reload failed")
+
+    monkeypatch.setattr(config_module, "add_custom_model", lambda **_kwargs: model)
+
+    def fail_remove(_model_id: str) -> None:
+        raise OSError("remove failed")
+
+    monkeypatch.setattr(config_module, "remove_custom_model", fail_remove)
+    service = ConfigService(on_config_change=reload_config)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await service.create_custom_model(
+            model_id=model.id,
+            base_url=model.base_url or "",
+            context_window=model.max_context_tokens,
+            max_output_tokens=model.max_output_tokens,
+        )
+
+    rollback_group = raised.value.exceptions[1]
+    assert str(raised.value.exceptions[0]) == "reload failed"
+    assert isinstance(rollback_group, BaseExceptionGroup)
+    assert [str(error) for error in rollback_group.exceptions] == ["remove failed"]
+    assert reload_count == 2
+
+
+@pytest.mark.asyncio
+async def test_custom_model_delete_cancellation_restores_exact_model(monkeypatch):
+    import arden.services.config as config_module
+
+    original = Model(
+        id="local/test",
+        provider=Provider.CUSTOM,
+        max_context_tokens=16_384,
+        max_output_tokens=4096,
+        pricing=Pricing(price_in=0.25, price_out=0.75),
+        base_url="http://localhost/v1",
+        api_key_env="LOCAL_MODEL_KEY",
+        reasoning_efforts=("low", "high"),
+    )
+    registered = {original.id: original}
+    persisted = {
+        "custom_model_keys": {original.id: "secret"},
+        "chat_model": original.id,
+    }
+    reload_started = asyncio.Event()
+    reload_count = 0
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    def add_model(**kwargs) -> Model:
+        restored = Model(
+            id=kwargs["model_id"],
+            provider=Provider.CUSTOM,
+            max_context_tokens=kwargs["context_window"],
+            max_output_tokens=kwargs["max_output_tokens"],
+            pricing=Pricing(price_in=kwargs["price_in"], price_out=kwargs["price_out"]),
+            base_url=kwargs["base_url"],
+            api_key_env=kwargs["api_key_env"],
+            reasoning_efforts=kwargs["reasoning_efforts"],
+        )
+        registered[restored.id] = restored
+        return restored
+
+    async def reload_config() -> None:
+        nonlocal reload_count
+        reload_count += 1
+        if reload_count == 1:
+            reload_started.set()
+            await asyncio.Future()
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "get_models_by_provider", lambda _provider: dict(registered))
+    monkeypatch.setattr(config_module, "remove_custom_model", registered.pop)
+    monkeypatch.setattr(config_module, "add_custom_model", add_model)
+
+    service = ConfigService(on_config_change=reload_config)
+    delete = asyncio.create_task(service.delete_custom_model(original.id))
+    await reload_started.wait()
+    delete.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await delete
+
+    assert registered == {original.id: original}
+    assert persisted == {
+        "custom_model_keys": {original.id: "secret"},
+        "chat_model": original.id,
+    }
+    assert reload_count == 2
+
+
+@pytest.mark.asyncio
+async def test_custom_model_delete_restores_settings_when_model_write_fails(monkeypatch):
+    import arden.services.config as config_module
+
+    model = Model("local/test", Provider.CUSTOM, 8192, base_url="http://localhost/v1")
+    persisted = {"custom_model_keys": {model.id: "secret"}, "chat_model": model.id}
+    reload_seen: list[dict] = []
+
+    def save_settings(settings: dict) -> None:
+        nonlocal persisted
+        persisted = deepcopy(settings)
+
+    async def reload_config() -> None:
+        reload_seen.append(deepcopy(persisted))
+
+    def fail_remove(_model_id: str) -> None:
+        raise OSError("model write failed")
+
+    monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
+    monkeypatch.setattr(config_module, "save_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "restore_user_settings", save_settings)
+    monkeypatch.setattr(config_module, "get_models_by_provider", lambda _provider: {model.id: model})
+    monkeypatch.setattr(config_module, "remove_custom_model", fail_remove)
+
+    service = ConfigService(on_config_change=reload_config)
+    with pytest.raises(OSError, match="model write failed"):
+        await service.delete_custom_model(model.id)
+
+    assert persisted == {"custom_model_keys": {model.id: "secret"}, "chat_model": model.id}
+    assert reload_seen == [{}, persisted]
+
+
+@pytest.mark.asyncio
 async def test_deleting_active_custom_embedding_clears_selection_and_key(monkeypatch):
     import arden.services.config as config_module
 
@@ -387,10 +641,19 @@ async def test_deleting_active_custom_embedding_clears_selection_and_key(monkeyp
         "custom_model_keys": {model.id: "secret"},
     }
     removed: list[str] = []
+    events: list[str] = []
 
     def save_settings(settings: dict) -> None:
         nonlocal persisted
+        events.append("settings")
         persisted = deepcopy(settings)
+
+    async def reload_config() -> None:
+        events.append("reload")
+
+    def remove_model(model_id: str) -> None:
+        events.append("model")
+        removed.append(model_id)
 
     monkeypatch.setattr(config_module, "load_user_settings", lambda: deepcopy(persisted))
     monkeypatch.setattr(config_module, "save_user_settings", save_settings)
@@ -402,14 +665,15 @@ async def test_deleting_active_custom_embedding_clears_selection_and_key(monkeyp
     monkeypatch.setattr(
         config_module,
         "remove_custom_embedding_model",
-        lambda model_id: removed.append(model_id),
+        remove_model,
     )
 
-    service = ConfigService(on_config_change=lambda: _noop())
+    service = ConfigService(on_config_change=reload_config)
     await service.delete_custom_embedding_model(model.id)
 
     assert removed == [model.id]
     assert persisted == {"embedding_model": None}
+    assert events == ["settings", "reload", "model"]
 
 
 @pytest.mark.asyncio
@@ -435,21 +699,28 @@ async def test_config_service_deletes_custom_model_and_clears_active_fields(monk
     }
     removed: list[str] = []
     reload_seen: list[dict] = []
+    events: list[str] = []
 
     def load_settings() -> dict:
         return deepcopy(persisted)
 
     def save_settings(settings: dict) -> None:
         nonlocal persisted
+        events.append("settings")
         persisted = deepcopy(settings)
 
     async def reload_config() -> None:
+        events.append("reload")
         reload_seen.append(deepcopy(persisted))
+
+    def remove_model(model_id: str) -> None:
+        events.append("model")
+        removed.append(model_id)
 
     monkeypatch.setattr(config_module, "load_user_settings", load_settings)
     monkeypatch.setattr(config_module, "save_user_settings", save_settings)
     monkeypatch.setattr(config_module, "get_models_by_provider", lambda _provider: {"local/test": model})
-    monkeypatch.setattr(config_module, "remove_custom_model", lambda model_id: removed.append(model_id))
+    monkeypatch.setattr(config_module, "remove_custom_model", remove_model)
 
     service = ConfigService(on_config_change=reload_config)
 
@@ -464,6 +735,7 @@ async def test_config_service_deletes_custom_model_and_clears_active_fields(monk
         "model_reasoning_efforts": {"other": "low"},
     }
     assert reload_seen == [persisted]
+    assert events == ["settings", "reload", "model"]
 
 
 @pytest.mark.asyncio

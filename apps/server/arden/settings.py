@@ -1,11 +1,9 @@
 import hashlib
 import hmac
 import json
-import os
 import secrets
-import tempfile
-from pathlib import Path
 
+from arden.atomic_file import write_private_atomic
 from arden.constants import ARDEN_DIR
 
 # Re-exported: ARDEN_DIR's canonical home is arden.constants, but config.py and
@@ -19,21 +17,6 @@ class SettingsError(RuntimeError):
 
 def _reject_nonfinite_json(value: str) -> None:
     raise ValueError(f"invalid JSON constant {value}")
-
-
-def _write_private_atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def load_user_settings() -> dict:
@@ -57,13 +40,13 @@ def save_user_settings(settings: dict) -> None:
     ARDEN_DIR.mkdir(parents=True, exist_ok=True)
     path = ARDEN_DIR / "settings.json"
     if path.exists():
-        _write_private_atomic(path.with_suffix(".json.bak"), path.read_bytes())
-    _write_private_atomic(path, payload)
+        write_private_atomic(path.with_suffix(".json.bak"), path.read_bytes())
+    write_private_atomic(path, payload)
 
 
 def restore_user_settings(settings: dict) -> None:
     payload = json.dumps(settings, indent=2, allow_nan=False).encode()
-    _write_private_atomic(ARDEN_DIR / "settings.json", payload)
+    write_private_atomic(ARDEN_DIR / "settings.json", payload)
 
 
 # --- API key auth ---

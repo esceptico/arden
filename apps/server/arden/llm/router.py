@@ -17,6 +17,7 @@ _stale_clients: list[CompletionClient] = []
 def init(config) -> None:
     _completion_clients.clear()
     _embedding_clients.clear()
+    _api_keys.clear()
     _api_keys[Provider.ANTHROPIC] = config.anthropic_api_key
     _api_keys[Provider.OPENAI] = config.openai_api_key
     _api_keys[Provider.GOOGLE] = config.gemini_api_key
@@ -27,7 +28,7 @@ def init(config) -> None:
     for model_id, key in custom_keys.items():
         _api_keys[model_id] = key
 
-    # Fallback: env var lookup via api_key_env (legacy / power-user)
+    # Custom model files may name an environment variable instead of storing a key.
     for model in chain(get_models().values(), get_embedding_models().values()):
         if model.provider == Provider.CUSTOM and model.api_key_env and model.id not in _api_keys:
             _api_keys[model.id] = config.model_extra.get(model.api_key_env.lower())

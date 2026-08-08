@@ -294,7 +294,7 @@ async def create_custom_model(
             max_output_tokens=req.max_output_tokens,
             api_key=req.api_key,
         )
-    except (RuntimeError, ValueError) as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "created", "model_id": model.id}
@@ -312,7 +312,7 @@ async def create_custom_embedding_model(
             dim=req.dimensions,
             api_key=req.api_key,
         )
-    except (RuntimeError, ValueError) as error:
+    except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return {"status": "created", "model_id": model.id}
 

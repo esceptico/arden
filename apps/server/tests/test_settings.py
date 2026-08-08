@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import arden.atomic_file as atomic_file
 import arden.config as config_module
 import arden.settings as settings_module
 from arden.settings import SettingsError
@@ -94,7 +95,7 @@ def test_primary_replace_failure_leaves_the_previous_settings_exact(settings_roo
             raise OSError("replace failed")
         replace(source, destination)
 
-    monkeypatch.setattr(settings_module.os, "replace", fail_primary)
+    monkeypatch.setattr(atomic_file.os, "replace", fail_primary)
 
     with pytest.raises(OSError, match="replace failed"):
         settings_module.save_user_settings({"version": "new"})
@@ -118,7 +119,7 @@ def test_backup_failure_leaves_the_primary_untouched(settings_root: Path, monkey
             raise OSError("backup failed")
         replace(source, destination)
 
-    monkeypatch.setattr(settings_module.os, "replace", fail_backup)
+    monkeypatch.setattr(atomic_file.os, "replace", fail_backup)
 
     with pytest.raises(OSError, match="backup failed"):
         settings_module.save_user_settings({"version": "new"})
