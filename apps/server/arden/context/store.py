@@ -593,6 +593,7 @@ class SessionStore:
         next_seq = int(max_seq_rows[0]["max_seq"]) + 1
         active_ids = [message["message_id"] for message in messages]
         existing: dict[str, aiosqlite.Row | dict] = {}
+        inserted: list[dict] = []
         for start in range(0, len(active_ids), 500):
             batch = active_ids[start : start + 500]
             placeholders = ",".join("?" for _ in batch)
@@ -628,6 +629,15 @@ class SessionStore:
                     "seq": next_seq,
                     "message_json": message_json,
                 }
+                inserted.append(
+                    {
+                        "message_id": message_id,
+                        "seq": next_seq,
+                        "role": role,
+                        "message_json": message_json,
+                        "created_at": created_at,
+                    }
+                )
                 next_seq += 1
             else:
                 try:
@@ -657,7 +667,7 @@ class SessionStore:
                 created_at=created_at,
                 connection=connection,
             )
-        await self._rebuild_session_turns(session_id, connection=connection)
+        await self._append_session_turn_messages(session_id, inserted, connection=connection)
 
     async def _record_compaction_message(
         self,
@@ -868,6 +878,94 @@ class SessionStore:
             return False
         message = json.loads(row["message_json"])
         return not self._is_handoff_message_payload(message)
+
+    async def _append_session_turn_messages(
+        self,
+        session_id: str,
+        messages: list[dict],
+        *,
+        connection: aiosqlite.Connection,
+    ) -> None:
+        if not messages:
+            return
+        rows = await connection.execute_fetchall(
+            """
+            SELECT * FROM session_turns
+            WHERE session_id = ?
+            ORDER BY turn_index DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        )
+        current = dict(rows[0]) if rows else None
+        existing_turn = current
+        existing_turn_changed = False
+        new_turns: list[dict] = []
+
+        for message in messages:
+            if not self._is_turn_message(message):
+                continue
+            if message["role"] == "user":
+                turn_index = current["turn_index"] + 1 if current is not None else 0
+                current = {
+                    "session_id": session_id,
+                    "turn_id": f"{session_id}:{turn_index}",
+                    "turn_index": turn_index,
+                    "user_message_id": message["message_id"],
+                    "message_start_id": message["message_id"],
+                    "message_end_id": message["message_id"],
+                    "message_start_seq": message["seq"],
+                    "message_end_seq": message["seq"],
+                    "started_at": message["created_at"],
+                    "ended_at": message["created_at"],
+                }
+                new_turns.append(current)
+            elif current is not None:
+                current["message_end_id"] = message["message_id"]
+                current["message_end_seq"] = message["seq"]
+                current["ended_at"] = message["created_at"]
+                existing_turn_changed = existing_turn_changed or current is existing_turn
+
+        if existing_turn_changed and existing_turn is not None:
+            await connection.execute(
+                """
+                UPDATE session_turns
+                SET message_end_id = ?, message_end_seq = ?, ended_at = ?
+                WHERE session_id = ? AND turn_index = ?
+                """,
+                (
+                    existing_turn["message_end_id"],
+                    existing_turn["message_end_seq"],
+                    existing_turn["ended_at"],
+                    session_id,
+                    existing_turn["turn_index"],
+                ),
+            )
+        if new_turns:
+            await connection.executemany(
+                """
+                INSERT INTO session_turns (
+                    session_id, turn_id, turn_index, user_message_id,
+                    message_start_id, message_end_id, message_start_seq, message_end_seq,
+                    started_at, ended_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        turn["session_id"],
+                        turn["turn_id"],
+                        turn["turn_index"],
+                        turn["user_message_id"],
+                        turn["message_start_id"],
+                        turn["message_end_id"],
+                        turn["message_start_seq"],
+                        turn["message_end_seq"],
+                        turn["started_at"],
+                        turn["ended_at"],
+                    )
+                    for turn in new_turns
+                ],
+            )
 
     async def _rebuild_session_turns(
         self,

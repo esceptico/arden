@@ -3098,6 +3098,11 @@ async def test_checkpoint_reconstructs_active_context_from_immutable_transcript(
 
     compacted = _build_compacted_messages(original, 1, 3, "first summary")
     await store.save_session(state, compacted)
+    turns = await store.list_session_turns(state.session_id)
+    assert [(turn["message_start_id"], turn["message_end_id"]) for turn in turns] == [
+        ("u-1", "a-1"),
+        ("u-2", "a-2"),
+    ]
 
     # A malformed active projection recovers from the durable checkpoint.
     # A valid [] is an explicit user clear and must never resurrect history.
@@ -4303,6 +4308,15 @@ async def test_rewind_session_trims_uncompacted_active_future(store: SessionStor
     turns = await store.list_session_turns("test-session")
     assert [turn["message_start_id"] for turn in turns] == ["m-0", "m-1"]
 
+    remaining = messages[:2]
+    remaining.append({"role": "assistant", "content": "continued", "client_id": "a-new"})
+    await store.save_session(state, remaining)
+    turns = await store.list_session_turns("test-session")
+    assert [(turn["message_start_id"], turn["message_end_id"]) for turn in turns] == [
+        ("m-0", "m-0"),
+        ("m-1", "a-new"),
+    ]
+
 
 @pytest.mark.asyncio
 async def test_session_turns_group_durable_transcript_by_user_turn(store: SessionStore):
@@ -4322,6 +4336,94 @@ async def test_session_turns_group_durable_transcript_by_user_turn(store: Sessio
     assert [(turn["message_start_id"], turn["message_end_id"]) for turn in turns] == [("u-1", "t-1"), ("u-2", "a-2")]
     assert turns[0]["started_at"] == "2026-01-01T00:00:00+00:00"
     assert turns[0]["ended_at"] == "2026-01-01T00:00:02+00:00"
+
+
+@pytest.mark.asyncio
+async def test_messages_before_the_first_user_do_not_create_a_turn(store: SessionStore):
+    state = _make_state("no-user-turn")
+    await store.save_session(
+        state,
+        [
+            {"role": "assistant", "content": "prologue", "client_id": "a-1"},
+            {"role": "tool", "content": "background result", "client_id": "t-1"},
+        ],
+    )
+
+    assert await store.list_session_turns(state.session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_turn_write_failure_rolls_back_the_snapshot_and_transcript(store: SessionStore):
+    state = _make_state("turn-write-rollback")
+    messages = [{"role": "user", "content": "first", "client_id": "u-1"}]
+    await store.save_session(state, messages)
+    await store.conn.execute(
+        """
+        CREATE TRIGGER reject_session_turn_update
+        BEFORE UPDATE ON session_turns
+        BEGIN
+            SELECT RAISE(ABORT, 'turn update failed');
+        END
+        """
+    )
+    await store.conn.commit()
+    messages.append({"role": "assistant", "content": "reply", "client_id": "a-1"})
+
+    with pytest.raises(sqlite3.IntegrityError, match="turn update failed"):
+        await store.save_session(state, messages)
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == ["u-1"]
+    transcript = await store.list_session_messages(state.session_id, limit=10)
+    assert [message["message_id"] for message in transcript["messages"]] == ["u-1"]
+
+
+@pytest.mark.asyncio
+async def test_ordinary_saves_append_turns_without_rebuilding_them(store: SessionStore):
+    state = _make_state("incremental-turns")
+    messages = [{"role": "user", "content": "first", "client_id": "u-1"}]
+    await store.save_session(state, messages)
+    await store.conn.execute(
+        """
+        CREATE TRIGGER reject_session_turn_rebuild
+        BEFORE DELETE ON session_turns
+        BEGIN
+            SELECT RAISE(ABORT, 'session turns must update incrementally');
+        END
+        """
+    )
+    await store.conn.execute("CREATE TABLE turn_update_audit (marker INTEGER NOT NULL)")
+    await store.conn.execute(
+        """
+        CREATE TRIGGER audit_session_turn_update
+        AFTER UPDATE ON session_turns
+        BEGIN
+            INSERT INTO turn_update_audit(marker) VALUES (1);
+        END
+        """
+    )
+    await store.conn.commit()
+
+    messages.extend(
+        {"role": "assistant", "content": f"reply {index}", "client_id": f"a-{index}"} for index in range(100)
+    )
+    await store.update_progress(state, messages)
+    messages.extend(
+        [
+            {"role": "user", "content": "second", "client_id": "u-2"},
+            {"role": "assistant", "content": "final reply", "client_id": "a-final"},
+        ]
+    )
+    await store.save_session(state, messages)
+
+    turns = await store.list_session_turns(state.session_id)
+    assert [(turn["message_start_id"], turn["message_end_id"]) for turn in turns] == [
+        ("u-1", "a-99"),
+        ("u-2", "a-final"),
+    ]
+    updates = await store.read_conn.execute_fetchall("SELECT count(*) AS count FROM turn_update_audit")
+    assert updates[0]["count"] == 1
 
 
 @pytest.mark.asyncio
