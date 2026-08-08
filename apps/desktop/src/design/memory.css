@@ -209,7 +209,9 @@
   gap: var(--space-0-5);
 }
 
-.memory-surface .mw-tree { gap: var(--space-3); }
+/* Root folders stack at the SAME 2px step as every row inside them —
+   one uniform distance for all files and dirs, no group breaks. */
+.memory-surface .mw-tree { gap: var(--space-0-5); }
 
 .memory-surface .mw-tree-row {
   position: relative;
