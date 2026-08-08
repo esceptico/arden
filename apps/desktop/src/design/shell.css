@@ -247,8 +247,18 @@
      own slack below its label, so the margin is smaller than the padding. */
   /* Bottom margin tuned so title→first-heading BASELINE pitch equals the
      heading→heading pitch — one rhythm, measured, not per-box margins. */
+  position: relative;
   margin: var(--space-2) 0 var(--space-3);
   padding: var(--space-3) var(--space-1) 0 var(--interactive-row-inline-padding);
+}
+
+/* Separators align with the CONTENT column (12px text inset), not the
+   rail box — a full-bleed rule overshoots everything it separates. */
+.workspace-rail__section-header::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  inset-inline: var(--interactive-row-inline-padding);
   border-top: 1px solid var(--edge);
 }
 
@@ -526,12 +536,20 @@
 }
 
 .workspace-rail__footer {
+  position: relative;
   display: flex;
   flex: none;
   align-items: center;
   gap: var(--space-1);
   margin-top: auto;
   padding-top: .4375rem;
+}
+
+.workspace-rail__footer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  inset-inline: var(--interactive-row-inline-padding);
   border-top: 1px solid var(--edge);
 }
 
