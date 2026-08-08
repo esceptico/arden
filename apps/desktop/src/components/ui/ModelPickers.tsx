@@ -139,7 +139,7 @@ export function ModelReasoningPicker({
   onSelectEffort,
 }: {
   buttonLabel?: string;
-  currentModel: string;
+  currentModel: string | null;
   currentEffort: string | null;
   efforts: string[];
   groups: ModelGroup[];
@@ -174,7 +174,7 @@ export function ModelReasoningPicker({
     <div className={clsx("model-picker model-picker--field", layout === "inline" && "model-picker--inline")}>
       <Combobox.Root
         items={groupedModels}
-        value={currentModel}
+        value={currentModel ?? ""}
         inputValue={query}
         open={modelOpen}
         disabled={disabled}
@@ -190,14 +190,14 @@ export function ModelReasoningPicker({
       >
         <Combobox.Trigger
           aria-label="Choose model"
-          title={currentModel}
+          title={currentModel ?? "Choose model"}
           className="model-picker__trigger model-picker__model-trigger group"
         >
           <BlurSwap
-            swapKey={`${buttonLabel ?? currentModel}`}
+            swapKey={buttonLabel ?? currentModel ?? "choose-model"}
             className="model-picker__current-model"
           >
-            {buttonLabel ?? shortModelLabel(currentModel)}
+            {buttonLabel ?? (currentModel ? shortModelLabel(currentModel) : "Choose model")}
           </BlurSwap>
           <Combobox.Icon className="model-picker__chevron">
             <ChevronDown size={ICON.SM} strokeWidth={2} />
@@ -265,13 +265,15 @@ export function ModelReasoningPicker({
         </Combobox.Portal>
       </Combobox.Root>
 
-      <ReasoningMenu
-        currentEffort={currentEffort}
-        efforts={efforts}
-        disabled={disabled || efforts.length === 0}
-        anchored={anchored}
-        onSelect={onSelectEffort}
-      />
+      {currentModel && (
+        <ReasoningMenu
+          currentEffort={currentEffort}
+          efforts={efforts}
+          disabled={disabled || efforts.length === 0}
+          anchored={anchored}
+          onSelect={onSelectEffort}
+        />
+      )}
     </div>
   );
 }
@@ -612,6 +614,7 @@ export function ModelReasoningChip() {
 
   const session = sessions.find((item) => item.session_id === currentSessionId);
   const currentModel = session?.chat_model ?? config.chat_model;
+  if (!currentModel) return null;
   const modelReasoningEfforts = config.model_reasoning_efforts;
   const currentEffort = modelReasoningEfforts[currentModel] ?? null;
   const configured = availableModelChoices(currentModel, configuredModelChoices(config));

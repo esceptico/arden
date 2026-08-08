@@ -57,7 +57,7 @@ export function useEntries(): CommandEntry[] {
   const order = useStore((s) => s.order);
   const serverModels = useStore((s) => s.serverModels);
   const serverConfig = useStore((s) => s.serverConfig);
-  const currentChatModel = serverConfig?.chat_model;
+  const currentChatModel = serverConfig?.chat_model ?? undefined;
 
   return useMemo(() => {
     const entries: CommandEntry[] = [];

@@ -92,6 +92,16 @@ export function ModelsTab() {
     );
   }
 
+  const chatModel = cfg.chat_model;
+  if (!chatModel && models.groups.length === 0) {
+    return (
+      <SettingsConnectionHint
+        title="Connect a model provider"
+        detail="Add a provider in Providers before choosing model defaults."
+      />
+    );
+  }
+
   if (
     !Object.prototype.hasOwnProperty.call(cfg, "model_reasoning_efforts") ||
     !Object.prototype.hasOwnProperty.call(cfg, "model_roles") ||
@@ -120,14 +130,14 @@ export function ModelsTab() {
         <Section
           title="Default chat (new chats)"
           description="Model new chats start on. Existing chats keep their own."
-          current={cfg.chat_model}
+          current={chatModel}
           savingModel={saving === "chat_model:model"}
           savingReasoning={saving === "chat_model:reasoning"}
           groups={groups}
           reasoningEfforts={models.reasoning_efforts}
-          currentReasoning={cfg.model_reasoning_efforts[cfg.chat_model] ?? null}
+          currentReasoning={chatModel ? cfg.model_reasoning_efforts[chatModel] ?? null : null}
           onSelect={async (model) => {
-            if (model === cfg.chat_model || saving) return;
+            if (model === chatModel || saving) return;
             setSaving("chat_model:model");
             setError(null);
             try {
@@ -141,12 +151,12 @@ export function ModelsTab() {
             }
           }}
           onSetReasoning={async (effort) => {
-            if (saving) return;
+            if (!chatModel || saving) return;
             setSaving("chat_model:reasoning");
             setError(null);
             try {
               await updateServerConfig({
-                reasoning_model: cfg.chat_model,
+                reasoning_model: chatModel,
                 reasoning_effort: effort,
               });
               fireSaved();
@@ -459,7 +469,7 @@ function Section({
 }: {
   title: string;
   description: string;
-  current: string;
+  current: string | null;
   groups: ModelGroup[];
   savingModel: boolean;
   savingReasoning: boolean;
@@ -468,7 +478,7 @@ function Section({
   onSelect: (model: string) => void;
   onSetReasoning: (effort: string | null) => void;
 }) {
-  const efforts = reasoningEfforts[current] ?? [];
+  const efforts = current ? reasoningEfforts[current] ?? [] : [];
 
   return (
     <SettingsSettingRow

@@ -113,6 +113,23 @@ test("accepts current config and model metadata contracts", () => {
   })).toMatchObject({ reasoning_efforts: { "gpt-5.2": ["low", "medium"] } });
 });
 
+test("accepts the explicit no-provider config and model contracts", () => {
+  const noProvider = {
+    chat_model: null,
+    research_model: null,
+    workflow_model: null,
+    memory_model: null,
+  };
+
+  expect(parseServerConfig({ ...config, ...noProvider, embedding_model: null })).toMatchObject(noProvider);
+  expect(parseModelsResponse({
+    models: [],
+    groups: [],
+    reasoning_efforts: {},
+    ...noProvider,
+  })).toMatchObject(noProvider);
+});
+
 test("accepts the nullable embedding catalog and rebuild status contracts", () => {
   expect(parseEmbeddingModelsResponse({
     models: ["text-embedding-3-small"],

@@ -116,16 +116,16 @@ export interface SkillDescriptor {
 }
 
 export interface ServerConfig {
-  chat_model: string;
+  chat_model: string | null;
   /** Hard token ceiling of the active chat model. */
   chat_model_max_context: number;
   /** Configured compaction ceiling and actual trigger after server headroom. */
   compaction_token_limit: number;
   compaction_token_trigger: number;
-  research_model: string;
+  research_model: string | null;
   /** Default model for workflow agents. */
-  workflow_model: string;
-  memory_model: string;
+  workflow_model: string | null;
+  memory_model: string | null;
   embedding_model: string | null;
   web_search: "auto" | "exa" | "ddgs" | "none";
   web_search_provider: string;
@@ -247,10 +247,10 @@ export interface ModelsResponse {
   models: string[];
   groups: ModelGroup[];
   reasoning_efforts: Record<string, string[]>;
-  chat_model: string;
-  research_model: string;
-  workflow_model: string;
-  memory_model: string;
+  chat_model: string | null;
+  research_model: string | null;
+  workflow_model: string | null;
+  memory_model: string | null;
 }
 
 // ─── Automations ───────────────────────────────────────────────────

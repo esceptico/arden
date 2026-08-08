@@ -477,10 +477,10 @@ function assertServerContract(condition: unknown, message: string): asserts cond
 
 export function parseServerConfig(data: unknown): ServerConfig {
   assertServerContract(isRecord(data), "Invalid /config response: expected an object");
-  assertServerContract(typeof data.chat_model === "string", "Invalid /config response: missing chat_model");
-  assertServerContract(typeof data.research_model === "string", "Invalid /config response: missing research_model");
-  assertServerContract(typeof data.workflow_model === "string", "Invalid /config response: missing workflow_model");
-  assertServerContract(typeof data.memory_model === "string", "Invalid /config response: missing memory_model");
+  assertServerContract(isNullableString(data.chat_model), "Invalid /config response: invalid chat_model");
+  assertServerContract(isNullableString(data.research_model), "Invalid /config response: invalid research_model");
+  assertServerContract(isNullableString(data.workflow_model), "Invalid /config response: invalid workflow_model");
+  assertServerContract(isNullableString(data.memory_model), "Invalid /config response: invalid memory_model");
   assertServerContract(
     isNullableString(data.embedding_model),
     "Invalid /config response: invalid embedding_model",
@@ -524,18 +524,18 @@ export function parseModelsResponse(data: unknown): ModelsResponse {
     isStringArrayRecord(data.reasoning_efforts),
     "Invalid /models response: missing reasoning_efforts",
   );
-  assertServerContract(typeof data.chat_model === "string", "Invalid /models response: missing chat_model");
+  assertServerContract(isNullableString(data.chat_model), "Invalid /models response: invalid chat_model");
   assertServerContract(
-    typeof data.research_model === "string",
-    "Invalid /models response: missing research_model",
+    isNullableString(data.research_model),
+    "Invalid /models response: invalid research_model",
   );
   assertServerContract(
-    typeof data.workflow_model === "string",
-    "Invalid /models response: missing workflow_model",
+    isNullableString(data.workflow_model),
+    "Invalid /models response: invalid workflow_model",
   );
   assertServerContract(
-    typeof data.memory_model === "string",
-    "Invalid /models response: missing memory_model",
+    isNullableString(data.memory_model),
+    "Invalid /models response: invalid memory_model",
   );
   return data as unknown as ModelsResponse;
 }

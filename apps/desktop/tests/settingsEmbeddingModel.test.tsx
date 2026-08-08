@@ -291,3 +291,66 @@ test("a failed initial embedding load leaves a direct retry", async () => {
   expect(Array.from(app.querySelectorAll("button")).some((button) => button.textContent === "Retry")).toBe(true);
   expect(app.querySelector<HTMLElement>('[aria-label="Choose embedding model"]')?.getAttribute("disabled")).not.toBeNull();
 });
+
+test("a fresh no-provider config shows setup instead of model controls", async () => {
+  const { app } = mount({});
+  setState({
+    serverConfig: {
+      ...CONFIG,
+      chat_model: null,
+      research_model: null,
+      workflow_model: null,
+      memory_model: null,
+    },
+    serverModels: {
+      models: [],
+      groups: [],
+      reasoning_efforts: {},
+      chat_model: null,
+      research_model: null,
+      workflow_model: null,
+      memory_model: null,
+    },
+  });
+
+  await act(async () => root?.render(<ModelsTab />));
+
+  expect(app.textContent).toContain("Connect a model provider");
+  expect(app.querySelector('[aria-label="Choose model"]')).toBeNull();
+});
+
+test("a custom-model-only setup can select its first chat model", async () => {
+  const { app, requests } = mount({});
+  setState({
+    serverConfig: {
+      ...CONFIG,
+      chat_model: null,
+      research_model: null,
+      workflow_model: null,
+      memory_model: null,
+    },
+    serverModels: {
+      models: ["custom/local"],
+      groups: [{ provider: "custom", label: "Custom", models: ["custom/local"] }],
+      reasoning_efforts: {},
+      chat_model: null,
+      research_model: null,
+      workflow_model: null,
+      memory_model: null,
+    },
+  });
+
+  await act(async () => root?.render(<ModelsTab />));
+  const chooser = app.querySelector<HTMLElement>('[aria-label="Choose model"]');
+  expect(chooser).not.toBeNull();
+  await act(async () => chooser?.click());
+  const option = document.querySelector<HTMLElement>('[role="option"]');
+  expect(option?.textContent).toContain("custom/local");
+  await act(async () => {
+    option?.click();
+    await Promise.resolve();
+  });
+
+  const patch = requests.find((request) => request.path === "/config" && request.method === "PATCH");
+  expect(JSON.parse(patch?.body ?? "null")).toEqual({ chat_model: "custom/local" });
+});
