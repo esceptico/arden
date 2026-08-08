@@ -2925,6 +2925,14 @@ async def test_valid_projection_load_does_not_scan_transcript(store: SessionStor
         pytest.param([{"content": "missing role"}], ValueError, id="missing-role"),
         pytest.param([{"role": [], "content": "bad role"}], ValueError, id="non-string-role"),
         pytest.param(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "system", "content": "late policy"},
+            ],
+            ValueError,
+            id="late-system-message",
+        ),
+        pytest.param(
             [{"role": "user", "content": "bad timestamp", "created_at": "yesterday"}],
             ValueError,
             id="invalid-timestamp",
@@ -3010,6 +3018,33 @@ async def test_update_progress_keeps_metadata_on_existing_session(store: Session
     assert loaded.last_input_tokens == 1234
     assert len(loaded.messages) == 2
     assert loaded.active_message_count == 2
+
+
+@pytest.mark.parametrize("save_method", ["save_session", "update_progress"])
+@pytest.mark.asyncio
+async def test_reintroduced_system_message_reuses_transcript_identity(
+    store: SessionStore,
+    save_method: str,
+):
+    state = _make_state(f"system-identity-{save_method}")
+    messages = [
+        {"role": "system", "content": "old prompt"},
+        {"role": "user", "content": "hello"},
+    ]
+    await store.save_session(state, messages)
+    system_id = messages[0]["message_id"]
+
+    replacement = [
+        {"role": "system", "content": "current prompt"},
+        messages[1],
+    ]
+    await getattr(store, save_method)(state, replacement)
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert loaded.messages[0]["message_id"] == system_id
+    transcript = await store.list_session_messages(state.session_id, limit=10)
+    assert [message["role"] for message in transcript["messages"]].count("system") == 1
 
 
 @pytest.mark.asyncio

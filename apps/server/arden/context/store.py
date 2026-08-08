@@ -431,6 +431,8 @@ class SessionStore:
             role = msg.get("role")
             if not isinstance(role, str) or role not in _MESSAGE_ROLES:
                 raise ValueError(f"message {index} has invalid role")
+            if role == "system" and index != 0:
+                raise ValueError(f"message {index} has system role after conversation content")
 
             created_at = msg.get("created_at")
             if created_at is None:
@@ -457,6 +459,28 @@ class SessionStore:
                 raise ValueError(f"message {index} duplicates message_id {message_id!r}")
             msg["message_id"] = message_id
             seen.add(message_id)
+
+    @staticmethod
+    async def _bind_system_message_identity(
+        session_id: str,
+        messages: list[dict],
+        connection: aiosqlite.Connection,
+    ) -> None:
+        if not messages or messages[0].get("role") != "system":
+            return
+        rows = await connection.execute_fetchall(
+            """
+            SELECT message_id, created_at
+            FROM session_messages
+            WHERE session_id = ? AND role = 'system'
+            ORDER BY seq
+            LIMIT 1
+            """,
+            (session_id,),
+        )
+        if rows:
+            messages[0]["message_id"] = rows[0]["message_id"]
+            messages[0]["created_at"] = rows[0]["created_at"]
 
     @staticmethod
     def _message_id_sequence(messages: list[dict]) -> list[str] | None:
@@ -1036,6 +1060,7 @@ class SessionStore:
                 serializable = self._to_serializable_messages(messages)
                 await self._ensure_session_public_ref(state, connection)
                 now = datetime.now(UTC).isoformat()
+                await self._bind_system_message_identity(state.session_id, serializable, connection)
                 self._stamp_messages(serializable, now)
 
                 messages_json = await asyncio.to_thread(lambda: _encode_json(serializable))
@@ -2069,6 +2094,7 @@ class SessionStore:
         # The list is shared with the agent's in-memory context, so stable
         # identity and timestamps survive later append-only saves.
         now = datetime.now(UTC).isoformat()
+        await self._bind_system_message_identity(state.session_id, serializable_messages, connection)
         self._stamp_messages(serializable_messages, now)
         meta = metadata or {}
         messages_json, metadata_json = await asyncio.to_thread(
