@@ -879,15 +879,6 @@ async def test_update_metadata_persists_v5_identity_fields(automation_store: Aut
     assert loaded.idempotency_scope == "thread"
 
 
-async def _downgrade_refs_to_v16(store: AutomationStore) -> None:
-    await store.conn.execute("DROP INDEX idx_automation_runs_ref")
-    await store.conn.execute("DROP INDEX idx_scheduled_tasks_automation_ref")
-    await store.conn.execute("ALTER TABLE automation_runs DROP COLUMN automation_ref")
-    await store.conn.execute("ALTER TABLE scheduled_tasks DROP COLUMN automation_ref")
-    await store.conn.execute("UPDATE automation_meta SET value = '16' WHERE key = 'schema_version'")
-    await store.conn.commit()
-
-
 @pytest.mark.asyncio
 async def test_fresh_schema_starts_at_current_version_and_restarts(tmp_path: Path):
     path = tmp_path / "fresh.db"
@@ -905,7 +896,7 @@ async def test_fresh_schema_starts_at_current_version_and_restarts(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", [0, 15])
+@pytest.mark.parametrize("version", [0, 15, 16])
 async def test_legacy_schema_versions_are_rejected(tmp_path: Path, version: int):
     conn = await database.connect(tmp_path / f"v{version}.db")
     store = AutomationStore(conn)
@@ -991,123 +982,6 @@ async def test_current_schema_rejects_missing_indexes_without_repair(tmp_path: P
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_automation_event_queue_task_claimed_id'"
     )
     assert indexes == []
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_v16_upgrade_rejects_noncanonical_columns(tmp_path: Path):
-    conn = await database.connect(tmp_path / "noncanonical-v16.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    await _downgrade_refs_to_v16(store)
-    await conn.execute("ALTER TABLE automation_count_state ADD COLUMN legacy_count INTEGER")
-    await conn.commit()
-
-    with pytest.raises(RuntimeError, match="unexpected columns in automation_count_state"):
-        await store.init_schema()
-    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "16"
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_v17_migration_backfills_task_and_run_refs(tmp_path: Path):
-    conn = await database.connect(tmp_path / "v16.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    automation = _automation("internal-task-id", name="Daily Brief")
-    await store.save(automation)
-    await store.record_run_start(automation.task_id, datetime.now(UTC))
-    await _downgrade_refs_to_v16(store)
-
-    await store.init_schema()
-
-    loaded = await store.get(automation.task_id)
-    assert loaded is not None
-    assert loaded.automation_ref == create_automation_ref("Daily Brief", "internal-task-id")
-    runs = await store.list_runs_since(datetime(2000, 1, 1, tzinfo=UTC))
-    assert runs[0]["automation_ref"] == loaded.automation_ref
-    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "17"
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_v17_migration_rejects_partial_ref_columns(tmp_path: Path):
-    conn = await database.connect(tmp_path / "partial-v16.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    await _downgrade_refs_to_v16(store)
-    await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN automation_ref TEXT")
-    await conn.commit()
-
-    with pytest.raises(RuntimeError, match="partial public-ref migration"):
-        await store.init_schema()
-    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "16"
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_v17_migration_rolls_back_after_a_late_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    conn = await database.connect(tmp_path / "late-failure-v16.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    await store.save(_automation("rollback", name="Rollback"))
-    await _downgrade_refs_to_v16(store)
-
-    async def fail_indexes(_conn):
-        raise RuntimeError("index write failed")
-
-    monkeypatch.setattr("arden.automation.store_schema._create_v17_indexes", fail_indexes)
-    with pytest.raises(RuntimeError, match="index write failed"):
-        await store.init_schema()
-
-    task_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
-    run_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
-    assert "automation_ref" not in task_columns
-    assert "automation_ref" not in run_columns
-    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "16"
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_v17_migration_preserves_runs_for_deleted_automations(tmp_path: Path):
-    conn = await database.connect(tmp_path / "deleted-v16.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    automation = _automation("deleted-task", name="Ephemeral")
-    await store.save(automation)
-    await store.record_run_start(automation.task_id, datetime.now(UTC))
-    assert await store.delete(automation.task_id)
-    await _downgrade_refs_to_v16(store)
-
-    await store.init_schema()
-
-    runs = await store.list_runs_since(datetime(2000, 1, 1, tzinfo=UTC))
-    assert runs[0]["automation_ref"] == create_automation_ref("Deleted automation", automation.task_id)
-    assert await store.get(automation.task_id) is None
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_v17_migration_rejects_public_ref_collisions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    conn = await database.connect(tmp_path / "collision.db")
-    store = AutomationStore(conn)
-    await store.init_schema()
-    await store.save(_automation("one", name="One"))
-    await store.save(_automation("two", name="Two"))
-    await _downgrade_refs_to_v16(store)
-    monkeypatch.setattr("arden.automation.store_schema.create_automation_ref", lambda _name, _task_id: "same~000000")
-
-    with pytest.raises(RuntimeError, match="public-ref collision"):
-        await store.init_schema()
-
-    columns = await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")
-    assert "automation_ref" not in {row["name"] for row in columns}
-    version = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
-    assert version[0]["value"] == "16"
     await conn.close()
 
 

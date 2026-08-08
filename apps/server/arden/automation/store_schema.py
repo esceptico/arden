@@ -1,13 +1,6 @@
-import sqlite3
-
 import aiosqlite
 
-from arden.automation.models import create_automation_ref
-from arden.logging import get_logger
-
 CURRENT_SCHEMA_VERSION = 17
-
-_logger = get_logger(__name__)
 
 _SCHEMA = """
 CREATE TABLE scheduled_tasks (
@@ -216,10 +209,6 @@ _V17_COLUMNS = {
     ),
 }
 
-_V16_COLUMNS = {
-    table: tuple(column for column in columns if column != "automation_ref") for table, columns in _V17_COLUMNS.items()
-}
-
 _REQUIRED_INDEXES_V17 = frozenset(
     {
         "idx_scheduled_tasks_next_run",
@@ -255,11 +244,9 @@ async def initialize(conn: aiosqlite.Connection) -> None:
     if version == CURRENT_SCHEMA_VERSION:
         await _validate_shape(conn, _V17_COLUMNS, _REQUIRED_INDEXES_V17)
         return
-    if version != 16:
-        if version < 16:
-            raise RuntimeError(f"automation schema v{version} is unsupported; restore a v16 database")
-        raise RuntimeError(f"automation schema v{version} is newer than supported v{CURRENT_SCHEMA_VERSION}")
-    await _upgrade_v16(conn)
+    if version < CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(f"automation schema v{version} is unsupported; restore a v{CURRENT_SCHEMA_VERSION} database")
+    raise RuntimeError(f"automation schema v{version} is newer than supported v{CURRENT_SCHEMA_VERSION}")
 
 
 async def _create_fresh(conn: aiosqlite.Connection) -> None:
@@ -279,7 +266,7 @@ async def _create_fresh(conn: aiosqlite.Connection) -> None:
 async def _schema_version(conn: aiosqlite.Connection) -> int:
     rows = await conn.execute_fetchall("SELECT value FROM automation_meta WHERE key = 'schema_version'")
     if not rows:
-        raise RuntimeError("automation schema version is missing; restore a v16 or v17 database")
+        raise RuntimeError(f"automation schema version is missing; restore a v{CURRENT_SCHEMA_VERSION} database")
     try:
         return int(rows[0]["value"])
     except (TypeError, ValueError) as exc:
@@ -303,76 +290,3 @@ async def _validate_shape(
     missing = required_indexes - indexes
     if missing:
         raise RuntimeError(f"automation schema is missing indexes: {', '.join(sorted(missing))}")
-
-
-async def _upgrade_v16(conn: aiosqlite.Connection) -> None:
-    task_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(scheduled_tasks)")}
-    run_columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(automation_runs)")}
-    if "automation_ref" in task_columns or "automation_ref" in run_columns:
-        raise RuntimeError("automation schema v16 has a partial public-ref migration")
-    await _validate_shape(conn, _V16_COLUMNS)
-
-    try:
-        await conn.execute("BEGIN IMMEDIATE")
-        await _add_public_refs(conn)
-        await conn.execute(
-            "INSERT OR REPLACE INTO automation_meta (key, value) VALUES ('schema_version', ?)",
-            (str(CURRENT_SCHEMA_VERSION),),
-        )
-        await _validate_shape(conn, _V17_COLUMNS, _REQUIRED_INDEXES_V17)
-        await conn.commit()
-    except sqlite3.OperationalError as exc:
-        await conn.rollback()
-        raise RuntimeError("automation schema v16 is incomplete") from exc
-    except BaseException:
-        await conn.rollback()
-        raise
-    _logger.info("Migrated automation store to v17 (stable model-facing refs)")
-
-
-async def _add_public_refs(conn: aiosqlite.Connection) -> None:
-    task_rows = await conn.execute_fetchall("SELECT task_id, name FROM scheduled_tasks")
-    names_by_task = {row["task_id"]: row["name"] for row in task_rows}
-    run_task_rows = await conn.execute_fetchall("SELECT DISTINCT task_id FROM automation_runs")
-    for row in run_task_rows:
-        names_by_task.setdefault(row["task_id"], "Deleted automation")
-
-    refs_by_task: dict[str, str] = {}
-    tasks_by_ref: dict[str, str] = {}
-    for task_id, name in names_by_task.items():
-        try:
-            automation_ref = create_automation_ref(name, task_id)
-        except ValueError as error:
-            raise RuntimeError(f"automation {task_id!r} cannot receive a public ref") from error
-        if other_task := tasks_by_ref.get(automation_ref):
-            raise RuntimeError(
-                f"automation public-ref collision between {other_task!r} and {task_id!r}: {automation_ref}"
-            )
-        refs_by_task[task_id] = automation_ref
-        tasks_by_ref[automation_ref] = task_id
-
-    await conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN automation_ref TEXT")
-    await conn.execute("ALTER TABLE automation_runs ADD COLUMN automation_ref TEXT")
-    for task_id, automation_ref in refs_by_task.items():
-        await conn.execute(
-            "UPDATE scheduled_tasks SET automation_ref = ? WHERE task_id = ?",
-            (automation_ref, task_id),
-        )
-        await conn.execute(
-            "UPDATE automation_runs SET automation_ref = ? WHERE task_id = ?",
-            (automation_ref, task_id),
-        )
-    missing_task_refs = await conn.execute_fetchall(
-        "SELECT task_id FROM scheduled_tasks WHERE automation_ref IS NULL OR automation_ref = '' LIMIT 1"
-    )
-    missing_run_refs = await conn.execute_fetchall(
-        "SELECT id FROM automation_runs WHERE automation_ref IS NULL OR automation_ref = '' LIMIT 1"
-    )
-    if missing_task_refs or missing_run_refs:
-        raise RuntimeError("automation public-ref migration left an unaddressable row")
-    await _create_v17_indexes(conn)
-
-
-async def _create_v17_indexes(conn: aiosqlite.Connection) -> None:
-    await conn.execute("CREATE UNIQUE INDEX idx_scheduled_tasks_automation_ref ON scheduled_tasks(automation_ref)")
-    await conn.execute("CREATE INDEX idx_automation_runs_ref ON automation_runs(automation_ref, started_at)")
