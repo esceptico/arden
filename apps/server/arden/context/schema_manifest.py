@@ -101,7 +101,7 @@ _EXPECTED_AUTO_INDEX_COLUMNS = {
     ("areas", "sqlite_autoindex_areas_2", "u", ("area_ref",)),
     ("background_agent_events", "sqlite_autoindex_background_agent_events_1", "pk", ("session_id", "seq")),
     ("background_agent_runs", "sqlite_autoindex_background_agent_runs_1", "pk", ("session_id", "task_id")),
-    ("chat_compactions", "sqlite_autoindex_chat_compactions_1", "pk", ("compaction_id",)),
+    ("chat_compactions", "sqlite_autoindex_chat_compactions_1", "pk", ("session_id", "compaction_id")),
     ("chat_idempotency_keys", "sqlite_autoindex_chat_idempotency_keys_1", "pk", ("session_id", "client_id")),
     ("chat_runs", "sqlite_autoindex_chat_runs_1", "pk", ("run_id",)),
     ("execution_cancellation_scopes", "sqlite_autoindex_execution_cancellation_scopes_1", "pk", ("session_id",)),

@@ -6,7 +6,7 @@ from arden.context.errors import SessionSchemaError
 from arden.context.schema_manifest import assert_current_schema as _assert_current_shape
 from arden.context.schema_sql import CANONICAL_SCHEMA_SQL
 
-CURRENT_VERSION = 10
+CURRENT_VERSION = 11
 
 
 async def initialize_context_schema(conn: aiosqlite.Connection) -> None:

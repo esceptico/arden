@@ -9,7 +9,6 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
-from pydantic import BaseModel
 
 from arden.constants import SESSION_HANDOFF_MARKER
 from arden.context.areas_store import AREA_PATCH_UNSET, AreaStore
@@ -37,6 +36,8 @@ from arden.trajectory.cold_storage import ColdBundleManifest
 
 _logger = get_logger(__name__)
 
+_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
+
 
 class StaleSessionContextError(RuntimeError):
     """A run tried to save through a context generation that was replaced."""
@@ -44,6 +45,10 @@ class StaleSessionContextError(RuntimeError):
 
 def _reject_nonfinite_json_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant {value}")
+
+
+def _encode_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
 SQL_SAVE_SESSION = """
@@ -232,16 +237,33 @@ class SessionStore:
         title = name.strip() if isinstance(name, str) and name.strip() else kind
         return title, kind
 
-    @staticmethod
-    def _strict_active_projection(session_id: str, raw_messages: object) -> list[dict]:
+    @classmethod
+    def _strict_active_projection(cls, session_id: str, raw_messages: object) -> list[dict]:
         if not isinstance(raw_messages, str):
             raise SessionDataCorruptionError(f"session {session_id} messages projection is missing")
         try:
-            messages = json.loads(raw_messages)
-        except json.JSONDecodeError as exc:
+            messages = json.loads(raw_messages, parse_constant=_reject_nonfinite_json_constant)
+        except ValueError as exc:
             raise SessionDataCorruptionError(f"session {session_id} messages projection is invalid JSON") from exc
-        if not isinstance(messages, list) or not all(isinstance(message, dict) for message in messages):
-            raise SessionDataCorruptionError(f"session {session_id} messages projection must be an array of objects")
+        if not isinstance(messages, list):
+            raise SessionDataCorruptionError(f"session {session_id} messages projection must be an array")
+
+        message_ids: set[str] = set()
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                raise SessionDataCorruptionError(f"session {session_id} projection message {index} must be an object")
+            cls._validate_persisted_message(session_id, message, source=f"projection message {index}")
+            message_id = message["message_id"]
+            if cls._is_handoff_message_payload(message):
+                try:
+                    cls._validated_handoff_receipt(message, message_id)
+                except ValueError as exc:
+                    raise SessionDataCorruptionError(
+                        f"session {session_id} projection message {index} has an invalid handoff receipt"
+                    ) from exc
+            if message_id in message_ids:
+                raise SessionDataCorruptionError(f"session {session_id} projection duplicates message_id {message_id}")
+            message_ids.add(message_id)
         return messages
 
     async def ensure_startup_recovery_indexes(self) -> None:
@@ -395,24 +417,44 @@ class SessionStore:
             time_used_seconds_delta=time_used_seconds_delta,
         )
 
-    def _to_serializable_messages(self, messages: list[dict | Any]) -> list[dict]:
+    def _to_serializable_messages(self, messages: list[dict]) -> list[dict]:
         serializable: list[dict] = []
-        for msg in messages:
-            if isinstance(msg, BaseModel):
-                serializable.append(msg.model_dump())
-            elif isinstance(msg, dict):
-                serializable.append(msg)
+        for index, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                raise TypeError(f"message {index} must be an object")
+            serializable.append(msg)
         return serializable
 
     def _stamp_messages(self, messages: list[dict], now: str) -> None:
         seen: set[str] = set()
-        for msg in messages:
-            if not msg.get("created_at"):
+        for index, msg in enumerate(messages):
+            role = msg.get("role")
+            if not isinstance(role, str) or role not in _MESSAGE_ROLES:
+                raise ValueError(f"message {index} has invalid role")
+
+            created_at = msg.get("created_at")
+            if created_at is None:
                 msg["created_at"] = now
+            elif not isinstance(created_at, str) or not created_at:
+                raise ValueError(f"message {index} has invalid created_at")
+            else:
+                try:
+                    parsed_created_at = datetime.fromisoformat(created_at)
+                except ValueError as exc:
+                    raise ValueError(f"message {index} has invalid created_at") from exc
+                if parsed_created_at.tzinfo is None:
+                    raise ValueError(f"message {index} created_at must include a timezone")
+
+            for field in ("message_id", "client_id"):
+                value = msg.get(field)
+                if field in msg and (not isinstance(value, str) or not value):
+                    raise ValueError(f"message {index} has invalid {field}")
 
             message_id = msg.get("message_id") or msg.get("client_id")
-            if not isinstance(message_id, str) or not message_id or message_id in seen:
+            if message_id is None:
                 message_id = f"msg-{uuid4().hex[:16]}"
+            if message_id in seen:
+                raise ValueError(f"message {index} duplicates message_id {message_id!r}")
             msg["message_id"] = message_id
             seen.add(message_id)
 
@@ -479,8 +521,8 @@ class SessionStore:
                 if refs:
                     compaction["background_result_refs"] = refs
         replacement = {
-            "role": previous.get("role", "assistant"),
-            "content": previous.get("content", SESSION_HANDOFF_MARKER),
+            "role": previous["role"],
+            "content": previous["content"],
             "message_id": compaction_id,
             "compaction": compaction,
         }
@@ -536,7 +578,7 @@ class SessionStore:
         session_id: str,
         messages: list[dict],
         *,
-        connection: aiosqlite.Connection | None = None,
+        connection: aiosqlite.Connection,
     ) -> None:
         # session_messages is the durable transcript. Normal snapshot saves
         # may append rows, but never rewrite or delete an existing message.
@@ -544,28 +586,36 @@ class SessionStore:
         if not messages:
             return
 
-        conn = connection or self.conn
-
-        rows = await conn.execute_fetchall(
-            "SELECT message_id, seq FROM session_messages WHERE session_id = ?",
+        max_seq_rows = await connection.execute_fetchall(
+            "SELECT COALESCE(MAX(seq), -1) AS max_seq FROM session_messages WHERE session_id = ?",
             (session_id,),
         )
-        existing = {row["message_id"]: row["seq"] for row in rows}
-        next_seq = max(existing.values(), default=-1) + 1
+        next_seq = int(max_seq_rows[0]["max_seq"]) + 1
+        active_ids = [message["message_id"] for message in messages]
+        existing: dict[str, aiosqlite.Row | dict] = {}
+        for start in range(0, len(active_ids), 500):
+            batch = active_ids[start : start + 500]
+            placeholders = ",".join("?" for _ in batch)
+            rows = await connection.execute_fetchall(
+                f"""
+                SELECT message_id, seq, message_json
+                FROM session_messages
+                WHERE session_id = ? AND message_id IN ({placeholders})
+                """,
+                (session_id, *batch),
+            )
+            existing.update((row["message_id"], row) for row in rows)
 
         for msg in messages:
-            message_id = msg.get("message_id")
-            if not isinstance(message_id, str) or not message_id:
-                continue
-
-            role = str(msg.get("role") or "")
-            client_id = msg.get("client_id") if isinstance(msg.get("client_id"), str) else None
-            created_at = str(msg.get("created_at") or datetime.now(UTC).isoformat())
-            message_json = await asyncio.to_thread(lambda m=msg: json.dumps(m, default=str))
+            message_id = msg["message_id"]
+            role = msg["role"]
+            client_id = msg.get("client_id")
+            created_at = msg["created_at"]
+            message_json = await asyncio.to_thread(lambda m=msg: _encode_json(m))
             search_text = self._flatten_message_text(msg)
 
             if message_id not in existing:
-                await conn.execute(
+                await connection.execute(
                     """
                     INSERT INTO session_messages
                         (session_id, message_id, seq, role, message_json, client_id, created_at, search_text)
@@ -573,17 +623,41 @@ class SessionStore:
                     """,
                     (session_id, message_id, next_seq, role, message_json, client_id, created_at, search_text),
                 )
-                existing[message_id] = next_seq
+                existing[message_id] = {
+                    "message_id": message_id,
+                    "seq": next_seq,
+                    "message_json": message_json,
+                }
                 next_seq += 1
+            else:
+                try:
+                    persisted = json.loads(
+                        existing[message_id]["message_json"],
+                        parse_constant=_reject_nonfinite_json_constant,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise SessionDataCorruptionError(
+                        f"session {session_id} message {message_id} has invalid transcript JSON"
+                    ) from exc
+                if not isinstance(persisted, dict):
+                    raise SessionDataCorruptionError(
+                        f"session {session_id} message {message_id} transcript envelope must be an object"
+                    )
+                if (
+                    self._is_handoff_message_payload(persisted) or self._is_handoff_message_payload(msg)
+                ) and persisted != msg:
+                    raise SessionDataCorruptionError(
+                        f"session {session_id} handoff {message_id} conflicts with its immutable transcript message"
+                    )
             await self._record_compaction_message(
                 session_id=session_id,
                 message_id=message_id,
-                seq=existing[message_id],
+                seq=existing[message_id]["seq"],
                 message=msg,
                 created_at=created_at,
-                connection=conn,
+                connection=connection,
             )
-        await self._rebuild_session_turns(session_id, connection=conn)
+        await self._rebuild_session_turns(session_id, connection=connection)
 
     async def _record_compaction_message(
         self,
@@ -593,31 +667,55 @@ class SessionStore:
         seq: int,
         message: dict,
         created_at: str,
-        connection: aiosqlite.Connection | None = None,
+        connection: aiosqlite.Connection,
     ) -> None:
-        compaction = message.get("compaction")
-        if not isinstance(compaction, dict) or compaction.get("kind") != "session_handoff":
+        if not self._is_handoff_message_payload(message):
             return
-        compaction_id = compaction.get("compaction_id")
-        if not isinstance(compaction_id, str) or not compaction_id or compaction_id != message_id:
-            return
-        messages_before = compaction.get("messages_before")
-        messages_after = compaction.get("messages_after")
-        if not isinstance(messages_before, int) or not isinstance(messages_after, int):
-            return
-        rehydration = compaction.get("rehydration")
-        rehydration_json = json.dumps(rehydration, default=str) if isinstance(rehydration, dict) else None
-        conn = connection or self.conn
-        await conn.execute(
+        compaction, _retained_ids, rehydration = self._validated_handoff_receipt(message, message_id)
+        messages_before = compaction["messages_before"]
+        messages_after = compaction["messages_after"]
+        rehydration_json = _encode_json(rehydration) if rehydration is not None else None
+        existing_rows = await connection.execute_fetchall(
             """
-            INSERT OR IGNORE INTO chat_compactions (
+            SELECT boundary_seq, messages_before, messages_after, rehydration_state, created_at
+            FROM chat_compactions
+            WHERE session_id = ? AND compaction_id = ?
+            """,
+            (session_id, message_id),
+        )
+        if existing_rows:
+            existing = existing_rows[0]
+            try:
+                existing_rehydration = (
+                    json.loads(existing["rehydration_state"], parse_constant=_reject_nonfinite_json_constant)
+                    if existing["rehydration_state"] is not None
+                    else None
+                )
+            except (TypeError, ValueError) as exc:
+                raise SessionDataCorruptionError(
+                    f"session {session_id} compaction {message_id} has invalid rehydration state"
+                ) from exc
+            if (
+                existing["boundary_seq"] != seq
+                or existing["messages_before"] != messages_before
+                or existing["messages_after"] != messages_after
+                or existing_rehydration != rehydration
+                or existing["created_at"] != created_at
+            ):
+                raise SessionDataCorruptionError(
+                    f"session {session_id} compaction {message_id} conflicts with its receipt"
+                )
+            return
+        await connection.execute(
+            """
+            INSERT INTO chat_compactions (
                 compaction_id, session_id, boundary_seq, messages_before, messages_after,
                 rehydration_state, created_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                compaction_id,
+                message_id,
                 session_id,
                 seq,
                 messages_before,
@@ -628,17 +726,47 @@ class SessionStore:
         )
 
     @staticmethod
+    def _validated_handoff_receipt(message: dict, message_id: str) -> tuple[dict, list[str], dict | None]:
+        compaction = message["compaction"]
+        content = message.get("content")
+        if not isinstance(content, str) or not content.startswith(SESSION_HANDOFF_MARKER):
+            raise ValueError("session handoff content must start with the handoff marker")
+        compaction_id = compaction.get("compaction_id")
+        if not isinstance(compaction_id, str) or not compaction_id or compaction_id != message_id:
+            raise ValueError("session handoff compaction_id must equal message_id")
+        messages_before = compaction.get("messages_before")
+        messages_after = compaction.get("messages_after")
+        if (
+            isinstance(messages_before, bool)
+            or not isinstance(messages_before, int)
+            or messages_before < 0
+            or isinstance(messages_after, bool)
+            or not isinstance(messages_after, int)
+            or messages_after < 0
+        ):
+            raise ValueError("session handoff message counts must be nonnegative integers")
+        retained_ids = compaction.get("preserved_tail_ids")
+        if (
+            not isinstance(retained_ids, list)
+            or not all(isinstance(value, str) and value for value in retained_ids)
+            or len(set(retained_ids)) != len(retained_ids)
+        ):
+            raise ValueError("session handoff preserved_tail_ids must contain unique message IDs")
+        rehydration = compaction.get("rehydration")
+        if rehydration is not None and not isinstance(rehydration, dict):
+            raise ValueError("session handoff rehydration must be an object")
+        return compaction, retained_ids, rehydration
+
+    @staticmethod
     def _is_handoff_message_payload(message: dict) -> bool:
-        content = message.get("content", "")
-        return isinstance(content, str) and content.startswith(SESSION_HANDOFF_MARKER)
+        compaction = message.get("compaction")
+        return isinstance(compaction, dict) and compaction.get("kind") == "session_handoff"
 
     @classmethod
     def _active_context_from_transcript_rows(
         cls,
+        session_id: str,
         rows: list[aiosqlite.Row],
-        fallback: list[dict],
-        *,
-        fallback_valid: bool,
     ) -> list[dict]:
         """Recover the active model view when its saved projection is invalid.
 
@@ -649,21 +777,33 @@ class SessionStore:
         handoff makes recovery deterministic by naming its retained tail.
         Legacy handoffs lack that information, so recovery fails closed.
         """
-        if fallback_valid:
-            return fallback
-
         parsed: list[tuple[int, str, dict]] = []
         for row in rows:
             try:
-                message = json.loads(row["message_json"])
-            except (TypeError, json.JSONDecodeError):
-                return fallback
+                message = json.loads(row["message_json"], parse_constant=_reject_nonfinite_json_constant)
+            except (TypeError, ValueError) as exc:
+                raise SessionDataCorruptionError(
+                    f"session {session_id} transcript message {row['message_id']} is invalid JSON"
+                ) from exc
             if not isinstance(message, dict):
-                return fallback
+                raise SessionDataCorruptionError(
+                    f"session {session_id} transcript message {row['message_id']} must be an object"
+                )
+            cls._validate_persisted_message(session_id, message, source=f"transcript message {row['message_id']}")
+            if (
+                message["message_id"] != row["message_id"]
+                or message["role"] != row["role"]
+                or message["created_at"] != row["created_at"]
+            ):
+                raise SessionDataCorruptionError(
+                    f"session {session_id} transcript message {row['message_id']} conflicts with its row"
+                )
             parsed.append((int(row["seq"]), str(row["message_id"]), message))
 
         if not parsed:
-            return fallback
+            raise SessionDataCorruptionError(
+                f"session {session_id} active projection is invalid and its transcript is empty"
+            )
 
         handoffs = [item for item in parsed if cls._is_handoff_message_payload(item[2])]
         if not handoffs:
@@ -672,25 +812,23 @@ class SessionStore:
         checkpoint: tuple[int, str, dict] | None = None
         retained_ids: list[str] | None = None
         for item in handoffs:
-            compaction = item[2].get("compaction")
-            candidate_ids = compaction.get("preserved_tail_ids") if isinstance(compaction, dict) else None
-            if (
-                isinstance(compaction, dict)
-                and compaction.get("kind") == "session_handoff"
-                and compaction.get("compaction_id") == item[1]
-                and isinstance(candidate_ids, list)
-                and all(isinstance(value, str) and value for value in candidate_ids)
-                and len(set(candidate_ids)) == len(candidate_ids)
-            ):
-                checkpoint = item
-                retained_ids = candidate_ids
+            try:
+                _compaction, candidate_ids, _rehydration = cls._validated_handoff_receipt(item[2], item[1])
+            except ValueError:
+                continue
+            checkpoint = item
+            retained_ids = candidate_ids
 
         if checkpoint is None or retained_ids is None or handoffs[-1][0] != checkpoint[0]:
-            return fallback
+            raise SessionDataCorruptionError(
+                f"session {session_id} active projection has no recoverable current handoff"
+            )
 
         by_id = {message_id: message for _seq, message_id, message in parsed}
         if any(message_id not in by_id for message_id in retained_ids):
-            return fallback
+            raise SessionDataCorruptionError(
+                f"session {session_id} current handoff references unavailable transcript messages"
+            )
 
         system = next((message for _seq, _id, message in parsed if message.get("role") == "system"), None)
         checkpoint_seq, checkpoint_id, checkpoint_message = checkpoint
@@ -706,25 +844,42 @@ class SessionStore:
         ]
         return [*([system] if system is not None else []), checkpoint_message, *retained, *appended]
 
+    @staticmethod
+    def _validate_persisted_message(session_id: str, message: dict, *, source: str) -> None:
+        role = message.get("role")
+        if not isinstance(role, str) or role not in _MESSAGE_ROLES:
+            raise SessionDataCorruptionError(f"session {session_id} {source} has invalid role")
+        for field in ("message_id", "created_at"):
+            value = message.get(field)
+            if not isinstance(value, str) or not value:
+                raise SessionDataCorruptionError(f"session {session_id} {source} has invalid {field}")
+        try:
+            created_at = datetime.fromisoformat(message["created_at"])
+        except ValueError as exc:
+            raise SessionDataCorruptionError(f"session {session_id} {source} has invalid created_at") from exc
+        if created_at.tzinfo is None:
+            raise SessionDataCorruptionError(f"session {session_id} {source} created_at has no timezone")
+        client_id = message.get("client_id")
+        if "client_id" in message and (not isinstance(client_id, str) or not client_id):
+            raise SessionDataCorruptionError(f"session {session_id} {source} has invalid client_id")
+
     def _is_turn_message(self, row: aiosqlite.Row) -> bool:
         if row["role"] == "system":
             return False
         message = json.loads(row["message_json"])
-        content = message.get("content", "")
-        return not (isinstance(content, str) and content.startswith(SESSION_HANDOFF_MARKER))
+        return not self._is_handoff_message_payload(message)
 
     async def _rebuild_session_turns(
         self,
         session_id: str,
         *,
-        connection: aiosqlite.Connection | None = None,
+        connection: aiosqlite.Connection,
     ) -> None:
-        conn = connection or self.conn
-        rows = await conn.execute_fetchall(
+        rows = await connection.execute_fetchall(
             "SELECT * FROM session_messages WHERE session_id = ? ORDER BY seq ASC",
             (session_id,),
         )
-        await conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
+        await connection.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
 
         current_start: aiosqlite.Row | None = None
         current_end: aiosqlite.Row | None = None
@@ -735,7 +890,7 @@ class SessionStore:
             if current_start is None or current_end is None:
                 return
             turn_id = f"{session_id}:{turn_index}"
-            await conn.execute(
+            await connection.execute(
                 """
                 INSERT INTO session_turns (
                     session_id, turn_id, turn_index, user_message_id,
@@ -772,7 +927,7 @@ class SessionStore:
 
         await flush_current()
 
-    async def update_progress(self, state: SessionState, messages: list[dict | Any]) -> None:
+    async def update_progress(self, state: SessionState, messages: list[dict]) -> None:
         """Lightweight mid-run save: rewrite messages + bump last_activity,
         upserting the row so a fresh session's first save lands instead of
         silently no-op'ing. Leaves metadata alone — the final save in the
@@ -785,7 +940,7 @@ class SessionStore:
                 now = datetime.now(UTC).isoformat()
                 self._stamp_messages(serializable, now)
 
-                messages_json = await asyncio.to_thread(lambda: json.dumps(serializable, default=str))
+                messages_json = await asyncio.to_thread(lambda: _encode_json(serializable))
                 cursor = await connection.execute(
                     SQL_UPSERT_PROGRESS,
                     (
@@ -1270,7 +1425,7 @@ class SessionStore:
         *,
         source_session_id: str,
         state: SessionState,
-        messages: list[dict | Any],
+        messages: list[dict],
         tool_call_ids: set[str],
         background_agent_refs: set[str],
         metadata: dict | None = None,
@@ -1297,7 +1452,7 @@ class SessionStore:
                 source_session_id=source_session_id,
                 target_session_id=state.session_id,
                 tool_call_ids=tool_call_ids,
-                projection=json.dumps(serializable, default=str),
+                projection=_encode_json(serializable),
             )
 
             if background_agent_refs:
@@ -1817,7 +1972,7 @@ class SessionStore:
     async def _save_session_snapshot_unlocked(
         self,
         state: SessionState,
-        messages: list[dict | Any],
+        messages: list[dict],
         metadata: dict | None,
         *,
         expected_generation: int | None = None,
@@ -1832,7 +1987,7 @@ class SessionStore:
         self._stamp_messages(serializable_messages, now)
         meta = metadata or {}
         messages_json, metadata_json = await asyncio.to_thread(
-            lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
+            lambda: (_encode_json(serializable_messages), _encode_json(meta))
         )
         generation = state.context_generation if expected_generation is None else expected_generation
         cursor = await connection.execute(
@@ -1862,7 +2017,7 @@ class SessionStore:
         await self._mirror_session_messages(state.session_id, serializable_messages, connection=connection)
         return serializable_messages, self._projection_etag(messages_json)
 
-    async def save_session(self, state: SessionState, messages: list[dict | Any], metadata: dict | None = None) -> None:
+    async def save_session(self, state: SessionState, messages: list[dict], metadata: dict | None = None) -> None:
         lock = await self._session_write_lock(state.session_id)
         async with lock:
             async with self._session_context_transaction() as connection:
@@ -1920,7 +2075,7 @@ class SessionStore:
     async def rewind_session(
         self,
         state: SessionState,
-        messages: list[dict | Any],
+        messages: list[dict],
         *,
         expected_message_ids: list[str],
         discard_message_ids: list[str],
@@ -2025,7 +2180,7 @@ class SessionStore:
     async def create_session_if_absent(
         self,
         state: SessionState,
-        messages: list[dict | Any] | None = None,
+        messages: list[dict] | None = None,
         metadata: dict | None = None,
     ) -> tuple[SessionState, bool]:
         """Insert a new session without replacing a row created by a racing owner."""
@@ -2043,7 +2198,7 @@ class SessionStore:
                 self._stamp_messages(serializable_messages, now)
                 meta = metadata or {}
                 messages_json, metadata_json = await asyncio.to_thread(
-                    lambda: (json.dumps(serializable_messages, default=str), json.dumps(meta))
+                    lambda: (_encode_json(serializable_messages), _encode_json(meta))
                 )
                 cursor = await connection.execute(
                     SQL_INSERT_SESSION_IF_ABSENT,
@@ -2118,8 +2273,8 @@ class SessionStore:
         if not isinstance(raw_metadata, str):
             raise SessionDataCorruptionError(f"session {session_id} metadata is missing")
         try:
-            parsed = json.loads(raw_metadata)
-        except json.JSONDecodeError as exc:
+            parsed = json.loads(raw_metadata, parse_constant=_reject_nonfinite_json_constant)
+        except ValueError as exc:
             raise SessionDataCorruptionError(f"session {session_id} metadata is invalid JSON") from exc
         if not isinstance(parsed, dict):
             raise SessionDataCorruptionError(f"session {session_id} metadata must be an object")
@@ -2172,35 +2327,30 @@ class SessionStore:
 
         def _parse_session_projection() -> tuple[list[dict], bool, dict]:
             try:
-                parsed_messages = json.loads(raw_messages) if raw_messages is not None else None
-            except (TypeError, json.JSONDecodeError):
-                parsed_messages = None
-            projection_valid = isinstance(parsed_messages, list) and all(
-                isinstance(message, dict) for message in parsed_messages
-            )
-            messages = parsed_messages if projection_valid else []
+                messages = self._strict_active_projection(session_id, raw_messages)
+                projection_valid = True
+            except SessionDataCorruptionError:
+                messages = []
+                projection_valid = False
             metadata = self._session_metadata(session_id, raw_metadata)
             return messages, projection_valid, metadata
 
         messages, projection_valid, metadata = await asyncio.to_thread(_parse_session_projection)
-        transcript_rows = await self.read_conn.execute_fetchall(
-            """
-            SELECT seq, message_id, message_json
-            FROM session_messages
-            WHERE session_id = ?
-            ORDER BY seq ASC
-            """,
-            (session_id,),
-        )
-        messages = self._active_context_from_transcript_rows(
-            transcript_rows,
-            messages,
-            fallback_valid=projection_valid,
-        )
+        if not projection_valid:
+            transcript_rows = await self.read_conn.execute_fetchall(
+                """
+                SELECT seq, message_id, role, message_json, created_at
+                FROM session_messages
+                WHERE session_id = ?
+                ORDER BY seq ASC
+                """,
+                (session_id,),
+            )
+            messages = self._active_context_from_transcript_rows(session_id, transcript_rows)
         message_count = self._active_message_count(session_id, row["active_message_count"])
-        if projection_valid and message_count != len(messages):
+        if message_count != len(messages):
             raise SessionDataCorruptionError(
-                f"session {session_id} active_message_count does not match its messages projection"
+                f"session {session_id} active_message_count does not match active messages"
             )
         await self.events.restore_active_tool_result_files(session_id, messages)
         input_tokens = self._optional_nonnegative_metadata_int(session_id, metadata, "last_input_tokens")

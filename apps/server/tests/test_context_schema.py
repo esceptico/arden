@@ -28,7 +28,7 @@ async def test_fresh_context_schema_is_canonical(tmp_path: Path):
             "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'session_messages_a_%'"
         )
 
-        assert [row["value"] for row in version] == ["10"]
+        assert [row["value"] for row in version] == ["11"]
         assert {"attention", "interrupts", "paused_at"} <= area_columns
         assert {row["name"] for row in triggers} == {
             "session_messages_ai",
@@ -59,7 +59,7 @@ async def test_current_schema_startup_never_runs_ddl(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("version", ["4", "5", "11"])
+@pytest.mark.parametrize("version", ["4", "5", "10", "12"])
 async def test_noncurrent_schema_versions_fail_without_mutation(tmp_path: Path, version: str):
     conn, read_conn, store = await _store(tmp_path)
     try:

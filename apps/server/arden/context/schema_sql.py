@@ -256,13 +256,14 @@ CREATE TABLE IF NOT EXISTS session_event_retention_state (
 );
 
 CREATE TABLE IF NOT EXISTS chat_compactions (
-    compaction_id TEXT PRIMARY KEY,
+    compaction_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     boundary_seq INTEGER NOT NULL,
     messages_before INTEGER NOT NULL,
     messages_after INTEGER NOT NULL,
     rehydration_state TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, compaction_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_compactions_session_boundary
@@ -394,7 +395,7 @@ AFTER UPDATE ON session_messages BEGIN
     VALUES (new.rowid, new.search_text);
 END;
 
-INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '10');
+INSERT INTO session_store_meta(key, value) VALUES ('schema_version', '11');
 """
 
 

@@ -2895,6 +2895,71 @@ async def test_save_stamps_created_at(store: SessionStore):
 
 
 @pytest.mark.asyncio
+async def test_valid_projection_load_does_not_scan_transcript(store: SessionStore):
+    state = _make_state("projection-only-load")
+    await store.save_session(state, [{"role": "user", "content": "hello", "client_id": "u-1"}])
+    queries: list[str] = []
+    await store.read_conn.set_trace_callback(queries.append)
+    try:
+        loaded = await store.load_session(state.session_id)
+    finally:
+        await store.read_conn.set_trace_callback(None)
+
+    assert loaded is not None
+    assert not any("FROM session_messages" in query for query in queries)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "error"),
+    [
+        pytest.param([object()], TypeError, id="unsupported-message"),
+        pytest.param([{"content": "missing role"}], ValueError, id="missing-role"),
+        pytest.param([{"role": [], "content": "bad role"}], ValueError, id="non-string-role"),
+        pytest.param(
+            [{"role": "user", "content": "bad timestamp", "created_at": "yesterday"}],
+            ValueError,
+            id="invalid-timestamp",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "one", "message_id": "duplicate"},
+                {"role": "assistant", "content": "two", "message_id": "duplicate"},
+            ],
+            ValueError,
+            id="duplicate-id",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "unsupported", "data": {"values": {1, 2}}}],
+            TypeError,
+            id="unsupported-nested-value",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "nonfinite", "score": float("nan")}],
+            ValueError,
+            id="nonfinite-number",
+        ),
+    ],
+)
+async def test_save_rejects_invalid_messages_without_writing(
+    store: SessionStore,
+    messages: list,
+    error: type[Exception],
+):
+    state = _make_state("invalid-message")
+
+    with pytest.raises(error):
+        await store.save_session(state, messages)
+
+    assert await store.load_session(state.session_id) is None
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT 1 FROM session_messages WHERE session_id = ?",
+        (state.session_id,),
+    )
+    assert rows == []
+
+
+@pytest.mark.asyncio
 async def test_update_progress_upserts_for_brand_new_session(store: SessionStore):
     """Regression: a fresh session's first save_progress (called by
     submit_chat_message before the agent starts) used to silently no-op
@@ -3106,6 +3171,57 @@ async def test_repeated_checkpoints_reconstruct_latest_summary_and_ordered_tail(
 
 
 @pytest.mark.asyncio
+async def test_compaction_receipts_are_owned_by_session(store: SessionStore):
+    first_state = _make_state("compaction-owner-a")
+    second_state = _make_state("compaction-owner-b")
+    first_source = [
+        {"role": "system", "content": "system", "client_id": "sys-a"},
+        {"role": "user", "content": "first", "client_id": "u-a"},
+    ]
+    second_source = [
+        {"role": "system", "content": "system", "client_id": "sys-b"},
+        {"role": "user", "content": "second", "client_id": "u-b"},
+    ]
+    await store.save_session(first_state, first_source)
+    await store.save_session(second_state, second_source)
+    first = _build_compacted_messages(first_source, 1, 2, "first")
+    second = _build_compacted_messages(second_source, 1, 2, "second")
+    shared_id = first[1]["message_id"]
+    second[1]["message_id"] = shared_id
+    second[1]["compaction"]["compaction_id"] = shared_id
+
+    await store.save_session(first_state, first)
+    await store.save_session(second_state, second)
+
+    assert [row["compaction_id"] for row in await store.list_chat_compactions(first_state.session_id)] == [shared_id]
+    assert [row["compaction_id"] for row in await store.list_chat_compactions(second_state.session_id)] == [shared_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["tail", "remove-receipt"])
+async def test_existing_compaction_message_cannot_change(store: SessionStore, mutation: str):
+    state = _make_state("immutable-compaction-receipt")
+    source = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "request", "client_id": "u-1"},
+    ]
+    await store.save_session(state, source)
+    compacted = _build_compacted_messages(source, 1, 2, "summary")
+    await store.save_session(state, compacted)
+    if mutation == "tail":
+        compacted[1]["compaction"]["preserved_tail_ids"] = ["forged-tail"]
+    else:
+        del compacted[1]["compaction"]
+
+    with pytest.raises(SessionDataCorruptionError, match="conflicts with its immutable transcript message"):
+        await store.save_session(state, compacted)
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert loaded.messages[1]["compaction"]["preserved_tail_ids"] == []
+
+
+@pytest.mark.asyncio
 async def test_valid_empty_snapshot_never_resurrects_immutable_transcript(store: SessionStore):
     state = _make_state()
     await store.save_session(
@@ -3129,6 +3245,161 @@ async def test_valid_empty_snapshot_never_resurrects_immutable_transcript(store:
 
     assert loaded is not None and loaded.messages == []
     assert [row["message_id"] for row in raw_rows] == ["u-1", "a-1"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_projection_without_transcript_fails_closed(store: SessionStore):
+    state = _make_state("empty-corrupt-projection")
+    await store.save_session(state, [])
+    await store.conn.execute(
+        "UPDATE sessions SET messages = '[{}]', active_message_count = 1 WHERE session_id = ?",
+        (state.session_id,),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(SessionDataCorruptionError, match="transcript is empty"):
+        await store.load_session(state.session_id)
+
+
+@pytest.mark.asyncio
+async def test_invalid_projection_with_corrupt_transcript_fails_closed(store: SessionStore):
+    state = _make_state("corrupt-transcript")
+    await store.save_session(state, [{"role": "user", "content": "hello", "client_id": "u-1"}])
+    await store.conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await store.conn.execute(
+        "UPDATE session_messages SET message_json = '{broken' WHERE session_id = ?",
+        (state.session_id,),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(SessionDataCorruptionError, match="transcript message u-1 is invalid JSON"):
+        await store.load_session(state.session_id)
+
+
+@pytest.mark.asyncio
+async def test_invalid_projection_role_recovers_from_valid_transcript(store: SessionStore):
+    state = _make_state("invalid-projection-role")
+    await store.save_session(state, [{"role": "user", "content": "hello", "client_id": "u-1"}])
+    await store.conn.execute(
+        "UPDATE sessions SET messages = ? WHERE session_id = ?",
+        (
+            json.dumps([{"role": [], "content": "broken", "message_id": "u-1", "created_at": "2026-01-01"}]),
+            state.session_id,
+        ),
+    )
+    await store.conn.commit()
+
+    loaded = await store.load_session(state.session_id)
+
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == ["u-1"]
+
+
+@pytest.mark.asyncio
+async def test_marker_only_content_recovers_as_an_ordinary_transcript_message(store: SessionStore):
+    state = _make_state("marker-content-recovery")
+    await store.save_session(
+        state,
+        [
+            {
+                "role": "assistant",
+                "content": "[Session State Handoff]\nquoted text",
+                "client_id": "quoted-marker",
+            },
+            {"role": "user", "content": "continue", "client_id": "u-1"},
+        ],
+    )
+    await store.conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await store.conn.commit()
+
+    loaded = await store.load_session(state.session_id)
+
+    assert loaded is not None
+    assert [message["message_id"] for message in loaded.messages] == ["quoted-marker", "u-1"]
+
+
+@pytest.mark.asyncio
+async def test_transcript_row_must_match_its_message_envelope(store: SessionStore):
+    state = _make_state("mismatched-transcript")
+    await store.save_session(state, [{"role": "user", "content": "hello", "client_id": "u-1"}])
+    await store.conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await store.conn.execute(
+        "UPDATE session_messages SET role = 'assistant' WHERE session_id = ?",
+        (state.session_id,),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(SessionDataCorruptionError, match="conflicts with its row"):
+        await store.load_session(state.session_id)
+
+
+@pytest.mark.asyncio
+async def test_recovered_projection_must_match_active_message_count(store: SessionStore):
+    state = _make_state("recovered-count-mismatch")
+    await store.save_session(state, [{"role": "user", "content": "hello", "client_id": "u-1"}])
+    await store.conn.execute(
+        "UPDATE sessions SET messages = '{broken', active_message_count = 2 WHERE session_id = ?",
+        (state.session_id,),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(SessionDataCorruptionError, match="active_message_count does not match active messages"):
+        await store.load_session(state.session_id)
+
+
+@pytest.mark.asyncio
+async def test_invalid_projection_with_malformed_current_handoff_fails_closed(store: SessionStore):
+    state = _make_state("malformed-current-handoff")
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+        {"role": "user", "content": "two", "client_id": "u-2"},
+    ]
+    await store.save_session(state, original)
+    compacted = _build_compacted_messages(original, 1, 2, "summary")
+    await store.save_session(state, compacted)
+    handoff_id = compacted[1]["message_id"]
+    rows = await store.read_conn.execute_fetchall(
+        "SELECT message_json FROM session_messages WHERE session_id = ? AND message_id = ?",
+        (state.session_id, handoff_id),
+    )
+    malformed = json.loads(rows[0]["message_json"])
+    malformed["compaction"].pop("preserved_tail_ids")
+    await store.conn.execute("UPDATE sessions SET messages = '{broken' WHERE session_id = ?", (state.session_id,))
+    await store.conn.execute(
+        "UPDATE session_messages SET message_json = ? WHERE session_id = ? AND message_id = ?",
+        (json.dumps(malformed), state.session_id, handoff_id),
+    )
+    await store.conn.commit()
+
+    with pytest.raises(SessionDataCorruptionError, match="no recoverable current handoff"):
+        await store.load_session(state.session_id)
+
+
+@pytest.mark.asyncio
+async def test_malformed_projection_handoff_recovers_from_valid_transcript(store: SessionStore):
+    state = _make_state("malformed-projection-handoff")
+    original = [
+        {"role": "system", "content": "system", "client_id": "sys"},
+        {"role": "user", "content": "one", "client_id": "u-1"},
+        {"role": "assistant", "content": "reply", "client_id": "a-1"},
+    ]
+    await store.save_session(state, original)
+    compacted = _build_compacted_messages(original, 1, 2, "summary")
+    await store.save_session(state, compacted)
+    malformed = json.loads(json.dumps(compacted))
+    malformed[1]["compaction"].pop("preserved_tail_ids")
+    await store.conn.execute(
+        "UPDATE sessions SET messages = ? WHERE session_id = ?",
+        (json.dumps(malformed), state.session_id),
+    )
+    await store.conn.commit()
+
+    loaded = await store.load_session(state.session_id)
+
+    assert loaded is not None
+    assert loaded.messages[1]["compaction"]["preserved_tail_ids"] == ["a-1"]
 
 
 @pytest.mark.asyncio
@@ -3183,7 +3454,7 @@ async def test_repeated_checkpoint_reconstruction_survives_cache_corruption_and_
 
 
 @pytest.mark.asyncio
-async def test_legacy_handoff_without_tail_ids_uses_compatibility_projection(store: SessionStore):
+async def test_incomplete_handoff_receipt_is_rejected(store: SessionStore):
     state = _make_state()
     original = [
         {"role": "system", "content": "system", "client_id": "sys"},
@@ -3201,15 +3472,47 @@ async def test_legacy_handoff_without_tail_ids_uses_compatibility_projection(sto
         },
         original[-1],
     ]
-    await store.save_session(state, legacy_projection)
+    with pytest.raises(ValueError, match="compaction_id must equal message_id"):
+        await store.save_session(state, legacy_projection)
 
     loaded = await store.load_session(state.session_id)
     assert loaded is not None
     assert [message["content"] for message in loaded.messages] == [
         "system",
-        "[Session State Handoff]\nlegacy summary",
+        "old",
         "tail",
     ]
+
+
+@pytest.mark.asyncio
+async def test_typed_handoff_requires_the_display_marker(store: SessionStore):
+    state = _make_state("invalid-handoff-content")
+    original = [{"role": "user", "content": "old", "client_id": "u-1"}]
+    await store.save_session(state, original)
+    handoff_id = "compact-invalid"
+
+    with pytest.raises(ValueError, match="content must start with the handoff marker"):
+        await store.save_session(
+            state,
+            [
+                {
+                    "role": "assistant",
+                    "content": "summary without marker",
+                    "message_id": handoff_id,
+                    "compaction": {
+                        "kind": "session_handoff",
+                        "compaction_id": handoff_id,
+                        "messages_before": 1,
+                        "messages_after": 1,
+                        "preserved_tail_ids": [],
+                    },
+                }
+            ],
+        )
+
+    loaded = await store.load_session(state.session_id)
+    assert loaded is not None
+    assert [message["content"] for message in loaded.messages] == ["old"]
 
 
 @pytest.mark.asyncio
@@ -4086,7 +4389,7 @@ async def test_legacy_chat_session_defaults_when_unset(store: SessionStore):
 
 
 @pytest.mark.asyncio
-async def test_session_turns_preserve_raw_transcript_without_handoff_rows(store: SessionStore):
+async def test_handoff_marker_without_receipt_is_ordinary_content(store: SessionStore):
     state = _make_state()
     original = [
         {"role": "user", "content": "first", "client_id": "u-1"},
@@ -4106,7 +4409,10 @@ async def test_session_turns_preserve_raw_transcript_without_handoff_rows(store:
 
     turns = await store.list_session_turns("test-session")
 
-    assert [(turn["message_start_id"], turn["message_end_id"]) for turn in turns] == [("u-1", "a-1"), ("u-2", "a-2")]
+    assert [(turn["message_start_id"], turn["message_end_id"]) for turn in turns] == [
+        ("u-1", "a-1"),
+        ("u-2", "handoff"),
+    ]
 
 
 @pytest.mark.asyncio
