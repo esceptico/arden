@@ -1057,6 +1057,7 @@ async def respawn_background_agent(
             kind="background",
             task_id=task_id,
             agent_ref=row["agent_ref"],
+            _resume_child_session_id=row.get("child_session_id"),
         )
     except Exception as exc:
         # A respawn that dies here would otherwise be silent: the outbox event

@@ -237,6 +237,62 @@ async def test_agent_worker_completes_the_event_on_dispatch(outbox_store: Outbox
 
 
 @pytest.mark.asyncio
+async def test_respawn_passes_durable_child_session_to_spawn(store: SessionStore, monkeypatch):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from arden.context.models import SessionState
+
+    agent_ref = public_ref("research", "sess-1:bg-resume", empty_slug="agent")
+    await store.save_session(
+        SessionState(
+            session_id="sess-1::existing",
+            public_ref=agent_ref,
+            started_at=datetime.now(UTC),
+            session_type="agent",
+            parent_session_id="sess-1",
+        ),
+        [],
+    )
+    await store.record_background_agent_started(
+        task_id="bg-resume",
+        agent_ref=agent_ref,
+        session_id="sess-1",
+        parent_run_id="run-1",
+        command="research",
+        child_session_id="sess-1::existing",
+        spawn_spec=_spec(),
+    )
+    await store.mark_interrupted_background_agent_runs()
+
+    captured: dict = {}
+
+    async def spawn_fn(_ctx, _task, **kwargs):
+        captured.update(kwargs)
+
+    tool_ctx = SimpleNamespace(spawn_fn=spawn_fn)
+    fake_agent = SimpleNamespace(executor=SimpleNamespace(ctx=tool_ctx))
+    monkeypatch.setattr("arden.services.chat.create_agent", lambda **_kwargs: fake_agent)
+    parent = SimpleNamespace(state=SessionState(session_id="sess-1", started_at=datetime.now(UTC)))
+    session_service = _FakeSessionService(store, session=parent)
+    deps = SimpleNamespace(
+        executor=SimpleNamespace(get_tools=lambda: []),
+        agent_config=SimpleNamespace(approval_timeout_seconds=300),
+        dispatch_session_message=None,
+    )
+
+    assert await respawn_background_agent(
+        RunRegistry(),
+        lambda: deps,
+        BusRegistry(),
+        session_id="sess-1",
+        task_id="bg-resume",
+        session_service=session_service,
+    )
+    assert captured["_resume_child_session_id"] == "sess-1::existing"
+
+
+@pytest.mark.asyncio
 async def test_respawn_host_failure_settles_row_and_notifies(store: SessionStore):
     """The E2E-caught silent-loss bug: if the host blows up after the no-op
     guards, the row must settle failed and the session must be told — never an

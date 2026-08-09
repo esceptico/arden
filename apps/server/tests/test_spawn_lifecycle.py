@@ -403,6 +403,41 @@ async def test_spawned_agent_cannot_widen_parent_tool_scope(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_restart_spawn_reuses_existing_child_session(monkeypatch):
+    class FakeAgent:
+        def __init__(self):
+            self.hooks = AgentHooks()
+
+        async def stream(self, _messages):
+            yield Result(text="done", stop_reason=StopReason.END_TURN, steps=1, usage=Usage())
+
+    monkeypatch.setattr(spawner_module, "Agent", lambda **_kwargs: FakeAgent())
+    service = SimpleNamespace(provision_state=AsyncMock(), save=AsyncMock())
+    executor = make_executor()
+    ctx = _persisted_context(
+        session_state=SessionState(session_id="parent", started_at=datetime.now(UTC)),
+        registry=executor.registry,
+        run=RunContext(run_id="run-1", current_depth=0, max_depth=3),
+        io=IOBridge(),
+        services={"session": service},
+        background_tasks=BackgroundTaskRegistry(session_id="parent"),
+    )
+
+    result = await create_spawn_fn(executor, "gpt-5-mini", 3, 0)(
+        ctx,
+        "resume research",
+        system_prompt="sys",
+        task_id="agent-resume",
+        agent_ref=public_ref("resume research", "agent-resume", empty_slug="agent"),
+        _resume_child_session_id="parent::existing",
+    )
+
+    assert result.child_session_id == "parent::existing"
+    provisioned_state = service.provision_state.await_args.args[0]
+    assert provisioned_state.session_id == "parent::existing"
+
+
+@pytest.mark.asyncio
 async def test_spawned_agent_prompt_includes_area_context(monkeypatch):
     captured = {}
 

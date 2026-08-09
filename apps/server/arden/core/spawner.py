@@ -259,6 +259,7 @@ def create_spawn_fn(
         exclude_tools: frozenset[str] | None = None,
         task_id: str | None = None,
         agent_ref: str | None = None,
+        _resume_child_session_id: str | None = None,
     ) -> SpawnResult:
         should_wait = (not background) if wait is None else wait
         background = not should_wait
@@ -288,7 +289,7 @@ def create_spawn_fn(
             parent_io.record_suspension,
             parent_io.resolve_suspension,
         )
-        recovered_child_session_id: str | None = None
+        recovered_child_session_id = _resume_child_session_id
         if suspension_id:
             has_any_suspension_callback = any(callback is not None for callback in suspension_callbacks)
             has_all_suspension_callbacks = all(callback is not None for callback in suspension_callbacks)
