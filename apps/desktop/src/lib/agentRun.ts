@@ -13,6 +13,10 @@ import { activityItemStatus, extractTask, friendlyAgentLabel } from "@/lib/agent
 export function childAgentTaskToBackgroundSnapshot(
   task: BackgroundTaskSummary,
 ): BackgroundAgentSnapshot {
+  const startedAt = Date.parse(task.started_at ?? task.created_at);
+  if (!Number.isFinite(startedAt)) {
+    throw new Error(`Invalid child-agent timestamp for ${task.task_id}`);
+  }
   return {
     taskId: task.child_run_id ?? task.task_id,
     agentRef: task.agent_ref,
@@ -24,6 +28,7 @@ export function childAgentTaskToBackgroundSnapshot(
     parentToolCallId: task.parent_tool_call_id ?? undefined,
     agentType: task.agent_type ?? undefined,
     wait: task.wait ?? undefined,
+    createdAt: startedAt,
   };
 }
 
@@ -238,14 +243,25 @@ export function agentRunFromActivityItem(
   }
   // Prefer the server's concise display name; fall back to the task (better
   // than the raw `Background(task: "…")` tool target) then the target itself.
+  const rosterName = roster?.command.trim();
   const name =
-    item.displayName ?? extractTask(item.args) ?? item.target ?? friendlyAgentLabel(item.kind);
+    (rosterName && rosterName !== "Agent" ? rosterName : undefined) ??
+    item.displayName ??
+    extractTask(item.args) ??
+    item.target ??
+    friendlyAgentLabel(item.kind);
+  const startedAt = item.startedAt ?? roster?.createdAt;
   return {
     key: item.id,
     name: name?.trim() || "Agent",
     type: humanizeAgentType(child?.agentType ?? item.kind),
     status,
-    elapsedLabel: item.durationMs != null ? formatDuration(item.durationMs) : "",
+    elapsedLabel:
+      item.durationMs != null
+        ? formatDuration(item.durationMs)
+        : isActiveAgentStatus(status) && startedAt != null
+          ? formatElapsed(startedAt)
+          : "",
     childSessionId: roster?.childSessionId ?? child?.childSessionId,
     runId: item.runId,
     detached: child ? child.wait === false : roster ? roster.wait === false : undefined,
@@ -273,8 +289,8 @@ export function agentRunFromBackgroundAgent(
     name: agent.command?.trim() || humanizeAgentType(agent.agentType),
     type: humanizeAgentType(agent.agentType),
     status: agent.status,
-    // createdAt is client poll-time, not the real start — only meaningful for
-    // a still-running agent; a finished run would read a misleading "0s".
+    // Active rows use the server's durable start time. Terminal rows keep the
+    // recorded duration/result instead of a growing relative-time label.
     elapsedLabel: active ? formatElapsed(agent.createdAt) : "",
     childSessionId: agent.childSessionId,
     runId: agent.taskId,

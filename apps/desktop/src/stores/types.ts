@@ -656,6 +656,7 @@ export interface Actions {
       parentToolCallId?: string;
       agentType?: string;
       wait?: boolean;
+      createdAt: number;
     }[],
   ) => void;
   upsertBackgroundAgent: (

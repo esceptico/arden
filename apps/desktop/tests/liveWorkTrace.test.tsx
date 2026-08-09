@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { TurnGroup } from "@/features/chat/components/TurnGroup";
 import { ItemButton } from "@/features/chat/components/ActivityRows";
-import { setState } from "@/stores";
+import { getState, setState } from "@/stores";
+import { createBackgroundAgentsDomainState } from "@/stores/background-agent-domain";
 
 beforeEach(() => {
   setState({
@@ -12,6 +13,7 @@ beforeEach(() => {
     sourceRefsRevision: 0,
     messages: new Map(),
     order: [],
+    backgroundAgents: createBackgroundAgentsDomainState(),
   });
 });
 
@@ -91,10 +93,11 @@ test("live work trace keeps one chronological three-row window", async () => {
   }
 });
 
-test("running Research elapsed time advances without navigation", async () => {
+test("a running agent receives its canonical title and advancing time without navigation", async () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
+  const startedAt = Date.now();
   try {
     await act(async () => {
       root.render(
@@ -106,13 +109,26 @@ test("running Research elapsed time advances without navigation", async () => {
             target: "Research",
             status: "ongoing",
             taskStatus: "running",
-            startedAt: Date.now(),
+            startedAt,
           }}
           onOpen={() => {}}
         />,
       );
     });
     expect(host.textContent).toContain("0s");
+
+    await act(async () => {
+      getState().upsertBackgroundAgent({
+        taskId: "agent-1",
+        sessionId: "session-1",
+        parentToolCallId: "research-1",
+        command: "Review product requirements",
+        status: "running",
+        createdAt: startedAt,
+        updatedAt: startedAt,
+      });
+    });
+    expect(host.textContent).toContain("Review product requirements");
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 1_100));

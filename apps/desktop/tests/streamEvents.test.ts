@@ -3076,6 +3076,8 @@ test("right sidebar maps child-agent snapshots into active sidebar rows", () => 
       parent_tool_call_id: "tool-call-1",
       agent_type: "research",
       wait: false,
+      created_at: "2026-08-08T20:00:00Z",
+      started_at: "2026-08-08T20:00:02Z",
     }),
   ).toEqual({
     taskId: "child-run-1",
@@ -3088,6 +3090,7 @@ test("right sidebar maps child-agent snapshots into active sidebar rows", () => 
     parentToolCallId: "tool-call-1",
     agentType: "research",
     wait: false,
+    createdAt: Date.parse("2026-08-08T20:00:02Z"),
   });
 });
 

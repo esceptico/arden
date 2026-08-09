@@ -352,11 +352,29 @@ describe("agentRunFromActivityItem", () => {
     });
     expect(view.status).toBe("failed");
   });
+
+  it("takes the canonical roster title and start time without navigation", () => {
+    const startedAt = Date.now() - 5_000;
+    const view = agentRunFromActivityItem(activityItem({ displayName: "Research" }), {
+      roster: backgroundAgent({
+        command: "Review product requirements",
+        createdAt: startedAt,
+      }),
+    });
+    expect(view.name).toBe("Review product requirements");
+    expect(view.elapsedLabel).toBe("5s");
+  });
 });
 
 describe("childAgentTaskToBackgroundSnapshot", () => {
   it("keeps live statuses running and settles unknown statuses as interrupted", () => {
-    const base = { task_id: "t1", agent_ref: "research~abc123", command: "research" };
+    const base = {
+      task_id: "t1",
+      agent_ref: "research~abc123",
+      command: "research",
+      created_at: "2026-08-08T20:00:00Z",
+      started_at: null,
+    };
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "running" }).status).toBe("running");
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "activity" }).status).toBe("running");
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "interrupted" }).status).toBe(
@@ -365,5 +383,28 @@ describe("childAgentTaskToBackgroundSnapshot", () => {
     expect(childAgentTaskToBackgroundSnapshot({ ...base, status: "weird" }).status).toBe(
       "interrupted",
     );
+  });
+
+  it("uses the durable server start time instead of roster fetch time", () => {
+    const snapshot = childAgentTaskToBackgroundSnapshot({
+      task_id: "t1",
+      agent_ref: "research~abc123",
+      command: "Review product requirements",
+      created_at: "2026-08-08T20:00:00Z",
+      started_at: "2026-08-08T20:00:02Z",
+    });
+    expect(snapshot.createdAt).toBe(Date.parse("2026-08-08T20:00:02Z"));
+  });
+
+  it("rejects an invalid durable timestamp", () => {
+    expect(() =>
+      childAgentTaskToBackgroundSnapshot({
+        task_id: "t1",
+        agent_ref: "research~abc123",
+        command: "Research",
+        created_at: "invalid",
+        started_at: null,
+      }),
+    ).toThrow("Invalid child-agent timestamp for t1");
   });
 });

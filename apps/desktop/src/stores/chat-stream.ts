@@ -429,6 +429,7 @@ function upsertTaskLifecycleAgent(event: TaskLifecycleEvent, updatedAt: number):
     detail: event.summary ?? prev?.detail,
     updatedAt,
   };
+  if (event.type === "task_started") agent.createdAt = updatedAt;
   if (event.child_session_id) agent.childSessionId = event.child_session_id;
   if (event.parent_tool_call_id) agent.parentToolCallId = event.parent_tool_call_id;
   if (event.agent_type) agent.agentType = event.agent_type;

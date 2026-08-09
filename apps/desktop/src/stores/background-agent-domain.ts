@@ -26,6 +26,7 @@ export interface BackgroundAgentSnapshot {
   parentToolCallId?: string;
   agentType?: string;
   wait?: boolean;
+  createdAt: number;
 }
 
 export type BackgroundAgentUpsert = Omit<BackgroundAgent, "createdAt"> & {
@@ -85,7 +86,7 @@ export function reduceBackgroundAgentsForSession(
       parentToolCallId: agent.parentToolCallId ?? prev?.parentToolCallId,
       agentType: agent.agentType ?? prev?.agentType,
       wait: agent.wait ?? prev?.wait,
-      createdAt: prev?.createdAt ?? now,
+      createdAt: agent.createdAt,
       updatedAt: now,
     };
 

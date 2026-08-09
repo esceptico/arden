@@ -72,6 +72,7 @@ test("background agent domain upserts rows and preserves missing running snapsho
         command: "research",
         status: "completed",
         detail: "done",
+        createdAt: 1,
       },
     ],
     3,
@@ -97,6 +98,7 @@ test("background agent domain keeps child-agent metadata from snapshots", () => 
         agentType: "research",
         wait: false,
         parentToolCallId: "tool-call-1",
+        createdAt: 500,
       },
     ],
     1,
@@ -106,6 +108,7 @@ test("background agent domain keeps child-agent metadata from snapshots", () => 
     agentType: "research",
     wait: false,
     parentToolCallId: "tool-call-1",
+    createdAt: 500,
   });
 });
 
@@ -121,7 +124,7 @@ test("unknown statuses normalize to interrupted, never an eternal running", () =
   const state = reduceBackgroundAgentsForSession(
     createBackgroundAgentsDomainState(),
     "session-1",
-    [{ taskId: "bg-1", command: "research", status: "orphaned" }],
+    [{ taskId: "bg-1", command: "research", status: "orphaned", createdAt: 1 }],
     1,
   );
   expect(state.rows["session-1:bg-1"].status).toBe("interrupted");
@@ -163,6 +166,7 @@ test("background agent domain preserves unchanged snapshot row identity", () => 
         status: "running",
         detail: "working",
         resultRef: "ref-1",
+        createdAt: 1,
       },
     ],
     2,
@@ -182,6 +186,7 @@ test("background agent domain preserves unchanged snapshot row identity", () => 
         status: "running",
         detail: "working",
         resultRef: "ref-1",
+        createdAt: 1,
       },
     ],
     3,

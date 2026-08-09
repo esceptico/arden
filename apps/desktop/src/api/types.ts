@@ -405,4 +405,6 @@ export interface BackgroundTaskSummary {
   command: string;
   detail?: string | null;
   result_ref?: string | null;
+  created_at: string;
+  started_at: string | null;
 }

@@ -622,7 +622,9 @@ def create_spawn_fn(
             else None,
         )
         task_id = child_run_id
-        label = "Agent"
+        # One human title identifies the child session, durable roster row, and
+        # live lifecycle events. Consumers must not invent a second title.
+        label = task_summary or agent_slug
         child_lifecycle = ChildSessionLifecycle(
             parent=calling_ctx,
             child=child_ctx,
@@ -904,7 +906,7 @@ def create_spawn_fn(
                         child_session_id=child_state.session_id if has_child_session else None,
                         agent_type=resolved_agent_type,
                         wait=should_wait,
-                        name=agent_slug,
+                        name=label,
                         status=status,
                         summary=summary,
                         depth=task_depth,
@@ -970,7 +972,7 @@ def create_spawn_fn(
                         child_session_id=child_state.session_id if has_child_session else None,
                         agent_type=resolved_agent_type,
                         wait=should_wait,
-                        name=agent_slug,
+                        name=label,
                         summary=task_summary,
                         depth=task_depth,
                         workflow_id=workflow_id,

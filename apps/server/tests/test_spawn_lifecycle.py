@@ -528,6 +528,8 @@ async def test_spawn_emits_foreground_task_lifecycle_on_success(monkeypatch):
     assert task_events[0].run_id == "run-1"
     assert task_events[0].task_id == "call-research"
     assert task_events[0].parent_tool_call_id == "call-research"
+    assert task_events[0].name == "research task"
+    assert task_events[0].summary == "research task"
     assert task_events[0].depth == 1
     assert task_events[1].status == "completed"
     assert result.child_run_id
@@ -821,6 +823,7 @@ async def test_spawn_wait_false_persists_child_session_and_background_snapshot(m
         runs = await store.list_background_agent_runs("parent")
         assert runs[0]["child_run_id"] == result.child_run_id
         assert runs[0]["child_session_id"] == result.child_session_id
+        assert runs[0]["command"] == "background research"
 
         bg_events = [event for event in emitted if isinstance(event, BackgroundTaskEvent)]
         assert bg_events[0].child_session_id == result.child_session_id
