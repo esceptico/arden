@@ -540,10 +540,9 @@ def parse_responses_response(
 
 def _parse_tool_search_call(data: dict[str, Any], *, done: bool = True) -> ProviderToolCall:
     call_id = _tool_search_call_id(data)
-    expected_status = "completed" if done else "in_progress"
     status = data.get("status")
-    if status != expected_status:
-        raise ProviderToolPayloadError(f"OpenAI tool_search_call.status must be {expected_status!r}, got {status!r}")
+    if status not in (None, "in_progress", "completed"):
+        raise ProviderToolPayloadError(f"OpenAI tool_search_call.status is invalid: {status!r}")
     return ProviderToolCall(
         id=call_id,
         name="tool_search",

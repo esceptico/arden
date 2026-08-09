@@ -1230,7 +1230,7 @@ def test_responses_parser_requires_tool_search_output():
     [
         {"type": "tool_search_call", "status": "completed"},
         {"type": "tool_search_call", "id": "tsc_1", "status": "completed", "arguments": "{bad"},
-        {"type": "tool_search_call", "id": "tsc_1", "status": "in_progress", "arguments": {}},
+        {"type": "tool_search_call", "id": "tsc_1", "status": "unknown", "arguments": {}},
     ],
 )
 def test_responses_rejects_invalid_successful_tool_search_payload(item):
@@ -1238,6 +1238,37 @@ def test_responses_rejects_invalid_successful_tool_search_payload(item):
 
     with pytest.raises(ProviderToolPayloadError):
         parse_responses_response(response, "gpt-5.5")
+
+
+@pytest.mark.parametrize("status", [None, "in_progress", "completed"])
+def test_responses_uses_completed_response_boundary_for_tool_search(status):
+    call = {
+        "type": "tool_search_call",
+        "id": "tsc_1",
+        "arguments": {"paths": ["wiki_create_page"]},
+    }
+    if status is not None:
+        call["status"] = status
+    response = SimpleNamespace(
+        status="completed",
+        usage=_Usage(),
+        output=[
+            _FakeItem(call),
+            _FakeItem(
+                {
+                    "type": "tool_search_output",
+                    "status": "completed",
+                    "tools": [{"type": "function", "name": "wiki_create_page"}],
+                }
+            ),
+        ],
+    )
+
+    parsed = parse_responses_response(response, "gpt-5.5")
+
+    provider_calls = parsed.choices[0].message.provider_tool_calls
+    assert provider_calls is not None
+    assert provider_calls[0].loaded_tool_names == ("wiki_create_page",)
 
 
 def test_responses_rejects_invalid_tool_search_output():
@@ -1354,7 +1385,7 @@ class _ToolSearchThenFunctionResponses:
                     {
                         "type": "response.output_item.added",
                         "output_index": 0,
-                        "item": {"type": "tool_search_call", "id": "tsc_1", "status": "in_progress"},
+                        "item": {"type": "tool_search_call", "id": "tsc_1", "status": "completed"},
                     }
                 ),
                 _Event(
