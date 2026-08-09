@@ -132,12 +132,9 @@ test("shows the selected session's hard window and distinct compaction trigger",
   expect(dialog.textContent).toContain("session/model");
   expect(dialog.textContent).toContain("50k / 200k");
   expect(dialog.textContent).toContain("Compacts at 152k");
-  expect(dialog.textContent).toContain("Observed tokens");
-  expect(dialog.textContent).toContain("Observed cost");
-  expect(dialog.textContent).toContain("Prompt");
-  expect(dialog.textContent).toContain("Output");
-  expect(dialog.textContent).toContain("Cache read");
-  expect(dialog.textContent).toContain("Cache write");
+  expect(dialog.textContent).not.toContain("This app session");
+  expect(dialog.textContent).not.toContain("Observed tokens");
+  expect(dialog.textContent).not.toContain("Prompt");
   expect(dialog.textContent).not.toContain("global/model");
   expect(dialog.textContent).not.toContain("799k");
 });

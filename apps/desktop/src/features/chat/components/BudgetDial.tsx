@@ -26,11 +26,6 @@ function formatTokens(n: number): string {
   return `${Math.round(n / 1000)}k`;
 }
 
-function formatCost(n: number): string {
-  if (n === 0) return "$0";
-  return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(3)}`;
-}
-
 function formatPct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
@@ -61,7 +56,7 @@ export function BudgetDial() {
     ? Math.min(1, usage.messageCount / messageLimit)
     : 0;
   const maxRatio = Math.max(tokenRatio, messageRatio);
-  const hasAnyData = usage.contextInputTokens > 0 || (usage.messageCount ?? 0) > 0 || usage.totalCost > 0;
+  const hasAnyData = usage.contextInputTokens > 0 || (usage.messageCount ?? 0) > 0;
   const messageCountLabel = usage.messageCount ?? "unknown";
 
   const compactLabel = usage.contextInputTokens > 0
@@ -175,50 +170,8 @@ export function BudgetDial() {
           hint={usage.messageCount !== null && messageLimit > 0 ? formatPct(messageRatio) : "—"}
           color={ratioColor(messageRatio)}
         />
-        <div className="mt-2 pt-2 border-t border-line-soft grid grid-cols-2 gap-y-1 gap-x-3">
-          <span className="col-span-2 text-2xs font-medium text-faint">This app session</span>
-          {/* Spend row hidden when zero — for OAuth-backed providers
-              (openai-codex, claude-pro, etc.) the server has no
-              pricing data and "$0" is misleading. The provider just
-              doesn't meter per-token from us. */}
-          {usage.totalCost > 0 && (
-            <>
-              <span className="text-muted">Observed cost</span>
-              <span className="tabular-nums text-ink-soft text-right">
-                {formatCost(usage.totalCost)}
-              </span>
-            </>
-          )}
-          {usage.totalTokens > 0 && (
-            <>
-              <span className="text-muted">Observed tokens</span>
-              <span className="tabular-nums text-ink-soft text-right">
-                {formatTokens(usage.totalTokens)}
-              </span>
-            </>
-          )}
-          <ObservedRow label="Prompt" value={usage.observedPromptTokens} />
-          <ObservedRow label="Output" value={usage.observedCompletionTokens} />
-          <ObservedRow label="Cache read" value={usage.observedCacheReadTokens} />
-          <ObservedRow label="Cache write" value={usage.observedCacheWriteTokens} />
-        </div>
-        <div className="mt-2 text-2xs text-muted leading-snug">
-          {tokenTrigger
-            ? `Compaction starts at ${formatTokens(tokenTrigger)} context tokens or when messages hit 100%. `
-            : "Compaction threshold is unavailable for this model. "}
-          Tool-agent usage affects observed totals only.
-        </div>
       </HoverPopover>
     </span>
-  );
-}
-
-function ObservedRow({ label, value }: { label: string; value: number }) {
-  return (
-    <>
-      <span className="text-muted">{label}</span>
-      <span className="tabular-nums text-ink-soft text-right">{formatTokens(value)}</span>
-    </>
   );
 }
 
