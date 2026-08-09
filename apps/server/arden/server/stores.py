@@ -31,6 +31,7 @@ class Stores:
 
     def __init__(
         self,
+        write_coordinator: database.WriteCoordinator,
         conn: database.aiosqlite.Connection,
         event_conn: database.aiosqlite.Connection,
         automation_settlement_conn: database.aiosqlite.Connection,
@@ -48,6 +49,7 @@ class Stores:
         executor_commands: ExecutorCommandLog,
         device_skills: DeviceSkillStore,
     ):
+        self.write_coordinator = write_coordinator
         self.conn = conn
         self.event_conn = event_conn
         self.automation_settlement_conn = automation_settlement_conn
@@ -69,13 +71,20 @@ class Stores:
     async def connect(cls, config: Config, *, defer_recovery: bool = False) -> Self:
         config.db_dir.mkdir(exist_ok=True)
         async with AsyncExitStack() as connections:
-            conn = await database.connect(config.sessions_db_path)
+            write_coordinator = database.WriteCoordinator()
+            conn = await database.connect(config.sessions_db_path, write_coordinator=write_coordinator)
             connections.push_async_callback(conn.close)
-            event_conn = await database.connect(config.sessions_db_path)
+            event_conn = await database.connect(config.sessions_db_path, write_coordinator=write_coordinator)
             connections.push_async_callback(event_conn.close)
-            automation_settlement_conn = await database.connect(config.sessions_db_path)
+            automation_settlement_conn = await database.connect(
+                config.sessions_db_path,
+                write_coordinator=write_coordinator,
+            )
             connections.push_async_callback(automation_settlement_conn.close)
-            chat_completion_conn = await database.connect(config.sessions_db_path)
+            chat_completion_conn = await database.connect(
+                config.sessions_db_path,
+                write_coordinator=write_coordinator,
+            )
             connections.push_async_callback(chat_completion_conn.close)
             read_conn = await database.connect(config.sessions_db_path, readonly=True)
             connections.push_async_callback(read_conn.close)
@@ -85,7 +94,7 @@ class Stores:
             if not defer_recovery:
                 await cls._reconcile_session_store(session_store)
 
-            outbox = OutboxStore(conn)
+            outbox = OutboxStore(conn, read_conn)
             await outbox.init_schema()
             settlement_outbox = OutboxStore(automation_settlement_conn)
 
@@ -118,6 +127,7 @@ class Stores:
             await device_skills.init_schema()
 
             stores = cls(
+                write_coordinator=write_coordinator,
                 conn=conn,
                 event_conn=event_conn,
                 automation_settlement_conn=automation_settlement_conn,

@@ -3,6 +3,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,21 @@ _MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
 class StaleSessionContextError(RuntimeError):
     """A run tried to save through a context generation that was replaced."""
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedMessage:
+    envelope: dict
+    encoded: str
+    search_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedSnapshot:
+    messages: list[dict]
+    messages_json: str
+    metadata_json: str
+    transcript: tuple[_PreparedMessage, ...]
 
 
 def _reject_nonfinite_json_constant(value: str) -> None:
@@ -193,6 +209,7 @@ class SessionStore:
         self.storage = SessionStorageStore(
             conn,
             self.read_conn,
+            getattr(conn, "write_coordinator", None),
             self._storage_maintenance_lock,
             self._session_write_lock,
             self._strict_active_projection,
@@ -482,6 +499,34 @@ class SessionStore:
             messages[0]["message_id"] = rows[0]["message_id"]
             messages[0]["created_at"] = rows[0]["created_at"]
 
+    async def _prepare_snapshot(
+        self,
+        session_id: str,
+        messages: list[dict],
+        metadata: dict | None,
+    ) -> _PreparedSnapshot:
+        serializable = self._to_serializable_messages(messages)
+        await self._bind_system_message_identity(session_id, serializable, self.read_conn)
+        self._stamp_messages(serializable, datetime.now(UTC).isoformat())
+
+        def encode() -> _PreparedSnapshot:
+            transcript = tuple(
+                _PreparedMessage(
+                    envelope=message,
+                    encoded=_encode_json(message),
+                    search_text=self._flatten_message_text(message),
+                )
+                for message in serializable
+            )
+            return _PreparedSnapshot(
+                messages=serializable,
+                messages_json=_encode_json(serializable),
+                metadata_json=_encode_json(metadata or {}),
+                transcript=transcript,
+            )
+
+        return await asyncio.to_thread(encode)
+
     @staticmethod
     def _message_id_sequence(messages: list[dict]) -> list[str] | None:
         ids: list[str] = []
@@ -600,7 +645,7 @@ class SessionStore:
     async def _mirror_session_messages(
         self,
         session_id: str,
-        messages: list[dict],
+        messages: tuple[_PreparedMessage, ...],
         *,
         connection: aiosqlite.Connection,
     ) -> None:
@@ -615,7 +660,7 @@ class SessionStore:
             (session_id,),
         )
         next_seq = int(max_seq_rows[0]["max_seq"]) + 1
-        active_ids = [message["message_id"] for message in messages]
+        active_ids = [message.envelope["message_id"] for message in messages]
         existing: dict[str, aiosqlite.Row | dict] = {}
         inserted: list[dict] = []
         for start in range(0, len(active_ids), 500):
@@ -631,13 +676,14 @@ class SessionStore:
             )
             existing.update((row["message_id"], row) for row in rows)
 
-        for msg in messages:
+        for prepared in messages:
+            msg = prepared.envelope
             message_id = msg["message_id"]
             role = msg["role"]
             client_id = msg.get("client_id")
             created_at = msg["created_at"]
-            message_json = await asyncio.to_thread(lambda m=msg: _encode_json(m))
-            search_text = self._flatten_message_text(msg)
+            message_json = prepared.encoded
+            search_text = prepared.search_text
 
             if message_id not in existing:
                 await connection.execute(
@@ -1056,14 +1102,10 @@ class SessionStore:
         chat service re-stamps last_input_tokens."""
         lock = await self._session_write_lock(state.session_id)
         async with lock:
+            prepared = await self._prepare_snapshot(state.session_id, messages, None)
+            now = datetime.now(UTC).isoformat()
             async with self._session_context_transaction() as connection:
-                serializable = self._to_serializable_messages(messages)
                 await self._ensure_session_public_ref(state, connection)
-                now = datetime.now(UTC).isoformat()
-                await self._bind_system_message_identity(state.session_id, serializable, connection)
-                self._stamp_messages(serializable, now)
-
-                messages_json = await asyncio.to_thread(lambda: _encode_json(serializable))
                 cursor = await connection.execute(
                     SQL_UPSERT_PROGRESS,
                     (
@@ -1071,7 +1113,7 @@ class SessionStore:
                         state.public_ref,
                         state.started_at.isoformat(),
                         now,
-                        messages_json,
+                        prepared.messages_json,
                         state.name,
                         state.session_type,
                         state.origin_automation_id,
@@ -1082,15 +1124,15 @@ class SessionStore:
                         state.area_id,
                         state.chat_model,
                         state.context_generation,
-                        len(serializable),
+                        len(prepared.messages),
                     ),
                 )
                 if cursor.rowcount == 0:
                     raise StaleSessionContextError(
                         f"session {state.session_id} context was replaced while its run was active"
                     )
-                await self._mirror_session_messages(state.session_id, serializable, connection=connection)
-            state.context_etag = self._projection_etag(messages_json)
+                await self._mirror_session_messages(state.session_id, prepared.transcript, connection=connection)
+            state.context_etag = self._projection_etag(prepared.messages_json)
 
     async def record_chat_run_started(
         self,
@@ -1555,82 +1597,83 @@ class SessionStore:
     ) -> None:
         """Atomically persist a branch and its durable recovery records."""
         lock = await self._session_write_lock(state.session_id)
-        async with lock, self._session_context_transaction() as connection:
-            source = await connection.execute_fetchall(
-                "SELECT 1 FROM sessions WHERE session_id = ?",
-                (source_session_id,),
-            )
-            if not source:
-                raise ValueError(f"source session {source_session_id} no longer exists")
-
-            serializable, etag = await self._save_session_snapshot_unlocked(
-                state,
-                messages,
-                metadata,
-                connection=connection,
-            )
-
-            await self.events.clone_for_branch(
-                connection=connection,
-                source_session_id=source_session_id,
-                target_session_id=state.session_id,
-                tool_call_ids=tool_call_ids,
-                projection=_encode_json(serializable),
-            )
-
-            if background_agent_refs:
-                placeholders = ",".join("?" for _ in background_agent_refs)
-                rows = await connection.execute_fetchall(
-                    f"""
-                    SELECT * FROM background_agent_runs
-                    WHERE session_id = ? AND agent_ref IN ({placeholders})
-                      AND status IN ('completed', 'failed', 'cancelled', 'interrupted')
-                      AND completion_id IS NOT NULL
-                    """,
-                    (source_session_id, *sorted(background_agent_refs)),
+        async with lock:
+            prepared = await self._prepare_snapshot(state.session_id, messages, metadata)
+            async with self._session_context_transaction() as connection:
+                source = await connection.execute_fetchall(
+                    "SELECT 1 FROM sessions WHERE session_id = ?",
+                    (source_session_id,),
                 )
-                by_ref = {str(row["agent_ref"]): row for row in rows}
-                missing = sorted(background_agent_refs - by_ref.keys())
-                if missing:
-                    raise ValueError(f"background results unavailable for branch: {', '.join(missing)}")
-                now = datetime.now(UTC).isoformat()
-                await connection.executemany(
-                    """
-                    INSERT INTO background_agent_runs (
-                        task_id, agent_ref, session_id, parent_run_id, parent_tool_call_id,
-                        suspension_id, child_session_id, agent_type, wait, status,
-                        command, detail, result_ref, result_text, created_at,
-                        started_at, updated_at, ended_at, cancel_requested_at,
-                        cancel_actor, terminal_cause, cancel_generation,
-                        cancel_idempotency_key, notified_at, completion_id,
-                        spawn_spec, spawn_attempts
-                    ) VALUES (
-                        ?, ?, ?, NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        NULL, NULL, NULL, 0, NULL, ?, ?, NULL, 0
+                if not source:
+                    raise ValueError(f"source session {source_session_id} no longer exists")
+
+                etag = await self._save_session_snapshot_unlocked(
+                    state,
+                    prepared,
+                    connection=connection,
+                )
+
+                await self.events.clone_for_branch(
+                    connection=connection,
+                    source_session_id=source_session_id,
+                    target_session_id=state.session_id,
+                    tool_call_ids=tool_call_ids,
+                    projection=prepared.messages_json,
+                )
+
+                if background_agent_refs:
+                    placeholders = ",".join("?" for _ in background_agent_refs)
+                    rows = await connection.execute_fetchall(
+                        f"""
+                        SELECT * FROM background_agent_runs
+                        WHERE session_id = ? AND agent_ref IN ({placeholders})
+                          AND status IN ('completed', 'failed', 'cancelled', 'interrupted')
+                          AND completion_id IS NOT NULL
+                        """,
+                        (source_session_id, *sorted(background_agent_refs)),
                     )
-                    """,
-                    [
-                        (
-                            row["task_id"],
-                            row["agent_ref"],
-                            state.session_id,
-                            row["agent_type"],
-                            row["status"],
-                            row["command"],
-                            row["detail"],
-                            row["result_ref"],
-                            row["result_text"],
-                            row["created_at"],
-                            row["started_at"],
-                            row["updated_at"],
-                            row["ended_at"],
-                            now,
-                            f"branch:{state.session_id}:{row['task_id']}:{row['status']}",
+                    by_ref = {str(row["agent_ref"]): row for row in rows}
+                    missing = sorted(background_agent_refs - by_ref.keys())
+                    if missing:
+                        raise ValueError(f"background results unavailable for branch: {', '.join(missing)}")
+                    now = datetime.now(UTC).isoformat()
+                    await connection.executemany(
+                        """
+                        INSERT INTO background_agent_runs (
+                            task_id, agent_ref, session_id, parent_run_id, parent_tool_call_id,
+                            suspension_id, child_session_id, agent_type, wait, status,
+                            command, detail, result_ref, result_text, created_at,
+                            started_at, updated_at, ended_at, cancel_requested_at,
+                            cancel_actor, terminal_cause, cancel_generation,
+                            cancel_idempotency_key, notified_at, completion_id,
+                            spawn_spec, spawn_attempts
+                        ) VALUES (
+                            ?, ?, ?, NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            NULL, NULL, NULL, 0, NULL, ?, ?, NULL, 0
                         )
-                        for row in by_ref.values()
-                    ],
-                )
-        state.context_etag = etag
+                        """,
+                        [
+                            (
+                                row["task_id"],
+                                row["agent_ref"],
+                                state.session_id,
+                                row["agent_type"],
+                                row["status"],
+                                row["command"],
+                                row["detail"],
+                                row["result_ref"],
+                                row["result_text"],
+                                row["created_at"],
+                                row["started_at"],
+                                row["updated_at"],
+                                row["ended_at"],
+                                now,
+                                f"branch:{state.session_id}:{row['task_id']}:{row['status']}",
+                            )
+                            for row in by_ref.values()
+                        ],
+                    )
+            state.context_etag = etag
 
     async def record_tool_approval_requested(
         self,
@@ -2082,24 +2125,12 @@ class SessionStore:
     async def _save_session_snapshot_unlocked(
         self,
         state: SessionState,
-        messages: list[dict],
-        metadata: dict | None,
+        prepared: _PreparedSnapshot,
         *,
         expected_generation: int | None = None,
         connection: aiosqlite.Connection,
-    ) -> tuple[list[dict], str]:
-        serializable_messages = self._to_serializable_messages(messages)
+    ) -> str:
         await self._ensure_session_public_ref(state, connection)
-
-        # The list is shared with the agent's in-memory context, so stable
-        # identity and timestamps survive later append-only saves.
-        now = datetime.now(UTC).isoformat()
-        await self._bind_system_message_identity(state.session_id, serializable_messages, connection)
-        self._stamp_messages(serializable_messages, now)
-        meta = metadata or {}
-        messages_json, metadata_json = await asyncio.to_thread(
-            lambda: (_encode_json(serializable_messages), _encode_json(meta))
-        )
         generation = state.context_generation if expected_generation is None else expected_generation
         cursor = await connection.execute(
             SQL_SAVE_SESSION,
@@ -2108,8 +2139,8 @@ class SessionStore:
                 state.public_ref,
                 state.started_at.isoformat(),
                 state.last_activity.isoformat(),
-                messages_json,
-                metadata_json,
+                prepared.messages_json,
+                prepared.metadata_json,
                 state.name,
                 state.session_type,
                 state.origin_automation_id,
@@ -2120,22 +2151,22 @@ class SessionStore:
                 state.area_id,
                 state.chat_model,
                 generation,
-                len(serializable_messages),
+                len(prepared.messages),
             ),
         )
         if cursor.rowcount == 0:
             raise StaleSessionContextError(f"session {state.session_id} context was replaced while its run was active")
-        await self._mirror_session_messages(state.session_id, serializable_messages, connection=connection)
-        return serializable_messages, self._projection_etag(messages_json)
+        await self._mirror_session_messages(state.session_id, prepared.transcript, connection=connection)
+        return self._projection_etag(prepared.messages_json)
 
     async def save_session(self, state: SessionState, messages: list[dict], metadata: dict | None = None) -> None:
         lock = await self._session_write_lock(state.session_id)
         async with lock:
+            prepared = await self._prepare_snapshot(state.session_id, messages, metadata)
             async with self._session_context_transaction() as connection:
-                _serializable, etag = await self._save_session_snapshot_unlocked(
+                etag = await self._save_session_snapshot_unlocked(
                     state,
-                    messages,
-                    metadata,
+                    prepared,
                     connection=connection,
                 )
             state.context_etag = etag
@@ -2202,6 +2233,14 @@ class SessionStore:
         """
         lock = await self._session_write_lock(state.session_id)
         async with lock:
+            serializable = self._to_serializable_messages(messages)
+            self._stamp_messages(serializable, datetime.now(UTC).isoformat())
+            replacement = self.renew_handoff_projection(
+                serializable,
+                messages_before=len(expected_message_ids),
+                reason="user_rewind",
+            )
+            prepared = await self._prepare_snapshot(state.session_id, replacement, metadata)
             async with self._session_context_transaction() as connection:
                 generation = state.context_generation if expected_generation is None else expected_generation
                 etag = state.context_etag if expected_projection_etag is None else expected_projection_etag
@@ -2219,17 +2258,9 @@ class SessionStore:
                 if next_generation is None:
                     return False
 
-                serializable = self._to_serializable_messages(messages)
-                self._stamp_messages(serializable, datetime.now(UTC).isoformat())
-                replacement = self.renew_handoff_projection(
-                    serializable,
-                    messages_before=len(expected_message_ids),
-                    reason="user_rewind",
-                )
-                replacement, replacement_etag = await self._save_session_snapshot_unlocked(
+                replacement_etag = await self._save_session_snapshot_unlocked(
                     state,
-                    replacement,
-                    metadata,
+                    prepared,
                     expected_generation=next_generation,
                     connection=connection,
                 )
@@ -2242,7 +2273,7 @@ class SessionStore:
                 await self._rebuild_session_turns(state.session_id, connection=connection)
             state.context_generation = next_generation
             state.context_etag = replacement_etag
-            messages[:] = replacement
+            messages[:] = prepared.messages
             return True
 
     async def clear_session_context(
@@ -2257,6 +2288,7 @@ class SessionStore:
         """Atomically clear the active projection and its transcript."""
         lock = await self._session_write_lock(state.session_id)
         async with lock:
+            prepared = await self._prepare_snapshot(state.session_id, [], metadata)
             async with self._session_context_transaction() as connection:
                 generation = state.context_generation if expected_generation is None else expected_generation
                 etag = state.context_etag if expected_projection_etag is None else expected_projection_etag
@@ -2274,10 +2306,9 @@ class SessionStore:
                 if next_generation is None:
                     return False
 
-                _messages, cleared_etag = await self._save_session_snapshot_unlocked(
+                cleared_etag = await self._save_session_snapshot_unlocked(
                     state,
-                    [],
-                    metadata,
+                    prepared,
                     expected_generation=next_generation,
                     connection=connection,
                 )
@@ -2297,20 +2328,14 @@ class SessionStore:
         """Insert a new session without replacing a row created by a racing owner."""
         lock = await self._session_write_lock(state.session_id)
         async with lock:
+            prepared = await self._prepare_snapshot(state.session_id, messages or [], metadata)
             async with self._session_context_transaction() as connection:
                 existing = await connection.execute_fetchall(SQL_LOAD_SESSION, (state.session_id,))
                 if existing:
                     durable_state = self._session_state_from_row(existing[0])
                     durable_state.context_etag = self._projection_etag(existing[0]["messages"])
                     return durable_state, False
-                serializable_messages = self._to_serializable_messages(messages or [])
                 await self._ensure_session_public_ref(state, connection)
-                now = datetime.now(UTC).isoformat()
-                self._stamp_messages(serializable_messages, now)
-                meta = metadata or {}
-                messages_json, metadata_json = await asyncio.to_thread(
-                    lambda: (_encode_json(serializable_messages), _encode_json(meta))
-                )
                 cursor = await connection.execute(
                     SQL_INSERT_SESSION_IF_ABSENT,
                     (
@@ -2318,8 +2343,8 @@ class SessionStore:
                         state.public_ref,
                         state.started_at.isoformat(),
                         state.last_activity.isoformat(),
-                        messages_json,
-                        metadata_json,
+                        prepared.messages_json,
+                        prepared.metadata_json,
                         state.name,
                         state.session_type,
                         state.origin_automation_id,
@@ -2330,7 +2355,7 @@ class SessionStore:
                         state.area_id,
                         state.chat_model,
                         state.context_generation,
-                        len(serializable_messages),
+                        len(prepared.messages),
                     ),
                 )
                 created = cursor.rowcount > 0
@@ -2338,10 +2363,10 @@ class SessionStore:
                     raise RuntimeError("session insert lost its exclusive transaction")
                 await self._mirror_session_messages(
                     state.session_id,
-                    serializable_messages,
+                    prepared.transcript,
                     connection=connection,
                 )
-            state.context_etag = self._projection_etag(messages_json)
+            state.context_etag = self._projection_etag(prepared.messages_json)
             return state, True
 
     @staticmethod

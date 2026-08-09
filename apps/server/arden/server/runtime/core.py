@@ -456,9 +456,10 @@ class Runtime:
             history_root=wiki_root / ".wiki-history",
         )
         self.wiki_service = WikiService(self.wiki_repository)
-        # The wiki approval store must not share Stores' writer connection: it
-        # owns its own lock/transactions while persisting in sessions.db.
-        approval_conn = await database.connect(self.config.sessions_db_path)
+        approval_conn = await database.connect(
+            self.config.sessions_db_path,
+            write_coordinator=self.stores.write_coordinator,
+        )
         try:
             approval_store = WikiRenameApprovalStore(approval_conn)
             await approval_store.init_schema()

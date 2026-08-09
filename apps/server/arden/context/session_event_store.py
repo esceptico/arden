@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
+from arden import database
 from arden.agent.types.tool_outcomes import ToolOutcome
 from arden.agent.types.tools import ToolResult, ToolResultPayloadError
 from arden.constants import (
@@ -67,7 +68,7 @@ class SessionEventStore:
             yield
             await self._write_conn.commit()
         except BaseException:
-            await asyncio.shield(self._write_conn.rollback())
+            await database.rollback_safely(self._write_conn)
             raise
 
     @asynccontextmanager

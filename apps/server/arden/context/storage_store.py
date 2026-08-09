@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import aiosqlite
 
+from arden import database
 from arden.storage_budget import StorageSessionCandidate
 from arden.trajectory.cold_storage import ColdBundleManifest, read_cold_session_bundle, write_cold_session_bundle
 
@@ -25,12 +26,14 @@ class SessionStorageStore:
         self,
         conn: aiosqlite.Connection,
         read_conn: aiosqlite.Connection,
+        write_coordinator: database.WriteCoordinator | None,
         maintenance_lock: asyncio.Lock,
         session_lock: SessionLock,
         strict_active_projection: StrictProjection,
     ):
         self._conn = conn
         self._read_conn = read_conn
+        self._write_coordinator = write_coordinator
         self._maintenance_lock = maintenance_lock
         self._session_lock = session_lock
         self._strict_active_projection = strict_active_projection
@@ -51,11 +54,11 @@ class SessionStorageStore:
         if not database_path:
             yield self._conn
             return
-        connection = await aiosqlite.connect(database_path)
-        connection.row_factory = aiosqlite.Row
+        connection = await database.connect(
+            Path(database_path),
+            write_coordinator=self._write_coordinator,
+        )
         try:
-            await connection.execute("PRAGMA busy_timeout=5000")
-            await connection.execute("PRAGMA foreign_keys=ON")
             yield connection
         finally:
             await connection.close()

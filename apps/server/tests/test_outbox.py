@@ -119,6 +119,31 @@ async def outbox_store(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_status_uses_read_connection_while_writer_transaction_is_open(tmp_path: Path):
+    coordinator = database.WriteCoordinator()
+    writer = await database.connect(tmp_path / "outbox.db", write_coordinator=coordinator)
+    reader = await database.connect(tmp_path / "outbox.db", readonly=True)
+    store = OutboxStore(writer, reader)
+    try:
+        await store.init_schema()
+        await writer.execute("BEGIN IMMEDIATE")
+        await writer.execute(
+            """
+            INSERT INTO outbox_events (
+                event_type, payload, idempotency_key, available_at, created_at, updated_at
+            ) VALUES ('test', '{}', 'pending-write', '2026-01-01', '2026-01-01', '2026-01-01')
+            """
+        )
+
+        status = await asyncio.wait_for(store.get_status(), timeout=0.5)
+        assert status["total"] == 0
+    finally:
+        await writer.rollback()
+        await reader.close()
+        await writer.close()
+
+
+@pytest.mark.asyncio
 async def test_enqueue_run_completed_is_idempotent_and_claims_payload(outbox_store: OutboxStore):
     event = _run_completed()
 

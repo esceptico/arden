@@ -289,8 +289,9 @@ def _event_from_data(data: dict) -> OutboxEvent:
 
 
 class OutboxStore:
-    def __init__(self, conn: aiosqlite.Connection):
+    def __init__(self, conn: aiosqlite.Connection, read_conn: aiosqlite.Connection | None = None):
         self.conn = conn
+        self.read_conn = read_conn or conn
 
     async def init_schema(self) -> None:
         await self.conn.executescript(_SCHEMA)
@@ -620,15 +621,15 @@ class OutboxStore:
 
     async def get_status(self, *, now: datetime | None = None, recent_dead_limit: int = 10) -> dict:
         observed_at = now or _now()
-        status_rows = await self.conn.execute_fetchall(_SQL_STATUS_COUNTS)
-        type_rows = await self.conn.execute_fetchall(_SQL_STATUS_COUNTS_BY_TYPE)
+        status_rows = await self.read_conn.execute_fetchall(_SQL_STATUS_COUNTS)
+        type_rows = await self.read_conn.execute_fetchall(_SQL_STATUS_COUNTS_BY_TYPE)
         summary_row = (
-            await self.conn.execute_fetchall(
+            await self.read_conn.execute_fetchall(
                 _SQL_STATUS_SUMMARY,
                 (_format_dt(observed_at), _format_dt(observed_at)),
             )
         )[0]
-        dead_rows = await self.conn.execute_fetchall(_SQL_RECENT_DEAD, (recent_dead_limit,))
+        dead_rows = await self.read_conn.execute_fetchall(_SQL_RECENT_DEAD, (recent_dead_limit,))
 
         by_status = dict.fromkeys(_STATUS_KEYS, 0)
         for row in status_rows:

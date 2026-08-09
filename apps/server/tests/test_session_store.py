@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sqlite3
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 import arden.context.session_event_store as session_event_store
+import arden.context.store as context_store
 import arden.database as database
 from arden.agent import ToolResult, Usage
 from arden.agent.types.tools import ToolResultPayloadError
@@ -28,9 +30,10 @@ from arden.services.session import SessionService
 
 @pytest_asyncio.fixture
 async def store(tmp_path: Path):
-    conn = await database.connect(tmp_path / "sessions.db")
-    event_conn = await database.connect(tmp_path / "sessions.db")
-    completion_conn = await database.connect(tmp_path / "sessions.db")
+    coordinator = database.WriteCoordinator()
+    conn = await database.connect(tmp_path / "sessions.db", write_coordinator=coordinator)
+    event_conn = await database.connect(tmp_path / "sessions.db", write_coordinator=coordinator)
+    completion_conn = await database.connect(tmp_path / "sessions.db", write_coordinator=coordinator)
     read_conn = await database.connect(tmp_path / "sessions.db", readonly=True)
     s = SessionStore(conn, read_conn, completion_conn, event_conn=event_conn)
     await s.init_schema()
@@ -2900,6 +2903,36 @@ async def test_save_stamps_created_at(store: SessionStore):
     loaded = await store.load_session("test-session")
     assert loaded is not None
     assert all(m.get("created_at") for m in loaded.messages)
+
+
+@pytest.mark.asyncio
+async def test_save_encodes_snapshot_before_opening_write_transaction(store: SessionStore, monkeypatch):
+    transaction_open = False
+    original_transaction = store._session_context_transaction
+    original_encode = context_store._encode_json
+
+    @asynccontextmanager
+    async def tracked_transaction():
+        nonlocal transaction_open
+        async with original_transaction() as connection:
+            transaction_open = True
+            try:
+                yield connection
+            finally:
+                transaction_open = False
+
+    def tracked_encode(value):
+        assert not transaction_open
+        return original_encode(value)
+
+    monkeypatch.setattr(store, "_session_context_transaction", tracked_transaction)
+    monkeypatch.setattr(context_store, "_encode_json", tracked_encode)
+
+    await store.save_session(
+        _make_state("prepared-before-transaction"),
+        [{"role": "user", "content": "hello"}],
+        {"last_input_tokens": 1},
+    )
 
 
 @pytest.mark.asyncio
