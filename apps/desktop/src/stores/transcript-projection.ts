@@ -304,6 +304,7 @@ export function applyChatEventToTranscript(
         depth: event.depth ?? 0,
         parentId: event.parent_id ?? null,
         semanticKind: event.kind ?? "tool",
+        startedAt: event.timestamp ?? Date.now(),
         startSeq: typeof event.seq === "number" ? event.seq : undefined,
         icon: event.icon ?? undefined,
         noun: event.noun ?? undefined,

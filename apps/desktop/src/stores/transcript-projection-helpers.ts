@@ -250,6 +250,7 @@ export function activityItemFromPending(id: string, pending: PendingToolCall): A
     target: formatCallTarget(pending.name, projected.args || "{}", pending.displayName),
     args: projected.args,
     status: "ongoing",
+    startedAt: pending.startedAt,
     depth: pending.depth || undefined,
     parentToolId: pending.parentId ?? undefined,
     icon: pending.icon,
@@ -264,6 +265,7 @@ export function activityPatchFromPending(pending: PendingToolCall): Partial<Acti
     target: formatCallTarget(pending.name, projected.args || "{}", pending.displayName),
     args: projected.args,
     displayTitle: projected.displayTitle,
+    startedAt: pending.startedAt,
     depth: pending.depth || undefined,
     parentToolId: pending.parentId ?? undefined,
   };

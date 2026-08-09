@@ -2,6 +2,7 @@ import { beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { TurnGroup } from "@/features/chat/components/TurnGroup";
+import { ItemButton } from "@/features/chat/components/ActivityRows";
 import { setState } from "@/stores";
 
 beforeEach(() => {
@@ -84,6 +85,39 @@ test("live work trace keeps one chronological three-row window", async () => {
       "Write report",
     ]);
     expect(host.textContent).toContain("Streaming answer");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+test("running Research elapsed time advances without navigation", async () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => {
+      root.render(
+        <ItemButton
+          item={{
+            id: "research-1",
+            kind: "research",
+            semanticKind: "agent",
+            target: "Research",
+            status: "ongoing",
+            taskStatus: "running",
+            startedAt: Date.now(),
+          }}
+          onOpen={() => {}}
+        />,
+      );
+    });
+    expect(host.textContent).toContain("0s");
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+    });
+    expect(host.textContent).toContain("1s");
   } finally {
     await act(async () => root.unmount());
     host.remove();

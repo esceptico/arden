@@ -37,6 +37,7 @@ import { switchSession } from "@/actions/sessions";
 import { cancelSubagent } from "@/actions/messages";
 import { cancelChildAgent } from "@/actions/childAgents";
 import { ICON } from "@/lib/icons";
+import { useTimeTicker } from "@/lib/hooks";
 import { Reveal } from "@/components/ui/Reveal";
 import { ThinkingStep } from "@/components/ui/ThinkingStep";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -44,6 +45,7 @@ import { callTitle, groupSummary, operationLabel, type StepIconKey } from "@/fea
 import {
   agentRunFromActivityItem,
   agentRunStatusLabel,
+  formatElapsed,
   isActiveAgentStatus,
 } from "@/lib/agentRun";
 import { EASE_OUT, MOTION, STAGGER } from "@/lib/tokens/motion";
@@ -231,6 +233,9 @@ function AgentRow({
   });
   const run = agentRunFromActivityItem(item, { roster, resultSnippet: fetchedSnippet });
   const running = isActiveAgentStatus(run.status);
+  useTimeTicker(running ? 1_000 : null);
+  const startedAt = item.startedAt ?? roster?.createdAt;
+  const elapsedLabel = running && startedAt != null ? formatElapsed(startedAt) : run.elapsedLabel;
   const childSessionId = run.childSessionId;
   // Awaited agents cancel through the parent run; anything else (detached, or
   // an agent known only via its roster row) cancels the durable child run —
@@ -329,8 +334,8 @@ function AgentRow({
           )}
         </span>
         {statusWord && <span className="arden-status">{statusWord}</span>}
-        {run.elapsedLabel && (
-          <span className="shrink-0 text-2xs tabular-nums text-faint">{run.elapsedLabel}</span>
+        {elapsedLabel && (
+          <span className="shrink-0 text-2xs tabular-nums text-faint">{elapsedLabel}</span>
         )}
         {item.usage && activityItemStatus(item) === "executed" && (
           <AgentUsageSuffix tokens={item.usage.total} cost={item.cost} />

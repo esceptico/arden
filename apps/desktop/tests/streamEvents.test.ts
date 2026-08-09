@@ -2765,6 +2765,7 @@ test("tool result child agent metadata attaches to activity item", async () => {
   expect(activityId).toBeTruthy();
   const item = state.messages.get(activityId!)?.activity?.items.find((it) => it.id === "call-research");
   expect(item?.semanticKind).toBe("agent");
+  expect(item?.startedAt).toBe(2);
   expect(item?.childAgent).toEqual({
     agentRef: "research~abc123",
     sessionRef: "research~abc123",

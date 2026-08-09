@@ -8,6 +8,7 @@ export interface PendingToolCall {
   depth: number;
   parentId: string | null;
   semanticKind: string;
+  startedAt: number;
   startSeq?: number;
   icon?: string;
   noun?: string;

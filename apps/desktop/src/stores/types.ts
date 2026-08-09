@@ -230,6 +230,8 @@ export interface ActivityItem {
   args?: string;
   result?: string;
   status?: "ongoing" | "executed" | "backgrounded";
+  /** Original TOOL_CALL_START timestamp, used by live elapsed labels. */
+  startedAt?: number;
   cancelRequested?: boolean;
   runId?: string;
   /** Nesting depth: 0 = top-level (called by the user-facing agent),
