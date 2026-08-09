@@ -17,7 +17,8 @@ from arden.server.app import _enqueue_background_respawns
 from arden.server.bus import BusRegistry, StreamRecord
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.state import RunRegistry
-from arden.services.chat import respawn_background_agent
+from arden.services.chat import make_child_io_factory, respawn_background_agent
+from arden.tools.core.context import ChildIOParams
 
 
 @pytest_asyncio.fixture
@@ -273,33 +274,61 @@ async def test_respawn_passes_durable_child_session_to_spawn(store: SessionStore
     )
     await store.mark_interrupted_background_agent_runs()
 
+    buses = BusRegistry(record_events=store.events.record_session_events)
+    run_registry = RunRegistry()
+    session_service = _FakeSessionService(store)
+
+    async def noop(**_kwargs):
+        return None
+
+    child_factory = make_child_io_factory(
+        buses,
+        run_registry,
+        session_service,
+        record_approval=noop,
+        resolve_approval=noop,
+        approval_timeout_seconds=300,
+    )
     captured: dict = {}
 
     async def spawn_fn(_ctx, _task, **kwargs):
         captured.update(kwargs)
+        child = await child_factory(
+            ChildIOParams(
+                session_id=kwargs["_resume_child_session_id"],
+                run_id="run-1",
+                pending_approvals={},
+            )
+        )
+        await child.finish("completed")
+        await buses.get(kwargs["_resume_child_session_id"]).drain_record_tasks()
 
     tool_ctx = SimpleNamespace(spawn_fn=spawn_fn)
     fake_agent = SimpleNamespace(executor=SimpleNamespace(ctx=tool_ctx))
     monkeypatch.setattr("arden.services.chat.create_agent", lambda **_kwargs: fake_agent)
     parent = SimpleNamespace(state=SessionState(session_id="sess-1", started_at=datetime.now(UTC)))
-    session_service = _FakeSessionService(store, session=parent)
+    session_service._session = parent
     deps = SimpleNamespace(
         executor=SimpleNamespace(get_tools=lambda: []),
         agent_config=SimpleNamespace(approval_timeout_seconds=300),
         dispatch_session_message=None,
     )
 
-    buses = BusRegistry()
-    assert await respawn_background_agent(
-        RunRegistry(),
-        lambda: deps,
-        buses,
-        session_id="sess-1",
-        task_id="bg-resume",
-        session_service=session_service,
-    )
-    assert captured["_resume_child_session_id"] == "sess-1::existing"
-    assert buses.get_or_create("sess-1::existing").next_seq == 818
+    try:
+        assert await respawn_background_agent(
+            run_registry,
+            lambda: deps,
+            buses,
+            session_id="sess-1",
+            task_id="bg-resume",
+            session_service=session_service,
+        )
+        assert captured["_resume_child_session_id"] == "sess-1::existing"
+        events = await store.events.list_session_events("sess-1::existing", after_seq=817)
+        assert [record.seq for record in events] == [818, 819]
+        assert [type(record.event).__name__ for record in events] == ["RunStartedEvent", "RunFinishedEvent"]
+    finally:
+        await buses.close_all()
 
 
 @pytest.mark.asyncio

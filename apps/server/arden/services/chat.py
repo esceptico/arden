@@ -980,8 +980,6 @@ async def respawn_background_agent(
     deps = build_deps()
     await prime_bus_cursor_from_store(buses, session_id, session_service.store.events)
     child_session_id = row.get("child_session_id")
-    if child_session_id is not None:
-        await prime_bus_cursor_from_store(buses, child_session_id, session_service.store.events)
     bus = buses.get_or_create(session_id)
     _wire_background_registry(bg_registry, session_service, session_id)
 
@@ -1602,10 +1600,7 @@ def make_child_io_factory(
     `finish` is idempotent so the terminal frame is emitted exactly once."""
 
     async def _child_io_factory(params: ChildIOParams) -> ChildSession:
-        # A freshly-spawned child has a brand-new session id with zero prior
-        # events, so there is no durable cursor to prime — get_or_create starts at
-        # seq 1. (prime_bus_cursor_from_store is for clients RECONNECTING to a
-        # stale session; doing it per spawn was 2 blocking DB reads for nothing.)
+        await prime_bus_cursor_from_store(buses, params.session_id, session_service.store.events)
         child_bus = buses.get_or_create(params.session_id)
         child_io = IOBridge(
             pending_approvals=params.pending_approvals,

@@ -863,6 +863,16 @@ def _fake_run_registry(get_active_run=lambda _sid: None):
 
 def _fake_session_service():
     class Store(_BackgroundCompletionStoreMixin):
+        @property
+        def events(self):
+            return self
+
+        async def get_latest_session_event_seq(self, session_id: str) -> int:
+            return 0
+
+        async def get_latest_session_checkpoint_seq(self, session_id: str) -> int:
+            return 0
+
         async def get_background_agent_result(self, session_id: str, task_id: str) -> None:
             return None
 
