@@ -979,6 +979,9 @@ async def respawn_background_agent(
 
     deps = build_deps()
     await prime_bus_cursor_from_store(buses, session_id, session_service.store.events)
+    child_session_id = row.get("child_session_id")
+    if child_session_id is not None:
+        await prime_bus_cursor_from_store(buses, child_session_id, session_service.store.events)
     bus = buses.get_or_create(session_id)
     _wire_background_registry(bg_registry, session_service, session_id)
 
@@ -1057,7 +1060,7 @@ async def respawn_background_agent(
             kind="background",
             task_id=task_id,
             agent_ref=row["agent_ref"],
-            _resume_child_session_id=row.get("child_session_id"),
+            _resume_child_session_id=child_session_id,
         )
     except Exception as exc:
         # A respawn that dies here would otherwise be silent: the outbox event

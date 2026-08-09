@@ -11,9 +11,10 @@ from arden.context.store import SessionStore
 from arden.core.isolation import IsolationLevel
 from arden.core.public_refs import public_ref
 from arden.core.spawn_spec import ParentRef, SpawnSpec
+from arden.events.sse import ThinkingEvent
 from arden.outbox import OUTBOX_AGENT_RUN_REQUESTED, OutboxStore
 from arden.server.app import _enqueue_background_respawns
-from arden.server.bus import BusRegistry
+from arden.server.bus import BusRegistry, StreamRecord
 from arden.server.runtime.outbox import RuntimeOutbox
 from arden.server.state import RunRegistry
 from arden.services.chat import respawn_background_agent
@@ -254,6 +255,13 @@ async def test_respawn_passes_durable_child_session_to_spawn(store: SessionStore
         ),
         [],
     )
+    await store.events.record_session_event(
+        StreamRecord(
+            seq=817,
+            session_id="sess-1::existing",
+            event=ThinkingEvent(status="processing"),
+        )
+    )
     await store.record_background_agent_started(
         task_id="bg-resume",
         agent_ref=agent_ref,
@@ -281,15 +289,17 @@ async def test_respawn_passes_durable_child_session_to_spawn(store: SessionStore
         dispatch_session_message=None,
     )
 
+    buses = BusRegistry()
     assert await respawn_background_agent(
         RunRegistry(),
         lambda: deps,
-        BusRegistry(),
+        buses,
         session_id="sess-1",
         task_id="bg-resume",
         session_service=session_service,
     )
     assert captured["_resume_child_session_id"] == "sess-1::existing"
+    assert buses.get_or_create("sess-1::existing").next_seq == 818
 
 
 @pytest.mark.asyncio
