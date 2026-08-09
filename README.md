@@ -1,12 +1,12 @@
 # Arden
 
+> **Public prototype:** This repository preserves the MIT-licensed public Arden prototype. Active product development now continues privately; this snapshot remains available for reference and evaluation.
+
 **Arden** is a personal AI agent that connects your conversations, memory, tools, and recurring work in one durable workspace.
 
 A local-first personal assistant. Not a coding agent: a place to keep the moving parts of your life in one system that remembers them and tells you what needs you. Python backend, Electron desktop app.
 
 ![Arden](docs/images/main.png)
-
-> **Public prototype:** This repository preserves the MIT-licensed public Arden prototype. Active product development now continues privately; this snapshot remains available for reference and evaluation.
 
 **Documentation: [arden.timganiev.com](https://arden.timganiev.com)**
 
