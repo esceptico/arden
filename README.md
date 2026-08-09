@@ -1,6 +1,6 @@
 # Arden
 
-> **Historical prototype:** This repository preserves the MIT-licensed public version of Arden as a technical artifact and portfolio reference. Active product development continues privately.
+> This repository preserves the MIT-licensed public version of Arden as an artifact.
 
 **Arden** is a personal AI agent that connects your conversations, memory, tools, and recurring work in one durable workspace.
 
